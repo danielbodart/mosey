@@ -1,0 +1,35 @@
+(* Shared primitives for the mosey S1 handshake models (ProVerif 2.05).
+   Symbolic (Dolev-Yao) model: primitives are perfect. The hybrid KEM
+   (X-Wing) is modelled as ONE IND-CCA KEM; the hybrid argument (secure if
+   either ML-KEM-768 or X25519 is) is the X-Wing paper's job, not ours. *)
+
+free c: channel.
+
+(* hashing / KDF: free constructors are one-way and collision-free *)
+fun hash(bitstring, bitstring): bitstring.
+fun kdf_ck(bitstring, bitstring): bitstring.
+fun kdf_k(bitstring, bitstring): bitstring.
+fun split_i2r(bitstring): bitstring.
+fun split_r2i(bitstring): bitstring.
+
+(* AEAD with explicit nonce and associated data *)
+fun aenc(bitstring, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: bitstring, n: bitstring, ad: bitstring, m: bitstring;
+  adec(k, n, ad, aenc(k, n, ad, m)) = m.
+
+(* KEM with HPKE-style info binding *)
+fun kempk(bitstring): bitstring.
+fun kemct(bitstring, bitstring, bitstring): bitstring.
+fun kemss(bitstring, bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, r: bitstring, info: bitstring;
+  kemdec(sk, kemct(kempk(sk), r, info), info) = kemss(kempk(sk), r, info).
+
+(* signatures (variant A) *)
+fun spk(bitstring): bitstring.
+fun sign(bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, m: bitstring;
+  verify(spk(sk), m, sign(sk, m)) = true.
+
+const n0, n1, n2: bitstring.
+const proto_B1, proto_B2, proto_A, prologue, lbl_R, lbl_I: bitstring.
+const helloC, helloS: bitstring.

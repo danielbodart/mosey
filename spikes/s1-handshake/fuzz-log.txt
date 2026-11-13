@@ -1,0 +1,55 @@
+=== FuzzParseHello start 2026-11-13T18:35:05+00:00
+fuzz: elapsed: 3m18s, execs: 46174709 (158239/sec), new interesting: 42 (total: 44)
+fuzz: elapsed: 3m20s, execs: 46516349 (163357/sec), new interesting: 42 (total: 44)
+PASS
+ok  	mosey.spike/s1-handshake/hs	200.174s
+=== FuzzParseHello end, wall 202s
+=== FuzzParseBCredentials start 2026-11-13T18:38:27+00:00
+fuzz: elapsed: 3m18s, execs: 27546881 (170807/sec), new interesting: 4 (total: 6)
+fuzz: elapsed: 3m20s, execs: 27883156 (155065/sec), new interesting: 4 (total: 6)
+PASS
+ok  	mosey.spike/s1-handshake/hs	200.236s
+=== FuzzParseBCredentials end, wall 200s
+=== FuzzBServerInitB1 start 2026-11-13T18:41:47+00:00
+fuzz: elapsed: 3m18s, execs: 23965726 (87190/sec), new interesting: 2 (total: 5)
+fuzz: elapsed: 3m20s, execs: 24142170 (82661/sec), new interesting: 2 (total: 5)
+PASS
+ok  	mosey.spike/s1-handshake/hs	200.208s
+=== FuzzBServerInitB1 end, wall 201s
+=== FuzzBServerInitB1FixMAC start 2026-11-13T18:45:08+00:00
+fuzz: elapsed: 3m21s, execs: 10953613 (16120/sec), new interesting: 11 (total: 14)
+fuzz: elapsed: 3m21s, execs: 10953613 (0/sec), new interesting: 11 (total: 14)
+PASS
+ok  	mosey.spike/s1-handshake/hs	201.232s
+=== FuzzBServerInitB1FixMAC end, wall 202s
+=== FuzzBServerInitB2FixMAC start 2026-11-13T18:48:30+00:00
+fuzz: elapsed: 3m21s, execs: 13489098 (0/sec), new interesting: 7 (total: 10)
+fuzz: elapsed: 3m21s, execs: 13489098 (0/sec), new interesting: 7 (total: 10)
+PASS
+ok  	mosey.spike/s1-handshake/hs	201.190s
+=== FuzzBServerInitB2FixMAC end, wall 202s
+=== FuzzBClientResp start 2026-11-13T18:51:52+00:00
+fuzz: elapsed: 3m18s, execs: 36636499 (181829/sec), new interesting: 0 (total: 2)
+fuzz: elapsed: 3m20s, execs: 37038250 (190932/sec), new interesting: 0 (total: 2)
+PASS
+ok  	mosey.spike/s1-handshake/hs	200.119s
+=== FuzzBClientResp end, wall 201s
+=== FuzzAHandshake start 2026-11-13T18:55:13+00:00
+fuzz: elapsed: 3m21s, execs: 46346971 (292945/sec), new interesting: 28 (total: 31)
+fuzz: elapsed: 3m21s, execs: 46346971 (0/sec), new interesting: 28 (total: 31)
+PASS
+ok  	mosey.spike/s1-handshake/hs	201.026s
+=== FuzzAHandshake end, wall 202s
+=== FuzzSessionOpen start 2026-11-13T18:58:35+00:00
+fuzz: elapsed: 3m18s, execs: 69558869 (333127/sec), new interesting: 1 (total: 6)
+fuzz: elapsed: 3m20s, execs: 70030153 (230149/sec), new interesting: 1 (total: 6)
+PASS
+ok  	mosey.spike/s1-handshake/hs	200.080s
+=== FuzzSessionOpen end, wall 200s
+=== FuzzReplayWindow start 2026-11-13T19:01:55+00:00
+fuzz: elapsed: 3m18s, execs: 65435125 (334987/sec), new interesting: 42 (total: 43)
+fuzz: elapsed: 3m20s, execs: 66094888 (316031/sec), new interesting: 42 (total: 43)
+PASS
+ok  	mosey.spike/s1-handshake/hs	200.109s
+=== FuzzReplayWindow end, wall 200s
+ALLDONE

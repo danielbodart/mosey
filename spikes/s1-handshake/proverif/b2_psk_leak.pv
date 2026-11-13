@@ -1,0 +1,68 @@
+(* GENERATED from b2.pv: psk known to the attacker from the start. Expect EVERYTHING to fail: in B2 the psk is the only authenticator, so the attacker is a full man-in-the-middle. Contrast b1_psk_leak. *)
+(* Variant B2: SSH delivers (sid, psk) only. Noise NNpsk0 + HFS-style KEM:
+   -> psk, e1, {hello} ; <- ekem1, {hello}.
+   Phase 1 leaks the psk (forward secrecy). *)
+
+free secretC, secretS: bitstring [private].
+
+event ClientSentInit(bitstring, bitstring).
+event ServerAcceptInit(bitstring, bitstring).
+event ClientDone(bitstring, bitstring, bitstring, bitstring).
+event ServerDone(bitstring, bitstring, bitstring, bitstring).
+
+query sid: bitstring, h: bitstring;
+  inj-event(ServerAcceptInit(sid, h)) ==> inj-event(ClientSentInit(sid, h)).
+query sid: bitstring, h: bitstring, k1: bitstring, k2: bitstring;
+  inj-event(ClientDone(sid, h, k1, k2)) ==> inj-event(ServerDone(sid, h, k1, k2)).
+query attacker(secretC).
+query attacker(secretS).
+
+let Client(sid: bitstring, psk: bitstring) =
+  new cidx: bitstring; new skE: bitstring;
+  let pkE = kempk(skE) in
+  let h0 = hash(proto_B2, (prologue, sid)) in
+  let ck1 = kdf_ck(proto_B2, psk) in let k1 = kdf_k(proto_B2, psk) in
+  let h1 = hash(h0, cidx) in
+  let h2 = hash(h1, pkE) in
+  let c1 = aenc(k1, n0, h2, helloC) in
+  let h3 = hash(h2, c1) in
+  event ClientSentInit(sid, h3);
+  out(c, (cidx, pkE, c1));
+  in(c, (sidx: bitstring, =cidx, enc: bitstring, c2: bitstring));
+  let h4 = hash(h3, (sidx, cidx)) in
+  let ss = kemdec(skE, enc, h4) in
+  let h5 = hash(h4, enc) in
+  let ck2 = kdf_ck(ck1, ss) in let k2 = kdf_k(ck1, ss) in
+  let p_helloS = adec(k2, n0, h5, c2) in if p_helloS = helloS then
+  let h6 = hash(h5, c2) in
+  let kc2s = split_i2r(ck2) in let ks2c = split_r2i(ck2) in
+  event ClientDone(sid, h6, kc2s, ks2c);
+  out(c, aenc(kc2s, n0, sid, secretC)).
+
+let Server(sid: bitstring, psk: bitstring) =
+  in(c, (cidx: bitstring, pkE: bitstring, c1: bitstring));
+  let h0 = hash(proto_B2, (prologue, sid)) in
+  let ck1 = kdf_ck(proto_B2, psk) in let k1 = kdf_k(proto_B2, psk) in
+  let h1 = hash(h0, cidx) in
+  let h2 = hash(h1, pkE) in
+  let p_helloC = adec(k1, n0, h2, c1) in if p_helloC = helloC then
+  let h3 = hash(h2, c1) in
+  event ServerAcceptInit(sid, h3);
+  new sidx: bitstring; new r: bitstring;
+  let h4 = hash(h3, (sidx, cidx)) in
+  let enc = kemct(pkE, r, h4) in
+  let ss = kemss(pkE, r, h4) in
+  let h5 = hash(h4, enc) in
+  let ck2 = kdf_ck(ck1, ss) in let k2 = kdf_k(ck1, ss) in
+  let c2 = aenc(k2, n0, h5, helloS) in
+  let h6 = hash(h5, c2) in
+  let kc2s = split_i2r(ck2) in let ks2c = split_r2i(ck2) in
+  event ServerDone(sid, h6, kc2s, ks2c);
+  out(c, (sidx, cidx, enc, c2));
+  out(c, aenc(ks2c, n0, sid, secretS)).
+
+process
+  !( new sid: bitstring; new psk: bitstring;
+     out(c, (sid, psk));   (* psk leaked BEFORE the handshake *)
+     ( Client(sid, psk) | Server(sid, psk)
+     ) )

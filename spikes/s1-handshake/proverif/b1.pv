@@ -1,0 +1,74 @@
+(* Variant B1: SSH delivers (sid, psk, pkS) where pkS is a per-handshake
+   X-Wing key. Pattern: <- s ; -> psk, skem, {hello} ; <- {hello}.
+   SSH delivery = the credentials are fresh names the attacker never sees,
+   one set per session, single use (the server process accepts exactly one
+   msg1, as the Go code does).
+   Phase 1 leaks the psk: forward secrecy w.r.t. the SSH-delivered secret.
+   The per-handshake skS is deleted after use and is not leaked here; see
+   b1_skS_leak.pv for what happens if deletion fails. *)
+
+free secretC, secretS: bitstring [private].
+
+event ClientSentInit(bitstring, bitstring).
+event ServerAcceptInit(bitstring, bitstring).
+event ClientDone(bitstring, bitstring, bitstring, bitstring).
+event ServerDone(bitstring, bitstring, bitstring, bitstring).
+
+(* replay protection + client authentication: each accepted msg1 was sent
+   by the genuine client, at most once *)
+query sid: bitstring, h: bitstring;
+  inj-event(ServerAcceptInit(sid, h)) ==> inj-event(ClientSentInit(sid, h)).
+(* server authentication + key agreement (no misbinding: sid and keys agree) *)
+query sid: bitstring, h: bitstring, k1: bitstring, k2: bitstring;
+  inj-event(ClientDone(sid, h, k1, k2)) ==> inj-event(ServerDone(sid, h, k1, k2)).
+(* key secrecy, including after the psk leaks (phase 1) *)
+query attacker(secretC).
+query attacker(secretS).
+
+let Client(sid: bitstring, psk: bitstring, pkS: bitstring) =
+  new cidx: bitstring; new r: bitstring;
+  let h0 = hash(hash(proto_B1, (prologue, sid)), pkS) in
+  let ck1 = kdf_ck(proto_B1, psk) in
+  let h1 = hash(h0, cidx) in
+  let enc = kemct(pkS, r, h1) in
+  let ss = kemss(pkS, r, h1) in
+  let h2 = hash(h1, enc) in
+  let ck2 = kdf_ck(ck1, ss) in let k2 = kdf_k(ck1, ss) in
+  let c1 = aenc(k2, n0, h2, helloC) in
+  let h3 = hash(h2, c1) in
+  event ClientSentInit(sid, h3);
+  out(c, (cidx, enc, c1));
+  in(c, (sidx: bitstring, =cidx, c2: bitstring));
+  let h4 = hash(h3, (sidx, cidx)) in
+  let p_helloS = adec(k2, n1, h4, c2) in if p_helloS = helloS then
+  let h5 = hash(h4, c2) in
+  let kc2s = split_i2r(ck2) in let ks2c = split_r2i(ck2) in
+  event ClientDone(sid, h5, kc2s, ks2c);
+  out(c, aenc(kc2s, n0, sid, secretC)).
+
+let Server(sid: bitstring, psk: bitstring, skS: bitstring) =
+  in(c, (cidx: bitstring, enc: bitstring, c1: bitstring));
+  let pkS = kempk(skS) in
+  let h0 = hash(hash(proto_B1, (prologue, sid)), pkS) in
+  let ck1 = kdf_ck(proto_B1, psk) in
+  let h1 = hash(h0, cidx) in
+  let ss = kemdec(skS, enc, h1) in
+  let h2 = hash(h1, enc) in
+  let ck2 = kdf_ck(ck1, ss) in let k2 = kdf_k(ck1, ss) in
+  let p_helloC = adec(k2, n0, h2, c1) in if p_helloC = helloC then
+  let h3 = hash(h2, c1) in
+  event ServerAcceptInit(sid, h3);
+  new sidx: bitstring;
+  let h4 = hash(h3, (sidx, cidx)) in
+  let c2 = aenc(k2, n1, h4, helloS) in
+  let h5 = hash(h4, c2) in
+  let kc2s = split_i2r(ck2) in let ks2c = split_r2i(ck2) in
+  event ServerDone(sid, h5, kc2s, ks2c);
+  out(c, (sidx, cidx, c2));
+  out(c, aenc(ks2c, n0, sid, secretS)).
+
+process
+  !( new sid: bitstring; new psk: bitstring; new skS: bitstring;
+     out(c, (sid, kempk(skS)));
+     ( Client(sid, psk, kempk(skS)) | Server(sid, psk, skS)
+     | phase 1; out(c, psk) ) )

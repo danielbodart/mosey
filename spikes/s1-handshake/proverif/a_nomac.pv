@@ -1,0 +1,85 @@
+(* GENERATED from a.pv: SANITY CHECK that the model can find misbinding. Responder identity+signature sent in clear (no SIGMA MAC) AND msg2 left out of the transcript the initiator signs. Expect the server-side agreement query to FAIL (identity misbinding: S thinks it shares k with C, C thinks it shares k with the attacker). Restoring either the MAC or the transcript binding fixes it. *)
+(* Variant A: SIGMA-I over an ephemeral X-Wing KEM with Ed25519 identities.
+     -> cidx, pkE
+     <- sidx, cidx, enc, {ID_S, Sig_S(lbl_R, h, ID_S), hello}
+     -> sidx, {ID_C, Sig_C(lbl_I, h, ID_C), hello}
+   Honest client C (skC) and server S (skS). The attacker chooses the
+   session id and, for every run, which peer key each side has pinned (it
+   can pin its own identities: the attacker can make any key pair), so
+   identity misbinding / unknown-key-share attacks are in scope.
+   Phase 1 leaks both long-term signing keys: forward secrecy. *)
+
+free skC, skS: bitstring [private].
+free secretC, secretS: bitstring [private].
+const empty: bitstring.
+
+event ClientDone(bitstring, bitstring, bitstring, bitstring). (* idC, idS, kc2s, ks2c *)
+event ServerDone(bitstring, bitstring, bitstring, bitstring).
+event ClientConfirmed(bitstring, bitstring, bitstring, bitstring).
+
+(* client-side: in SIGMA-I the initiator finishes before the responder
+   (msg3 can be dropped), so the client's agreement property is stated at
+   key confirmation: the first transport packet from the server. If C has
+   confirmed keys believing it talks to S, S completed a run believing it
+   talks to C, with the same keys (once). *)
+query k1: bitstring, k2: bitstring;
+  inj-event(ClientConfirmed(spk(skC), spk(skS), k1, k2)) ==> inj-event(ServerDone(spk(skC), spk(skS), k1, k2)).
+(* server-side: symmetric *)
+query k1: bitstring, k2: bitstring;
+  inj-event(ServerDone(spk(skC), spk(skS), k1, k2)) ==> inj-event(ClientDone(spk(skC), spk(skS), k1, k2)).
+query attacker(secretC).
+query attacker(secretS).
+
+let Client(sid: bitstring, pinS: bitstring) =
+  new cidx: bitstring; new skEk: bitstring;
+  let pkE = kempk(skEk) in
+  let h1 = hash(hash(proto_A, (prologue, sid)), (cidx, pkE)) in
+  out(c, (cidx, pkE));
+  in(c, (sidx: bitstring, =cidx, enc: bitstring, c2: bitstring));
+  let h2 = hash(h1, (sidx, cidx)) in
+  let ss = kemdec(skEk, enc, h2) in
+  let h3 = hash(h2, enc) in
+  let ck = kdf_ck(proto_A, ss) in let k = kdf_k(proto_A, ss) in
+  let (pubS: bitstring, sigS: bitstring, hS: bitstring) = c2 in
+  if pubS = pinS then
+  if verify(pubS, (lbl_R, h3, pubS), sigS) then
+  let h4 = h3 in
+  let h5 = hash(h4, sidx) in
+  let sigC = sign(skC, (lbl_I, h5, spk(skC))) in
+  let c3 = aenc(k, n1, h5, (spk(skC), sigC, helloC)) in
+  let kc2s = split_i2r(ck) in let ks2c = split_r2i(ck) in
+  event ClientDone(spk(skC), pinS, kc2s, ks2c);
+  out(c, (sidx, c3));
+  in(c, conf: bitstring);
+  let p_conf = adec(ks2c, n0, empty, conf) in if p_conf = helloS then
+  event ClientConfirmed(spk(skC), pinS, kc2s, ks2c);
+  if pinS = spk(skS) then out(c, aenc(kc2s, n0, empty, secretC)).
+
+let Server(sid: bitstring, pinC: bitstring) =
+  in(c, (cidx: bitstring, pkE: bitstring));
+  let h1 = hash(hash(proto_A, (prologue, sid)), (cidx, pkE)) in
+  new sidx: bitstring; new r: bitstring;
+  let h2 = hash(h1, (sidx, cidx)) in
+  let enc = kemct(pkE, r, h2) in
+  let ss = kemss(pkE, r, h2) in
+  let h3 = hash(h2, enc) in
+  let ck = kdf_ck(proto_A, ss) in let k = kdf_k(proto_A, ss) in
+  let sigS = sign(skS, (lbl_R, h3, spk(skS))) in
+  let c2 = (spk(skS), sigS, helloS) in
+  out(c, (sidx, cidx, enc, c2));
+  in(c, (=sidx, c3: bitstring));
+  let h4 = h3 in
+  let h5 = hash(h4, sidx) in
+  let (pubC: bitstring, sigC: bitstring, hC: bitstring) = adec(k, n1, h5, c3) in
+  if pubC = pinC then
+  if verify(pubC, (lbl_I, h5, pubC), sigC) then
+  let kc2s = split_i2r(ck) in let ks2c = split_r2i(ck) in
+  event ServerDone(pinC, spk(skS), kc2s, ks2c);
+  out(c, aenc(ks2c, n0, empty, helloS));       (* first transport packet *)
+  if pinC = spk(skC) then out(c, aenc(ks2c, n1, empty, secretS)).
+
+process
+  out(c, (spk(skC), spk(skS)));
+  ( !( in(c, (sid: bitstring, pinS: bitstring)); Client(sid, pinS) )
+  | !( in(c, (sid: bitstring, pinC: bitstring)); Server(sid, pinC) )
+  | phase 1; out(c, (skC, skS)) )
