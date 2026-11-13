@@ -31,5 +31,5 @@ reduc forall sk: bitstring, m: bitstring;
   verify(spk(sk), m, sign(sk, m)) = true.
 
 const n0, n1, n2: bitstring.
-const proto_B1, proto_B2, proto_A, prologue, lbl_R, lbl_I: bitstring.
+const proto_B1, proto_B2, proto_B3, proto_A, prologue, lbl_R, lbl_I: bitstring.
 const helloC, helloS: bitstring.

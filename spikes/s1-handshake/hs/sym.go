@@ -1,9 +1,14 @@
 // Package hs is a research spike (S1) for the mosey handshake and packet
 // layer. It is a record of an experiment, not production code.
 //
-// Everything here is composed from audited building blocks only:
+// Everything here is composed from Go standard-library / x/crypto
+// building blocks; no primitive is implemented here:
 //   - crypto/hpke with MLKEM768X25519 (X-Wing) as the hybrid KEM, used in
-//     export-only mode as a plain KEM (RFC 9180 §5.3 exporter);
+//     export-only mode as a plain KEM (RFC 9180 §5.3 exporter). NOTE:
+//     crypto/hpke shipped in Go 1.26, AFTER the 2025 Trail of Bits audit
+//     cited in PLAN §7, so it and its X-Wing combiner are NOT covered by
+//     that audit (crypto/mlkem and crypto/ecdh underneath are). See
+//     FINDINGS decision D-4 for the alternative;
 //   - crypto/hkdf + crypto/sha256 for the key schedule;
 //   - golang.org/x/crypto/chacha20poly1305 for the AEAD;
 //   - crypto/ed25519 for signatures (variant A only).
@@ -46,12 +51,17 @@ var (
 const kemExportLabel = "mosey kem shared secret"
 
 // kemGenerate returns a fresh X-Wing key pair.
-func kemGenerate() (hpke.PrivateKey, []byte, error) {
-	sk, err := xwing.GenerateKey()
-	if err != nil {
-		return nil, nil, err
-	}
-	return sk, sk.PublicKey().Bytes(), nil
+// It runs under secretDo so that, with GOEXPERIMENT=runtimesecret, the
+// key's heap memory is erased once it is dropped and the GC notices; Go
+// gives no way to erase an opaque hpke.PrivateKey on demand.
+func kemGenerate() (sk hpke.PrivateKey, pk []byte, err error) {
+	secretDo(func() {
+		sk, err = xwing.GenerateKey()
+		if err == nil {
+			pk = sk.PublicKey().Bytes()
+		}
+	})
+	return
 }
 
 // kemEncap encapsulates to pk. info binds the encapsulation to the

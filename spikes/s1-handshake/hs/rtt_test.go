@@ -26,11 +26,11 @@ func TestHandshakeLatency(t *testing.T) {
 			})
 		})
 	}
-	for _, mode := range []BMode{B1ServerKEM, B2ClientKEM} {
-		run(map[BMode]string{1: "B1", 2: "B2"}[mode], func(t *testing.T, link func([]byte) []byte, start time.Time) result {
+	for _, mode := range allB {
+		run(map[BMode]string{1: "B1", 2: "B2", 3: "B3"}[mode], func(t *testing.T, link func([]byte) []byte, start time.Time) result {
 			var r result
-			server, cred, _ := NewBServer(mode, serverHello, DefaultConfig())
-			client, m1, _ := NewBClient(cred, clientHello, DefaultConfig())
+			server, cred, mk := mintB(t, mode, DefaultConfig())
+			client, m1, _ := mk(cred)
 			m2, srv, _, err := server.HandleInit(link(m1))
 			mustT(t, err)
 			r.serverCanSend = time.Since(start)

@@ -1,43 +1,65 @@
-### b1 (1.2s)
+### b1 (1.6s)
 RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is true.
 RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is true.
 RESULT not attacker_p1(secretC[]) is true.
 RESULT not attacker_p1(secretS[]) is true.
-### b1_psk_leak (1.2s)
+### b1_psk_leak (1.1s)
 RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is false.
 RESULT (even event(ServerAcceptInit(sid,h)) ==> event(ClientSentInit(sid,h)) is false.)
 RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is true.
 RESULT not attacker(secretC[]) is true.
 RESULT not attacker(secretS[]) is false.
-### b1_skS_leak (1.4s)
+### b1_skS_leak (1.0s)
 RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is true.
 RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is true.
 RESULT not attacker_p1(secretC[]) is false.
 RESULT not attacker_p1(secretS[]) is false.
-### b2 (1.3s)
+### b2 (1.2s)
 RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is true.
 RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is true.
 RESULT not attacker_p1(secretC[]) is true.
 RESULT not attacker_p1(secretS[]) is true.
-### b2_psk_leak (1.4s)
+### b2_psk_leak (1.0s)
 RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is false.
 RESULT (even event(ServerAcceptInit(sid,h)) ==> event(ClientSentInit(sid,h)) is false.)
 RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is false.
 RESULT (even event(ClientDone(sid,h,k1,k2)) ==> event(ServerDone(sid,h,k1,k2)) is false.)
 RESULT not attacker(secretC[]) is false.
 RESULT not attacker(secretS[]) is false.
-### a (3.2s)
+### b3 (2.0s)
+RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is false.
+RESULT (but event(ServerAcceptInit(sid,h)) ==> event(ClientSentInit(sid,h)) is true.)
+RESULT inj-event(ServerConfirmed(sid,h,k1,k2)) ==> inj-event(ClientDone(sid,h,k1,k2)) is true.
+RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is true.
+RESULT not attacker_p1(secretC[]) is true.
+RESULT not attacker_p1(secretS[]) is true.
+### b3_stdout_leak (1.6s)
+RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is false.
+RESULT (even event(ServerAcceptInit(sid,h)) ==> event(ClientSentInit(sid,h)) is false.)
+RESULT inj-event(ServerConfirmed(sid,h,k1,k2)) ==> inj-event(ClientDone(sid,h,k1,k2)) is true.
+RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is true.
+RESULT not attacker(secretC[]) is true.
+RESULT not attacker(secretS[]) is true.
+### b3_noss2_sanity (1.3s)
+RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is false.
+RESULT (even event(ServerAcceptInit(sid,h)) ==> event(ClientSentInit(sid,h)) is false.)
+RESULT inj-event(ServerConfirmed(sid,h,k1,k2)) ==> inj-event(ClientDone(sid,h,k1,k2)) is false.
+RESULT (even event(ServerConfirmed(sid,h,k1,k2)) ==> event(ClientDone(sid,h,k1,k2)) is false.)
+RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is true.
+RESULT not attacker(secretC[]) is true.
+RESULT not attacker(secretS[]) is false.
+### a (4.0s)
 RESULT inj-event(ClientConfirmed(spk(skC[]),spk(skS[]),k1,k2)) ==> inj-event(ServerDone(spk(skC[]),spk(skS[]),k1,k2)) is true.
 RESULT inj-event(ServerDone(spk(skC[]),spk(skS[]),k1,k2)) ==> inj-event(ClientDone(spk(skC[]),spk(skS[]),k1,k2)) is true.
 RESULT not attacker_p1(secretC[]) is true.
 RESULT not attacker_p1(secretS[]) is true.
-### a_kci (2.0s)
+### a_kci (2.8s)
 RESULT inj-event(ClientConfirmed(spk(skC[]),spk(skS[]),k1,k2)) ==> inj-event(ServerDone(spk(skC[]),spk(skS[]),k1,k2)) is true.
 RESULT inj-event(ServerDone(spk(skC[]),spk(skS[]),k1,k2)) ==> inj-event(ClientDone(spk(skC[]),spk(skS[]),k1,k2)) is false.
 RESULT (even event(ServerDone(spk(skC[]),spk(skS[]),k1,k2)) ==> event(ClientDone(spk(skC[]),spk(skS[]),k1,k2)) is false.)
 RESULT not attacker_p1(secretC[]) is true.
 RESULT not attacker_p1(secretS[]) is false.
-### a_nomac (1.6s)
+### a_nomac (1.8s)
 RESULT inj-event(ClientConfirmed(spk(skC[]),spk(skS[]),k1,k2)) ==> inj-event(ServerDone(spk(skC[]),spk(skS[]),k1,k2)) is true.
 RESULT inj-event(ServerDone(spk(skC[]),spk(skS[]),k1,k2)) ==> inj-event(ClientDone(spk(skC[]),spk(skS[]),k1,k2)) is false.
 RESULT (even event(ServerDone(spk(skC[]),spk(skS[]),k1,k2)) ==> event(ClientDone(spk(skC[]),spk(skS[]),k1,k2)) is false.)

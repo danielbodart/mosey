@@ -132,7 +132,7 @@ func (c *AClient) HandleResp(msg []byte) (msg3 []byte, sess *Session, peer Hello
 	i2r, r2i, root := st.split()
 	c.done = true
 	c.kemSK = nil
-	return out, newSession(c.cfg, true, c.localIdx, serverIdx, i2r, r2i, root), peer, nil
+	return out, newSession(c.cfg, true, c.localIdx, serverIdx, &i2r, &r2i, &root), peer, nil
 }
 
 // ---------------------------------------------------------------- server
@@ -219,5 +219,5 @@ func (s *AServer) HandleFin(msg []byte) (*Session, Hello, error) {
 	i2r, r2i, root := st.split()
 	s.pending = false
 	s.st.wipe()
-	return newSession(s.cfg, false, s.localIdx, s.peerIdx, i2r, r2i, root), peer, nil
+	return newSession(s.cfg, false, s.localIdx, s.peerIdx, &i2r, &r2i, &root), peer, nil
 }

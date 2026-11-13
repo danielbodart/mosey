@@ -23,30 +23,42 @@ import (
 //     network process over a unix socket in a 0700 directory under
 //     $XDG_RUNTIME_DIR, and the network process checks SO_PEERCRED
 //     (uid must equal its own). This is the "authenticated local channel".
-//  3. The network process mints brand-new single-use BCredentials (new
-//     session id, new PSK, new X-Wing key) for this attach and returns them;
-//     the helper prints them to SSH stdout; the client reads them.
+//  3. The helper forwards the client's one-shot B3 public key (which the
+//     client wrote to SSH stdin) and an "exclusive" flag. The network
+//     process mints brand-new single-use BCredentials (credential id,
+//     session id, PSK, server X-Wing key) bound to that client key, with a
+//     TTL; the helper prints them to SSH stdout; the client reads them.
 //  4. The client runs an ordinary variant-B handshake with them. The new
-//     transport is attached to the existing terminal session. Old clients'
-//     transports are independent (each has its own keys and indices).
+//     transport is attached to the existing terminal session. By default
+//     other clients' transports stay attached (O5, several devices); with
+//     --exclusive every other transport is revoked and its keys wiped as
+//     soon as the new one confirms (Dispatcher.onConsume). Exclusive attach
+//     is what turns "log in over SSH again" into recovery from a stolen or
+//     compromised client.
 //
 // So "resume" is just "a new handshake whose credentials were vouched for by
 // a new SSH login", and the only thing that persists is the session itself
 // (pty + emulator state), which lives in the session process (O4).
 
-const resumeMagic = "mosey-attach-v1\n"
+const resumeMagic = "mosey-attach-v2\n"
+
+// AttachRequest is what `mosey-server attach` forwards from SSH stdin.
+type AttachRequest struct {
+	Exclusive bool
+	ClientPK  []byte // B3 one-shot client key (KEMPublicKeySize bytes)
+}
 
 // ResumeServer hands out fresh credentials to same-uid local peers.
 type ResumeServer struct {
 	ln      *net.UnixListener
 	Path    string
-	Mint    func() (BCredentials, error)
+	Mint    func(AttachRequest) (BCredentials, error)
 	wantUID uint32
 	// PeerUID is overridable in tests to simulate a foreign uid.
 	PeerUID func(*net.UnixConn) (uint32, error)
 }
 
-func ListenResume(dir string, mint func() (BCredentials, error)) (*ResumeServer, error) {
+func ListenResume(dir string, mint func(AttachRequest) (BCredentials, error)) (*ResumeServer, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -101,33 +113,49 @@ func (r *ResumeServer) ServeOne() error {
 	if uid != r.wantUID {
 		return ErrForeignPeer
 	}
-	buf := make([]byte, len(resumeMagic))
-	if _, err := io.ReadFull(c, buf); err != nil || string(buf) != resumeMagic {
+	buf := make([]byte, len(resumeMagic)+1+KEMPublicKeySize)
+	if _, err := io.ReadFull(c, buf); err != nil || string(buf[:len(resumeMagic)]) != resumeMagic || buf[len(resumeMagic)] > 1 {
 		return ErrMalformed
 	}
-	cred, err := r.Mint()
+	req := AttachRequest{Exclusive: buf[len(resumeMagic)] == 1, ClientPK: buf[len(resumeMagic)+1:]}
+	cred, err := r.Mint(req)
 	if err != nil {
 		return err
 	}
-	_, err = c.Write(cred.Marshal())
+	out := cred.Marshal()
+	_, err = c.Write(out)
+	clear(out)
+	cred.Wipe()
 	return err
 }
 
 func (r *ResumeServer) Close() error { return r.ln.Close() }
 
 // RequestCredentials is what `mosey-server attach` does.
-func RequestCredentials(path string) (BCredentials, error) {
+func RequestCredentials(path string, req AttachRequest) (BCredentials, error) {
+	if len(req.ClientPK) != KEMPublicKeySize {
+		return BCredentials{}, ErrMalformed
+	}
 	c, err := net.Dial("unix", path)
 	if err != nil {
 		return BCredentials{}, err
 	}
 	defer c.Close()
-	if _, err := c.Write([]byte(resumeMagic)); err != nil {
+	msg := []byte(resumeMagic)
+	if req.Exclusive {
+		msg = append(msg, 1)
+	} else {
+		msg = append(msg, 0)
+	}
+	msg = append(msg, req.ClientPK...)
+	if _, err := c.Write(msg); err != nil {
 		return BCredentials{}, err
 	}
 	b, err := io.ReadAll(io.LimitReader(c, 4096))
 	if err != nil {
 		return BCredentials{}, err
 	}
-	return ParseBCredentials(b)
+	cred, err := ParseBCredentials(b)
+	clear(b)
+	return cred, err
 }

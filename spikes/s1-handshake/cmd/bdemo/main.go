@@ -23,7 +23,7 @@ func cpu() time.Duration {
 
 func main() {
 	n := flag.Int("n", 200, "handshakes")
-	mode := flag.Int("mode", 1, "1 = B1 (server KEM key over SSH), 2 = B2 (client KEM key in msg1)")
+	mode := flag.Int("mode", 1, "1 = B1 (server KEM key over SSH), 2 = B2 (client KEM key in msg1), 3 = B3 (both one-shot KEM keys over SSH)")
 	flag.Parse()
 	hello := hs.Hello{Proto: 1, Channels: []string{"terminal", "agent@mosey"}}
 	cfg := hs.DefaultConfig()
@@ -63,7 +63,13 @@ func main() {
 	c0 := cpu()
 	buf := make([]byte, 2048)
 	for i := 0; i < *n; i++ {
-		srv, cred, err := hs.NewBServer(hs.BMode(*mode), hello, cfg) // minted at SSH bootstrap
+		var ck *hs.ClientKEM // B3: made by the client, pk written to SSH stdin
+		var pks [][]byte
+		if *mode == 3 {
+			ck, _ = hs.NewClientKEM()
+			pks = append(pks, ck.PublicKey)
+		}
+		srv, cred, err := hs.NewBServer(hs.BMode(*mode), hello, cfg, pks...) // minted at SSH bootstrap
 		if err != nil {
 			panic(err)
 		}
@@ -71,7 +77,11 @@ func main() {
 		jobs <- job{srv, ack}
 		cconn, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 		t0 := time.Now()
-		cli, m1, err := hs.NewBClient(cred, hello, cfg)
+		var cks []*hs.ClientKEM
+		if ck != nil {
+			cks = append(cks, ck)
+		}
+		cli, m1, err := hs.NewBClient(cred, hello, cfg, cks...)
 		if err != nil {
 			panic(err)
 		}

@@ -32,14 +32,40 @@ func mustT(t testing.TB, err error) {
 	}
 }
 
-func handshakeB(t testing.TB, mode BMode, cfg Config) (cli, srv *Session, m1, m2 []byte) {
+// mintB runs the SSH bootstrap for mode: in B3 the client first makes its
+// one-shot key and "writes it to stdin". It returns a factory for clients
+// (each B3 client gets its own copy of the same one-shot key pair).
+func mintB(t testing.TB, mode BMode, cfg Config) (*BServer, BCredentials, func(BCredentials) (*BClient, []byte, error)) {
 	t.Helper()
-	server, cred, err := NewBServer(mode, serverHello, cfg)
+	var ck *ClientKEM
+	var pks [][]byte
+	if mode == B3BothKEM {
+		var err error
+		ck, err = NewClientKEM()
+		mustT(t, err)
+		pks = append(pks, ck.PublicKey)
+	}
+	server, cred, err := NewBServer(mode, serverHello, cfg, pks...)
 	mustT(t, err)
 	// the SSH hop: credentials are serialised and parsed again
 	cred2, err := ParseBCredentials(cred.Marshal())
 	mustT(t, err)
-	client, m1, err := NewBClient(cred2, clientHello, cfg)
+	mk := func(c BCredentials) (*BClient, []byte, error) {
+		if ck == nil {
+			return NewBClient(c, clientHello, cfg)
+		}
+		cp := *ck
+		return NewBClient(c, clientHello, cfg, &cp)
+	}
+	return server, cred2, mk
+}
+
+var allB = []BMode{B1ServerKEM, B2ClientKEM, B3BothKEM}
+
+func handshakeB(t testing.TB, mode BMode, cfg Config) (cli, srv *Session, m1, m2 []byte) {
+	t.Helper()
+	server, cred, mk := mintB(t, mode, cfg)
+	client, m1, err := mk(cred)
 	mustT(t, err)
 	m2, srv, peer, err := server.HandleInit(m1)
 	mustT(t, err)
@@ -51,7 +77,8 @@ func handshakeB(t testing.TB, mode BMode, cfg Config) (cli, srv *Session, m1, m2
 	if want := []string{"terminal", "agent@mosey"}; len(got.Channels) != 2 || got.Channels[0] != want[0] || got.Channels[1] != want[1] {
 		t.Fatalf("negotiated %v", got.Channels)
 	}
-	cli.Peer, srv.Peer = addrS, addrA
+	cli.SetPeer(addrS)
+	srv.SetPeer(addrA)
 	return
 }
 
@@ -73,7 +100,8 @@ func handshakeA(t testing.TB, cfg Config) (cli, srv *Session, m1, m2, m3 []byte)
 	if len(peer.Channels) != 2 {
 		t.Fatalf("server got selection %v", peer.Channels)
 	}
-	cli.Peer, srv.Peer = addrS, addrA
+	cli.SetPeer(addrS)
+	srv.SetPeer(addrA)
 	return
 }
 
@@ -93,7 +121,7 @@ func exchange(t *testing.T, a, b *Session, from netip.AddrPort, msg string) {
 
 func TestHandshakes(t *testing.T) {
 	cfg := DefaultConfig()
-	for _, mode := range []BMode{B1ServerKEM, B2ClientKEM} {
+	for _, mode := range allB {
 		cli, srv, m1, m2 := handshakeB(t, mode, cfg)
 		exchange(t, cli, srv, addrA, "ls\r")
 		exchange(t, srv, cli, addrS, "ls\r\nfoo bar\r\n")
@@ -123,21 +151,22 @@ func TestBRetransmitAndSingleUse(t *testing.T) {
 	}
 	c, _, err := client.HandleResp(m2b)
 	mustT(t, err)
-	c.Peer, s1.Peer = addrS, addrA
+	c.SetPeer(addrS)
+	s1.SetPeer(addrA)
 	exchange(t, c, s1, addrA, "x")
 }
 
 func TestBWrongCredentialsLeaveStateUntouched(t *testing.T) {
-	for _, mode := range []BMode{B1ServerKEM, B2ClientKEM} {
-		server, cred, _ := NewBServer(mode, serverHello, DefaultConfig())
+	for _, mode := range allB {
+		server, cred, mk := mintB(t, mode, DefaultConfig())
 		bad := cred
 		bad.PSK[0] ^= 1
-		_, m1bad, _ := NewBClient(bad, clientHello, DefaultConfig())
+		_, m1bad, _ := mk(bad)
 		if _, _, _, err := server.HandleInit(m1bad); err != ErrAuth {
 			t.Fatalf("mode %d: wrong PSK: %v", mode, err)
 		}
 		// state untouched: the genuine client still succeeds
-		_, m1, _ := NewBClient(cred, clientHello, DefaultConfig())
+		_, m1, _ := mk(cred)
 		if _, _, _, err := server.HandleInit(m1); err != nil {
 			t.Fatalf("mode %d: genuine client after attack: %v", mode, err)
 		}
@@ -145,11 +174,11 @@ func TestBWrongCredentialsLeaveStateUntouched(t *testing.T) {
 }
 
 func TestBTamperEveryByte(t *testing.T) {
-	for _, mode := range []BMode{B1ServerKEM, B2ClientKEM} {
-		server, cred, _ := NewBServer(mode, serverHello, DefaultConfig())
-		client, m1, _ := NewBClient(cred, clientHello, DefaultConfig())
+	for _, mode := range allB {
+		server, cred, mk := mintB(t, mode, DefaultConfig())
+		client, m1, _ := mk(cred)
 		for i := range m1 {
-			if i >= 2 && i < 6 {
+			if i >= 10 && i < 14 {
 				continue // sender index is authenticated too, but skip for speed
 			}
 			m := bytes.Clone(m1)
@@ -298,11 +327,12 @@ func TestRekeyByTime(t *testing.T) {
 	if _, err := srv.Open(p, addrA); err != nil {
 		t.Fatal(err)
 	}
-	if cli.Stats.Rekeys != 1 || srv.Stats.Rekeys != 0 || srv.next == nil {
-		t.Fatalf("after resp: cli=%d srv=%d", cli.Stats.Rekeys, srv.Stats.Rekeys)
+	// the initiator's keepalive right after RESP confirmed the new keys
+	if cli.Stats.Rekeys != 1 || srv.Stats.Rekeys != 1 || srv.next != nil {
+		t.Fatalf("after resp+keepalive: cli=%d srv=%d", cli.Stats.Rekeys, srv.Stats.Rekeys)
 	}
-	exchange(t, cli, srv, addrA, "first under new keys") // confirms -> server promotes
-	if srv.Stats.Rekeys != 1 || srv.cur.localIdx == oldIdx || cli.cur.sendKey == oldCliKey {
+	exchange(t, cli, srv, addrA, "first under new keys")
+	if srv.cur.localIdx == oldIdx || cli.cur.sendKey == oldCliKey {
 		t.Fatal("server did not promote / keys unchanged")
 	}
 	exchange(t, srv, cli, addrS, "reply")
@@ -359,33 +389,83 @@ func TestRekeyPacketSizes(t *testing.T) {
 
 // ---------------------------------------------------------------- resume
 
+// TestResumeOverLocalSocket: the attach helper's request (client key +
+// exclusive flag) crosses a real unix socket with a real SO_PEERCRED check,
+// the dispatcher mints credentials, the new client handshakes over the
+// dispatcher, and -- exclusive -- the old client's transport is revoked.
+// The foreign-uid refusal is checked by stubbing PeerUID (a real second uid
+// needs root or a user namespace; not done in the spike).
 func TestResumeOverLocalSocket(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1e9, 0)}
+	cfg := cfgWith(clk)
+	d := NewDispatcher(cfg)
+
+	// first client: initial SSH bootstrap (non-exclusive)
+	old, oldSrv := attachViaDispatcher(t, d, cfg, false, addrA)
+	exchange(t, old, oldSrv, addrA, "before resume")
+
 	dir := t.TempDir() + "/rt"
-	var server *BServer
-	rs, err := ListenResume(dir, func() (BCredentials, error) {
-		s, c, err := NewBServer(B1ServerKEM, serverHello, DefaultConfig())
-		server = s
-		return c, err
+	rs, err := ListenResume(dir, func(r AttachRequest) (BCredentials, error) {
+		return d.Mint("term0", B3BothKEM, serverHello, r.ClientPK, r.Exclusive)
 	})
 	mustT(t, err)
 	defer rs.Close()
 	done := make(chan error, 1)
 	go func() { done <- rs.ServeOne() }()
-	cred, err := RequestCredentials(rs.Path) // what `mosey-server attach` does over SSH
+	ck, _ := NewClientKEM()
+	cred, err := RequestCredentials(rs.Path, AttachRequest{Exclusive: true, ClientPK: ck.PublicKey})
 	mustT(t, err)
 	mustT(t, <-done)
-	client, m1, err := NewBClient(cred, clientHello, DefaultConfig())
+	nc := runClientViaDispatcher(t, d, cfg, cred, ck, addrB)
+	if d.Revoked != 1 || !oldSrv.Revoked() {
+		t.Fatalf("exclusive attach did not revoke the old transport (revoked=%d)", d.Revoked)
+	}
+	// the stolen/old client is now dead: its packets hit no key
+	p, err := old.Seal([]byte("from the old device"))
 	mustT(t, err)
-	m2, _, _, err := server.HandleInit(m1)
-	mustT(t, err)
-	_, _, err = client.HandleResp(m2)
-	mustT(t, err)
+	if _, _, _, err := d.Handle(p, addrA); err != ErrNoKey {
+		t.Fatalf("old client after exclusive attach: %v", err)
+	}
+	p, _ = nc.Seal([]byte("new device"))
+	if _, app, _, err := d.Handle(p, addrB); err != nil || string(app) != "new device" {
+		t.Fatalf("new client: %q %v", app, err)
+	}
 
 	// a peer with another uid is refused
 	rs.PeerUID = func(*net.UnixConn) (uint32, error) { return 4242, nil }
 	go func() { done <- rs.ServeOne() }()
-	RequestCredentials(rs.Path)
+	RequestCredentials(rs.Path, AttachRequest{ClientPK: ck.PublicKey})
 	if err := <-done; err != ErrForeignPeer {
 		t.Fatalf("foreign uid: %v", err)
 	}
+}
+
+// attachViaDispatcher mints a B3 credential for "term0" and completes a
+// handshake through d from address from. It returns the client session and
+// the server's session.
+func attachViaDispatcher(t *testing.T, d *Dispatcher, cfg Config, exclusive bool, from netip.AddrPort) (*Session, *Session) {
+	t.Helper()
+	ck, _ := NewClientKEM()
+	cred, err := d.Mint("term0", B3BothKEM, serverHello, ck.PublicKey, exclusive)
+	mustT(t, err)
+	cli := runClientViaDispatcher(t, d, cfg, cred, ck, from)
+	return cli, d.byIdx[cli.cur.remoteIdx]
+}
+
+func runClientViaDispatcher(t *testing.T, d *Dispatcher, cfg Config, cred BCredentials, ck *ClientKEM, from netip.AddrPort) *Session {
+	t.Helper()
+	c, m1, err := NewBClient(cred, clientHello, cfg, ck)
+	mustT(t, err)
+	out, _, _, err := d.Handle(m1, from)
+	mustT(t, err)
+	cli, _, err := c.HandleResp(out[0])
+	mustT(t, err)
+	cli.SetPeer(addrS)
+	p, _ := cli.Seal([]byte("confirm"))
+	_, app, _, err := d.Handle(p, from)
+	mustT(t, err)
+	if string(app) != "confirm" {
+		t.Fatalf("app %q", app)
+	}
+	return cli
 }

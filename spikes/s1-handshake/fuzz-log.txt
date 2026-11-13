@@ -53,3 +53,28 @@ PASS
 ok  	mosey.spike/s1-handshake/hs	200.109s
 === FuzzReplayWindow end, wall 200s
 ALLDONE
+
+################ campaign 2 (after adversarial review) ################
+fuzz campaign 2 (after review), start 2026-11-13T19:29:42+00:00
+=== FuzzBServerInitB3FixMAC start 19:29:42
+fuzz: elapsed: 1m40s, execs: 24494799 (224054/sec), new interesting: 2 (total: 5)
+PASS
+ok  	mosey.spike/s1-handshake/hs	100.105s
+=== FuzzBServerInitB1 start 19:31:22
+fuzz: elapsed: 1m40s, execs: 11131421 (53446/sec), new interesting: 2 (total: 7)
+PASS
+ok  	mosey.spike/s1-handshake/hs	100.093s
+=== FuzzParseBCredentials start 19:33:03
+fuzz: elapsed: 1m40s, execs: 26538359 (239285/sec), new interesting: 3 (total: 10)
+PASS
+ok  	mosey.spike/s1-handshake/hs	100.120s
+=== FuzzBClientResp start 19:34:43
+fuzz: elapsed: 1m40s, execs: 27491280 (253052/sec), new interesting: 1 (total: 4)
+PASS
+ok  	mosey.spike/s1-handshake/hs	100.124s
+=== FuzzSessionOpen start 19:36:23
+fuzz: elapsed: 1m40s, execs: 27832281 (249863/sec), new interesting: 0 (total: 6)
+PASS
+ok  	mosey.spike/s1-handshake/hs	100.108s
+end 2026-11-13T19:38:03+00:00
+(lines filtered to the 1m40s progress line and result; script: for each target, go test ./hs -run '^$' -fuzz ^T$ -fuzztime 100s -parallel 8)

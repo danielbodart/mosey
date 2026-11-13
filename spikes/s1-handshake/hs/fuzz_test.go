@@ -25,8 +25,8 @@ func FuzzParseHello(f *testing.F) {
 }
 
 func FuzzParseBCredentials(f *testing.F) {
-	for _, m := range []BMode{B1ServerKEM, B2ClientKEM} {
-		_, c, _ := NewBServer(m, serverHello, DefaultConfig())
+	for _, m := range allB {
+		_, c, _ := mintB(f, m, DefaultConfig())
 		f.Add(c.Marshal())
 	}
 	f.Fuzz(func(t *testing.T, in []byte) {
@@ -44,8 +44,8 @@ func FuzzParseBCredentials(f *testing.F) {
 // fuzzer's bytes get a valid mac1 appended so mutations reach the KEM, AEAD
 // and hello parsers behind the pre-filter.
 func fuzzBServer(f *testing.F, mode BMode, fixMAC bool) {
-	server, cred, _ := NewBServer(mode, serverHello, DefaultConfig())
-	_, m1, _ := NewBClient(cred, clientHello, DefaultConfig())
+	server, cred, mk := mintB(f, mode, DefaultConfig())
+	_, m1, _ := mk(cred)
 	f.Add(m1)
 	f.Add(m1[:len(m1)-mac1Size])
 	f.Add([]byte{TypeBInit, Version})
@@ -65,9 +65,9 @@ func fuzzBServer(f *testing.F, mode BMode, fixMAC bool) {
 		if sess != nil && !bytes.Equal(msg, m1) {
 			t.Fatalf("accepted a msg1 the client never sent: %x", msg)
 		}
-		if server.consumed { // genuine msg1 found again: reset
-			server, cred, _ = NewBServer(mode, serverHello, DefaultConfig())
-			_, m1, _ = NewBClient(cred, clientHello, DefaultConfig())
+		if server.consumed || len(server.pending) > 0 { // genuine msg1 found again: reset
+			server, cred, mk = mintB(t, mode, DefaultConfig())
+			_, m1, _ = mk(cred)
 			key = mac1Key(&cred)
 		}
 	})
@@ -76,21 +76,22 @@ func fuzzBServer(f *testing.F, mode BMode, fixMAC bool) {
 func FuzzBServerInitB1(f *testing.F)       { fuzzBServer(f, B1ServerKEM, false) }
 func FuzzBServerInitB1FixMAC(f *testing.F) { fuzzBServer(f, B1ServerKEM, true) }
 func FuzzBServerInitB2FixMAC(f *testing.F) { fuzzBServer(f, B2ClientKEM, true) }
+func FuzzBServerInitB3FixMAC(f *testing.F) { fuzzBServer(f, B3BothKEM, true) }
 
 func FuzzBClientResp(f *testing.F) {
-	for _, mode := range []BMode{B1ServerKEM, B2ClientKEM} {
-		server, cred, _ := NewBServer(mode, serverHello, DefaultConfig())
-		_, m1, _ := NewBClient(cred, clientHello, DefaultConfig())
+	for _, mode := range allB {
+		server, cred, mk := mintB(f, mode, DefaultConfig())
+		_, m1, _ := mk(cred)
 		m2, _, _, _ := server.HandleInit(m1)
 		f.Add(byte(mode), m2)
 	}
 	clients := map[BMode]*BClient{}
-	for _, mode := range []BMode{B1ServerKEM, B2ClientKEM} {
-		_, cred, _ := NewBServer(mode, serverHello, DefaultConfig())
-		clients[mode], _, _ = NewBClient(cred, clientHello, DefaultConfig())
+	for _, mode := range allB {
+		_, cred, mk := mintB(f, mode, DefaultConfig())
+		clients[mode], _, _ = mk(cred)
 	}
 	f.Fuzz(func(t *testing.T, mode byte, in []byte) {
-		c := clients[BMode(mode%2+1)]
+		c := clients[BMode(mode%3+1)]
 		// any msg2 here is for a different server: it must never succeed
 		if _, _, err := c.HandleResp(in); err == nil {
 			t.Fatal("client accepted a msg2 from a server without the PSK")
