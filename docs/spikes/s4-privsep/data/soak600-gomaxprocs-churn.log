@@ -1,0 +1,8 @@
+1794595107
+[soak pid=134908] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+176.554µs)
+[soak pid=134908] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (167.926µs)
+[soak pid=134908] seccomp: how=tsync policy=net insns=60 skipped=[] threads-at-install=5 (151.537µs, t+637.577µs)
+[stress pid=134908] done 600s: numGC=6014 goroutines=2
+SOAK OK 600s udp-roundtrips=8553166 ipc-roundtrips=13744518
+exit=0
+1794595707

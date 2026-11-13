@@ -1,0 +1,2056 @@
+[
+ {
+  "layout": "A",
+  "sandbox": "none",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": true,
+    "detail": "pid 171528"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": true,
+    "detail": "permission check passed (EFAULT (14))"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": true,
+    "detail": "ring created (io_uring ops bypass seccomp)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EINVAL (22)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": true,
+    "detail": "layout A: 32-byte key in memory"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": true,
+   "~/pwned-exec exists (exec'd shell ran)": true,
+   "~/pwned-fs exists": true,
+   "~/.bashrc modified": true,
+   "tcp listener accepted": true,
+   "unix (agent/bus replica) accepted": true,
+   "abstract unix accepted": true,
+   "udp datagrams received": [
+    "exfil-inherited",
+    "exfil-new"
+   ]
+  },
+  "log": [
+   "[net pid=171522] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+150.223\u00b5s)",
+   "MOSEY-SPIKE PIDS session=171516 net=171522 emu=171526 shell=171527 pts=/dev/pts/2 layout=A",
+   "[net] (red team) forged log line",
+   "[emu pid=171526] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+95.184\u00b5s)"
+  ]
+ },
+ {
+  "layout": "A",
+  "sandbox": "landlock",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": false,
+    "detail": "connect: EACCES (13)"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": false,
+    "detail": "connect: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": true,
+    "detail": "ring created (io_uring ops bypass seccomp)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EINVAL (22)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": true,
+    "detail": "layout A: 32-byte key in memory"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": true,
+   "~/pwned-exec exists (exec'd shell ran)": false,
+   "~/pwned-fs exists": false,
+   "~/.bashrc modified": false,
+   "tcp listener accepted": false,
+   "unix (agent/bus replica) accepted": true,
+   "abstract unix accepted": false,
+   "udp datagrams received": [
+    "exfil-inherited",
+    "exfil-new"
+   ]
+  },
+  "log": [
+   "[net pid=171578] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+163.076\u00b5s)",
+   "MOSEY-SPIKE PIDS session=171572 net=171578 emu=171579 shell=171583 pts=/dev/pts/2 layout=A",
+   "[emu pid=171579] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+166.599\u00b5s)",
+   "[net pid=171578] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (9.274467ms)",
+   "[net] (red team) forged log line",
+   "[emu pid=171579] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (8.711769ms)"
+  ]
+ },
+ {
+  "layout": "A",
+  "sandbox": "seccomp",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": false,
+    "detail": "pidfd_open: EPERM (1)"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": true,
+    "detail": "layout A: 32-byte key in memory"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": true,
+   "~/pwned-exec exists (exec'd shell ran)": false,
+   "~/pwned-fs exists": false,
+   "~/.bashrc modified": false,
+   "tcp listener accepted": false,
+   "unix (agent/bus replica) accepted": false,
+   "abstract unix accepted": false,
+   "udp datagrams received": [
+    "exfil-inherited"
+   ]
+  },
+  "log": [
+   "[net pid=171619] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+170.419\u00b5s)",
+   "[net pid=171619] seccomp: how=tsync policy=net insns=60 skipped=[] threads-at-install=5 (169.216\u00b5s, t+429.977\u00b5s)",
+   "MOSEY-SPIKE PIDS session=171612 net=171619 emu=171623 shell=171626 pts=/dev/pts/2 layout=A",
+   "[net] (red team) forged log line",
+   "[emu pid=171623] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+174.008\u00b5s)",
+   "[emu pid=171623] seccomp: how=tsync policy=emu insns=55 skipped=[] threads-at-install=4 (164.756\u00b5s, t+461.503\u00b5s)"
+  ]
+ },
+ {
+  "layout": "A",
+  "sandbox": "both",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": false,
+    "detail": "pidfd_open: EPERM (1)"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": true,
+    "detail": "layout A: 32-byte key in memory"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": true,
+   "~/pwned-exec exists (exec'd shell ran)": false,
+   "~/pwned-fs exists": false,
+   "~/.bashrc modified": false,
+   "tcp listener accepted": false,
+   "unix (agent/bus replica) accepted": false,
+   "abstract unix accepted": false,
+   "udp datagrams received": [
+    "exfil-inherited"
+   ]
+  },
+  "log": [
+   "[net pid=171708] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+379.515\u00b5s)",
+   "MOSEY-SPIKE PIDS session=171703 net=171708 emu=171712 shell=171714 pts=/dev/pts/2 layout=A",
+   "[emu pid=171712] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+122.004\u00b5s)",
+   "[emu pid=171712] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (6.858837ms)",
+   "[emu pid=171712] seccomp: how=tsync policy=emu insns=55 skipped=[] threads-at-install=5 (181.523\u00b5s, t+8.949737ms)",
+   "[net pid=171708] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (11.149511ms)",
+   "[net pid=171708] seccomp: how=tsync policy=net insns=60 skipped=[] threads-at-install=5 (238.012\u00b5s, t+15.497459ms)",
+   "[net] (red team) forged log line"
+  ]
+ },
+ {
+  "layout": "B",
+  "sandbox": "none",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": true,
+    "detail": "pid 171912"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": true,
+    "detail": "permission check passed (EFAULT (14))"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": true,
+    "detail": "ring created (io_uring ops bypass seccomp)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EINVAL (22)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": false,
+    "detail": "layout B: never sent"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": false,
+   "~/pwned-exec exists (exec'd shell ran)": true,
+   "~/pwned-fs exists": true,
+   "~/.bashrc modified": true,
+   "tcp listener accepted": true,
+   "unix (agent/bus replica) accepted": true,
+   "abstract unix accepted": true,
+   "udp datagrams received": [
+    "exfil-inherited",
+    "exfil-new"
+   ]
+  },
+  "log": [
+   "[net pid=171903] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+1.703237ms)",
+   "MOSEY-SPIKE PIDS session=171898 net=171903 emu=171904 shell=171908 pts=/dev/pts/2 layout=B",
+   "[net] (red team) forged log line",
+   "[emu pid=171904] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+208.5\u00b5s)"
+  ]
+ },
+ {
+  "layout": "B",
+  "sandbox": "landlock",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": false,
+    "detail": "connect: EACCES (13)"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": false,
+    "detail": "connect: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": true,
+    "detail": "ring created (io_uring ops bypass seccomp)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EINVAL (22)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": false,
+    "detail": "layout B: never sent"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": false,
+   "~/pwned-exec exists (exec'd shell ran)": false,
+   "~/pwned-fs exists": false,
+   "~/.bashrc modified": false,
+   "tcp listener accepted": false,
+   "unix (agent/bus replica) accepted": true,
+   "abstract unix accepted": false,
+   "udp datagrams received": [
+    "exfil-inherited",
+    "exfil-new"
+   ]
+  },
+  "log": [
+   "MOSEY-SPIKE PIDS session=171946 net=171951 emu=171952 shell=171953 pts=/dev/pts/2 layout=B",
+   "[emu pid=171952] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+697.04\u00b5s)",
+   "[net pid=171951] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=6 (t+183.066\u00b5s)",
+   "[net pid=171951] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (4.444245ms)",
+   "[net] (red team) forged log line",
+   "[emu pid=171952] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (8.234755ms)"
+  ]
+ },
+ {
+  "layout": "B",
+  "sandbox": "seccomp",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": false,
+    "detail": "pidfd_open: EPERM (1)"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": false,
+    "detail": "layout B: never sent"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": false,
+   "~/pwned-exec exists (exec'd shell ran)": false,
+   "~/pwned-fs exists": false,
+   "~/.bashrc modified": false,
+   "tcp listener accepted": false,
+   "unix (agent/bus replica) accepted": false,
+   "abstract unix accepted": false,
+   "udp datagrams received": [
+    "exfil-inherited"
+   ]
+  },
+  "log": [
+   "[net pid=172002] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+151.086\u00b5s)",
+   "[net pid=172002] seccomp: how=tsync policy=net insns=60 skipped=[] threads-at-install=4 (192.536\u00b5s, t+429.067\u00b5s)",
+   "[net] (red team) forged log line",
+   "MOSEY-SPIKE PIDS session=171996 net=172002 emu=172003 shell=172009 pts=/dev/pts/2 layout=B",
+   "[emu pid=172003] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+106.504\u00b5s)",
+   "[emu pid=172003] seccomp: how=tsync policy=emu insns=55 skipped=[] threads-at-install=5 (122.629\u00b5s, t+292.232\u00b5s)"
+  ]
+ },
+ {
+  "layout": "B",
+  "sandbox": "both",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": false,
+    "detail": "pidfd_open: EPERM (1)"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": false,
+    "detail": "layout B: never sent"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": false,
+   "~/pwned-exec exists (exec'd shell ran)": false,
+   "~/pwned-fs exists": false,
+   "~/.bashrc modified": false,
+   "tcp listener accepted": false,
+   "unix (agent/bus replica) accepted": false,
+   "abstract unix accepted": false,
+   "udp datagrams received": [
+    "exfil-inherited"
+   ]
+  },
+  "log": [
+   "MOSEY-SPIKE PIDS session=172071 net=172077 emu=172078 shell=172079 pts=/dev/pts/2 layout=B",
+   "[net pid=172077] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+238.603\u00b5s)",
+   "[emu pid=172078] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+257.389\u00b5s)",
+   "[emu pid=172078] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (1.718857ms)",
+   "[net pid=172077] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (4.85621ms)",
+   "[net pid=172077] seccomp: how=tsync policy=net insns=60 skipped=[] threads-at-install=5 (290.334\u00b5s, t+5.53127ms)",
+   "[net] (red team) forged log line",
+   "[emu pid=172078] seccomp: how=tsync policy=emu insns=55 skipped=[] threads-at-install=5 (249.35\u00b5s, t+4.674213ms)"
+  ]
+ },
+ {
+  "layout": "B2",
+  "sandbox": "none",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": true,
+    "detail": "pid 172394"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": true,
+    "detail": "permission check passed (EFAULT (14))"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": true,
+    "detail": "ring created (io_uring ops bypass seccomp)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EINVAL (22)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": false,
+    "detail": "layout B: never sent"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": false,
+   "~/pwned-exec exists (exec'd shell ran)": true,
+   "~/pwned-fs exists": true,
+   "~/.bashrc modified": true,
+   "tcp listener accepted": true,
+   "unix (agent/bus replica) accepted": true,
+   "abstract unix accepted": true,
+   "udp datagrams received": [
+    "exfil-inherited",
+    "exfil-new"
+   ]
+  },
+  "log": [
+   "[net pid=172387] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+148.558\u00b5s)",
+   "[net] (red team) forged log line",
+   "MOSEY-SPIKE PIDS session=172382 net=172387 emu=172391 shell=172393 pts=/dev/pts/2 layout=B2",
+   "[emu pid=172391] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+311.151\u00b5s)"
+  ]
+ },
+ {
+  "layout": "B2",
+  "sandbox": "landlock",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": false,
+    "detail": "connect: EACCES (13)"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": true,
+    "detail": "connected"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": false,
+    "detail": "connect: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": false,
+    "detail": "EACCES (13)"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": true,
+    "detail": "ring created (io_uring ops bypass seccomp)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EINVAL (22)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": false,
+    "detail": "layout B: never sent"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": false,
+   "~/pwned-exec exists (exec'd shell ran)": false,
+   "~/pwned-fs exists": false,
+   "~/.bashrc modified": false,
+   "tcp listener accepted": false,
+   "unix (agent/bus replica) accepted": true,
+   "abstract unix accepted": false,
+   "udp datagrams received": [
+    "exfil-inherited",
+    "exfil-new"
+   ]
+  },
+  "log": [
+   "[net pid=172553] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+196.009\u00b5s)",
+   "[net pid=172553] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (292.567\u00b5s)",
+   "[net] (red team) forged log line",
+   "MOSEY-SPIKE PIDS session=172545 net=172553 emu=172554 shell=172565 pts=/dev/pts/2 layout=B2",
+   "[emu pid=172554] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+174.705\u00b5s)",
+   "[emu pid=172554] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (256.777\u00b5s)"
+  ]
+ },
+ {
+  "layout": "B2",
+  "sandbox": "seccomp",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": false,
+    "detail": "write udp 127.0.0.1:43909->127.0.0.1:43763: sendto: operation not permitted"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": false,
+    "detail": "pidfd_open: EPERM (1)"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": false,
+    "detail": "layout B: never sent"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": false,
+   "~/pwned-exec exists (exec'd shell ran)": false,
+   "~/pwned-fs exists": false,
+   "~/.bashrc modified": false,
+   "tcp listener accepted": false,
+   "unix (agent/bus replica) accepted": false,
+   "abstract unix accepted": false,
+   "udp datagrams received": []
+  },
+  "log": [
+   "MOSEY-SPIKE PIDS session=172750 net=172756 emu=172757 shell=172758 pts=/dev/pts/2 layout=B2",
+   "[emu pid=172757] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+281.818\u00b5s)",
+   "[net pid=172756] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+304.703\u00b5s)",
+   "[net pid=172756] seccomp: how=tsync policy=net-recvonly insns=57 skipped=[] threads-at-install=4 (286.673\u00b5s, t+719.684\u00b5s)",
+   "[net] (red team) forged log line",
+   "[emu pid=172757] seccomp: how=tsync policy=emu insns=55 skipped=[] threads-at-install=4 (1.219871ms, t+4.274322ms)"
+  ]
+ },
+ {
+  "layout": "B2",
+  "sandbox": "both",
+  "results": [
+   {
+    "attack": "fs.read ~/.ssh/id_ed25519",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.append ~/.bashrc",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.create ~/pwned-fs",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.list /tmp",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.read /proc/<session>/environ",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "fs.open /proc/<session>/mem",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.new TCP socket + connect",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.new UDP socket + sendto",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "net.inherited UDP sendto anywhere",
+    "allowed": false,
+    "detail": "write udp 127.0.0.1:57861->127.0.0.1:44994: sendto: operation not permitted"
+   },
+   {
+    "attack": "net.write() on inherited UDP fd",
+    "allowed": false,
+    "detail": "EDESTADDRREQ (89)"
+   },
+   {
+    "attack": "unix.connect path (agent/bus replica)",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect abstract",
+    "allowed": false,
+    "detail": "socket: EPERM (1)"
+   },
+   {
+    "attack": "unix.connect via inherited UDP fd (SCM_RIGHTS path)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "net.setsockopt on inherited UDP fd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "log.write to inherited stderr (log injection)",
+    "allowed": true,
+    "detail": "ok"
+   },
+   {
+    "attack": "exec /bin/sh (fork+exec)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(session, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "kill(other same-uid process, 0)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "ptrace(SEIZE, other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "process_vm_readv(other process)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pidfd_getfd(other process, fd 1)",
+    "allowed": false,
+    "detail": "pidfd_open: EPERM (1)"
+   },
+   {
+    "attack": "pty.open /dev/ptmx",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "pty.open session's /dev/pts/N (read = steal keystrokes)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "io_uring_setup",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "userfaultfd",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "unshare(CLONE_NEWUSER)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "keyctl(user keyring)",
+    "allowed": false,
+    "detail": "EPERM (1)"
+   },
+   {
+    "attack": "secret: net process holds the session traffic key",
+    "allowed": false,
+    "detail": "layout B: never sent"
+   },
+   {
+    "attack": "ipc: forge keystrokes to the shell",
+    "allowed": true,
+    "detail": "message delivered; see harness check for ~/pwned-ipc"
+   }
+  ],
+  "side_effects": {
+   "~/pwned-ipc exists (shell ran forged keystrokes)": false,
+   "~/pwned-exec exists (exec'd shell ran)": false,
+   "~/pwned-fs exists": false,
+   "~/.bashrc modified": false,
+   "tcp listener accepted": false,
+   "unix (agent/bus replica) accepted": false,
+   "abstract unix accepted": false,
+   "udp datagrams received": []
+  },
+  "log": [
+   "MOSEY-SPIKE PIDS session=173104 net=173110 emu=173111 shell=173112 pts=/dev/pts/2 layout=B2",
+   "[emu pid=173111] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+126.71\u00b5s)",
+   "[net pid=173110] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+157.687\u00b5s)",
+   "[emu pid=173111] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (8.764081ms)",
+   "[emu pid=173111] seccomp: how=tsync policy=emu insns=55 skipped=[] threads-at-install=5 (141.506\u00b5s, t+9.147673ms)",
+   "[net pid=173110] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (13.016597ms)",
+   "[net pid=173110] seccomp: how=tsync policy=net-recvonly insns=57 skipped=[] threads-at-install=4 (369.657\u00b5s, t+13.728652ms)",
+   "[net] (red team) forged log line"
+  ]
+ }
+]

@@ -1,0 +1,4 @@
+[soak pid=158709] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=5 (t+218.479µs)
+[soak pid=158709] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (687.209µs)
+[soak pid=158709] seccomp: how=tsync policy=net insns=60 skipped=[] threads-at-install=5 (121.027µs, t+1.128525ms)
+[stress pid=158709] done 600s: numGC=26798 goroutines=2
