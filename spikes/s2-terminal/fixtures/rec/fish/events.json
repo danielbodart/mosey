@@ -1,0 +1,38 @@
+[
+ {
+  "off": 278,
+  "kind": "snap",
+  "name": "prompt"
+ },
+ {
+  "off": 365,
+  "kind": "snap",
+  "name": "typing"
+ },
+ {
+  "off": 867,
+  "kind": "snap",
+  "name": "echo"
+ },
+ {
+  "off": 1863,
+  "kind": "snap",
+  "name": "loop"
+ },
+ {
+  "off": 1863,
+  "kind": "resize",
+  "w": 100,
+  "h": 30
+ },
+ {
+  "off": 1871,
+  "kind": "snap",
+  "name": "resized"
+ },
+ {
+  "off": 2523,
+  "kind": "snap",
+  "name": "color"
+ }
+]

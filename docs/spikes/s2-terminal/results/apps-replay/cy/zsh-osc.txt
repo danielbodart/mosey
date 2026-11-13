@@ -1,0 +1,9 @@
+dan@dan-desktop /home/dan/Projects/mosey/.claude/worktrees/wf_81ba60d9-5e8-2/spi
+kes/s2-terminal ❯ echo 漢 字 👍 🏽 e<0301> 🇬🇧 mbold                       [18:42] ✓
+漢 字 👍 🏽 e 🇬🇧 mbold
+dan@dan-desktop /home/dan/Projects/mosey/.claude/worktrees/wf_81ba60d9-5e8-2/spi
+kes/s2-terminal ❯ printf '\e]8;;http://example.com\e\\link\e]8;;\e\\ \e]2;title-
+from-zsh\a\e[38;2;255;100;0mtruecolor\e[0m\n'
+link truecolor
+dan@dan-desktop /home/dan/Projects/mosey/.claude/worktrees/wf_81ba60d9-5e8-2/spi
+kes/s2-terminal ❯                                                     [18:42] ✓

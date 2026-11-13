@@ -1,0 +1,49 @@
+[
+ {
+  "off": 294,
+  "kind": "snap",
+  "name": "prompt"
+ },
+ {
+  "off": 686,
+  "kind": "snap",
+  "name": "echo"
+ },
+ {
+  "off": 1198,
+  "kind": "snap",
+  "name": "osc"
+ },
+ {
+  "off": 18408,
+  "kind": "snap",
+  "name": "scroll"
+ },
+ {
+  "off": 18408,
+  "kind": "resize",
+  "w": 50,
+  "h": 24
+ },
+ {
+  "off": 18560,
+  "kind": "snap",
+  "name": "narrow"
+ },
+ {
+  "off": 18623,
+  "kind": "snap",
+  "name": "ls"
+ },
+ {
+  "off": 18623,
+  "kind": "resize",
+  "w": 80,
+  "h": 24
+ },
+ {
+  "off": 23242,
+  "kind": "snap",
+  "name": "back"
+ }
+]

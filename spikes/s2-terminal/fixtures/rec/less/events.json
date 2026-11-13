@@ -1,0 +1,38 @@
+[
+ {
+  "off": 1095,
+  "kind": "snap",
+  "name": "open"
+ },
+ {
+  "off": 2377,
+  "kind": "snap",
+  "name": "page2"
+ },
+ {
+  "off": 5557,
+  "kind": "snap",
+  "name": "search"
+ },
+ {
+  "off": 6704,
+  "kind": "snap",
+  "name": "back"
+ },
+ {
+  "off": 6704,
+  "kind": "resize",
+  "w": 120,
+  "h": 40
+ },
+ {
+  "off": 8880,
+  "kind": "snap",
+  "name": "resized"
+ },
+ {
+  "off": 8908,
+  "kind": "snap",
+  "name": "quit"
+ }
+]

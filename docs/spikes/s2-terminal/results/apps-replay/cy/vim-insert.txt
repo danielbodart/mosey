@@ -1,0 +1,24 @@
+  1 hello 漢 字  👍 🏽  e 🇬 🇧               |  1 hello 漢 字  👍 🏽  e 🇬 🇧
+  2 package emu                         |  2 package emu
+  3                                     |  3
+  4 import (                            |  4 import (
+  5         "sync"                      |  5         "sync"
+  6                                     |  6
+  7         xterm "github.com/gitpod-io/|  7         xterm "github.com/gitpod-io
+    xterm-go"                           |    /xterm-go"
+  8 )                                   |  8 )
+  9                                     |  9
+ 10 type xtermEmu struct {              | 10 type xtermEmu struct {
+ 11         t     *xterm.Terminal       | 11         t     *xterm.Terminal
+ 12         mu    sync.Mutex            | 12         mu    sync.Mutex
+ 13         resp  []byte                | 13         resp  []byte
+ 14         title string                | 14         title string
+ 15         cell  xterm.CellData        | 15         cell  xterm.CellData
+ 16 }                                   | 16 }
+ 17                                     | 17
+ 18 func init() {                       | 18 func init() {
+ 19         register(Factory{Name: "xter| 19         register(Factory{Name: "xte
+    mgo", New: func(w, h int) Emulator {|    rmgo", New: func(w, h int) Emulator
+     return newXterm(w, h) }})          |     { return newXterm(w, h) }})
+<es/sample_go.txt [+] 1,35-23        Top <s/sample_go.txt [+] 2,1            Top
+-- INSERT --                                                         ^[

@@ -1,0 +1,24 @@
+     22 , xterm.WithScrollback(1000))}
+     23         x.t.OnData(func(s string) { x.mu.Lock(); x.resp = append(x.resp,
+     23  s...); x.mu.Unlock() })
+     24         x.t.OnTitleChange(func(s string) { x.mu.Lock(); x.title = s; x.m
+     24 u.Unlock() })
+     25         return x
+     26 }
+     27
+     28 func (x *xtermEmu) Name() string     { return "xtermgo" }
+     29 func (x *xtermEmu) Write(p []byte)   { _, _ = x.t.Write(p) }
+     30 func (x *xtermEmu) Resize(w, h int)  { x.t.Resize(w, h) }
+     31 func (x *xtermEmu) Size() (int, int) { return x.t.Cols(), x.t.Rows() }
+     32
+     33 func xtColor(mode uint32, v int) Color {
+     34         switch mode {
+     35         case xterm.AttrCMP16, xterm.AttrCMP256:
+     36                 return Indexed(uint8(v))
+     37         case xterm.AttrCMRGB:
+     38                 return colorRGB | Color(uint32(v)&0xFFFFFF)
+     39         }
+     40         return ColorDefault
+     41 }
+     42
+:

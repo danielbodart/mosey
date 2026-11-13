@@ -5,21 +5,26 @@
 //
 // Wire format (all integers are unsigned varints, strings are length-prefixed):
 //
-//	frame   := op* opEnd
-//	op      := 'Z' w h                    resize + clear (a full repaint follows)
+//	frame   := op*
+//	op      := 'X'                        reset the style table to {0: default} and blank the cells
+//	         | 'D' id fg bg attr link     define style id (fg/bg as in emu.Color);
+//	                                      ids are dense: id == current table size
+//	         | 'Z' w h                    resize + clear (a full repaint follows)
 //	         | 'U' n                      scroll the whole screen up n rows
-//	         | 'D' id fg bg attr link     define style id (fg/bg as in emu.Color)
 //	         | 'R' y x0 n run*            replace n columns of row y from x0
 //	         | 'C' x y flags              cursor (flags bit0 visible)
-//	         | 'T' title                  window title (already allow-listed)
-//	         | 'M' modes                  bitset of input modes the client must mirror
+//	         | 'T' title                  window title
 //	run     := styleID count cell{count}
 //	cell    := (len<<1 | wide) bytes      grapheme cluster; wide cells cover 2 columns
 //
+// Every text field (title, link, cell) passes the D9 allow-list in allow.go
+// on the server (Snapshot sanitises) and again on the client (Apply rejects
+// the whole diff). Sizes are clamped to MaxCols x MaxRows on the server
+// before the emulator's Resize, and the client refuses anything larger.
+//
 // Rows are compared by a cached 64-bit hash, so an unchanged row costs one
 // comparison; scrolls are detected by matching row hashes at an offset.
-// This is a spike: no versioning, no bounds on style-table growth beyond a
-// reset, no OSC 52/8 event channel.
+// This is a spike: no versioning, no input-mode op yet, no OSC 52 channel.
 package celldiff
 
 import (
@@ -55,41 +60,89 @@ type Frame struct {
 	Modes  uint32
 }
 
-// Styles interns styles to small ids. Server and client each keep one.
-type Styles struct {
-	ids   map[Style]uint32
-	byID  []Style
-	fresh []uint32 // ids defined since the last Diff
+// Limits on what one session can make either end hold.
+const (
+	// MaxCols and MaxRows clamp the window size the client asks for. The
+	// server applies them before the emulator's Resize (see ClampSize);
+	// the client refuses a larger 'Z'. Chosen from the worst-case memory
+	// per session in FINDINGS ("Worst-case memory per session").
+	MaxCols = 1000
+	MaxRows = 500
+
+	maxStyles    = 1 << 16
+	maxLinkBytes = 1 << 20
+)
+
+// ClampSize is what the server does to a window size from the client before
+// it reaches the emulator.
+func ClampSize(w, h int) (int, int) {
+	return min(max(w, 1), MaxCols), min(max(h, 1), MaxRows)
 }
 
-const maxStyles = 1 << 16
+// Styles interns styles to small ids (the server's table; the client keeps
+// the matching slice in Client.Styles).
+type Styles struct {
+	ids       map[Style]uint32
+	byID      []Style
+	fresh     []uint32 // ids defined since the last Diff
+	linkBytes int
+	reset     bool // the next Diff starts with 'X' and a full repaint
+	Degraded  int  // styles replaced because the table was full
+}
 
 func NewStyles() *Styles {
-	s := &Styles{ids: map[Style]uint32{}}
-	s.id(Style{})
-	s.fresh = nil
+	s := &Styles{}
+	s.Reset()
+	s.reset = false
 	return s
+}
+
+// Reset empties the table; the next Diff tells the client to do the same.
+func (s *Styles) Reset() {
+	s.ids = map[Style]uint32{{}: 0}
+	s.byID = []Style{{}}
+	s.fresh = nil
+	s.linkBytes = 0
+	s.reset = true
 }
 
 func (s *Styles) id(st Style) uint32 {
 	if id, ok := s.ids[st]; ok {
 		return id
 	}
+	if len(s.byID) >= maxStyles || s.linkBytes+len(st.Link) > maxLinkBytes {
+		// Hostile style churn: keep the cell's colours if the link was what
+		// did not fit, otherwise fall back to the default style. Memory on
+		// both ends stays bounded; the screen is wrong only for a program
+		// that shows more than 65,535 distinct styles at once.
+		s.Degraded++
+		if st.Link != "" {
+			st.Link = ""
+			return s.id(st)
+		}
+		return 0
+	}
 	id := uint32(len(s.byID))
 	s.ids[st] = id
 	s.byID = append(s.byID, st)
 	s.fresh = append(s.fresh, id)
+	s.linkBytes += len(st.Link)
 	return id
 }
 
-// Full reports whether the table hit its cap; the caller then resets both
-// ends with a full repaint (hostile style churn must not grow memory).
-func (s *Styles) Full() bool { return len(s.byID) >= maxStyles }
+// Full reports whether the table is three-quarters full; Snapshot then
+// resets both ends at the start of the next frame.
+func (s *Styles) Full() bool {
+	return len(s.byID) >= maxStyles*3/4 || s.linkBytes >= maxLinkBytes*3/4
+}
 
 var seed = maphash.MakeSeed()
 
 // Snapshot reads e into a Frame (styles interned into st).
 func Snapshot(e emu.Emulator, st *Styles, f *Frame) *Frame {
+	if st.Full() {
+		st.Reset()
+	}
 	w, h := e.Size()
 	if f == nil || f.W != w || f.H != h {
 		f = &Frame{W: w, H: h, Rows: make([][]Cell, h), hash: make([]uint64, h)}
@@ -108,9 +161,10 @@ func Snapshot(e emu.Emulator, st *Styles, f *Frame) *Frame {
 				_ = mh.WriteByte(0xff)
 				continue
 			}
-			sid := st.id(Style{Fg: c.Fg, Bg: c.Bg, Attr: c.Attr, Link: c.Link})
-			row[x] = Cell{Text: c.Text, Wide: c.Width == 2, Style: sid}
-			_, _ = mh.WriteString(c.Text)
+			sid := st.id(Style{Fg: c.Fg, Bg: c.Bg, Attr: c.Attr, Link: SanitizeLink(c.Link)})
+			text := SanitizeCell(c.Text)
+			row[x] = Cell{Text: text, Wide: c.Width == 2, Style: sid}
+			_, _ = mh.WriteString(text)
 			var b [5]byte
 			binary.LittleEndian.PutUint32(b[:], sid)
 			if c.Width == 2 {
@@ -121,7 +175,8 @@ func Snapshot(e emu.Emulator, st *Styles, f *Frame) *Frame {
 		f.hash[y] = mh.Sum64()
 	}
 	f.CurX, f.CurY, f.CurVis = e.Cursor()
-	f.Title = e.Title()
+	f.CurX, f.CurY = min(max(f.CurX, 0), w-1), min(max(f.CurY, 0), h-1)
+	f.Title = SanitizeTitle(e.Title())
 	return f
 }
 
@@ -148,6 +203,11 @@ func (e *enc) s(v string) { e.u(uint64(len(v))); e.WriteString(v) }
 // unknown size) to cur. st.fresh lists styles the client has not seen.
 func Diff(prev, cur *Frame, st *Styles) []byte {
 	var e enc
+	if st.reset {
+		e.WriteByte('X')
+		st.reset = false
+		prev = nil // cells refer to the old ids: repaint everything
+	}
 	for _, id := range st.fresh {
 		s := st.byID[id]
 		e.WriteByte('D')
@@ -293,89 +353,286 @@ func shifted(prev *Frame, n int) *Frame {
 }
 
 // Client is the receiving side: a frame and a style table, no VT parser.
+//
+// Apply treats the diff as hostile input from an authenticated but untrusted
+// peer: every length and index is bounded before it is used, ops are
+// rejected before the first 'Z', a truncated diff is an error, and on any
+// error the client state is left exactly as it was (the whole diff is
+// decoded and validated into a list of ops before anything is applied).
+// Memory the peer can make the client hold is bounded by MaxCols*MaxRows
+// cells of at most MaxCluster bytes, maxStyles styles and maxLinkBytes of
+// link text.
 type Client struct {
-	F      *Frame
-	Styles []Style
+	F         *Frame
+	Styles    []Style
+	linkBytes int
 }
 
-var errShort = errors.New("celldiff: truncated")
+var (
+	errShort = errors.New("celldiff: truncated")
+	errRange = errors.New("celldiff: value out of range")
+	errOrder = errors.New("celldiff: op before the first resize")
+	errStyle = errors.New("celldiff: bad style")
+	errText  = errors.New("celldiff: text not allowed")
+	errOp    = errors.New("celldiff: bad op")
+)
 
-// Apply decodes one diff into c.
+type dec struct{ p []byte }
+
+func (d *dec) u(limit uint64) (uint64, error) {
+	v, n := binary.Uvarint(d.p)
+	if n <= 0 {
+		return 0, errShort
+	}
+	d.p = d.p[n:]
+	if v > limit {
+		return 0, errRange
+	}
+	return v, nil
+}
+
+func (d *dec) bytes(n uint64) ([]byte, error) {
+	if n > uint64(len(d.p)) {
+		return nil, errShort
+	}
+	b := d.p[:n]
+	d.p = d.p[n:]
+	return b, nil
+}
+
+type cellOp struct {
+	x    int
+	cell Cell
+}
+
+type op struct {
+	kind    byte
+	a, b, c int
+	style   Style
+	text    string
+	cells   []cellOp
+	y       int
+}
+
+// Apply decodes one diff into c. On error c is unchanged.
 func (c *Client) Apply(p []byte) error {
-	r := bytes.NewReader(p)
-	u := func() uint64 {
-		v, err := binary.ReadUvarint(r)
-		if err != nil {
-			panic(errShort)
-		}
-		return v
+	ops, err := c.parse(p)
+	if err != nil {
+		return err
 	}
-	s := func() string {
-		n := u()
-		if n > uint64(r.Len()) {
-			panic(errShort)
-		}
-		b := make([]byte, n)
-		_, _ = r.Read(b)
-		return string(b)
+	if len(c.Styles) == 0 {
+		c.Styles = []Style{{}}
 	}
-	defer func() {
-		if x := recover(); x != nil && x != errShort {
-			panic(x)
-		}
-	}()
-	for r.Len() > 0 {
-		op, _ := r.ReadByte()
-		switch op {
+	for _, o := range ops {
+		switch o.kind {
+		case 'X':
+			// Cells would refer to ids that no longer exist: blank them
+			// too (the server always repaints after 'X').
+			c.Styles = []Style{{}}
+			c.linkBytes = 0
+			if c.F != nil {
+				c.F = blank(c.F.W, c.F.H)
+			}
 		case 'D':
-			id := u()
-			st := Style{Fg: emu.Color(u()), Bg: emu.Color(u()), Attr: emu.Attr(u()), Link: s()}
-			for uint64(len(c.Styles)) <= id {
-				c.Styles = append(c.Styles, Style{})
-			}
-			c.Styles[id] = st
+			c.Styles = append(c.Styles, o.style)
+			c.linkBytes += len(o.style.Link)
 		case 'Z':
-			w, h := int(u()), int(u())
-			if w > 4096 || h > 4096 {
-				return errors.New("celldiff: size out of range")
-			}
-			c.F = blank(w, h)
+			c.F = blank(o.a, o.b)
 		case 'U':
-			c.F = shifted(c.F, int(u()))
+			c.F = shifted(c.F, o.a)
 		case 'R':
-			y, x0, n := int(u()), int(u()), int(u())
-			if y >= c.F.H || x0+n > c.F.W {
-				return errors.New("celldiff: row op out of range")
+			row := c.F.Rows[o.y]
+			for _, co := range o.cells {
+				row[co.x] = co.cell
+				if co.cell.Wide && co.x+1 < c.F.W {
+					row[co.x+1] = Cell{}
+				}
 			}
-			row := c.F.Rows[y]
-			x := x0
-			for x < x0+n {
-				sid, cnt := uint32(u()), int(u())
-				for i := 0; i < cnt; i++ {
-					l := u()
-					wide := l&1 == 1
-					t := make([]byte, l>>1)
-					_, _ = r.Read(t)
-					if x >= c.F.W {
-						return errors.New("celldiff: run past row end")
+		case 'C':
+			c.F.CurX, c.F.CurY, c.F.CurVis = o.a, o.b, o.c == 1
+		case 'T':
+			c.F.Title = o.text
+		}
+	}
+	return nil
+}
+
+// parse validates the whole diff against the state each op will see, and
+// returns the ops; it does not touch c.
+func (c *Client) parse(p []byte) ([]op, error) {
+	d := &dec{p: p}
+	w, h := 0, 0
+	if c.F != nil {
+		w, h = c.F.W, c.F.H
+	}
+	nStyles, linkBytes := len(c.Styles), c.linkBytes
+	if nStyles == 0 {
+		nStyles = 1 // style 0 is always the default
+	}
+	var ops []op
+	for len(d.p) > 0 {
+		kind := d.p[0]
+		d.p = d.p[1:]
+		o := op{kind: kind}
+		switch kind {
+		case 'X':
+			nStyles, linkBytes = 1, 0
+		case 'D':
+			id, err := d.u(maxStyles)
+			if err != nil {
+				return nil, err
+			}
+			if id != uint64(nStyles) || nStyles >= maxStyles {
+				return nil, errStyle
+			}
+			var v [3]uint64
+			for i, lim := range []uint64{1<<32 - 1, 1<<32 - 1, 1<<16 - 1} {
+				if v[i], err = d.u(lim); err != nil {
+					return nil, err
+				}
+			}
+			n, err := d.u(MaxLink)
+			if err != nil {
+				return nil, err
+			}
+			lb, err := d.bytes(n)
+			if err != nil {
+				return nil, err
+			}
+			link := string(lb)
+			if !ValidLink(link) || linkBytes+len(link) > maxLinkBytes {
+				return nil, errStyle
+			}
+			o.style = Style{Fg: emu.Color(v[0]), Bg: emu.Color(v[1]), Attr: emu.Attr(v[2]), Link: link}
+			nStyles++
+			linkBytes += len(link)
+		case 'Z':
+			cw, err := d.u(MaxCols)
+			if err != nil {
+				return nil, err
+			}
+			ch, err := d.u(MaxRows)
+			if err != nil {
+				return nil, err
+			}
+			if cw == 0 || ch == 0 {
+				return nil, errRange
+			}
+			w, h = int(cw), int(ch)
+			o.a, o.b = w, h
+		case 'U':
+			if w == 0 {
+				return nil, errOrder
+			}
+			n, err := d.u(uint64(h))
+			if err != nil {
+				return nil, err
+			}
+			if n == 0 {
+				return nil, errRange
+			}
+			o.a = int(n)
+		case 'R':
+			if w == 0 {
+				return nil, errOrder
+			}
+			y, err := d.u(uint64(h - 1))
+			if err != nil {
+				return nil, err
+			}
+			x0, err := d.u(uint64(w - 1))
+			if err != nil {
+				return nil, err
+			}
+			n, err := d.u(uint64(w) - x0)
+			if err != nil {
+				return nil, err
+			}
+			if n == 0 {
+				return nil, errRange
+			}
+			o.y = int(y)
+			x, end := int(x0), int(x0)+int(n)
+			for x < end {
+				sid, err := d.u(uint64(nStyles - 1))
+				if err != nil {
+					return nil, err
+				}
+				cnt, err := d.u(uint64(end - x))
+				if err != nil {
+					return nil, err
+				}
+				if cnt == 0 {
+					return nil, errRange
+				}
+				for i := uint64(0); i < cnt; i++ {
+					if x >= end {
+						return nil, errRange
 					}
-					row[x] = Cell{Text: string(t), Wide: wide, Style: sid}
+					l, err := d.u(MaxCluster<<1 | 1)
+					if err != nil {
+						return nil, err
+					}
+					tb, err := d.bytes(l >> 1)
+					if err != nil {
+						return nil, err
+					}
+					t := string(tb)
+					if !ValidCell(t) {
+						return nil, errText
+					}
+					wide := l&1 == 1
+					o.cells = append(o.cells, cellOp{x: x, cell: Cell{Text: t, Wide: wide, Style: uint32(sid)}})
 					x++
-					if wide && x < c.F.W {
-						row[x] = Cell{}
+					if wide {
 						x++
 					}
 				}
 			}
+			// a run ends exactly at end, except a wide cell in the last
+			// column, whose continuation would fall off the row
+			if x > end+1 || (x == end+1 && (end != w || !o.cells[len(o.cells)-1].cell.Wide)) {
+				return nil, errRange
+			}
 		case 'C':
-			c.F.CurX, c.F.CurY, c.F.CurVis = int(u()), int(u()), u() == 1
+			if w == 0 {
+				return nil, errOrder
+			}
+			x, err := d.u(uint64(w - 1))
+			if err != nil {
+				return nil, err
+			}
+			y, err := d.u(uint64(h - 1))
+			if err != nil {
+				return nil, err
+			}
+			v, err := d.u(1)
+			if err != nil {
+				return nil, err
+			}
+			o.a, o.b, o.c = int(x), int(y), int(v)
 		case 'T':
-			c.F.Title = s()
+			if w == 0 {
+				return nil, errOrder
+			}
+			n, err := d.u(MaxTitle)
+			if err != nil {
+				return nil, err
+			}
+			tb, err := d.bytes(n)
+			if err != nil {
+				return nil, err
+			}
+			if !ValidTitle(string(tb)) {
+				return nil, errText
+			}
+			o.text = string(tb)
 		default:
-			return errors.New("celldiff: bad op")
+			return nil, errOp
 		}
+		ops = append(ops, o)
 	}
-	return nil
+	return ops, nil
 }
 
 // Equal reports whether two frames show the same cells, cursor and title.

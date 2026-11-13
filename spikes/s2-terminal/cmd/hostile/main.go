@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 
+	"mosey.spike/s2-terminal/celldiff"
 	"mosey.spike/s2-terminal/emu"
 )
 
@@ -141,6 +142,47 @@ var cases = []hcase{
 			f([]byte("漢字 hello 👍🏽 world\r\n\x1b[5;5Hx"))
 		}
 	}},
+	// Cases added for the S2 review: sizes up to the client clamp, and cells
+	// as expensive as a program can make them.
+	{"resize-to-clamp", "resize to the clamp (1000x500) then back, 20 times, writing in the corner", func(e emu.Emulator, f func([]byte)) {
+		for i := 0; i < 20; i++ {
+			e.Resize(celldiff.ClampSize(5000, 5000))
+			f([]byte("\x1b[?1049h\x1b[500;1000Hx\x1b[?1049l\x1b[500;1000Hx"))
+			e.Resize(80, 24)
+		}
+	}},
+	{"resize-storm-clamp", "2,000 resizes between 1x1 and 1000x500 with output between", func(e emu.Emulator, f func([]byte)) {
+		seed := uint32(1)
+		for i := 0; i < 2000; i++ {
+			seed = seed*1664525 + 1013904223
+			e.Resize(celldiff.ClampSize(1+int(seed>>8)%1000, 1+int(seed>>20)%500))
+			f([]byte("漢字 hello 👍🏽 world\r\n\x1b[5;5Hx"))
+		}
+	}},
+	{"cluster-color-scrollback", "12,000 full-width lines of 63-byte clusters, each cell a distinct truecolour", func(e emu.Emulator, f func([]byte)) {
+		w, _ := e.Size()
+		cl := "e" + strings.Repeat("\u0301", 31)
+		var b bytes.Buffer
+		n := 0
+		for l := 0; l < 12000; l++ {
+			for x := 0; x < w; x++ {
+				n++
+				fmt.Fprintf(&b, "\x1b[38;2;%d;%d;%dm%s", n&255, n>>8&255, n>>16&255, cl)
+			}
+			b.WriteString("\r\n")
+			if b.Len() > 60000 {
+				f(b.Bytes())
+				b.Reset()
+			}
+		}
+		f(b.Bytes())
+	}},
+	{"osc8-long-links", "a distinct 2 KiB OSC 8 URI on every cell, 512 MiB in all", func(e emu.Emulator, f func([]byte)) {
+		pad := strings.Repeat("x", 2000)
+		for i := 0; i < (512<<20)/2048; i++ {
+			f([]byte(fmt.Sprintf("\x1b]8;;https://example.invalid/%d/%s\x1b\\x", i, pad)))
+		}
+	}},
 	{"resize-huge", "resize to 5000x5000 then back, 20 times (host-controlled; shows per-size cost)", func(e emu.Emulator, f func([]byte)) {
 		for i := 0; i < 20; i++ {
 			e.Resize(5000, 5000)
@@ -166,7 +208,11 @@ func child(name, cname string) {
 		fmt.Println("RESULT nocase")
 		os.Exit(3)
 	}
-	e := fac.New(80, 24)
+	w0, h0 := 80, 24
+	if v := os.Getenv("MOSEY_HOSTILE_SIZE"); v != "" {
+		fmt.Sscanf(v, "%dx%d", &w0, &h0)
+	}
+	e := fac.New(w0, h0)
 	var fed, calls atomic.Int64
 	feed := func(p []byte) {
 		calls.Add(1)
@@ -215,6 +261,7 @@ func main() {
 	only := flag.String("cases", "", "comma-separated case names (default all)")
 	timeout := flag.Duration("timeout", 20*time.Second, "")
 	maxRSS := flag.Int("maxrss", 4<<20, "kill above this RSS, KiB")
+	size := flag.String("size", "80x24", "session size for every case (the S2 review reran at the clamp, 1000x500)")
 	list := flag.Bool("list", false, "list cases")
 	flag.Parse()
 	if *ch {
@@ -234,6 +281,7 @@ func main() {
 		}
 	}
 	self, _ := os.Executable()
+	_ = os.Setenv("MOSEY_HOSTILE_SIZE", *size)
 	fmt.Printf("| case | %s |\n|---|%s\n", strings.ReplaceAll(*emus, ",", " | "), strings.Repeat("---|", len(strings.Split(*emus, ","))))
 	for _, c := range cases {
 		if len(sel) > 0 && !sel[c.name] {

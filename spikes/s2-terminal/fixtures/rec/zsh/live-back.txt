@@ -1,0 +1,24 @@
+-r--r--r--     3 root     root        5954 Jan  1  1970 008rgx4rb542n3fplby411c0
+hngvpvf6-flong-mounts.json
+-r--r--r--     2 root     root        3323 Jan  1  1970 008vb0m2hsn56p2y09yz1sxc
+8v9rpv0k-unit-accounts-daemon.service.drv
+-r--r--r--     2 root     root        3775 Jan  1  1970 00905zkzv4dd6bd9p2z495rv
+3f84p7jh-source.drv
+-r--r--r--     2 root     root        3114 Jan  1  1970 009is8hr0i8vsrzas1xpxh2q
+pp137ar2-crate-syn-2.0.59.tar.gz.drv
+-r--r--r--     2 root     root        4339 Jan  1  1970 009qlgk7lxj4nkbssrwzxy08
+8pjri22c-source.drv
+-r--r--r--    22 root     root        1275 Jan  1  1970 009viiygp6xw25y9idrf4xic
+d41zjpvw-copy-desktop-items.sh
+-r--r--r--     2 root     root       10349 Jan  1  1970 00a0q3j2waahy1g6b0prc7a2
+njhbsj4b-glibc-2.42-100.drv
+-r--r--r--     2 root     root        3583 Jan  1  1970 00a5n0wk30jxsg8rry8rgrji
+2b6g6jmf-crate-bytes-1.11.1.tar.gz.drv
+dr-xr-xr-x     3 root     root        4096 Jan  1  1970 00a758ys9qy7lcwmihjqvc9q
+xv6skm4n-perl5.42.0-Digest-HMAC-1.05
+-r--r--r--     2 root     root        3181 Jan  1  1970 00aa62dhc4k86xjwyc9z24ck
+asgq27p6-keyutils-1.6.3.drv
+-r--r--r--     2 root     root        2237 Jan  1  1970 00bdb6rjci6ij5jaxv0w6d9z
+srvqyyib-apr-1.7.6.drv
+dan@dan-desktop /home/dan/Projects/mosey/.claude/worktrees/wf_81ba60d9-5e8-2/spi
+kes/s2-terminal ❯                                                     [18:42] ✓

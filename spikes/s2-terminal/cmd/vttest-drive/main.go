@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"mosey.spike/s2-terminal/emu"
@@ -66,6 +67,20 @@ func attrDump(m emu.Emulator) string {
 		fmt.Fprintf(&sb, "%s\n", strings.Join(row, " "))
 	}
 	return sb.String()
+}
+
+// countW counts bytes written to the raw log, so each saved screen can
+// record the offset of the program output that preceded it (the scorer uses
+// this to classify screens by what vttest sent, e.g. DECCOLM).
+type countW struct {
+	w *os.File
+	n atomic.Int64
+}
+
+func (c *countW) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n.Add(int64(n))
+	return n, err
 }
 
 type tmuxScreen struct{ sock string }
@@ -140,6 +155,7 @@ func main() {
 	env := []string{"TERM=xterm", "LANG=C.UTF-8", "PATH=/usr/bin:/bin", "HOME=" + os.TempDir()}
 
 	var scr screen
+	var rawCount *countW
 	if *name == "tmux" {
 		t := tmuxScreen{sock: fmt.Sprintf("mosey-spike-s2-%d", os.Getpid())}
 		t.tmux("new-session", "-d", "-s", "v", "-x", "80", "-y", "24", "env", "-i", "TERM=xterm", *vttest)
@@ -154,7 +170,8 @@ func main() {
 			log.Fatal(err)
 		}
 		defer raw.Close()
-		s, err := ptyrun.Start(f.New(80, 24), 80, 24, env, raw, *vttest)
+		rawCount = &countW{w: raw}
+		s, err := ptyrun.Start(f.New(80, 24), 80, 24, env, rawCount, *vttest)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -171,6 +188,9 @@ func main() {
 		// Record whether the program had DECCOLM (132 columns) set, so the
 		// scorer can separate screens that depend on it: mosey, like tmux,
 		// will not let the remote side resize the client's window.
+		if rawCount != nil {
+			_ = os.WriteFile(filepath.Join(dir, tag+".off"), []byte(fmt.Sprint(rawCount.n.Load())), 0o644)
+		}
 		if es, ok := scr.(emuScreen); ok {
 			es.s.With(func(m emu.Emulator) {
 				if t, ok := emu.TuiosOf(m); ok {

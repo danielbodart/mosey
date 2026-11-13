@@ -1,0 +1,18 @@
+
+
+         Menu 11.6: ISO 6429 colors
+
+         Choose test type:
+
+          0. Exit
+          1. Disable color-switching
+          2. Display color test-pattern
+          3. Test SGR-0 color reset
+          4. Test BCE-style clear line/display (ED, EL)
+          5. Test BCE-style clear line/display (ECH, Indexing)
+          6. Test of VT102-style features with BCE
+          7. Test other ISO-6429 features with BCE
+          8. Test screen features with BCE
+          9. Test screen features with ISO 6429 SGR 22-27 codes
+
+          Enter choice number (0 - 9):

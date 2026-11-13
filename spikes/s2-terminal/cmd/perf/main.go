@@ -19,8 +19,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"mosey.spike/s2-terminal/emu"
@@ -100,15 +102,43 @@ func child(name, rec string) {
 			continue
 		}
 		e := f.New(80, 24)
+		c0 := cpuTime()
 		t0 := time.Now()
 		for p := 0; p < len(w.d); p += 4096 {
 			e.Write(w.d[p:min(p+4096, len(w.d))])
 			_ = e.Responses()
 		}
 		el := time.Since(t0)
+		cpu := cpuTime() - c0
 		e.Close()
-		fmt.Printf("SPEED %s %.1f\n", w.n, float64(len(w.d))/1e6/el.Seconds())
+		// Both wall-clock and CPU-time rates: CPU time (user+sys of the whole
+		// process, so GC counts) is much less sensitive to other load on the
+		// machine than wall time, which includes time spent descheduled.
+		fmt.Printf("SPEED %s %.1f %.1f\n", w.n, float64(len(w.d))/1e6/el.Seconds(), float64(len(w.d))/1e6/cpu.Seconds())
 	}
+}
+
+func cpuTime() time.Duration {
+	var ru syscall.Rusage
+	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &ru)
+	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
+}
+
+// med returns "median [min-max]" of xs.
+func med(xs []float64) string {
+	if len(xs) == 0 {
+		return "-"
+	}
+	s := append([]float64(nil), xs...)
+	sort.Float64s(s)
+	m := s[len(s)/2]
+	if len(s)%2 == 0 {
+		m = (s[len(s)/2-1] + s[len(s)/2]) / 2
+	}
+	if len(s) == 1 {
+		return fmt.Sprintf("%.1f", m)
+	}
+	return fmt.Sprintf("%.1f [%.1f-%.1f]", m, s[0], s[len(s)-1])
 }
 
 func main() {
@@ -118,26 +148,49 @@ func main() {
 	}
 	emus := flag.String("emus", strings.Join(emu.Names(), ","), "")
 	rec := flag.String("rec", "", "apprec directory for the app-mix stream")
+	reps := flag.Int("reps", 1, "repetitions per emulator (interleaved); report median [min-max]")
 	flag.Parse()
 	self, _ := os.Executable()
-	fmt.Println("| emulator | RSS per fresh 80x24 session | RSS per session after 10k coloured lines | plain MB/s | SGR MB/s | recorded-apps MB/s |")
-	fmt.Println("|---|---|---|---|---|---|")
-	for _, n := range strings.Split(*emus, ",") {
-		cmd := exec.Command(self, "-child", n, *rec)
-		cmd.Env = append(os.Environ(), "GOMAXPROCS=1")
-		out, err := cmd.Output()
-		if err != nil {
-			fmt.Printf("| %s | error %v |\n", n, err)
-			continue
-		}
-		var fresh, full int
-		sp := map[string]string{}
-		for _, l := range strings.Split(string(out), "\n") {
-			fmt.Sscanf(l, "MEM fresh_per_session_KiB=%d filled_per_session_KiB=%d", &fresh, &full)
-			if f := strings.Fields(l); len(f) == 3 && f[0] == "SPEED" {
-				sp[f[1]] = f[2]
+	names := strings.Split(*emus, ",")
+	type acc struct {
+		fresh, full []float64
+		wall, cpu   map[string][]float64
+	}
+	res := map[string]*acc{}
+	for _, n := range names {
+		res[n] = &acc{wall: map[string][]float64{}, cpu: map[string][]float64{}}
+	}
+	for r := 0; r < *reps; r++ {
+		for _, n := range names {
+			cmd := exec.Command(self, "-child", n, *rec)
+			cmd.Env = append(os.Environ(), "GOMAXPROCS=1")
+			out, err := cmd.Output()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "%s: %v\n", n, err)
+				continue
+			}
+			a := res[n]
+			for _, l := range strings.Split(string(out), "\n") {
+				var fresh, full int
+				if k, _ := fmt.Sscanf(l, "MEM fresh_per_session_KiB=%d filled_per_session_KiB=%d", &fresh, &full); k == 2 {
+					a.fresh = append(a.fresh, float64(fresh))
+					a.full = append(a.full, float64(full))
+				}
+				if f := strings.Fields(l); len(f) == 4 && f[0] == "SPEED" {
+					w, _ := strconv.ParseFloat(f[2], 64)
+					c, _ := strconv.ParseFloat(f[3], 64)
+					a.wall[f[1]] = append(a.wall[f[1]], w)
+					a.cpu[f[1]] = append(a.cpu[f[1]], c)
+				}
 			}
 		}
-		fmt.Printf("| %s | %d KiB | %d KiB | %s | %s | %s |\n", n, fresh, full, sp["plain"], sp["sgr"], sp["apps"])
+	}
+	fmt.Printf("%d repetitions, interleaved; each cell is median [min-max].\n\n", *reps)
+	fmt.Println("| emulator | RSS KiB, fresh 80x24 session | RSS KiB after 10k coloured lines | plain MB/s wall | plain MB per CPU-s | SGR MB/s wall | SGR MB per CPU-s | apps MB/s wall | apps MB per CPU-s |")
+	fmt.Println("|---|---|---|---|---|---|---|---|---|")
+	for _, n := range names {
+		a := res[n]
+		fmt.Printf("| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n", n, med(a.fresh), med(a.full),
+			med(a.wall["plain"]), med(a.cpu["plain"]), med(a.wall["sgr"]), med(a.cpu["sgr"]), med(a.wall["apps"]), med(a.cpu["apps"]))
 	}
 }

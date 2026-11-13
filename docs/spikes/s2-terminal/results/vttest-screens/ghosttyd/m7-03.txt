@@ -1,0 +1,23 @@
+                      :/*
+
+                         *
+                          :-*
+
+                             *
+                              :+*
+
+Testing S8C1T. A real VT200 will not recognize S8C1T at this point
+         Response to CUP(1,1)/DSR(6) <27> [ 1 ; 1 R  ok
+
+Push <RETURN>                        7)!*6d!r"f#q$r%f&q'r(f)q*r+f,q-r.f/q0r1f2q3
+r4f5q6r)/The screen should be cleared, and have a centered*/rectangle of "*"s wi
+th "!"s on the inside to the+/left and right. Only this, and,/Push <RETURN>
+This is the normal character set:"/ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKL
+MNO#/PQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~% This is the special graph
+ics character set:'/ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNO(/PQRSTUVWXY
+Z[\]^_`abcdefghijklmnopqrstuvwxyz{|}~+ Push <RETURN>
+Test of terminal response to IDENTIFY command
+
+Response was  <27> [ ? 6 2 ; 2 2 c
+
+Verify operating level after restoring ANSI mode

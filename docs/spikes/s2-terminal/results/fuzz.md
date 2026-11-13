@@ -52,3 +52,20 @@ Reproducers: `spikes/s2-terminal/fuzz/crashers/<Target>/`.
   (`test/fuzz-libghostty`: `osc`, `parser`, `stream` targets) at the pinned
   commit; running those for hours is the meaningful test of that backend and
   was not done here.
+
+## Phase 3: targets added after the S2 review
+
+`scripts/fuzz-review.sh`: three targets at once, each in its own
+`mosey-spike-fuzz-*` scope capped at 4 GiB, `-parallel 3`, alongside other
+spikes' fuzzers (load average 25-35 during the runs), 2026-11-13 19:27-19:48 UTC.
+
+| target | what | wall time | execs | coverage entries | result |
+|---|---|---|---|---|---|
+| `FuzzTuiosClamp` (`fuzz/clamp_test.go`) | tuios; `0xFE` + 4 bytes resizes to any size up to the clamp (1000x500); the 17 seeds above plus two clamp-sized ones; after GC every 256 inputs HeapAlloc must stay under 384 MiB; full cell check whenever the screen is at most 200x100 and at the end of every input | 1203 s | 2,512,051 | 600 | **no failures** |
+| `FuzzApply` (`celldiff/hostile_test.go`) | the cell-diff client decoder fed arbitrary bytes while holding a real 80x24 frame; error => state byte-for-byte unchanged; success => every bound holds (size, cursor, title, links, cell text, style ids, table sizes); HeapAlloc under 768 MiB every 512 inputs | 901 s | 2,404,217 | 207 | **no failures** |
+| `FuzzRoundTrip` (`celldiff/hostile_test.go`) | arbitrary output into tuios at a fuzzed size up to the clamp, then a fuzzed resize; Snapshot+Diff+Apply after each half; the client must accept and equal the server; same bounds | 903 s | 977,967 | 515 | **no failures** |
+
+The first FuzzApply run (before the fix) failed after 0.66 s on the input
+`X`: a style-table reset left the client's cells pointing at styles that
+no longer existed. `X` now also blanks the cells; the input is kept as a
+seed in `celldiff/testdata/fuzz/FuzzApply/`. The run above is after the fix.

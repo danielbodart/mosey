@@ -1,0 +1,24 @@
+              :3*
+
+                 *
+                  :1*
+
+                     *
+                      :/*
+
+                         *
+                          :-*
+
+                             *
+                              :+*
+
+                                 *
+                                  :)*
+
+                                     7)!*6d!r"f#q$r%f&q'r(f)q*r+f,q-r.f/q0r1f2q3
+r4f5q6r)/The screen should be cleared, and have a centered*/rectangle of "*"s wi
+th "!"s on the inside to the+/left and right. Only this, and,/Push <RETURN>
+This is the normal character set:"/ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKL
+MNO#/PQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~% This is the special graph
+ics character set:'/ !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNO(/PQRSTUVWXY
+Z[\]^_`abcdefghijklmnopqrstuvwxyz{|}~+ Push <RETURN>

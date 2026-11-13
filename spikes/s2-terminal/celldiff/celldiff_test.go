@@ -71,11 +71,3 @@ func firstDiff(a, b *Frame) string {
 	}
 	return ""
 }
-
-func FuzzApply(f *testing.F) {
-	f.Add([]byte("Z\x50\x18R\x00\x00\x02\x00\x02\x02a\x02b"))
-	f.Fuzz(func(t *testing.T, p []byte) {
-		c := &Client{F: blank(80, 24)}
-		_ = c.Apply(p)
-	})
-}

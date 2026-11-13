@@ -1,0 +1,3 @@
+dan@dan-desktop /h/d/P/m/.c/w/w/s/s2-terminal (spike/s2-terminal)> echo hello 漢
+hello 漢 字  👍 🏽
+dan@dan-desktop /h/d/P/m/.c/w/w/s/s2-terminal (spike/s2-terminal)>

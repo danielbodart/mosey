@@ -1,0 +1,24 @@
+150         p := c.e.CursorPosition()   |  1 package emu
+151         return p.X, p.Y, !c.e.Cursor|  2
+    Hidden()                            |  3 import (
+152 }                                   |  4         "sync"
+153 func (c *charmEmu) Responses() []byt|  5
+    e {                                 |  6         xterm "github.com/gitpod-io
+154         c.mu.Lock()                 |    /xterm-go"
+155         defer c.mu.Unlock()         |  7 )
+156         r := c.resp                 |  8
+157         c.resp = nil                |  9 type xtermEmu struct {
+158         return r                    | 10         t     *xterm.Terminal
+159 }                                   | 11         mu    sync.Mutex
+160 func (c *charmEmu) Title() string { | 12         resp  []byte
+161         c.mu.Lock()                 | 13         title string
+162         defer c.mu.Unlock()         | 14         cell  xterm.CellData
+163         return c.title              | 15 }
+164 }                                   | 16
+165 func (c *charmEmu) AltScreen() bool | 17 func init() {
+    { return c.e.IsAltScreen() }        | 18         register(Factory{Name: "xte
+166 func (c *charmEmu) Close()          |    rmgo", New: func(w, h int) Emulator
+    { _ = c.e.Close() }                 |     { return newXterm(w, h) }})
+~                                       | 19 }
+<xtures/sample_go.txt 166,1          Bot <tures/sample_go.txt 1,1            Top
+:vsplit

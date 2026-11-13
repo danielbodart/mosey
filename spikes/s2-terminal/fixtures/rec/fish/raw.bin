@@ -1,0 +1,48 @@
+[?u[>0q]11;?\[?1049hP+q696e646e\P+q71756572792d6f732d6e616d65\[?1049l[0c]0;/h/d/P/m/.c/w/w/s/s2-terminal[m]11;?\[6n[0c[?2004h[?2031h[=5u]133;A;click_events=1\dan[m@dan-desktop[m /h/d/P/m/.c/w/w/s/s2-terminal[m (spike/s2-terminal)[m> ]133;B[K[67Cecho [72Chello [78C漢字 [3C👍🏽[5C[A[62Cecho hello 漢字 👍🏽[5C[?2004l[?2031l[=0u
+[m]133;C;cmdline_url=echo%20hello%20%E6%BC%A2%E5%AD%97%20%F0%9F%91%8D%F0%9F%8F%BD]0;echo hello 漢字 👍🏽 /h/d/P/m/.c/w/w/s/s2-terminal[mhello 漢字 👍🏽
+]133;D;0[?25h[2m⏎[m                                                                               ⏎ [K]0;/h/d/P/m/.c/w/w/s/s2-terminal[m]11;?\[6n[0c[?2004h[?2031h[=5u]133;A;click_events=1dan[m@dan-desktop[m /h/d/P/m/.c/w/w/s/s2-terminal[m (spike/s2-terminal)[m> ]133;B[K[67Cfor [71Ci [73Cin [76C(seq [C1 [3C40)[6C;[7C [8Cecho [13Cline [18C$i;[21C [22C[?2004l[?2031l[=0uend[25C[A[42Cfor i in (seq
+[C1 40); echo line $i; end[25C
+[m]133;C;cmdline_url=for%20i%20in%20%28seq%201%2040%29%3B%20echo%20line%20%24i%3B%20end]0;for i in (seq 1 40); /h/d/P/m/.c/w/w/s/s2-terminal[mline 1
+line 2
+line 3
+line 4
+line 5
+line 6
+line 7
+line 8
+line 9
+line 10
+line 11
+line 12
+line 13
+line 14
+line 15
+line 16
+line 17
+line 18
+line 19
+line 20
+line 21
+line 22
+line 23
+line 24
+line 25
+line 26
+line 27
+line 28
+line 29
+line 30
+line 31
+line 32
+line 33
+line 34
+line 35
+line 36
+line 37
+line 38
+line 39
+line 40
+]133;D;0[?25h[2m⏎[m                                                                               ⏎ [K]0;/h/d/P/m/.c/w/w/s/s2-terminal[m]11;?\[6n[0c[?2004h[?2031h[=5u]133;A;click_events=1dan[m@dan-desktop[m /h/d/P/m/.c/w/w/s/s2-terminal[m (spike/s2-terminal)[m> ]133;B[K[67C[6n[0c[67Cset_color [J[77Cred;[81C [82Cecho [87Cred;[91C [92Cset_color [2C[?2004l[?2031l[=0unormal[8C[A[59Cset_color red; echo red; set_color normal[8C
+[m]133;C;cmdline_url=set_color%20red%3B%20echo%20red%3B%20set_color%20normal]0;set_color red; echo  /h/d/P/m/.c/w/w/s/s2-terminal[m[31mred
+[m]133;D;0[?25h[2m⏎[m                                                                                                   ⏎ [K]0;/h/d/P/m/.c/w/w/s/s2-terminal[m]11;?\[6n[0c[?2004h[?2031h[=5u]133;A;click_events=1dan[m@dan-desktop[m /h/d/P/m/.c/w/w/s/s2-terminal[m (spike/s2-terminal)[m> ]133;B[K[67C[?2004l[?2031l[=0uexit[71C
+[m]133;C;cmdline_url=exit]0;exit /h/d/P/m/.c/w/w/s/s2-terminal[m]133;D;0[?25h[m

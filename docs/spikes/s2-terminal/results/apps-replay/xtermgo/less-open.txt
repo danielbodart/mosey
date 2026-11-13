@@ -1,0 +1,24 @@
+      1 package emu
+      2
+      3 import (
+      4         "sync"
+      5
+      6         xterm "github.com/gitpod-io/xterm-go"
+      7 )
+      8
+      9 type xtermEmu struct {
+     10         t     *xterm.Terminal
+     11         mu    sync.Mutex
+     12         resp  []byte
+     13         title string
+     14         cell  xterm.CellData
+     15 }
+     16
+     17 func init() {
+     18         register(Factory{Name: "xtermgo", New: func(w, h int) Emulator {
+     18  return newXterm(w, h) }})
+     19 }
+     20
+     21 func newXterm(w, h int) *xtermEmu {
+     22         x := &xtermEmu{t: xterm.New(xterm.WithCols(w), xterm.WithRows(h)
+ey/.claude/worktrees/wf_81ba60d9-5e8-2/spikes/s2-terminal/fixtures/sample_go.txt

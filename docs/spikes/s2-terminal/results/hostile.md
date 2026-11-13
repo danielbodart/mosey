@@ -4,6 +4,8 @@ Machine: dan-desktop, 24 CPUs, 12th Gen Intel(R) Core(TM) i9-12900K, 2026-11-13T
 
 Each cell: outcome, wall time, peak RSS; for runs killed at the limit, the throughput reached. Children run with GOMAXPROCS=2, 5 emulators in parallel per case, 30 s / 4 GiB limits.
 
+Scoring rule (added after the S2 review; FINDINGS applies it): *ok* finishes in reasonable time and memory; *degraded* is a finite slowdown or a large but bounded allocation that stays inside the one session (the helper's limits contain it); *fail* is a crash, unbounded work, or memory growth the emulator never stops. TIMEOUT means killed by the 30 s watchdog, which can be either: libghostty's altscreen-toggle is degraded (each toggle finishes, ~14k/s), charm's rep-overflow is a fail (one REP never returns). The "resize-huge" row is client-controlled in mosey, not host-controlled; see hostile-clamp.md for the rerun at the 1000x500 clamp.
+
 | case | ghostty | tuios | charm | xtermgo | cy |
 |---|---|---|---|---|---|
 | csi-huge-params | ok 0.1s 17MiB | ok 0.0s 10MiB | ok 0.3s 11MiB | TIMEOUT>30s 30.0s 29MiB (0.0 MB/s, 1 writes) | TIMEOUT>30s 30.0s 7MiB (0.0 MB/s, 5 writes) |

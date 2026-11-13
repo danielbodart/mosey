@@ -1,11 +1,15 @@
 # Per-session memory and throughput
 
-Machine: dan-desktop, 24 CPUs, 12th Gen Intel(R) Core(TM) i9-12900K, 2026-11-13T18:59:52Z, load average at start: 13.16 35.36 39.04 (other spikes share this machine)
+Machine: dan-desktop, 24 CPUs, 12th Gen Intel(R) Core(TM) i9-12900K, 2026-11-13T19:47:51Z, load average: 4.63 9.28 15.85 (other spikes share this machine)
 
-| emulator | RSS per fresh 80x24 session | RSS per session after 10k coloured lines | plain MB/s | SGR MB/s | recorded-apps MB/s |
-|---|---|---|---|---|---|
-| ghostty | 60 KiB | 7550 KiB | 112.6 | 105.0 | 25.5 |
-| tuios | 44 KiB | 1177 KiB | 60.9 | 45.2 | 44.8 |
-| charm | 498 KiB | 58688 KiB | 2.7 | 3.2 | 1.7 |
-| xtermgo | 79 KiB | 12655 KiB | 48.4 | 65.6 | 31.9 |
-| cy | 120 KiB | 48926 KiB | 15.5 | 19.0 | 18.5 |
+3 repetitions, interleaved; each cell is median [min-max].
+
+| emulator | RSS KiB, fresh 80x24 session | RSS KiB after 10k coloured lines | plain MB/s wall | plain MB per CPU-s | SGR MB/s wall | SGR MB per CPU-s | apps MB/s wall | apps MB per CPU-s |
+|---|---|---|---|---|---|---|---|---|
+| ghostty | 63.0 [62.0-66.0] | 7553.0 [7553.0-7559.0] | 144.8 [140.4-152.5] | 144.1 [139.8-152.0] | 129.3 [128.8-134.6] | 128.6 [127.8-134.2] | 34.6 [34.4-35.3] | 33.5 [33.4-34.5] |
+| tuios | 44.0 [44.0-44.0] | 1178.0 [1178.0-1179.0] | 74.8 [74.5-75.3] | 74.8 [74.5-75.3] | 72.8 [71.8-72.9] | 72.9 [71.8-73.0] | 70.7 [70.1-71.0] | 70.7 [70.2-71.0] |
+| charm | 498.0 [498.0-499.0] | 58661.0 [58658.0-58688.0] | 3.1 [3.1-3.1] | 3.1 [3.1-3.1] | 3.9 [3.9-3.9] | 3.9 [3.9-3.9] | 2.1 [2.1-2.2] | 2.2 [2.2-2.2] |
+| xtermgo | 79.0 [78.0-81.0] | 12654.0 [12648.0-12664.0] | 83.9 [83.2-84.7] | 84.1 [83.8-84.9] | 87.3 [87.2-87.4] | 87.5 [87.4-87.5] | 33.6 [33.5-33.7] | 33.7 [33.6-33.8] |
+| cy | 120.0 [120.0-120.0] | 48946.0 [48944.0-48963.0] | 16.4 [15.9-16.7] | 16.5 [15.9-16.8] | 20.1 [19.2-20.2] | 20.1 [19.2-20.3] | 19.3 [18.5-19.4] | 19.4 [18.6-19.4] |
+
+Finished: 2026-11-13T19:51:13Z, load average: 2.68 5.89 13.22

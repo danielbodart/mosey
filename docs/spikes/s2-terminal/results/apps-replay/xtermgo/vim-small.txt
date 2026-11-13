@@ -1,0 +1,19 @@
+  1 🇧                                   |  2 package emu
+  2                                     |  3
+  3                                     |  4 import (
+  4                                     |  5         "sync"
+  5                                     |  6
+  6                                     |  7         xterm "
+  7 b.com/gitpod-io/xterm-go"           |    github.com/gitp
+  8                                     |    od-io/xterm-go"
+  9                                     |  8 )
+ 10  {                                  |  9
+ 11 .Terminal                           | 10 type xtermEmu s
+ 12 utex                                |    truct {
+ 13                                     | 11         t     *
+ 14                                     |    xterm.Terminal
+ 15 CellData                            | 12         mu    s
+ 16                                     |    ync.Mutex
+ 17                                     | 13         resp  [
+ 18                                     |    ]byte
+<es/sample_go.txt [+] 1,31-21        Top <.txt [+] 2,1    0%
