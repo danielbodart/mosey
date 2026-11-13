@@ -1,0 +1,59 @@
+# mosh-client black-box sweep (scripts/moshprobe.sh), 2026-11-13
+# sweep 1 (idle machine for most of it)
+oneway=2ms rtt=4ms keys=25 median_ms=14.2 instant(<2ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 0
+oneway=5ms rtt=10ms keys=25 median_ms=20.3 instant(<5ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 0
+oneway=8ms rtt=16ms keys=25 median_ms=26.2 instant(<8ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 0
+oneway=10ms rtt=20ms keys=25 median_ms=30.2 instant(<10ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 0
+oneway=12ms rtt=24ms keys=25 median_ms=34.4 instant(<12ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 0
+oneway=14ms rtt=28ms keys=25 median_ms=37.7 instant(<14ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 0
+oneway=15ms rtt=30ms keys=25 median_ms=39.8 instant(<15ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 0
+oneway=16ms rtt=32ms keys=25 median_ms=41.6 instant(<16ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 0
+oneway=18ms rtt=36ms keys=25 median_ms=45.6 instant(<18ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 1
+oneway=20ms rtt=40ms keys=25 median_ms=0.1 instant(<20ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 25
+oneway=22ms rtt=44ms keys=25 median_ms=0.3 instant(<22ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 25
+oneway=25ms rtt=50ms keys=25 median_ms=0.3 instant(<25ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 25
+oneway=30ms rtt=60ms keys=25 median_ms=0.2 instant(<30ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 25
+oneway=35ms rtt=70ms keys=25 median_ms=0.3 instant(<35ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 25
+oneway=38ms rtt=76ms keys=25 median_ms=0.3 instant(<38ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 25
+oneway=40ms rtt=80ms keys=25 median_ms=0.3 instant(<40ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 25
+oneway=42ms rtt=84ms keys=25 median_ms=0.3 instant(<42ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 25
+oneway=45ms rtt=90ms keys=25 median_ms=0.3 instant(<45ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 25
+oneway=50ms rtt=100ms keys=25 median_ms=0.2 instant(<50ms)=0 underlined=25
+  keys faster than one-way delay (=predicted): 25
+oneway=60ms rtt=120ms keys=25 median_ms=0.3 instant(<60ms)=0 underlined=25
+  keys faster than one-way delay (=predicted): 25
+oneway=75ms rtt=150ms keys=25 median_ms=1.4 instant(<75ms)=0 underlined=25
+  keys faster than one-way delay (=predicted): 25
+# sweep 2 (CPU loaded by a concurrent fuzzer)
+oneway=17ms rtt=34ms keys=25 median_ms=7.1 instant(<17ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 13
+oneway=18ms rtt=36ms keys=25 median_ms=4.1 instant(<18ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 15
+oneway=19ms rtt=38ms keys=25 median_ms=0.7 instant(<19ms)=0 underlined=0
+  keys faster than one-way delay (=predicted): 25
+oneway=46ms rtt=92ms keys=25 median_ms=0.5 instant(<46ms)=0 underlined=15
+  keys faster than one-way delay (=predicted): 25
+oneway=47ms rtt=94ms keys=25 median_ms=1.1 instant(<47ms)=0 underlined=16
+  keys faster than one-way delay (=predicted): 25
+oneway=48ms rtt=96ms keys=25 median_ms=1.1 instant(<48ms)=0 underlined=19
+  keys faster than one-way delay (=predicted): 25
+oneway=49ms rtt=98ms keys=25 median_ms=1.0 instant(<49ms)=0 underlined=25
+  keys faster than one-way delay (=predicted): 25

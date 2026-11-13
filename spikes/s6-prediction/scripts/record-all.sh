@@ -4,7 +4,7 @@
 # Usage: record-all.sh <scratch-dir> <traces-out-dir> [rounds]
 set -euo pipefail
 SCR=$(realpath "$1"); OUT=$(realpath "$2"); ROUNDS=${3:-2}; ONLY=${4:-}
-HERE=$(cd "$(dirname "$0")/.." && pwd)
+HERE=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 mkdir -p "$SCR/bin" "$OUT"
 (cd "$HERE" && mise exec go@1.27.3 -- go build -o "$SCR/bin/" ./cmd/record ./cmd/faketui)
 
@@ -137,6 +137,59 @@ H="$SB/tui"; mkdir -p "$H"; mkwork "$H/work"
 run tui-fakecursor "$H" "$H/work" -- "$SCR/bin/faketui" -cursor=fake
 SEED=18
 run tui-realcursor "$H" "$H/work" -- "$SCR/bin/faketui" -cursor=real
+
+# ---- held-out traces: non-default colours (heuristic generalisation) ----
+# zsh with Solarized true-colour autosuggestion and highlight styles
+SEED=21
+H="$SB/zsh-solar"; mkdir -p "$H"; mkwork "$H/work"
+printf '%s\n' "${HIST[@]}" > "$H/.zsh_history"
+cat > "$H/.zshrc" <<EOF
+HISTFILE=\$ZDOTDIR/.zsh_history; HISTSIZE=1000; SAVEHIST=1000
+autoload -Uz compinit && compinit -u -d \$ZDOTDIR/.zcompdump
+PROMPT='%F{#268bd2}%~%f %F{#859900}❯%f '
+RPROMPT='%F{#93a1a1}%n@sandbox %*%f'
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=#586e75'
+source $ZAS
+source $ZSH_HL
+typeset -A ZSH_HIGHLIGHT_STYLES
+ZSH_HIGHLIGHT_STYLES[command]='fg=#859900'
+ZSH_HIGHLIGHT_STYLES[builtin]='fg=#b58900'
+ZSH_HIGHLIGHT_STYLES[unknown-token]='fg=#dc322f'
+ZSH_HIGHLIGHT_STYLES[path]='fg=#2aa198,underline'
+ZSH_HIGHLIGHT_STYLES[single-quoted-argument]='fg=#cb4b16'
+ZSH_HIGHLIGHT_STYLES[double-quoted-argument]='fg=#cb4b16'
+EOF
+run zsh-solar "$H" "$H/work" "ZDOTDIR=$H" "COLORTERM=truecolor" -- zsh -i
+
+# fish with Solarized colours, autosuggestion in a true-colour grey-blue
+SEED=22
+H="$SB/fish-solar"; mkdir -p "$H/.config/fish" "$H/.local/share/fish"; mkwork "$H/work"
+for c in "${HIST[@]}"; do printf -- '- cmd: %s\n  when: 1700000000\n' "$c"; done > "$H/.local/share/fish/fish_history"
+cat > "$H/.config/fish/config.fish" <<'EOF'
+set -g fish_greeting ''
+set -g fish_color_autosuggestion 586e75
+set -g fish_color_command 859900
+set -g fish_color_param 839496
+set -g fish_color_quote cb4b16
+set -g fish_color_error dc322f
+set -g fish_pager_color_prefix 268bd2
+function fish_right_prompt; set_color 93a1a1; date +%H:%M:%S; set_color normal; end
+EOF
+run fish-solar "$H" "$H/work" "XDG_CONFIG_HOME=$H/.config" "XDG_DATA_HOME=$H/.local/share" "COLORTERM=truecolor" -- fish -i
+
+# real Claude Code (an Ink app): sandbox HOME, prompt editing only, never
+# presses Enter, so nothing is ever submitted to a model. The -pre keys
+# accept the folder-trust dialog. Set CLAUDE_BIN to enable.
+if [ -n "${CLAUDE_BIN:-}" ] && { [ -z "$ONLY" ] || [ "$ONLY" = claude ]; }; then
+  SEED=23
+  H="$SB/claude"; mkdir -p "$H"; mkwork "$H/work"
+  printf '{"hasCompletedOnboarding": true, "theme": "dark"}\n' > "$H/.claude.json"
+  (cd "$H/work" && "${common_env[@]}" "PATH=$P:$(dirname "$CLAUDE_BIN")" "HOME=$H" \
+     ANTHROPIC_API_KEY=sk-ant-api03-mosey-spike-dummy-key-0000000000000000000000 \
+     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 \
+     "$SCR/bin/record" -scenario claude -rounds "$ROUNDS" -seed "$SEED" -settle 24s -pre '\x1b[B|\r' \
+     -out "$OUT/claude.json.gz" -- "$CLAUDE_BIN") > "$OUT/claude.log" 2>&1 &
+fi
 
 wait
 for f in "$OUT"/*.log; do head -1 "$f"; done

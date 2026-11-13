@@ -187,35 +187,218 @@ func TestRebaseAfterKill(t *testing.T) {
 	}
 }
 
+// Type-ahead at a no-echo prompt plus a coincidental match (another process
+// writes the same glyph at the cursor). Without the echo-off bit the epoch
+// confirms and the next password key is drawn; with it nothing is drawn and
+// nothing is logged.
+func TestEchoOffCoincidentalMatch(t *testing.T) {
+	for _, use := range []bool{false, true} {
+		c := Mosey()
+		c.UseEchoOff = use
+		e := New(c, srv(20, 2, 4, 0, "pw: "))
+		// the frame that shows the prompt says echo is off
+		e.FrameEx(time.Second, srv(20, 2, 4, 0, "pw: "), FrameInfo{EchoOff: true})
+		e.Input([]byte("x"))
+		// `wall` (or another writer) happens to put an "x" at the cursor
+		e.FrameEx(2*time.Second, srv(20, 2, 5, 0, "pw: x"), FrameInfo{EchoAck: 1, Received: 1, EchoOff: true})
+		e.Input([]byte("y"))
+		got := shownText(e, 20)
+		if use && (got != "" || e.LogLen() != 0) {
+			t.Fatalf("echo-off honoured: shown %q, log %d", got, e.LogLen())
+		}
+		if !use && got == "" {
+			t.Fatal("expected the no-echo-bit engine to leak here; the test no longer demonstrates the risk")
+		}
+		if !use && got != "" {
+			t.Logf("without echo-off bit: password key drawn as %q (the risk the bit removes)", got)
+		}
+	}
+}
+
+func TestLogCopiesInput(t *testing.T) {
+	c := Mosey()
+	c.Recovery = RecoverRebase
+	e := New(c, srv(20, 2, 2, 0, "$ "))
+	buf := []byte("a")
+	e.Input(buf)
+	buf[0] = 'Z' // a terminal read loop reuses its buffer
+	if string(e.log[1]) != "a" {
+		t.Fatalf("log aliases caller buffer: %q", e.log[1])
+	}
+}
+
+// More than LogSize keys during an outage: rebase must not replay a log with
+// holes; it waits until the server has everything (gate behaviour).
+func TestRebaseLogOverflow(t *testing.T) {
+	c := Mosey()
+	c.Recovery = RecoverRebase
+	e := New(c, srv(80, 2, 2, 0, "$ "))
+	e.Input([]byte("\r")) // bump: unfounded
+	for i := 0; i < LogSize+50; i++ {
+		e.Input([]byte("a"))
+	}
+	if e.LogLen() > LogSize {
+		t.Fatalf("log %d > %d", e.LogLen(), LogSize)
+	}
+	e.Frame(time.Second, srv(80, 2, 2, 1, "$", "$ "), 1, 1) // server has only the Enter
+	if e.founded {
+		t.Fatal("rebased over a log with holes")
+	}
+	e.Frame(2*time.Second, srv(80, 2, 2, 1, "$", "$ "), e.Seq(), e.Seq())
+	if !e.founded {
+		t.Fatal("should found once the server has every key")
+	}
+}
+
+// The display rule is the exact set of confirmed epochs, not a high-water
+// mark: leftovers of an unconfirmed older epoch stay hidden.
+func TestExactConfirmedEpochs(t *testing.T) {
+	c := Mosey()
+	c.Recovery = RecoverBlind
+	e := New(c, srv(20, 2, 2, 0, "$ "))
+	e.Input([]byte("a")) // epoch 1
+	e.bump(e.seq)        // epoch 2
+	e.Input([]byte("b")) // epoch 2
+	e.confirmed[2] = true
+	cells, _, _, _ := e.Display()
+	for _, cc := range cells {
+		if cc.Seq == 1 {
+			t.Fatal("cell of unconfirmed epoch 1 displayed after epoch 2 confirmed")
+		}
+	}
+	if len(cells) == 0 {
+		t.Fatal("epoch 2 cell should be displayed")
+	}
+}
+
+func TestBracketedPaste(t *testing.T) {
+	e := New(Mosey(), srv(80, 2, 2, 0, "$ "))
+	e.Input([]byte("a"))
+	e.Frame(time.Second, srv(80, 2, 3, 0, "$ a"), 1, 1)
+	// a short paste delivered in several reads
+	for _, b := range []string{"\x1b[200~ls", " -la", "\x1b[201~"} {
+		seq := e.Input([]byte(b))
+		if e.Predicted(seq) {
+			t.Fatalf("paste fragment %q predicted", b)
+		}
+	}
+	e.Frame(2*time.Second, srv(80, 2, 9, 0, "$ als -la"), 4, 4)
+	if seq := e.Input([]byte("x")); !e.Predicted(seq) {
+		t.Fatal("typing after the paste should be predicted again")
+	}
+}
+
+// Replays are deterministic: same inputs give identical Display output.
+func TestDeterministicDisplay(t *testing.T) {
+	run := func() string {
+		e := New(Mosey(), srv(40, 2, 2, 0, "$ "))
+		e.Input([]byte("a"))
+		e.Frame(time.Second, srv(40, 2, 3, 0, "$ a"), 1, 1)
+		for _, k := range "bcdefgh" {
+			e.Input([]byte(string(k)))
+		}
+		e.Input([]byte("\x1b[D"))
+		e.Input([]byte("\x7f"))
+		cells, _, _, _ := e.Display()
+		var b strings.Builder
+		for _, c := range cells {
+			b.WriteString(c.Cell.Text)
+		}
+		return b.String()
+	}
+	want := run()
+	for i := 0; i < 50; i++ {
+		if got := run(); got != want {
+			t.Fatalf("nondeterministic: %q vs %q", got, want)
+		}
+	}
+}
+
+// FuzzEngine drives every recovery mode with arbitrary keys AND an arbitrary
+// (hostile or buggy) server: random screen sizes, resizes, echo acks and
+// received counts that jump, decrease or exceed what was sent, random cell
+// contents including reverse-video and ghost-styled cells, and the echo-off
+// bit. It checks the resource limits and the core safety property: no cell
+// is displayed unless its epoch had a confirmation.
 func FuzzEngine(f *testing.F) {
-	f.Add([]byte("hello\x7f\x1b[Dworld\r"), uint8(3))
-	f.Add([]byte("日本‮\x1b[C"), uint8(9))
-	f.Fuzz(func(t *testing.T, in []byte, step uint8) {
+	f.Add([]byte("hello\x7f\x1b[Dworld\r"), []byte{3, 9, 1, 0, 200, 7})
+	f.Add([]byte("日本‮\x1b[C"), []byte{9, 1, 2, 3, 4, 5, 6})
+	f.Add([]byte("\x1b[200~paste\x1b[201~ab"), []byte{0, 0, 255, 255})
+	f.Fuzz(func(t *testing.T, in []byte, srvb []byte) {
+		if len(srvb) == 0 {
+			srvb = []byte{1}
+		}
+		sb := func(i int) int { return int(srvb[i%len(srvb)]) }
 		for _, rec := range []Recovery{RecoverBlind, RecoverGate, RecoverRebase} {
 			c := Mosey()
 			c.Recovery = rec
-			e := New(c, srv(10, 3, 0, 0))
-			s := srv(10, 3, 0, 0)
-			st := int(step%7) + 1
+			c.MaxPendingCells = 64 + sb(0) // small enough to bind on big screens
+			W, H := 1+sb(1)%120, 1+sb(2)%40
+			e := New(c, screen.New(W, H))
+			s := screen.New(W, H)
+			st := sb(3)%7 + 1
+			ix := 0
 			for i := 0; i < len(in); i += st {
 				j := min(i+st, len(in))
 				e.Input(in[i:j])
-				// a server that echoes raw bytes into a tiny screen
+				ix++
+				op := sb(ix)
+				// server mutations
+				if op%17 == 0 { // resize
+					W, H = 1+sb(ix+1)%120, 1+sb(ix+2)%40
+					s = screen.New(W, H)
+				}
 				for _, b := range in[i:j] {
-					if b >= 0x20 && b < 0x7f {
-						s.Set(s.CurX, s.CurY, screen.Cell{Text: string(rune(b)), Width: 1})
-						s.CurX = (s.CurX + 1) % s.W
+					if b >= 0x20 && b < 0x7f && W > 0 {
+						cell := screen.Cell{Text: string(rune(b)), Width: 1}
+						switch op % 5 {
+						case 1:
+							cell.Style.Attrs = screen.AttrReverse
+						case 2:
+							cell.Style.Fg = 9 // ghost grey
+						}
+						s.Set(s.CurX, s.CurY, cell)
+						s.CurX = (s.CurX + 1) % W
 					}
 				}
-				e.Frame(time.Duration(i), s, e.Seq()-uint64(step%2), e.Seq())
+				s.CursorVisible = op%3 != 0
+				seq := e.Seq()
+				var ack, recv uint64
+				switch op % 6 {
+				case 0:
+					ack, recv = seq, seq
+				case 1:
+					ack, recv = seq-min(seq, 1), seq
+				case 2:
+					ack, recv = seq+uint64(sb(ix+3)), seq+uint64(sb(ix+4)) // beyond what was sent
+				case 3:
+					ack, recv = uint64(sb(ix+3)), uint64(sb(ix+4)) // arbitrary, maybe decreasing
+				case 4:
+					ack, recv = seq, seq/2 // received < echoAck
+				case 5:
+					ack, recv = 0, 0
+				}
+				e.FrameEx(time.Duration(i), s, FrameInfo{EchoAck: ack, Received: recv, EchoOff: op%11 == 0})
 				cells, cx, cy, _ := e.Display()
 				for _, cc := range cells {
-					if cc.X < 0 || cc.X >= 10 || cc.Y < 0 || cc.Y >= 3 {
-						t.Fatalf("cell out of bounds %+v", cc)
+					if cc.X < 0 || cc.X >= W || cc.Y < 0 || cc.Y >= H {
+						t.Fatalf("cell out of bounds %+v (%dx%d)", cc, W, H)
 					}
 				}
-				if cx < 0 || cx > 10 || cy < 0 || cy >= 3 {
-					t.Fatalf("cursor out of bounds %d,%d", cx, cy)
+				if cx < 0 || cx > W || cy < 0 || cy >= H {
+					t.Fatalf("cursor out of bounds %d,%d (%dx%d)", cx, cy, W, H)
+				}
+				if e.Pending() > c.MaxPendingCells+W {
+					t.Fatalf("pending %d > %d+%d", e.Pending(), c.MaxPendingCells, W)
+				}
+				if e.LogLen() > LogSize {
+					t.Fatalf("log %d", e.LogLen())
+				}
+				if e.CursorPreds() > 1024 || e.Bumps() > 4096 || len(e.confirmed) > 1024 {
+					t.Fatalf("unbounded state: curs %d bumps %d confirmed %d", e.CursorPreds(), e.Bumps(), len(e.confirmed))
+				}
+				if e.shownWithoutConfirmation() {
+					t.Fatal("displayed a cell whose epoch was never confirmed")
 				}
 			}
 		}

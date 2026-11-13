@@ -28,19 +28,26 @@ var profiles = []sim.Profile{
 type variant struct {
 	name string
 	cfg  predict.Config
+	opt  sim.Options
 }
 
 func variants() []variant {
 	m := predict.Mosey()
-	vs := []variant{{"paper", predict.Paper()}, {"mosey", m}}
+	vs := []variant{
+		{name: "paper-strict", cfg: predict.PaperStrict()},
+		{name: "paper-permissive", cfg: predict.PaperPermissive()},
+		{name: "mosey", cfg: m},
+	}
 	abl := func(name string, f func(c *predict.Config)) {
 		c := m
 		f(&c)
-		vs = append(vs, variant{name, c})
+		vs = append(vs, variant{name: name, cfg: c})
 	}
 	abl("mosey-blind", func(c *predict.Config) { c.Recovery = predict.RecoverBlind })
 	abl("mosey+rebase", func(c *predict.Config) { c.Recovery = predict.RecoverRebase })
-	abl("mosey-ghost", func(c *predict.Config) { c.GhostAware = false })
+	abl("mosey-decoration", func(c *predict.Config) { c.GhostAware = false; c.StyleBreak = false })
+	abl("mosey-stylebreak+ghostcolour", func(c *predict.Config) { c.GhostAware = true; c.StyleBreak = false })
+	abl("mosey+ghostcolour", func(c *predict.Config) { c.GhostAware = true })
 	abl("mosey-shiftrow", func(c *predict.Config) { c.Shift = predict.ShiftRow })
 	abl("mosey-shiftnone", func(c *predict.Config) { c.Shift = predict.ShiftNone })
 	abl("mosey+stylestrict", func(c *predict.Config) { c.ConfirmStyle = true })
@@ -49,6 +56,15 @@ func variants() []variant {
 	abl("mosey-wide", func(c *predict.Config) { c.WideChars = false })
 	abl("mosey-bsguard", func(c *predict.Config) { c.GuardBackspace = false })
 	abl("mosey-fakecursor", func(c *predict.Config) { c.FakeCursor = false })
+	abl("mosey+bsconfirm", func(c *predict.Config) { c.BackspaceConfirms = true })
+	abl("mosey-informative", func(c *predict.Config) { c.InformativeOnly = false })
+	abl("mosey-echooff", func(c *predict.Config) { c.UseEchoOff = false })
+	abl("mosey-echooff-informative", func(c *predict.Config) { c.UseEchoOff = false; c.InformativeOnly = false })
+	vs = append(vs,
+		variant{name: "mosey@piggyback", cfg: m, opt: sim.Options{EchoAck: sim.EchoAckPiggyback}},
+		variant{name: "mosey@nosecretack", cfg: m, opt: sim.Options{EchoAck: sim.EchoAckExtraUnlessEchoOff}},
+		variant{name: "mosey+rebase@piggyback", cfg: func() predict.Config { c := m; c.Recovery = predict.RecoverRebase; return c }(), opt: sim.Options{EchoAck: sim.EchoAckPiggyback}},
+	)
 	return vs
 }
 
@@ -59,18 +75,40 @@ type agg struct {
 	ttc                                                     []time.Duration
 	kills, visible, up, down                                int
 	wrongLabels                                             map[string]int
+	secretCells, secretKeys, secretN                        int
+	echoOnly, echoOnlySecret                                int
+	truthN, heurMismatch                                    int
+	events                                                  map[string]bool
+	run                                                     int
 }
 
 func (a *agg) add(r *sim.Result) {
 	if a.wrongLabels == nil {
 		a.wrongLabels = map[string]int{}
 	}
+	if a.events == nil {
+		a.events = map[string]bool{}
+	}
+	a.run++
+	a.secretCells += r.SecretCellsShown
+	a.secretKeys += r.SecretKeysShown
+	a.echoOnly += r.EchoOnlyFrames
+	a.echoOnlySecret += r.EchoOnlyFramesSecret
 	a.kills += r.EngineKills
 	a.visible += r.EngineVisible
 	a.up += r.UpPackets
 	a.down += r.DownPackets
 	for _, k := range r.Keys {
 		a.n++
+		if k.Secret {
+			a.secretN++
+		}
+		if k.TruthCursor {
+			a.truthN++
+			if k.HeurMismatch {
+				a.heurMismatch++
+			}
+		}
 		if k.Label == "type" || k.Label == "typo" || k.Label == "fix" || k.Label == "bs" {
 			a.typeN++
 			if k.Shown && !k.Wrong {
@@ -94,6 +132,7 @@ func (a *agg) add(r *sim.Result) {
 			a.wrongLabels[k.Label]++
 			if k.TimeToCorrect >= 0 {
 				a.ttc = append(a.ttc, k.TimeToCorrect)
+				a.events[fmt.Sprintf("%p/%d/%d", a, a.run, k.CorrectedAt)] = true
 			}
 		}
 		if k.Effect && k.ServerLat >= 0 {
@@ -185,8 +224,8 @@ func main() {
 		}
 		return
 	}
-	header := "| trace | variant | keys | instant | instant (typing keys) | wrong | engine-visible-kills | style-only | row-stale | median lat (pred / no-pred) ms | mean lat (pred / no-pred) ms | p95 no-pred ms | TTC median/p95 ms |"
-	sep := "|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+	header := "| trace | variant | keys | instant | instant (typing keys) | wrong | row-stale | engine-visible-kills | style-only | median lat (pred / no-pred) ms | mean lat (pred / no-pred) ms | p95 no-pred ms | TTC median/p95 ms (n keys, n events) | secret keys shown / secret keys | echo-ack-only frames (in echo-off) |"
+	sep := "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
 	for _, p := range ps {
 		fmt.Printf("\n### Profile %s (RTT %v, jitter %v, loss %.0f%%, burst %.0f)\n\n", p.Name, p.RTT, p.Jitter, p.Loss*100, p.BurstLen)
 		fmt.Println(header)
@@ -196,7 +235,7 @@ func main() {
 			for _, tr := range traces {
 				a := &agg{}
 				for s := 0; s < *seeds; s++ {
-					r := sim.Run(tr, p, v.cfg, int64(1000+s))
+					r := sim.RunOpts(tr, p, v.cfg, int64(1000+s), v.opt)
 					a.add(r)
 					total.add(r)
 				}
@@ -210,11 +249,14 @@ func main() {
 }
 
 func row(name, v string, a *agg, seeds int) {
-	fmt.Printf("| %s | %s | %d | %s | %s | %s | %d | %s | %s | %s / %s | %s / %s | %s | %s / %s |\n",
-		name, v, a.n/seeds, pct(a.shown, a.n), pct(a.typeShown, a.typeN), pct(a.wrong, a.n), a.visible/seeds,
-		pct(a.styleOnly, a.n), pct(a.rowStale, a.n),
+	fmt.Printf("| %s | %s | %d | %s | %s | %s | %s | %d | %s | %s / %s | %s / %s | %s | %s / %s (%d, %d) | %d / %d | %d (%d) |\n",
+		name, v, a.n/seeds, pct(a.shown, a.n), pct(a.typeShown, a.typeN), pct(a.wrong, a.n), pct(a.rowStale, a.n), a.visible/seeds,
+		pct(a.styleOnly, a.n),
 		q(a.lat, 0.5), q(a.latNoPred, 0.5), mean(a.lat), mean(a.latNoPred), q(a.latNoPred, 0.95),
-		q(a.ttc, 0.5), q(a.ttc, 0.95))
+		q(a.ttc, 0.5), q(a.ttc, 0.95), len(a.ttc), len(a.events), a.secretKeys, a.secretN, a.echoOnly/seeds, a.echoOnlySecret/seeds)
+	if a.truthN > 0 && os.Getenv("HEUR") != "" {
+		fmt.Printf("|   cursor heuristic vs app truth: %d/%d keys disagree |\n", a.heurMismatch, a.truthN)
+	}
 	if os.Getenv("LABELS") != "" && len(a.wrongLabels) > 0 {
 		fmt.Printf("|   wrong by label: %v |\n", a.wrongLabels)
 	}

@@ -2,8 +2,8 @@
 // simulated network. It is NOT the S5 simulator (that was being built in
 // parallel and was not available); it is a small discrete-event model with
 // fixed base RTT, uniform jitter, and i.i.d. or Gilbert-Elliott loss, plus a
-// simplified SSP sender (D11 timing constants). See FINDINGS.md for the
-// approximations.
+// simplified SSP sender (D11 timing constants). See FINDINGS.md §2 for the
+// approximations (notably: the application is replayed open-loop).
 package sim
 
 import (
@@ -12,6 +12,7 @@ import (
 	"io"
 	"math/rand"
 	"sort"
+	"strings"
 	"time"
 
 	"mosey.spike/s6-prediction/predict"
@@ -21,6 +22,25 @@ import (
 
 // Debug, when set, receives a per-event log.
 var Debug io.Writer
+
+// EchoAckMode is how the server reports a new echo ack.
+type EchoAckMode int
+
+const (
+	// EchoAckExtra: send an extra frame ~50 ms after each keystroke even if
+	// the screen has not changed (the paper's description).
+	EchoAckExtra EchoAckMode = iota
+	// EchoAckPiggyback: echo ack only rides on frames that are due anyway
+	// (screen change, retransmission). No keystroke-tagged frames.
+	EchoAckPiggyback
+	// EchoAckExtraUnlessEchoOff: extra frames, except while the pty is at a
+	// no-echo canonical prompt.
+	EchoAckExtraUnlessEchoOff
+)
+
+type Options struct {
+	EchoAck EchoAckMode
+}
 
 type Profile struct {
 	Name     string
@@ -117,6 +137,7 @@ type frame struct {
 	scr      int
 	echoAck  int
 	received int
+	echoOff  bool
 }
 
 type upPkt struct {
@@ -136,6 +157,10 @@ type KeyResult struct {
 	Effect        bool // the key visibly changed the screen in the recording
 	ServerLat     time.Duration
 	TimeToCorrect time.Duration // for Wrong keys
+	CorrectedAt   time.Duration // sim time the wrong prediction left the screen (groups keys into events)
+	Secret        bool          // typed while the pty was at a no-echo canonical prompt
+	TruthCursor   bool          // ground-truth cursor came from the app (faketui marker), not the heuristic
+	HeurMismatch  bool          // the reverse-cell heuristic disagreed with the app's own insertion point
 	Detail        string
 }
 
@@ -145,10 +170,24 @@ type Result struct {
 	EngineVisible int
 	UpPackets     int
 	DownPackets   int
+	// SecretCellsShown counts (event, cell) pairs where a predicted non-blank
+	// cell for a secret key was displayed; SecretKeysShown the distinct keys.
+	SecretCellsShown int
+	SecretKeysShown  int
+	// EchoOnlyFrames: frames whose only news is a new echo ack (screen
+	// unchanged): each one tags a keystroke for an on-path observer.
+	// EchoOnlyFramesSecret: those sent while the pty was echo-off.
+	EchoOnlyFrames       int
+	EchoOnlyFramesSecret int
 }
 
 // Run replays tr under profile p with predictor config cfg.
 func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
+	return RunOpts(tr, p, cfg, seed, Options{})
+}
+
+// RunOpts is Run with server options.
+func RunOpts(tr *trace.Trace, p Profile, cfg predict.Config, seed int64, opt Options) *Result {
 	r := rand.New(rand.NewSource(seed))
 	upLoss := &lossy{r: r, p: p.Loss, burst: p.BurstLen}
 	downLoss := &lossy{r: r, p: p.Loss, burst: p.BurstLen}
@@ -162,24 +201,55 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 
 	// recorded timeline
 	type outEv struct {
-		t   time.Duration
-		scr int
+		t     time.Duration
+		scr   int
+		eo    bool
+		truth []int
 	}
 	var outs []outEv
 	var keyT []time.Duration
 	var keyB [][]byte
 	var keyL []string
+	secret := []bool{false}
+	hasTruth := false
 	for _, e := range tr.Events {
 		t := time.Duration(e.T) * time.Microsecond
 		if e.Kind == trace.Out {
-			outs = append(outs, outEv{t, e.Screen})
+			outs = append(outs, outEv{t, e.Screen, e.EchoOff, e.Truth})
+			if e.Truth != nil {
+				hasTruth = true
+			}
 		} else {
 			keyT = append(keyT, t)
 			keyB = append(keyB, e.Data)
 			keyL = append(keyL, e.Label)
+			secret = append(secret, e.EchoOff)
 		}
 	}
 	N := len(keyT)
+	// Password keys typed after a `read -s` line. zsh and fish implement
+	// read -s in raw mode, so the pty echo-off bit misses them; mark them
+	// from the script so the "never display a password cell" check covers
+	// every shell, not only those the bit covers.
+	{
+		line, pw := "", false
+		for k := 1; k <= N; k++ {
+			b := string(keyB[k-1])
+			switch b {
+			case "\r":
+				pw = !pw && strings.Contains(line, "read -s")
+				line = ""
+				continue
+			case "\x03", "\x15":
+				line, pw = "", false
+				continue
+			}
+			if pw {
+				secret[k] = true
+			}
+			line += b
+		}
+	}
 	keyT = append([]time.Duration{0}, keyT...) // 1-based
 	end := time.Duration(1<<62 - 1)
 	nextKeyT := func(k int) time.Duration { // recorded time of key k+1
@@ -195,9 +265,26 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 		}
 		return outs[i-1].scr
 	}
+	echoOffAt := func(rho time.Duration) bool {
+		i := sort.Search(len(outs), func(i int) bool { return outs[i].t > rho })
+		if i == 0 {
+			return false
+		}
+		return outs[i-1].eo
+	}
+	truthAt := func(rho time.Duration) []int { // the app's last reported insertion point
+		i := sort.Search(len(outs), func(i int) bool { return outs[i].t > rho })
+		for i--; i >= 0; i-- {
+			if outs[i].truth != nil {
+				return outs[i].truth
+			}
+		}
+		return nil
+	}
 
 	// per-key ground truth and first response in the recording
 	settled := make([]int, N+1)
+	settledTruth := make([][]int, N+1)
 	respT := make([]time.Duration, N+1)
 	effect := make([]bool, N+1)
 	for k := 1; k <= N; k++ {
@@ -206,6 +293,9 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 			lim = keyT[k] + 2*time.Second
 		}
 		settled[k] = screenAt(lim - time.Microsecond)
+		if hasTruth {
+			settledTruth[k] = truthAt(lim - time.Microsecond)
+		}
 		before := screenAt(keyT[k])
 		i := sort.Search(len(outs), func(i int) bool { return outs[i].t > keyT[k] })
 		for ; i < len(outs) && outs[i].t < lim; i++ {
@@ -273,7 +363,7 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 	}
 	curFrame := func(now time.Duration) *frame {
 		rh := rho(now)
-		return &frame{rho: rh, scr: screenAt(rh), echoAck: echoAck(now), received: srvN}
+		return &frame{rho: rh, scr: screenAt(rh), echoAck: echoAck(now), received: srvN, echoOff: echoOffAt(rh)}
 	}
 	dirty := func(now time.Duration) {
 		if srvPending {
@@ -326,9 +416,32 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 				keep = append(keep, w)
 			} else {
 				res.Keys[w.k].TimeToCorrect = now - w.at
+				res.Keys[w.k].CorrectedAt = now
 			}
 		}
 		watches = keep
+	}
+	anySecret := false
+	for _, s := range secret {
+		anySecret = anySecret || s
+	}
+	secretShown := map[uint64]bool{}
+	checkSecrets := func() {
+		if !anySecret {
+			return
+		}
+		cells, _, _, _ := eng.Display()
+		for _, c := range cells {
+			// a glyph of a password key on screen; a predicted blank (backspace
+			// over a mask character) reveals nothing and is not counted
+			if c.Seq < uint64(len(secret)) && secret[c.Seq] && !c.Cell.Blank() {
+				res.SecretCellsShown++
+				secretShown[c.Seq] = true
+				if Debug != nil {
+					fmt.Fprintf(Debug, "SECRET shown: key %d cell (%d,%d) %q\n", c.Seq, c.X, c.Y, c.Cell.Text)
+				}
+			}
+		}
 	}
 	for q.Len() > 0 {
 		e := heap.Pop(q).(*ev)
@@ -351,8 +464,18 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 			wrong := false
 			var bad []predict.Shown
 			curWrong := false
+			kr.Secret = secret[k]
+			tx, ty := predict.VisualCursor(truth, cfg.FakeCursor)
+			if tc := settledTruth[k]; tc != nil {
+				// judge against the application's own insertion point, not
+				// the heuristic under test
+				kr.TruthCursor = true
+				if hx, hy := predict.VisualCursor(truth, true); hx != tc[0] || hy != tc[1] {
+					kr.HeurMismatch = true
+				}
+				tx, ty = tc[0], tc[1]
+			}
 			if shown {
-				tx, ty := predict.VisualCursor(truth, cfg.FakeCursor)
 				if cx != tx || cy != ty {
 					wrong, curWrong = true, true
 					kr.Detail += fmt.Sprintf("cursor %d,%d want %d,%d; ", cx, cy, tx, ty)
@@ -364,7 +487,9 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 				}
 				shown = true
 				t := truth.At(c.X, c.Y)
-				if !t.SameGlyph(c.Cell) && !(c.Cell.Blank() && predict.Ghost(t)) {
+				// a predicted blank where the app then draws a suggestion or
+				// other decoration is not a misprediction (colour-independent)
+				if !t.SameGlyph(c.Cell) && !(c.Cell.Blank() && (predict.Ghost(t) || predict.Decoration(truth, c.X, c.Y))) {
 					wrong = true
 					bad = append(bad, c)
 					kr.Detail += fmt.Sprintf("(%d,%d) %q want %q; ", c.X, c.Y, c.Cell.Text, t.Text)
@@ -413,7 +538,14 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 				for ; i < len(outs) && outs[i].t < hi; i++ {
 					push(&ev{at: now + (outs[i].t - lo), kind: evServerDirty, n: gen})
 				}
-				push(&ev{at: now + echoDelay, kind: evServerDirty, n: gen})
+				switch opt.EchoAck {
+				case EchoAckExtra:
+					push(&ev{at: now + echoDelay, kind: evServerDirty, n: gen})
+				case EchoAckExtraUnlessEchoOff:
+					if !echoOffAt(rho(now)) {
+						push(&ev{at: now + echoDelay, kind: evServerDirty, n: gen})
+					}
+				}
 				dirty(now)
 			}
 		case evServerDirty:
@@ -426,6 +558,12 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 			if srvLastSent != nil && srvAcked >= srvLastSent.serial &&
 				f.scr == srvLastSent.scr && f.echoAck == srvLastSent.echoAck && f.received == srvLastSent.received {
 				break // nothing new and the last frame is acknowledged
+			}
+			if srvLastSent != nil && f.scr == srvLastSent.scr && f.echoAck != srvLastSent.echoAck && f.received == srvLastSent.received {
+				res.EchoOnlyFrames++
+				if f.echoOff {
+					res.EchoOnlyFramesSecret++
+				}
 			}
 			srvSerial++
 			f.serial = srvSerial
@@ -455,7 +593,7 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 				cliAcked = f.received
 			}
 			cliScr = f.scr
-			eng.Frame(now, tr.Screens[f.scr], uint64(f.echoAck), uint64(f.received))
+			eng.FrameEx(now, tr.Screens[f.scr], predict.FrameInfo{EchoAck: uint64(f.echoAck), Received: uint64(f.received), EchoOff: f.echoOff})
 			if Debug != nil {
 				fmt.Fprintf(Debug, "%8.3fs frame #%d ack=%d recv=%d kills=%d pending=%d\n", now.Seconds(), f.serial, f.echoAck, f.received, eng.Kills, eng.Pending())
 			}
@@ -471,6 +609,7 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 			}
 		}
 		checkWatches(now)
+		checkSecrets()
 	}
 
 	// server-only latency per key, and time-to-correct for wrong keys
@@ -488,6 +627,7 @@ func Run(tr *trace.Trace, p Profile, cfg predict.Config, seed int64) *Result {
 			kr.TimeToCorrect = -1 // never corrected before the trace ended
 		}
 	}
+	res.SecretKeysShown = len(secretShown)
 	res.Keys = res.Keys[1:]
 	res.EngineKills = eng.Kills
 	res.EngineVisible = eng.VisibleWrong

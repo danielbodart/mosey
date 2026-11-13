@@ -25,6 +25,14 @@ type Event struct {
 	Data   []byte `json:"d,omitempty"`
 	Screen int    `json:"s"` // index into Screens (state after this event)
 	Label  string `json:"l,omitempty"`
+	// EchoOff: the pty's termios had ECHO clear and ICANON set (a no-echo
+	// canonical prompt such as passwd, sudo or `read -s`), sampled with
+	// tcgetattr on the master after this event.
+	EchoOff bool `json:"eo,omitempty"`
+	// Truth is the application's own insertion point [x, y], when the
+	// application reports it (faketui emits OSC 7777;x BEL at the start of
+	// its input row). Nil when not reported in this event.
+	Truth []int `json:"tc,omitempty"`
 }
 
 type Trace struct {

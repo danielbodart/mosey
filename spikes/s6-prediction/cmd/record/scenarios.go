@@ -145,6 +145,8 @@ func buildScenario(name string, seed int64, rounds int) []Step {
 			lessRound(t, r)
 		case strings.HasPrefix(name, "tui"):
 			tuiRound(t, r)
+		case strings.HasPrefix(name, "claude"):
+			claudeRound(t, r)
 		default:
 			panic("unknown scenario " + name)
 		}
@@ -192,6 +194,10 @@ func shellRound(t *typist, name string, r int) {
 	// password prompt: no echo after Enter
 	if isFish {
 		t.Type("read -s -P 'pw: ' pw")
+	} else if strings.HasPrefix(name, "zsh") {
+		// zsh: -p means "read from the coprocess"; the prompt goes after '?'
+		// (the first recording used -p and the "password" ran as a command)
+		t.Type("read -s 'pw?pw: '")
 	} else {
 		t.Type("read -s -p 'pw: ' pw")
 	}
@@ -346,6 +352,37 @@ func tuiRound(t *typist, r int) {
 	t.Key(CtrlU, "ctrl-u")
 	t.Type("thanks")
 	t.Enter(2000)
+}
+
+// claudeRound drives real Claude Code's prompt box. It NEVER presses Enter:
+// nothing is submitted to a model. Only editing keys inside the input box.
+func claudeRound(t *typist, r int) {
+	t.Type("explain how predictive local echo decides what to show")
+	t.Think(400)
+	t.Keys(Left, 8, "left")
+	t.Type("really ")
+	t.Key(CtrlE, "ctrl-e")
+	t.Keys(BS, 6, "bs")
+	t.Type("display")
+	t.Think(600)
+	t.Key(CtrlU, "ctrl-u")
+	t.Think(500)
+	t.Type("/he")
+	t.Think(700)
+	t.Keys(BS, 3, "bs")
+	t.Think(300)
+	t.Type("what about 日本語 input and wrapping onto a second line of the prompt box here")
+	t.Keys(BS, 5, "bs")
+	t.Type("text?")
+	t.Think(500)
+	t.Key(CtrlU, "ctrl-u")
+	t.Think(400)
+	t.Type("thanks")
+	t.Keys(Left, 3, "left")
+	t.Keys(Right, 2, "right")
+	t.Think(400)
+	t.Key(CtrlU, "ctrl-u")
+	t.Think(600)
 }
 
 var _ = utf8.RuneLen

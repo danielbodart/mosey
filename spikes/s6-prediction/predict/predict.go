@@ -16,6 +16,8 @@
 package predict
 
 import (
+	"sort"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -79,6 +81,11 @@ type Config struct {
 	// (autosuggestion): it is never shifted, typing over it is predicted as
 	// "consume", and Right-arrow over it is unpredictable.
 	GhostAware bool
+	// StyleBreak (colour-independent ghost handling): the shifted text run
+	// also ends where the rendition changes from the text left of the cursor.
+	// An autosuggestion, a right prompt or a placeholder is drawn in a
+	// different rendition from the text being edited, whatever the theme.
+	StyleBreak bool
 	// ConfirmStyle requires the rendition to match too, not just the glyph.
 	ConfirmStyle bool
 	// AckHorizon: when an unpredictable key (Enter, Tab, Up...) was received
@@ -97,6 +104,19 @@ type Config struct {
 	// FakeCursor: when the terminal cursor is hidden and exactly one
 	// reverse-video cell is visible, treat it as the cursor (Ink/React TUIs).
 	FakeCursor bool
+	// InformativeOnly: only a prediction of the cell the user just changed
+	// (and which differed from the server's cell) can confirm an epoch.
+	// Off: any matching prediction confirms (the paper's reading).
+	InformativeOnly bool
+	// BackspaceConfirms lets the cell a backspace empties confirm an epoch
+	// (with InformativeOnly). Off: only a typed glyph confirms. Measured: at
+	// fish's masked `read -s` prompt (raw mode, draws ●), a confirmed
+	// backspace made the next password glyph visible in the clear.
+	BackspaceConfirms bool
+	// UseEchoOff honours the server frame's echo-off bit (pty termios has
+	// ECHO clear and ICANON set: a password prompt). While it is set the
+	// engine neither predicts nor logs input.
+	UseEchoOff bool
 
 	// Hostile-input limits.
 	MaxPendingCells  int // outstanding predicted cells; beyond this, stop predicting
@@ -109,31 +129,54 @@ type Config struct {
 	Width func(g string) int
 }
 
-// Paper returns the baseline configuration: the behaviour described in the
-// paper with the simplest reasonable choices where the paper is silent.
-func Paper() Config {
+// PaperStrict returns the "paper + strict choices" baseline: the paper's
+// epochs and server echo ack, blind recovery, and two strict choices the
+// paper does not make: rendition must match to confirm, and an insert shifts
+// the whole rest of the row (terminal ICH semantics). Display thresholds are
+// not set: the spike measures with DisplayAlways.
+func PaperStrict() Config {
 	return Config{
-		Display:           DisplayAlways,
-		ShowAboveRTT:      30 * time.Millisecond,
-		UnderlineAboveRTT: 80 * time.Millisecond,
-		Shift:             ShiftRow,
-		GapCells:          3,
-		ConfirmStyle:      true,
-		PredictWrap:       true,
-		MaxPendingCells:   1 << 20,
-		MaxInputBytes:     1 << 20,
-		MaxGraphemeBytes:  1 << 20,
-		MaxGraphemeRunes:  1 << 20,
-		Width:             defaultWidth,
+		Display:          DisplayAlways,
+		Shift:            ShiftRow,
+		GapCells:         3,
+		ConfirmStyle:     true,
+		PredictWrap:      true,
+		MaxPendingCells:  1 << 20,
+		MaxInputBytes:    1 << 20,
+		MaxGraphemeBytes: 1 << 20,
+		MaxGraphemeRunes: 1 << 20,
+		Width:            defaultWidth,
 	}
 }
 
+// PaperPermissive resolves the paper's silences permissively: glyph-only
+// confirmation, text-run shift (no ghost awareness), blind recovery, any
+// matching prediction confirms.
+func PaperPermissive() Config {
+	c := PaperStrict()
+	c.ConfirmStyle = false
+	c.Shift = ShiftText
+	return c
+}
+
 // Mosey returns the improved configuration this spike recommends.
+//
+// Display thresholds: see prediction-spec.md §11. They were derived by a
+// black-box sweep of the installed mosh-client (scripts/moshprobe.sh), not
+// from the paper or from Mosh source.
 func Mosey() Config {
-	c := Paper()
+	c := PaperStrict()
+	c.Display = DisplayAlways
+	// black-box sweep of mosh-client (FINDINGS §3): predictions appear from
+	// a netem RTT of ~36-40 ms, underlines from ~92-100 ms
+	c.ShowAboveRTT = 38 * time.Millisecond
+	c.UnderlineAboveRTT = 95 * time.Millisecond
+	c.InformativeOnly = true
+	c.UseEchoOff = true
 	c.Recovery = RecoverGate
 	c.Shift = ShiftText
-	c.GhostAware = true
+	c.GhostAware = false // colour heuristic: 0 % recall on non-default themes
+	c.StyleBreak = true  // colour-independent decoration handling
 	c.ConfirmStyle = false
 	c.AckHorizon = true
 	c.PredictWrap = false
@@ -186,14 +229,24 @@ type curPred struct {
 	epoch uint64
 }
 
+// LogSize is the number of recent inputs kept for rebase.
+const LogSize = 512
+
+const predRing = 1024
+
 type Engine struct {
 	cfg Config
 	srv *screen.Screen
+	bx  int // visual cursor of srv, computed once per frame
+	by  int
 
-	cells   map[int]*cellPred
-	curs    []curPred
-	epoch   uint64
-	confirm uint64 // highest epoch that has had a prediction confirmed
+	cells     map[int]*cellPred
+	curs      []curPred
+	epoch     uint64
+	confirmed map[uint64]bool // epochs that had a prediction confirmed (exact set, pruned)
+
+	echoOff bool // last frame said the pty is at a no-echo canonical prompt
+	inPaste bool // between ESC[200~ and ESC[201~
 
 	seq      uint64
 	bumps    []uint64 // sequence numbers of unpredictable keys, ascending
@@ -205,11 +258,11 @@ type Engine struct {
 	log     map[uint64][]byte
 
 	// counters
-	VisibleWrong  int // displayed predictions shown wrong (kill events while displayed)
-	Kills         int
-	CellsPredict  int
-	Observer      func(Event)
-	predictedSeqs map[uint64]bool
+	VisibleWrong int // displayed predictions shown wrong (kill events while displayed)
+	Kills        int
+	CellsPredict int
+	Observer     func(Event)
+	predicted    [predRing]uint64 // instrumentation: seq%predRing -> seq if predicted
 }
 
 func New(cfg Config, initial *screen.Screen) *Engine {
@@ -219,16 +272,18 @@ func New(cfg Config, initial *screen.Screen) *Engine {
 	if cfg.GapCells <= 0 {
 		cfg.GapCells = 3
 	}
-	return &Engine{
-		cfg:           cfg,
-		srv:           initial.Clone(),
-		cells:         map[int]*cellPred{},
-		epoch:         1,
-		inStartY:      -1,
-		predictedSeqs: map[uint64]bool{},
-		founded:       true,
-		log:           map[uint64][]byte{},
+	e := &Engine{
+		cfg:       cfg,
+		srv:       initial.Clone(),
+		cells:     map[int]*cellPred{},
+		epoch:     1,
+		confirmed: map[uint64]bool{},
+		inStartY:  -1,
+		founded:   true,
+		log:       map[uint64][]byte{},
 	}
+	e.bx, e.by = VisualCursor(e.srv, cfg.FakeCursor)
+	return e
 }
 
 func (e *Engine) SetRTT(d time.Duration) { e.srtt = d }
@@ -236,7 +291,29 @@ func (e *Engine) SetRTT(d time.Duration) { e.srtt = d }
 // Seq is the sequence number of the last input.
 func (e *Engine) Seq() uint64 { return e.seq }
 
-func (e *Engine) displayedEpoch(ep uint64) bool { return ep <= e.confirm }
+// displayedEpoch: exactly the epochs that had a prediction confirmed. (Not a
+// high-water mark: confirming epoch 5 must not reveal leftovers of epoch 4.)
+func (e *Engine) displayedEpoch(ep uint64) bool { return e.confirmed[ep] }
+
+// sorted returns the cell predictions in a deterministic order (seq, row,
+// column), so replays are bit-for-bit reproducible.
+func (e *Engine) sorted() []*cellPred {
+	ps := make([]*cellPred, 0, len(e.cells))
+	for _, p := range e.cells {
+		ps = append(ps, p)
+	}
+	sort.Slice(ps, func(i, j int) bool {
+		a, b := ps[i], ps[j]
+		if a.seq != b.seq {
+			return a.seq < b.seq
+		}
+		if a.y != b.y {
+			return a.y < b.y
+		}
+		return a.x < b.x
+	})
+	return ps
+}
 
 func (e *Engine) showing() bool {
 	switch e.cfg.Display {
@@ -260,7 +337,7 @@ func (e *Engine) view(x, y int) screen.Cell {
 	return e.srv.At(x, y)
 }
 
-func (e *Engine) baseCursor() (int, int) { return VisualCursor(e.srv, e.cfg.FakeCursor) }
+func (e *Engine) baseCursor() (int, int) { return e.bx, e.by }
 
 // VisualCursor is where the user perceives the insertion point: the terminal
 // cursor, or with fake=true and the cursor hidden, a lone reverse-video cell.
@@ -293,6 +370,23 @@ func (e *Engine) cursor() (int, int) {
 		return e.curs[n-1].x, e.curs[n-1].y
 	}
 	return e.baseCursor()
+}
+
+// Decoration reports whether the cell at x,y is non-blank text drawn in a
+// different rendition from the nearest glyph to its left on the row: an
+// autosuggestion, right prompt or placeholder, whatever the colour theme.
+// (Colour-independent counterpart of Ghost; also used by the replay oracle.)
+func Decoration(s *screen.Screen, x, y int) bool {
+	c := s.At(x, y)
+	if c.Blank() {
+		return false
+	}
+	for i := x - 1; i >= 0; i-- {
+		if l := s.At(i, y); !l.Blank() {
+			return l.Style != c.Style
+		}
+	}
+	return false
 }
 
 // Ghost is exported for the replay oracle.
@@ -328,8 +422,18 @@ func ghost(c screen.Cell) bool {
 func (e *Engine) Input(b []byte) uint64 {
 	e.seq++
 	seq := e.seq
-	e.log[seq] = b
-	delete(e.log, seq-512)
+	if old, ok := e.log[seq-LogSize]; ok {
+		clear(old) // may hold a password typed before the echo-off bit arrived
+		delete(e.log, seq-LogSize)
+	}
+	paste := e.pasting(b)
+	if (e.cfg.UseEchoOff && e.echoOff) || paste {
+		// no-echo prompt: neither predict nor keep the bytes. A paste is
+		// unpredictable (performance: no keystroke-by-keystroke value).
+		e.bump(seq)
+		return seq
+	}
+	e.log[seq] = append([]byte(nil), b...) // the caller may reuse b
 	if e.cfg.Recovery != RecoverBlind && !e.founded {
 		if !easy(b) {
 			e.bump(seq)
@@ -338,6 +442,22 @@ func (e *Engine) Input(b []byte) uint64 {
 	}
 	e.predictInput(b, seq)
 	return seq
+}
+
+// pasting tracks bracketed paste (ESC[200~ ... ESC[201~) and reports whether
+// b is (part of) a paste.
+func (e *Engine) pasting(b []byte) bool {
+	const start, end = "\x1b[200~", "\x1b[201~"
+	s := string(b)
+	was := e.inPaste
+	if i := strings.LastIndex(s, start); i >= 0 {
+		e.inPaste = !strings.Contains(s[i:], end)
+		return true
+	}
+	if was && strings.Contains(s, end) {
+		e.inPaste = false
+	}
+	return was
 }
 
 // easy reports whether a key is one the engine knows how to predict.
@@ -451,9 +571,15 @@ func (e *Engine) textEnd(x, y int) int {
 	if e.cfg.GhostAware && e.cfg.FakeCursor && e.view(x, y).Style.Attrs&screen.AttrReverse != 0 && ghost(e.view(x+1, y)) {
 		return x // a drawn cursor sitting on placeholder text
 	}
+	// reference rendition: the text being edited, i.e. the nearest glyph
+	// left of the cursor (the cell at the cursor may itself be a suggestion)
+	first := e.refStyle(x, y)
 	for i := x; i < W; i++ {
 		c := e.view(i, y)
 		if e.cfg.GhostAware && ghost(c) {
+			break
+		}
+		if e.cfg.StyleBreak && !c.Blank() && c.Style != first {
 			break
 		}
 		if c.Blank() {
@@ -467,6 +593,17 @@ func (e *Engine) textEnd(x, y int) int {
 		end = i + 1
 	}
 	return end
+}
+
+// refStyle is the rendition of the text being edited: the nearest glyph
+// left of x on row y (the cell at x may itself be a suggestion), else x's.
+func (e *Engine) refStyle(x, y int) screen.Style {
+	for i := x - 1; i >= 0; i-- {
+		if l := e.view(i, y); !l.Blank() {
+			return l.Style
+		}
+	}
+	return e.view(x, y).Style
 }
 
 func (e *Engine) printable(g string, seq uint64) bool {
@@ -533,7 +670,7 @@ func (e *Engine) printable(g string, seq uint64) bool {
 		e.setCell(x+1, y, screen.Cell{Width: 0, Style: st}, seq, false)
 	}
 	e.setCursor(x+w, y, seq)
-	e.predictedSeqs[seq] = true
+	e.predicted[seq%predRing] = seq
 	return true
 }
 
@@ -552,19 +689,20 @@ func (e *Engine) backspace(seq uint64) bool {
 	end := e.textEnd(x, y)
 	n := end - x
 	// the cell at start is where the deleted glyph was: the evidence cell
+	bc := e.cfg.BackspaceConfirms
 	for i := 0; i < n; i++ {
-		e.setCell(start+i, y, e.view(x+i, y), seq, i == 0)
+		e.setCell(start+i, y, e.view(x+i, y), seq, bc && i == 0)
 	}
 	for i := start + n; i < end && i < start+n+w; i++ {
-		e.setCell(i, y, screen.Cell{Text: " ", Width: 1}, seq, i == start)
+		e.setCell(i, y, screen.Cell{Text: " ", Width: 1}, seq, bc && i == start)
 	}
 	if n == 0 {
 		for i := start; i < x; i++ {
-			e.setCell(i, y, screen.Cell{Text: " ", Width: 1}, seq, i == start)
+			e.setCell(i, y, screen.Cell{Text: " ", Width: 1}, seq, bc && i == start)
 		}
 	}
 	e.setCursor(start, y, seq)
-	e.predictedSeqs[seq] = true
+	e.predicted[seq%predRing] = seq
 	return true
 }
 
@@ -581,7 +719,7 @@ func (e *Engine) left(seq uint64) bool {
 		return false
 	}
 	e.setCursor(nx, y, seq)
-	e.predictedSeqs[seq] = true
+	e.predicted[seq%predRing] = seq
 	return true
 }
 
@@ -592,6 +730,10 @@ func (e *Engine) right(seq uint64) bool {
 		// at end of input Right accepts an autosuggestion (zsh, fish)
 		return false
 	}
+	if e.cfg.StyleBreak && (c.Blank() || c.Style != e.refStyle(x, y)) {
+		// differently rendered text under the cursor may be a suggestion
+		return false
+	}
 	w := int(c.Width)
 	if w < 1 {
 		w = 1
@@ -600,23 +742,43 @@ func (e *Engine) right(seq uint64) bool {
 		return false
 	}
 	e.setCursor(x+w, y, seq)
-	e.predictedSeqs[seq] = true
+	e.predicted[seq%predRing] = seq
 	return true
 }
 
 // ---- server frames ------------------------------------------------------
 
+// FrameInfo is the prediction metadata a server frame carries.
+type FrameInfo struct {
+	EchoAck  uint64 // latest keystroke presented to the application >= 50 ms ago
+	Received uint64 // latest keystroke the server has received
+	EchoOff  bool   // pty termios: ECHO clear and ICANON set (password prompt)
+}
+
 // Frame applies a new authoritative server state. echoAck is the latest
 // keystroke presented to the application for at least 50 ms; received is
 // the latest keystroke the server has received.
 func (e *Engine) Frame(now time.Duration, s *screen.Screen, echoAck, received uint64) {
+	e.FrameEx(now, s, FrameInfo{EchoAck: echoAck, Received: received})
+}
+
+// FrameEx is Frame with the full metadata.
+func (e *Engine) FrameEx(now time.Duration, s *screen.Screen, fi FrameInfo) {
+	echoAck, received := fi.EchoAck, fi.Received
 	if s.W != e.srv.W || s.H != e.srv.H {
-		e.killAll(now, false)
+		e.killAll(now, true)
 		e.srv = s.Clone()
+		e.bx, e.by = VisualCursor(e.srv, e.cfg.FakeCursor)
+		e.echoOff = fi.EchoOff
 		return
 	}
 	e.srv = s.Clone()
-	bx, by := e.baseCursor()
+	e.bx, e.by = VisualCursor(e.srv, e.cfg.FakeCursor)
+	bx, by := e.bx, e.by
+	if e.cfg.UseEchoOff && fi.EchoOff && !e.echoOff {
+		e.killAll(now, true) // entering a no-echo prompt: drop everything
+	}
+	e.echoOff = fi.EchoOff
 
 	horizon := func(seq uint64) bool {
 		if !e.cfg.AckHorizon {
@@ -636,7 +798,8 @@ func (e *Engine) Frame(now time.Duration, s *screen.Screen, echoAck, received ui
 
 	wrong := false
 	wrongDisplayed := false
-	for k, p := range e.cells {
+	for _, p := range e.sorted() {
+		k := e.idx(p.x, p.y)
 		if p.seq > echoAck {
 			continue
 		}
@@ -651,7 +814,7 @@ func (e *Engine) Frame(now time.Duration, s *screen.Screen, echoAck, received ui
 		if ok && e.cfg.ConfirmStyle && p.cell.Width != 0 {
 			ok = got.Style == p.cell.Style
 		}
-		if !ok && e.cfg.GhostAware && p.cell.Blank() && ghost(got) {
+		if !ok && p.cell.Blank() && (e.cfg.GhostAware && ghost(got) || e.cfg.StyleBreak && Decoration(s, p.x, p.y)) {
 			// we predicted a blank and a suggestion was drawn there: consistent
 			// with the user's text, but not evidence for it
 			delete(e.cells, k)
@@ -659,8 +822,8 @@ func (e *Engine) Frame(now time.Duration, s *screen.Screen, echoAck, received ui
 			continue
 		}
 		if ok {
-			if p.informative && p.epoch > e.confirm {
-				e.confirm = p.epoch
+			if p.informative || !e.cfg.InformativeOnly {
+				e.confirmed[p.epoch] = true
 			}
 			delete(e.cells, k)
 			e.emit(p.seq, Confirmed, disp, now)
@@ -701,32 +864,63 @@ func (e *Engine) Frame(now time.Duration, s *screen.Screen, echoAck, received ui
 		}
 		e.killAll(now, true)
 	}
-	if !e.founded {
+	if !e.founded && !(e.cfg.UseEchoOff && e.echoOff) {
 		var lastBump uint64
 		if n := len(e.bumps); n > 0 {
 			lastBump = e.bumps[n-1]
 		}
 		switch e.cfg.Recovery {
 		case RecoverGate:
-			if received == e.seq {
+			if received >= e.seq {
 				e.founded = true
 			}
 		case RecoverRebase:
-			if received >= lastBump {
+			if received >= e.seq {
+				e.founded = true
+			} else if received >= lastBump && e.logComplete(received+1, e.seq) {
 				e.founded = true
 				e.epoch++
 				for q := received + 1; q <= e.seq && e.founded; q++ {
 					e.predictInput(e.log[q], q)
 				}
 			}
+			// else: some input in (received, seq] is not in the log (evicted,
+			// a paste, or typed at a no-echo prompt): behave as gate.
+		}
+	}
+	e.pruneConfirmed()
+}
+
+func (e *Engine) logComplete(from, to uint64) bool {
+	for q := from; q <= to; q++ {
+		if _, ok := e.log[q]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// pruneConfirmed forgets confirmed epochs that no live prediction can belong
+// to any more, keeping the set bounded.
+func (e *Engine) pruneConfirmed() {
+	lo := e.epoch
+	for _, p := range e.cells {
+		lo = min(lo, p.epoch)
+	}
+	for _, c := range e.curs {
+		lo = min(lo, c.epoch)
+	}
+	for ep := range e.confirmed {
+		if ep < lo {
+			delete(e.confirmed, ep)
 		}
 	}
 }
 
 func (e *Engine) killAll(now time.Duration, bumpEpoch bool) {
-	for k, p := range e.cells {
+	for _, p := range e.sorted() {
 		e.emit(p.seq, Collateral, e.displayedEpoch(p.epoch) && e.showing(), now)
-		delete(e.cells, k)
+		delete(e.cells, e.idx(p.x, p.y))
 	}
 	e.curs = e.curs[:0]
 	if bumpEpoch {
@@ -761,7 +955,7 @@ func (e *Engine) Display() (cells []Shown, curX, curY int, curSeq uint64) {
 		return nil, curX, curY, 0
 	}
 	ul := e.srtt > e.cfg.UnderlineAboveRTT
-	for _, p := range e.cells {
+	for _, p := range e.sorted() {
 		if e.displayedEpoch(p.epoch) {
 			cells = append(cells, Shown{X: p.x, Y: p.y, Cell: p.cell, Seq: p.seq, Underline: ul})
 		}
@@ -775,7 +969,33 @@ func (e *Engine) Display() (cells []Shown, curX, curY int, curSeq uint64) {
 }
 
 // Predicted reports whether input seq produced any prediction (shown or not).
-func (e *Engine) Predicted(seq uint64) bool { return e.predictedSeqs[seq] }
+// It remembers only the last 1024 inputs (instrumentation; bounded).
+func (e *Engine) Predicted(seq uint64) bool { return seq != 0 && e.predicted[seq%predRing] == seq }
 
 // Pending is the number of outstanding cell predictions.
 func (e *Engine) Pending() int { return len(e.cells) }
+
+// LogLen is the number of inputs held for rebase (for limit tests).
+func (e *Engine) LogLen() int { return len(e.log) }
+
+// CursorPreds is the number of outstanding cursor predictions.
+func (e *Engine) CursorPreds() int { return len(e.curs) }
+
+// Bumps is the length of the unpredictable-key list.
+func (e *Engine) Bumps() int { return len(e.bumps) }
+
+// EpochShown reports whether the epoch of input seq's newest cell is displayed
+// (test helper: no cell may be displayed without a confirmation).
+func (e *Engine) shownWithoutConfirmation() bool {
+	if !e.showing() {
+		return false
+	}
+	cells, _, _, _ := e.Display()
+	for _, c := range cells {
+		p := e.cells[e.idx(c.X, c.Y)]
+		if p == nil || !e.confirmed[p.epoch] {
+			return true
+		}
+	}
+	return false
+}

@@ -236,6 +236,9 @@ func (a *app) render() {
 	if pad < 0 {
 		pad = 0
 	}
+	// ground truth for the replay: the real insertion point, as an OSC the
+	// recorder strips (cmd/record feed); terminals ignore unknown OSCs
+	fmt.Fprintf(&b, "\x1b]7777;%d\x07", curCol+2)
 	b.WriteString("\x1b[38;5;244m│\x1b[0m " + line.String() + strings.Repeat(" ", pad) + " \x1b[38;5;244m│\x1b[0m\r\n")
 	b.WriteString("\x1b[38;5;244m╰" + strings.Repeat("─", width-2) + "╯\x1b[0m\r\n")
 	h := 3
