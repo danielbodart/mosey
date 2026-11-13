@@ -165,3 +165,102 @@ func TestWithAnAttesterEachSignCarriesTheClientsChain(t *testing.T) {
 	}
 	t.Logf("statement: %d links, leaf %q %q, cwd %q", len(o.Chain), leaf.Comm, leaf.Argv, leaf.Cwd)
 }
+
+// signFails runs ssh-keygen -Y sign against the session's socket and
+// expects it to fail.
+func signFails(t *testing.T, sock, pub string) {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "commit")
+	os.WriteFile(file, []byte("tree 0\n"), 0o600)
+	cmd := exec.Command("ssh-keygen", "-Y", "sign", "-n", "git", "-f", pub, file)
+	cmd.Env = append(os.Environ(), "SSH_AUTH_SOCK="+sock)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("ssh-keygen signed:\n%s", out)
+	}
+}
+
+// A hand-off socket that is there but takes nothing (the attester has
+// died, and its socket file is left): the client is refused, never pumped.
+func TestAnAttesterThatIsThereButDownRefusesTheClient(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "handoff.sock")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.SetUnlinkOnClose(false)
+	ln.Close()
+	l, pub := newLocal(t)
+	sock, _ := session(t, &Forwarder{Attester: path}, l)
+	signFails(t, sock, pub)
+	if l.signs != 0 {
+		t.Fatalf("the agent signed %d times", l.signs)
+	}
+}
+
+// An attester that accepts the forwarder and hangs up on every hand-off,
+// as one out of fds or over the user's limit does: refused, not pumped.
+func TestAnAttesterThatHangsUpRefusesTheClient(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "handoff.sock")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.AcceptUnix()
+			if err != nil {
+				return
+			}
+			// Read the hand-off, dropping its fds as MSG_CTRUNC would,
+			// and hang up.
+			c.ReadMsgUnix(make([]byte, 1), nil)
+			c.Close()
+		}
+	}()
+	l, pub := newLocal(t)
+	sock, _ := session(t, &Forwarder{Attester: path}, l)
+	for range 3 {
+		signFails(t, sock, pub)
+	}
+	if l.signs != 0 {
+		t.Fatalf("the agent signed %d times", l.signs)
+	}
+}
+
+// A host meant to have an attester refuses every client when it has none.
+func TestARequiredAttesterThatIsAbsentRefusesTheClient(t *testing.T) {
+	l, pub := newLocal(t)
+	sock, _ := session(t, &Forwarder{Attester: filepath.Join(t.TempDir(), "none"), Required: true}, l)
+	signFails(t, sock, pub)
+	if l.signs != 0 {
+		t.Fatalf("the agent signed %d times", l.signs)
+	}
+}
+
+// A user over the attester's per-user limit is refused, not forwarded
+// plainly: what a local user flooding the hand-off socket gets, and what
+// the session's own forwarder then gets is a refusal, not a bypass.
+func TestOverTheAttestersLimitTheClientIsRefused(t *testing.T) {
+	path := startAttester(t)
+	var hold []net.Conn
+	for range provenance.MaxPerUID {
+		c, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hold = append(hold, c)
+	}
+	defer func() {
+		for _, c := range hold {
+			c.Close()
+		}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	l, pub := newLocal(t)
+	sock, _ := session(t, &Forwarder{Attester: path}, l)
+	signFails(t, sock, pub)
+	if l.signs != 0 {
+		t.Fatalf("the agent signed %d times", l.signs)
+	}
+}

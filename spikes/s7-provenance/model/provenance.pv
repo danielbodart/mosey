@@ -1,0 +1,93 @@
+(* S7 provenance: delegation -> statement -> session-bind -> request.
+   A symbolic (Dolev-Yao) model of what the local agent's check proves.
+   The network, the remote user's programs (they pick the request, the
+   chain the attester is shown, and any inner statement), and a third host
+   E whose keys are the attacker's are all the attacker.  Honest hosts A and
+   B: root makes the delegation, the attester seals what it is shown.  The
+   host keys also sign other things in other namespaces (session-bind,
+   SSHSIG): modelled as a signing oracle under another tag.
+   Not modelled: time (MaxSkew, NotAfter), the seen-nonce set, the size
+   limits, or whether a chain is true: the chain is whatever the
+   client gets the attester to read, so the property is authenticity of the
+   claim, never its truth. *)
+
+free c: channel.
+type skey.
+type pkey.
+fun pk(skey): pkey.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+reduc forall m: bitstring, k: skey; getmess(sign(m, k)) = m.
+fun H(bitstring): bitstring.
+
+const nsDelegation, nsStatement, nsOther: bitstring.
+fun dlg(pkey, pkey): bitstring [data].                          (* host key, attester key *)
+fun st(pkey, bitstring, bitstring, bitstring): bitstring [data]. (* host key, request hash, chain, inner *)
+fun tagged(bitstring, bitstring): bitstring [data].
+fun req(bitstring): bitstring [data].                            (* a sign request's bytes *)
+free none: bitstring.
+
+free skHA, skAttA, skHB, skAttB: skey [private].
+free skHE, skAttE: skey.                                         (* E: compromised, keys public *)
+
+event Attested(pkey, bitstring, bitstring, bitstring).
+event Shown(pkey, bitstring, bitstring).
+event ShownNested(pkey, bitstring, pkey, bitstring, bitstring, bitstring).
+event Sealed(pkey, bitstring).
+
+(* One hop: what the agent shows for host A is what A's attester sealed. *)
+query r: bitstring, ch: bitstring, i: bitstring;
+  event(Shown(pk(skHA), r, ch)) ==> event(Attested(pk(skHA), r, ch, i)).
+(* And each showing is a distinct sealing: expected to FAIL, since without
+   the seen-nonce set a statement can be replayed for the same request. *)
+query r: bitstring, ch: bitstring, i: bitstring;
+  inj-event(Shown(pk(skHA), r, ch)) ==> inj-event(Attested(pk(skHA), r, ch, i)).
+(* here -> A -> B: B's chain is B's attester's, and A's statement names
+   that exact statement of B's as its inner. *)
+query r: bitstring, chA: bitstring, chB: bitstring, sB: bitstring, i: bitstring;
+  event(ShownNested(pk(skHA), chA, pk(skHB), chB, r, sB)) ==>
+    event(Attested(pk(skHB), r, chB, i)) && event(Sealed(pk(skHB), sB)) &&
+    event(Attested(pk(skHA), r, chA, H(sB))).
+(* B honest, A compromised: B's chain is still B's (A can drop it, not forge it). *)
+query r: bitstring, chA: bitstring, chB: bitstring, sB: bitstring, i: bitstring;
+  event(ShownNested(pk(skHE), chA, pk(skHB), chB, r, sB)) ==>
+    event(Attested(pk(skHB), r, chB, i)) && event(Sealed(pk(skHB), sB)).
+(* Sanity: a compromised host E's claims are E's to make up (expected FAIL). *)
+query r: bitstring, ch: bitstring, i: bitstring;
+  event(Shown(pk(skHE), r, ch)) ==> event(Attested(pk(skHE), r, ch, i)).
+
+(* A host's root: delegates once to its attester, and signs other things. *)
+let Root(skH: skey, pkAtt: pkey) =
+  out(c, sign(tagged(nsDelegation, dlg(pk(skH), pkAtt)), skH)) |
+  !(in(c, m: bitstring); out(c, sign(tagged(nsOther, m), skH))).
+
+(* A host's attester: seals what a client on its host shows it. *)
+let Attester(skH: skey, skAtt: skey) =
+  !(in(c, (rq: bitstring, ch: bitstring, inner: bitstring));
+    event Attested(pk(skH), H(rq), ch, inner);
+    let s = sign(tagged(nsStatement, st(pk(skH), H(rq), ch, inner)), skAtt) in
+    event Sealed(pk(skH), s);
+    out(c, s)).
+
+(* The local agent, on a connection whose forwarded bind is to host X:
+   a delegation by X, a statement by the delegated key about this request. *)
+let Agent(X: pkey) =
+  !(in(c, (rq: bitstring, d: bitstring, s: bitstring));
+    let tagged(=nsDelegation, dlg(=X, pa)) = checksign(d, X) in
+    let tagged(=nsStatement, st(=X, =H(rq), ch, inner)) = checksign(s, pa) in
+    event Shown(X, H(rq), ch)).
+
+(* here -> A -> B: binds to A then B; B's statement, then A's naming it. *)
+let AgentNested(XA: pkey, XB: pkey) =
+  !(in(c, (rq: bitstring, dA: bitstring, sA: bitstring, dB: bitstring, sB: bitstring));
+    let tagged(=nsDelegation, dlg(=XB, pb)) = checksign(dB, XB) in
+    let tagged(=nsStatement, st(=XB, =H(rq), chB, innerB)) = checksign(sB, pb) in
+    let tagged(=nsDelegation, dlg(=XA, pa)) = checksign(dA, XA) in
+    let tagged(=nsStatement, st(=XA, =H(rq), chA, =H(sB))) = checksign(sA, pa) in
+    event ShownNested(XA, chA, XB, chB, H(rq), sB)).
+
+process
+  Root(skHA, pk(skAttA)) | Attester(skHA, skAttA) |
+  Root(skHB, pk(skAttB)) | Attester(skHB, skAttB) |
+  Root(skHE, pk(skAttE)) |
+  Agent(pk(skHA)) | Agent(pk(skHE)) | AgentNested(pk(skHA), pk(skHB)) | AgentNested(pk(skHE), pk(skHB))

@@ -1,0 +1,410 @@
+Process 0 (that is, the initial process):
+(
+    {1}let skH: skey = skHA in
+    {2}let pkAtt: pkey = pk(skAttA) in
+    (
+        {3}out(c, sign(tagged(nsDelegation,dlg(pk(skH),pkAtt)),skH))
+    ) | (
+        {4}!
+        {5}in(c, m: bitstring);
+        {6}out(c, sign(tagged(nsOther,m),skH))
+    )
+) | (
+    {7}let skH_1: skey = skHA in
+    {8}let skAtt: skey = skAttA in
+    {9}!
+    {10}in(c, (rq: bitstring,ch: bitstring,inner: bitstring));
+    {11}event Attested(pk(skH_1),H(rq),ch,inner);
+    {12}let s: bitstring = sign(tagged(nsStatement,st(pk(skH_1),H(rq),ch,inner)),skAtt) in
+    {13}event Sealed(pk(skH_1),s);
+    {14}out(c, s)
+) | (
+    {15}let skH_2: skey = skHB in
+    {16}let pkAtt_1: pkey = pk(skAttB) in
+    (
+        {17}out(c, sign(tagged(nsDelegation,dlg(pk(skH_2),pkAtt_1)),skH_2))
+    ) | (
+        {18}!
+        {19}in(c, m_1: bitstring);
+        {20}out(c, sign(tagged(nsOther,m_1),skH_2))
+    )
+) | (
+    {21}let skH_3: skey = skHB in
+    {22}let skAtt_1: skey = skAttB in
+    {23}!
+    {24}in(c, (rq_1: bitstring,ch_1: bitstring,inner_1: bitstring));
+    {25}event Attested(pk(skH_3),H(rq_1),ch_1,inner_1);
+    {26}let s_1: bitstring = sign(tagged(nsStatement,st(pk(skH_3),H(rq_1),ch_1,inner_1)),skAtt_1) in
+    {27}event Sealed(pk(skH_3),s_1);
+    {28}out(c, s_1)
+) | (
+    {29}let skH_4: skey = skHE in
+    {30}let pkAtt_2: pkey = pk(skAttE) in
+    (
+        {31}out(c, sign(tagged(nsDelegation,dlg(pk(skH_4),pkAtt_2)),skH_4))
+    ) | (
+        {32}!
+        {33}in(c, m_2: bitstring);
+        {34}out(c, sign(tagged(nsOther,m_2),skH_4))
+    )
+) | (
+    {35}let X: pkey = pk(skHA) in
+    {36}!
+    {37}in(c, (rq_2: bitstring,d: bitstring,s_2: bitstring));
+    {38}let tagged(=nsDelegation,dlg(=X,pa: pkey)) = checksign(d,X) in
+    {39}let tagged(=nsStatement,st(=X,=H(rq_2),ch_2: bitstring,inner_2: bitstring)) = checksign(s_2,pa) in
+    {40}event Shown(X,H(rq_2),ch_2)
+) | (
+    {41}let X_1: pkey = pk(skHE) in
+    {42}!
+    {43}in(c, (rq_3: bitstring,d_1: bitstring,s_3: bitstring));
+    {44}let tagged(=nsDelegation,dlg(=X_1,pa_1: pkey)) = checksign(d_1,X_1) in
+    {45}let tagged(=nsStatement,st(=X_1,=H(rq_3),ch_3: bitstring,inner_3: bitstring)) = checksign(s_3,pa_1) in
+    {46}event Shown(X_1,H(rq_3),ch_3)
+) | (
+    {47}let XA: pkey = pk(skHA) in
+    {48}let XB: pkey = pk(skHB) in
+    {49}!
+    {50}in(c, (rq_4: bitstring,dA: bitstring,sA: bitstring,dB: bitstring,sB: bitstring));
+    {51}let tagged(=nsDelegation,dlg(=XB,pb: pkey)) = checksign(dB,XB) in
+    {52}let tagged(=nsStatement,st(=XB,=H(rq_4),chB: bitstring,innerB: bitstring)) = checksign(sB,pb) in
+    {53}let tagged(=nsDelegation,dlg(=XA,pa_2: pkey)) = checksign(dA,XA) in
+    {54}let tagged(=nsStatement,st(=XA,=H(rq_4),chA: bitstring,=H(sB))) = checksign(sA,pa_2) in
+    {55}event ShownNested(XA,chA,XB,chB,H(rq_4),sB)
+) | (
+    {56}let XA_1: pkey = pk(skHE) in
+    {57}let XB_1: pkey = pk(skHB) in
+    {58}!
+    {59}in(c, (rq_5: bitstring,dA_1: bitstring,sA_1: bitstring,dB_1: bitstring,sB_1: bitstring));
+    {60}let tagged(=nsDelegation,dlg(=XB_1,pb_1: pkey)) = checksign(dB_1,XB_1) in
+    {61}let tagged(=nsStatement,st(=XB_1,=H(rq_5),chB_1: bitstring,innerB_1: bitstring)) = checksign(sB_1,pb_1) in
+    {62}let tagged(=nsDelegation,dlg(=XA_1,pa_3: pkey)) = checksign(dA_1,XA_1) in
+    {63}let tagged(=nsStatement,st(=XA_1,=H(rq_5),chA_1: bitstring,=H(sB_1))) = checksign(sA_1,pa_3) in
+    {64}event ShownNested(XA_1,chA_1,XB_1,chB_1,H(rq_5),sB_1)
+)
+
+--  Process 1 (that is, process 0, with let moved downwards):
+(
+    {1}let skH: skey = skHA in
+    (
+        {2}let pkAtt: pkey = pk(skAttA) in
+        {3}out(c, sign(tagged(nsDelegation,dlg(pk(skH),pkAtt)),skH))
+    ) | (
+        {4}!
+        {5}in(c, m: bitstring);
+        {6}out(c, sign(tagged(nsOther,m),skH))
+    )
+) | (
+    {9}!
+    {10}in(c, (rq: bitstring,ch: bitstring,inner: bitstring));
+    {7}let skH_1: skey = skHA in
+    {11}event Attested(pk(skH_1),H(rq),ch,inner);
+    {8}let skAtt: skey = skAttA in
+    {12}let s: bitstring = sign(tagged(nsStatement,st(pk(skH_1),H(rq),ch,inner)),skAtt) in
+    {13}event Sealed(pk(skH_1),s);
+    {14}out(c, s)
+) | (
+    {15}let skH_2: skey = skHB in
+    (
+        {16}let pkAtt_1: pkey = pk(skAttB) in
+        {17}out(c, sign(tagged(nsDelegation,dlg(pk(skH_2),pkAtt_1)),skH_2))
+    ) | (
+        {18}!
+        {19}in(c, m_1: bitstring);
+        {20}out(c, sign(tagged(nsOther,m_1),skH_2))
+    )
+) | (
+    {23}!
+    {24}in(c, (rq_1: bitstring,ch_1: bitstring,inner_1: bitstring));
+    {21}let skH_3: skey = skHB in
+    {25}event Attested(pk(skH_3),H(rq_1),ch_1,inner_1);
+    {22}let skAtt_1: skey = skAttB in
+    {26}let s_1: bitstring = sign(tagged(nsStatement,st(pk(skH_3),H(rq_1),ch_1,inner_1)),skAtt_1) in
+    {27}event Sealed(pk(skH_3),s_1);
+    {28}out(c, s_1)
+) | (
+    {29}let skH_4: skey = skHE in
+    (
+        {30}let pkAtt_2: pkey = pk(skAttE) in
+        {31}out(c, sign(tagged(nsDelegation,dlg(pk(skH_4),pkAtt_2)),skH_4))
+    ) | (
+        {32}!
+        {33}in(c, m_2: bitstring);
+        {34}out(c, sign(tagged(nsOther,m_2),skH_4))
+    )
+) | (
+    {36}!
+    {37}in(c, (rq_2: bitstring,d: bitstring,s_2: bitstring));
+    {35}let X: pkey = pk(skHA) in
+    {38}let tagged(=nsDelegation,dlg(=X,pa: pkey)) = checksign(d,X) in
+    {39}let tagged(=nsStatement,st(=X,=H(rq_2),ch_2: bitstring,inner_2: bitstring)) = checksign(s_2,pa) in
+    {40}event Shown(X,H(rq_2),ch_2)
+) | (
+    {42}!
+    {43}in(c, (rq_3: bitstring,d_1: bitstring,s_3: bitstring));
+    {41}let X_1: pkey = pk(skHE) in
+    {44}let tagged(=nsDelegation,dlg(=X_1,pa_1: pkey)) = checksign(d_1,X_1) in
+    {45}let tagged(=nsStatement,st(=X_1,=H(rq_3),ch_3: bitstring,inner_3: bitstring)) = checksign(s_3,pa_1) in
+    {46}event Shown(X_1,H(rq_3),ch_3)
+) | (
+    {49}!
+    {50}in(c, (rq_4: bitstring,dA: bitstring,sA: bitstring,dB: bitstring,sB: bitstring));
+    {48}let XB: pkey = pk(skHB) in
+    {51}let tagged(=nsDelegation,dlg(=XB,pb: pkey)) = checksign(dB,XB) in
+    {52}let tagged(=nsStatement,st(=XB,=H(rq_4),chB: bitstring,innerB: bitstring)) = checksign(sB,pb) in
+    {47}let XA: pkey = pk(skHA) in
+    {53}let tagged(=nsDelegation,dlg(=XA,pa_2: pkey)) = checksign(dA,XA) in
+    {54}let tagged(=nsStatement,st(=XA,=H(rq_4),chA: bitstring,=H(sB))) = checksign(sA,pa_2) in
+    {55}event ShownNested(XA,chA,XB,chB,H(rq_4),sB)
+) | (
+    {58}!
+    {59}in(c, (rq_5: bitstring,dA_1: bitstring,sA_1: bitstring,dB_1: bitstring,sB_1: bitstring));
+    {57}let XB_1: pkey = pk(skHB) in
+    {60}let tagged(=nsDelegation,dlg(=XB_1,pb_1: pkey)) = checksign(dB_1,XB_1) in
+    {61}let tagged(=nsStatement,st(=XB_1,=H(rq_5),chB_1: bitstring,innerB_1: bitstring)) = checksign(sB_1,pb_1) in
+    {56}let XA_1: pkey = pk(skHE) in
+    {62}let tagged(=nsDelegation,dlg(=XA_1,pa_3: pkey)) = checksign(dA_1,XA_1) in
+    {63}let tagged(=nsStatement,st(=XA_1,=H(rq_5),chA_1: bitstring,=H(sB_1))) = checksign(sA_1,pa_3) in
+    {64}event ShownNested(XA_1,chA_1,XB_1,chB_1,H(rq_5),sB_1)
+)
+
+-- Query event(Shown(pk(skHA[]),r,ch_4)) ==> event(Attested(pk(skHA[]),r,ch_4,i)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query event(Shown(pk(skHA[]),r,ch_4)) ==> event(Attested(pk(skHA[]),r,ch_4,i))
+goal reachable: b-event(Attested(pk(skHA[]),H(rq_6),ch_4,inner_4)) && attacker(rq_6) && attacker(ch_4) && attacker(inner_4) -> event(Shown(pk(skHA[]),H(rq_6),ch_4))
+RESULT event(Shown(pk(skHA[]),r,ch_4)) ==> event(Attested(pk(skHA[]),r,ch_4,i)) is true.
+-- Query inj-event(Shown(pk(skHA[]),r,ch_4)) ==> inj-event(Attested(pk(skHA[]),r,ch_4,i)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query inj-event(Shown(pk(skHA[]),r,ch_4)) ==> inj-event(Attested(pk(skHA[]),r,ch_4,i))
+goal reachable: @sid ≠ @sid_1 && b-inj-event(Attested(pk(skHA[]),H(rq_6),ch_4,inner_4),@occ11_1) && attacker(rq_6) && attacker(ch_4) && attacker(inner_4) -> inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_1) && inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_2)
+Abbreviations:
+@occ40_1 = @occ40[s_2 = sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[]),d = sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[]),rq_2 = rq_6,!1 = @sid]
+@occ40_2 = @occ40[s_2 = sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[]),d = sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[]),rq_2 = rq_6,!1 = @sid_1]
+@occ11_1 = @occ11[inner = inner_4,ch = ch_4,rq = rq_6,!1 = @sid_2]
+
+Derivation:
+Abbreviations:
+@occ40_1 = @occ40[s_2 = sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[]),d = sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[]),rq_2 = rq_6,!1 = @sid]
+@occ40_2 = @occ40[s_2 = sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[]),d = sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[]),rq_2 = rq_6,!1 = @sid_1]
+@occ11_1 = @occ11[inner = inner_4,ch = ch_4,rq = rq_6,!1 = @sid_2]
+
+1. We assume as hypothesis that
+attacker(inner_4).
+
+2. We assume as hypothesis that
+attacker(ch_4).
+
+3. We assume as hypothesis that
+attacker(rq_6).
+
+4. By 3, the attacker may know rq_6.
+By 2, the attacker may know ch_4.
+By 1, the attacker may know inner_4.
+Using the function 3-tuple the attacker may obtain (rq_6,ch_4,inner_4).
+attacker((rq_6,ch_4,inner_4)).
+
+5. The message (rq_6,ch_4,inner_4) that the attacker may have by 4 may be received at input {10}.
+The event Attested(pk(skHA[]),H(rq_6),ch_4,inner_4) (with occurrence name @occ11_1) may be executed at {11}.
+So the message sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[]) may be sent to the attacker at output {14}.
+attacker(sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[])).
+
+6. The message sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[]) may be sent to the attacker at output {3}.
+attacker(sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[])).
+
+7. By 3, the attacker may know rq_6.
+By 6, the attacker may know sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[]).
+By 5, the attacker may know sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[]).
+Using the function 3-tuple the attacker may obtain (rq_6,sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[]),sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[])).
+attacker((rq_6,sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[]),sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[]))).
+
+8. The message (rq_6,sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[]),sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[])) that the attacker may have by 7 may be received at input {37}.
+So event Shown(pk(skHA[]),H(rq_6),ch_4) may be executed at {40} in session @sid_1.
+inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_2).
+
+9. By 8, inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_2).
+The goal is reached, represented in the following fact:
+inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_2).
+
+10. The message (rq_6,sign(tagged(nsDelegation,dlg(pk(skHA[]),pk(skAttA[]))),skHA[]),sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),ch_4,inner_4)),skAttA[])) that the attacker may have by 7 may be received at input {37}.
+So event Shown(pk(skHA[]),H(rq_6),ch_4) may be executed at {40} in session @sid.
+inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_1).
+
+11. By 10, inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_1).
+The goal is reached, represented in the following fact:
+inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_1).
+
+12. By 11, inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_1).
+By 9, inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_2).
+We have @occ40_1 ≠ @occ40_2.
+The goals for injectivity are reached, combined in the following fact:
+inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_1) && inj-event(Shown(pk(skHA[]),H(rq_6),ch_4),@occ40_2).
+
+
+A more detailed output of the traces is available with
+  set traceDisplay = long.
+
+out(c, ~M) with ~M = sign(tagged(nsDelegation,dlg(pk(skHE),pk(skAttE))),skHE) at {31}
+
+out(c, ~M_1) with ~M_1 = sign(tagged(nsDelegation,dlg(pk(skHB),pk(skAttB))),skHB) at {17}
+
+out(c, ~M_2) with ~M_2 = sign(tagged(nsDelegation,dlg(pk(skHA),pk(skAttA))),skHA) at {3}
+
+in(c, (a,a_1,a_2)) at {10} in copy a_3
+
+event Attested(pk(skHA),H(a),a_1,a_2) at {11} in copy a_3
+
+event Sealed(pk(skHA),sign(tagged(nsStatement,st(pk(skHA),H(a),a_1,a_2)),skAttA)) at {13} in copy a_3
+
+out(c, ~M_3) with ~M_3 = sign(tagged(nsStatement,st(pk(skHA),H(a),a_1,a_2)),skAttA) at {14} in copy a_3
+
+in(c, (a,~M_2,~M_3)) with ~M_2 = sign(tagged(nsDelegation,dlg(pk(skHA),pk(skAttA))),skHA), ~M_3 = sign(tagged(nsStatement,st(pk(skHA),H(a),a_1,a_2)),skAttA) at {37} in copy a_4
+
+event Shown(pk(skHA),H(a),a_1) at {40} in copy a_4 (goal)
+
+in(c, (a,~M_2,~M_3)) with ~M_2 = sign(tagged(nsDelegation,dlg(pk(skHA),pk(skAttA))),skHA), ~M_3 = sign(tagged(nsStatement,st(pk(skHA),H(a),a_1,a_2)),skAttA) at {37} in copy a_5
+
+event Shown(pk(skHA),H(a),a_1) at {40} in copy a_5 (goal)
+
+The event Shown(pk(skHA),H(a),a_1) is executed at {40} in copy a_4.
+The event Shown(pk(skHA),H(a),a_1) is executed at {40} in copy a_5.
+A trace has been found.
+RESULT inj-event(Shown(pk(skHA[]),r,ch_4)) ==> inj-event(Attested(pk(skHA[]),r,ch_4,i)) is false.
+RESULT (but event(Shown(pk(skHA[]),r,ch_4)) ==> event(Attested(pk(skHA[]),r,ch_4,i)) is true.)
+-- Query event(ShownNested(pk(skHA[]),chA_2,pk(skHB[]),chB_2,r,sB_2)) ==> event(Attested(pk(skHB[]),r,chB_2,i)) && event(Sealed(pk(skHB[]),sB_2)) && event(Attested(pk(skHA[]),r,chA_2,H(sB_2))) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query event(ShownNested(pk(skHA[]),chA_2,pk(skHB[]),chB_2,r,sB_2)) ==> event(Attested(pk(skHB[]),r,chB_2,i)) && event(Sealed(pk(skHB[]),sB_2)) && event(Attested(pk(skHA[]),r,chA_2,H(sB_2)))
+goal reachable: b-event(Sealed(pk(skHA[]),sign(tagged(nsStatement,st(pk(skHA[]),H(rq_6),chA_2,H(sign(tagged(nsStatement,st(pk(skHB[]),H(rq_6),chB_2,innerB_2)),skAttB[])))),skAttA[]))) && b-event(Attested(pk(skHA[]),H(rq_6),chA_2,H(sign(tagged(nsStatement,st(pk(skHB[]),H(rq_6),chB_2,innerB_2)),skAttB[])))) && attacker(chA_2) && b-event(Sealed(pk(skHB[]),sign(tagged(nsStatement,st(pk(skHB[]),H(rq_6),chB_2,innerB_2)),skAttB[]))) && b-event(Attested(pk(skHB[]),H(rq_6),chB_2,innerB_2)) && attacker(rq_6) && attacker(chB_2) && attacker(innerB_2) -> event(ShownNested(pk(skHA[]),chA_2,pk(skHB[]),chB_2,H(rq_6),sign(tagged(nsStatement,st(pk(skHB[]),H(rq_6),chB_2,innerB_2)),skAttB[])))
+RESULT event(ShownNested(pk(skHA[]),chA_2,pk(skHB[]),chB_2,r,sB_2)) ==> event(Attested(pk(skHB[]),r,chB_2,i)) && event(Sealed(pk(skHB[]),sB_2)) && event(Attested(pk(skHA[]),r,chA_2,H(sB_2))) is true.
+-- Query event(ShownNested(pk(skHE[]),chA_2,pk(skHB[]),chB_2,r,sB_2)) ==> event(Attested(pk(skHB[]),r,chB_2,i)) && event(Sealed(pk(skHB[]),sB_2)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query event(ShownNested(pk(skHE[]),chA_2,pk(skHB[]),chB_2,r,sB_2)) ==> event(Attested(pk(skHB[]),r,chB_2,i)) && event(Sealed(pk(skHB[]),sB_2))
+goal reachable: attacker(chA_2) && b-event(Sealed(pk(skHB[]),sign(tagged(nsStatement,st(pk(skHB[]),H(rq_6),chB_2,innerB_2)),skAttB[]))) && b-event(Attested(pk(skHB[]),H(rq_6),chB_2,innerB_2)) && attacker(rq_6) && attacker(chB_2) && attacker(innerB_2) -> event(ShownNested(pk(skHE[]),chA_2,pk(skHB[]),chB_2,H(rq_6),sign(tagged(nsStatement,st(pk(skHB[]),H(rq_6),chB_2,innerB_2)),skAttB[])))
+RESULT event(ShownNested(pk(skHE[]),chA_2,pk(skHB[]),chB_2,r,sB_2)) ==> event(Attested(pk(skHB[]),r,chB_2,i)) && event(Sealed(pk(skHB[]),sB_2)) is true.
+-- Query event(Shown(pk(skHE[]),r,ch_4)) ==> event(Attested(pk(skHE[]),r,ch_4,i)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query event(Shown(pk(skHE[]),r,ch_4)) ==> event(Attested(pk(skHE[]),r,ch_4,i))
+goal reachable: attacker(rq_6) && attacker(ch_4) -> event(Shown(pk(skHE[]),H(rq_6),ch_4))
+
+Derivation:
+
+1. The attacker has some term k.
+attacker(k).
+
+2. The attacker has some term inner_4.
+attacker(inner_4).
+
+3. We assume as hypothesis that
+attacker(ch_4).
+
+4. We assume as hypothesis that
+attacker(rq_6).
+
+5. By 4, the attacker may know rq_6.
+Using the function H the attacker may obtain H(rq_6).
+attacker(H(rq_6)).
+
+6. The attacker initially knows skHE[].
+attacker(skHE[]).
+
+7. By 6, the attacker may know skHE[].
+Using the function pk the attacker may obtain pk(skHE[]).
+attacker(pk(skHE[])).
+
+8. By 7, the attacker may know pk(skHE[]).
+By 5, the attacker may know H(rq_6).
+By 3, the attacker may know ch_4.
+By 2, the attacker may know inner_4.
+Using the function st the attacker may obtain st(pk(skHE[]),H(rq_6),ch_4,inner_4).
+attacker(st(pk(skHE[]),H(rq_6),ch_4,inner_4)).
+
+9. Using the function nsStatement the attacker may obtain nsStatement.
+attacker(nsStatement).
+
+10. By 9, the attacker may know nsStatement.
+By 8, the attacker may know st(pk(skHE[]),H(rq_6),ch_4,inner_4).
+Using the function tagged the attacker may obtain tagged(nsStatement,st(pk(skHE[]),H(rq_6),ch_4,inner_4)).
+attacker(tagged(nsStatement,st(pk(skHE[]),H(rq_6),ch_4,inner_4))).
+
+11. By 10, the attacker may know tagged(nsStatement,st(pk(skHE[]),H(rq_6),ch_4,inner_4)).
+By 1, the attacker may know k.
+Using the function sign the attacker may obtain sign(tagged(nsStatement,st(pk(skHE[]),H(rq_6),ch_4,inner_4)),k).
+attacker(sign(tagged(nsStatement,st(pk(skHE[]),H(rq_6),ch_4,inner_4)),k)).
+
+12. By 1, the attacker may know k.
+Using the function pk the attacker may obtain pk(k).
+attacker(pk(k)).
+
+13. By 7, the attacker may know pk(skHE[]).
+By 12, the attacker may know pk(k).
+Using the function dlg the attacker may obtain dlg(pk(skHE[]),pk(k)).
+attacker(dlg(pk(skHE[]),pk(k))).
+
+14. Using the function nsDelegation the attacker may obtain nsDelegation.
+attacker(nsDelegation).
+
+15. By 14, the attacker may know nsDelegation.
+By 13, the attacker may know dlg(pk(skHE[]),pk(k)).
+Using the function tagged the attacker may obtain tagged(nsDelegation,dlg(pk(skHE[]),pk(k))).
+attacker(tagged(nsDelegation,dlg(pk(skHE[]),pk(k)))).
+
+16. By 15, the attacker may know tagged(nsDelegation,dlg(pk(skHE[]),pk(k))).
+By 6, the attacker may know skHE[].
+Using the function sign the attacker may obtain sign(tagged(nsDelegation,dlg(pk(skHE[]),pk(k))),skHE[]).
+attacker(sign(tagged(nsDelegation,dlg(pk(skHE[]),pk(k))),skHE[])).
+
+17. By 4, the attacker may know rq_6.
+By 16, the attacker may know sign(tagged(nsDelegation,dlg(pk(skHE[]),pk(k))),skHE[]).
+By 11, the attacker may know sign(tagged(nsStatement,st(pk(skHE[]),H(rq_6),ch_4,inner_4)),k).
+Using the function 3-tuple the attacker may obtain (rq_6,sign(tagged(nsDelegation,dlg(pk(skHE[]),pk(k))),skHE[]),sign(tagged(nsStatement,st(pk(skHE[]),H(rq_6),ch_4,inner_4)),k)).
+attacker((rq_6,sign(tagged(nsDelegation,dlg(pk(skHE[]),pk(k))),skHE[]),sign(tagged(nsStatement,st(pk(skHE[]),H(rq_6),ch_4,inner_4)),k))).
+
+18. The message (rq_6,sign(tagged(nsDelegation,dlg(pk(skHE[]),pk(k))),skHE[]),sign(tagged(nsStatement,st(pk(skHE[]),H(rq_6),ch_4,inner_4)),k)) that the attacker may have by 17 may be received at input {43}.
+So event Shown(pk(skHE[]),H(rq_6),ch_4) may be executed at {46}.
+event(Shown(pk(skHE[]),H(rq_6),ch_4)).
+
+19. By 18, event(Shown(pk(skHE[]),H(rq_6),ch_4)).
+The goal is reached, represented in the following fact:
+event(Shown(pk(skHE[]),H(rq_6),ch_4)).
+
+
+A more detailed output of the traces is available with
+  set traceDisplay = long.
+
+out(c, ~M) with ~M = sign(tagged(nsDelegation,dlg(pk(skHE),pk(skAttE))),skHE) at {31}
+
+out(c, ~M_1) with ~M_1 = sign(tagged(nsDelegation,dlg(pk(skHB),pk(skAttB))),skHB) at {17}
+
+out(c, ~M_2) with ~M_2 = sign(tagged(nsDelegation,dlg(pk(skHA),pk(skAttA))),skHA) at {3}
+
+in(c, (a,sign(tagged(nsDelegation,dlg(pk(skHE),pk(a_1))),skHE),sign(tagged(nsStatement,st(pk(skHE),H(a),a_2,a_3)),a_1))) at {43} in copy a_4
+
+event Shown(pk(skHE),H(a),a_2) at {46} in copy a_4 (goal)
+
+The event Shown(pk(skHE),H(a),a_2) is executed at {46} in copy a_4.
+A trace has been found.
+RESULT event(Shown(pk(skHE[]),r,ch_4)) ==> event(Attested(pk(skHE[]),r,ch_4,i)) is false.
+
+--------------------------------------------------------------
+Verification summary:
+
+Query event(Shown(pk(skHA[]),r,ch_4)) ==> event(Attested(pk(skHA[]),r,ch_4,i)) is true.
+
+Query inj-event(Shown(pk(skHA[]),r,ch_4)) ==> inj-event(Attested(pk(skHA[]),r,ch_4,i)) is false.
+
+Query event(ShownNested(pk(skHA[]),chA_2,pk(skHB[]),chB_2,r,sB_2)) ==> event(Attested(pk(skHB[]),r,chB_2,i)) && event(Sealed(pk(skHB[]),sB_2)) && event(Attested(pk(skHA[]),r,chA_2,H(sB_2))) is true.
+
+Query event(ShownNested(pk(skHE[]),chA_2,pk(skHB[]),chB_2,r,sB_2)) ==> event(Attested(pk(skHB[]),r,chB_2,i)) && event(Sealed(pk(skHB[]),sB_2)) is true.
+
+Query event(Shown(pk(skHE[]),r,ch_4)) ==> event(Attested(pk(skHE[]),r,ch_4,i)) is false.
+
+--------------------------------------------------------------
+
+
+real	0m0.298s
+user	0m0.285s
+sys	0m0.106s

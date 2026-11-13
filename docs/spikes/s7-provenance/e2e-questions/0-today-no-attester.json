@@ -1,6 +1,6 @@
 {
   "Title": "SSHSIG signature",
-  "Text": "key SHA256:KpkGzS7A/Ws6Qm5ApKpQnfpl1noJpJBNmP9IUYE8nfc (e2e)\nforwarded\nSSHSIG namespace \"git\"",
+  "Text": "key SHA256:0mCLw3qMpAx+jE8UmLfNWCQeaUTXn6wrL/g/C1RWQTU (e2e)\nforwarded\nSSHSIG namespace \"git\"",
   "Level": "normal",
   "Grantable": false,
   "Password": false,
@@ -8,17 +8,17 @@
   "Chain": {
     "Rows": [
       [
-        "134382",
+        "219302",
         "agentsrv.test",
         ""
       ],
       [
-        "134403",
+        "219318",
         "ssh",
-        "ssh -F /dev/null -p 33623 -o \\\n    UserKnownHostsFile=/tmp/TestEndToEndOverStockOpenSSH3337487557/001/known_hosts \\\n    -o StrictHostKeyChecking=yes -o \\\n    IdentityFile=/tmp/TestEndToEndOverStockOpenSSH3337487557/001/client -o \\\n    IdentitiesOnly=yes -o \\\n    IdentityAgent=/tmp/TestEndToEndOverStockOpenSSH3337487557/001/agent -o \\\n    BatchMode=yes -o \\\n    ForwardAgent=/tmp/TestEndToEndOverStockOpenSSH3337487557/001/agent \\\n    127.0.0.1 env E2E_ROOT=/tmp/TestEndToEndOverStockOpenSSH3337487557/001 \\\n    /tmp/claude-1000/s7p/agentsrv.test -test.run=^TestSSHE2EHelper$ -test.v"
+        "ssh -F /dev/null -p 46273 -o \\\n    UserKnownHostsFile=/tmp/TestEndToEndOverStockOpenSSH2139795248/001/known_hosts \\\n    -o StrictHostKeyChecking=yes -o \\\n    IdentityFile=/tmp/TestEndToEndOverStockOpenSSH2139795248/001/client -o \\\n    IdentitiesOnly=yes -o \\\n    IdentityAgent=/tmp/TestEndToEndOverStockOpenSSH2139795248/001/agent -o \\\n    BatchMode=yes -o \\\n    ForwardAgent=/tmp/TestEndToEndOverStockOpenSSH2139795248/001/agent \\\n    127.0.0.1 env E2E_ROOT=/tmp/TestEndToEndOverStockOpenSSH2139795248/001 \\\n    /tmp/go-build3927890958/b001/agentsrv.test -test.run=^TestSSHE2EHelper$ \\\n    -test.v"
       ]
     ],
-    "Summary": "agentsrv.test ← ssh -F /dev/null -p 33623 -o UserKnownHostsFile=/tmp/TestEndToEndOverStockOpenSSH3337487557/001/known_hosts -o StrictHostKeyChecking=yes -o IdentityFile=/tmp/TestEndToEndOverStockOpenSSH3337487557/001/client -o IdentitiesOnly=yes -o IdentityAgent=/tmp/TestEndToEndOverStockOpenSSH333…",
+    "Summary": "agentsrv.test ← ssh -F /dev/null -p 46273 -o UserKnownHostsFile=/tmp/TestEndToEndOverStockOpenSSH2139795248/001/known_hosts -o StrictHostKeyChecking=yes -o IdentityFile=/tmp/TestEndToEndOverStockOpenSSH2139795248/001/client -o IdentitiesOnly=yes -o IdentityAgent=/tmp/TestEndToEndOverStockOpenSSH213…",
     "Columns": null,
     "Monospace": null
   },

@@ -55,10 +55,25 @@ bound to. It proves nothing more:
   The agent MUST present a statement as **claimed by** the host and name the
   attester key, never as a fact.
 - what the statement adds is protection against the user's *own* programs
-  on that host, a hostile AI agent among them. They cannot read `A`. They
-  cannot forge a chain, because the attester reads it from the kernel. They
-  cannot reuse a statement for another request, because it is bound to the
-  request's hash. Section 9 covers how they can still bypass the attester.
+  on that host, a hostile AI agent among them, forging the *statement*. They
+  cannot read `A`, and they cannot reuse a statement for another request,
+  because it is bound to the request's hash.
+- it does **not** stop those programs *describing themselves* misleadingly.
+  The attester reads the chain from the kernel, but only the tree (pid,
+  ppid, start time, uid) is the kernel's own record. `comm`, `argv` and the
+  cgroup inside the user's delegated subtree are set by the processes
+  themselves (`exec -a`, argv rewriting, `PR_SET_NAME`, writing
+  `cgroup.procs`), and a process can drop its ancestors by double-forking
+  so that it is reparented. Only `exe` cannot be set by the process, and
+  only a privileged attester (`CAP_SYS_PTRACE`) can read it for another
+  user's process. A statement is therefore "process P, which says it is
+  `git push`, run by this tree, asked for this request", claimed by `K`.
+- it names the process that **opened** the connection (the kernel's peer),
+  read again at each request. A process that is passed or inherits the
+  connection's descriptor is not told apart from the one that opened it.
+  The attester refuses once the opener is gone or has exec'd (§4).
+- a program of the user's can still **bypass** the attester, under any
+  forwarder the user can replace. See §11.
 
 ## 3. Delegation
 
@@ -121,6 +136,17 @@ and after reading it, so that a reused pid is not reported. A field it
 cannot read stays empty. A process's working directory and executable are
 readable only by its owner or a privileged reader: an unprivileged system
 attester leaves them empty rather than asking the client.
+
+The attester MUST read the chain again for every request it attests, not
+once per connection, and MUST compare the leaf with what it read when the
+connection was handed to it: the same pid and start time, and the same
+`exe` (where it can read it), `comm` and `argv`. It MUST NOT forward a sign
+request it cannot attest: if the peer cannot be read (it has exited), if the
+leaf has changed (it has exec'd), or if the statement cannot be sealed, the
+attester answers the client `SSH_AGENT_FAILURE` and does not pass the
+request on. Only an upstream agent's refusal of the extension itself lets a
+request go on without a statement, because that is the upstream agent's
+choice.
 
 Defined statement attributes: `cut` (the chain did not reach pid 1),
 `anchor=<pid>`, `terminal`, `session-root`, `project=<path>` (when a
@@ -193,9 +219,11 @@ So is a statement on a connection with no forwarded bind.
 carries the agent channel. Under mosey that is the session identifier the
 handshake derives. If the agent also knows that identifier (from a
 mosey-specific bind, see mosey spike S3), it SHOULD require the two to be
-equal. Under OpenSSH the attester cannot see sshd's session id, so `session`
-is empty. Replay is then limited by `request_hash`, `time` and the
-single-use rule in §9.
+equal. (The prototype fills `session` under mosey but no agent checks it
+yet: this depends on S3 choosing a mosey bind that carries the id.) Under
+OpenSSH the attester cannot see sshd's session id, so `session` is empty.
+Replay is then limited by `request_hash`, `time` and the single-use rule in
+§9.
 
 ## 9. Agent behaviour
 
@@ -206,11 +234,15 @@ single-use rule in §9.
 2. Check `K` against the connection's forwarded binds (§8).
 3. Hold at most 8 pending statements per connection, dropping the oldest.
 4. When a request arrives, take the statements whose `request_hash` matches
-   it. Each statement is used **once**.
+   it and whose `time` is *still* within 5 minutes. Each statement is used
+   **once per agent**: the agent keeps the (attester key, nonce) of every
+   statement it took for 10 minutes and refuses one it has seen, on any
+   connection.
 5. Show each attested hop with the host's name from the known hosts file,
    the chain laid out as a local chain would be, and a line such as
    "claimed by its attester SHA256:… (delegated by host key SHA256:… until
-   …)".
+   …)". Show the leaf's `exe` (and `cwd`) when present. When `exe` is empty,
+   say that the names shown are the processes' own.
 6. Statements SHOULD only add to what is shown. An agent MAY take them into
    its decision for hosts the user names as their own. It MUST NOT treat a
    statement from any other host as weaker evidence than no statement.
@@ -228,27 +260,56 @@ connection, and the attester's end of a stream socket pair whose other end
 the forwarder copies to the upstream agent. From then on the attester reads
 the client's requests and its kernel identity directly. The forwarder can
 lie about neither, and it never parses a statement. The attester MUST
-refuse a client whose uid is not the forwarder's.
+refuse a client whose uid is not the forwarder's, so a forwarder only ever
+obtains statements about its own user's processes. The attester SHOULD
+limit how many connections each uid holds open (the prototype: 64), and
+SHOULD time out idle clients (the prototype: 5 minutes; upstream reads are
+not timed, since a request waits on a person).
+
+A forwarder MUST fail closed. If a hand-off socket exists and the hand-off
+fails for any reason, the forwarder refuses the client. It forwards plainly
+only when the host has no attester at all, and an administrator SHOULD be
+able to forbid even that. The path is fixed or set by root-owned
+configuration, never by the user's environment.
 
 mosey's server is such a forwarder. Under OpenSSH, a per-session shim runs
 in front of sshd's agent socket and sets `SSH_AUTH_SOCK` to its own socket.
+Either is an *honest* forwarder only while it is unmodified: see §11.
 
 ## 11. Security considerations
 
 - **Compromised host**: it can claim any chain, but only for requests sent
   over a session bound to its own host key. The UI says whose claim it is.
 - **The user's own programs on the host**: they cannot forge or replay
-  statements. Under OpenSSH they can **bypass** the attester by connecting to
-  sshd's socket directly, so their request arrives unattested. §9.7 makes a
-  bypass visible for hosts known to attest. Under mosey no unattested path
-  exists, because every connection to the session's agent socket is handed
-  to the attester.
+  statements. They can describe themselves misleadingly (§2). And they can
+  **bypass** the attester, so that their request arrives with no statement:
+  - under OpenSSH, at once, by connecting to sshd's agent socket rather than
+    the shim's;
+  - under mosey, only by changing what the user's own files run: replacing
+    the user-installed mosey-server, or starting their own forwarder. The
+    hand-off path is not taken from the environment, and a failed hand-off
+    refuses rather than falls back. This raises the bar from "any program at
+    any time" to "a program that persists by modifying the user's files",
+    but it is the same class: the forwarder is the user's, so it is not a
+    trust anchor.
+
+  The enforcement in both cases is the agent's: §9.7 makes a request with
+  no statement from a host known to attest a warning that no grant covers
+  (or a refusal, if the agent chooses). Nothing makes a bypass impossible
+  unless the forwarder itself is root-owned and not replaceable by the user.
+- **Denial of service on the host**: another local user can use up the
+  attester's connections only up to the per-uid limit. A failed hand-off
+  makes the forwarder refuse, so the worst outcome is that signing fails,
+  never that it silently goes unattested.
 - **Intermediate hops** can drop an inner host's statement, which shows that
   hop as unattested. They cannot alter it.
 - **Replay** is bounded by the request hash. A userauth request contains the
-  session id. An SSHSIG request contains the hash of the message. Replaying a
-  statement therefore only re-describes the same request, within the time
-  window, once per connection.
+  session id. An SSHSIG request contains the hash of the message. A replayed
+  statement could only re-describe the same request, and the agent's
+  (attester, nonce) set refuses it: each statement is shown at most once per
+  agent, within the time window. An agent that restarts loses the set, so a
+  statement can be shown once more for the same request within 5 minutes
+  of its making.
 - **Denial of service**: statements are at most 64 KiB. Each costs the agent
   two signature verifications. Agents cap pending statements per connection.
 - **Downgrade**: stripping statements only removes information. The agent
