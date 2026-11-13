@@ -1,0 +1,23 @@
+Test of Device Attributes report (what are you)
+
+Report is: <27> [ ? 6 2 ; 1 ; 6 ; 2 2 c  VT200 family
+    1 = 132 columns
+    6 = selective erase
+    22 = color
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Push <RETURN>

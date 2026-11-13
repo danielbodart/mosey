@@ -1,0 +1,23 @@
+Testing Secondary Device Attributes (Firmware version)
+
+          <27> [ ? 6 c  failed
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Push <RETURN>

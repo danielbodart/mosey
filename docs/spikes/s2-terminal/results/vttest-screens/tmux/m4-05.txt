@@ -1,0 +1,23 @@
+
+
+
+
+
+
+
+lqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqk
+lqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqk
+x                                       x
+x                                       x
+x * The mad programmer strikes again *  x
+x * The mad programmer strikes again *  x
+x                                      x
+x                                      x
+mqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqj
+mqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqj
+
+
+
+
+Another test pattern...  a frame with blinking bold text,
+all in double-height double-width size. Push <RETURN>

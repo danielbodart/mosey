@@ -1,0 +1,4 @@
+AA
+
+
+Test of 'Delete Character'. The top line should be 'AB'. Push <RETURN>

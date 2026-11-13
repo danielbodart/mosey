@@ -1,0 +1,23 @@
+
+Origin mode test. This line should be at the bottom of the screen.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+This line should be the one above the bottom of the screen. Push <RETURN>

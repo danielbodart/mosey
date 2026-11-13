@@ -1,0 +1,23 @@
+Test of Device Attributes report (what are you)
+
+Report is: <27> [ ? 1 ; 2 ; 4 c  BAD VALUE
+    2 = printer port
+    4 = Sixel graphics
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Push <RETURN>

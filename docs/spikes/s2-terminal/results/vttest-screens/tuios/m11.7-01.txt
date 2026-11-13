@@ -1,0 +1,15 @@
+
+
+         Menu 11.7: Miscellaneous ISO-6429 (ECMA-48) Tests
+
+         Choose test type:
+
+          0. Exit
+          1. Protected-Area Tests
+          2. Test Repeat (REP)
+          3. Test Scroll-Down (SD)
+          4. Test Scroll-Left (SL)
+          5. Test Scroll-Right (SR)
+          6. Test Scroll-Up (SU)
+
+          Enter choice number (0 - 6):

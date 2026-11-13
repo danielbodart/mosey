@@ -1,0 +1,22 @@
+Test of autowrap, mixing control and print characters.
+The left/right margins should have letters in order:
+I
+J
+K
+L
+M
+N
+O
+P
+Q
+R
+S
+T
+U
+V
+W
+X
+Y
+Z
+
+Push <RETURN>

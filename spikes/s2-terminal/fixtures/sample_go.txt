@@ -1,0 +1,166 @@
+package emu
+
+import (
+	"sync"
+
+	xterm "github.com/gitpod-io/xterm-go"
+)
+
+type xtermEmu struct {
+	t     *xterm.Terminal
+	mu    sync.Mutex
+	resp  []byte
+	title string
+	cell  xterm.CellData
+}
+
+func init() {
+	register(Factory{Name: "xtermgo", New: func(w, h int) Emulator { return newXterm(w, h) }})
+}
+
+func newXterm(w, h int) *xtermEmu {
+	x := &xtermEmu{t: xterm.New(xterm.WithCols(w), xterm.WithRows(h), xterm.WithScrollback(1000))}
+	x.t.OnData(func(s string) { x.mu.Lock(); x.resp = append(x.resp, s...); x.mu.Unlock() })
+	x.t.OnTitleChange(func(s string) { x.mu.Lock(); x.title = s; x.mu.Unlock() })
+	return x
+}
+
+func (x *xtermEmu) Name() string     { return "xtermgo" }
+func (x *xtermEmu) Write(p []byte)   { _, _ = x.t.Write(p) }
+func (x *xtermEmu) Resize(w, h int)  { x.t.Resize(w, h) }
+func (x *xtermEmu) Size() (int, int) { return x.t.Cols(), x.t.Rows() }
+
+func xtColor(mode uint32, v int) Color {
+	switch mode {
+	case xterm.AttrCMP16, xterm.AttrCMP256:
+		return Indexed(uint8(v))
+	case xterm.AttrCMRGB:
+		return colorRGB | Color(uint32(v)&0xFFFFFF)
+	}
+	return ColorDefault
+}
+
+func (x *xtermEmu) CellAt(cx, cy int) Cell {
+	b := x.t.Buffer()
+	line := b.Lines.Get(b.YBase + cy)
+	if line == nil || cx >= line.Len {
+		return Cell{Width: 1}
+	}
+	c := &x.cell
+	line.LoadCell(cx, c)
+	out := Cell{Text: c.GetChars(), Width: uint8(c.GetWidth())}
+	if out.Text == " " {
+		out.Text = ""
+	}
+	out.Fg = xtColor(c.GetFgColorMode(), c.GetFgColor())
+	out.Bg = xtColor(c.GetBgColorMode(), c.GetBgColor())
+	if c.IsBold() != 0 {
+		out.Attr |= Bold
+	}
+	if c.IsDim() != 0 {
+		out.Attr |= Faint
+	}
+	if c.IsItalic() != 0 {
+		out.Attr |= Italic
+	}
+	if c.IsUnderline() != 0 {
+		out.Attr |= Underline
+	}
+	if c.IsBlink() != 0 {
+		out.Attr |= Blink
+	}
+	if c.IsInverse() != 0 {
+		out.Attr |= Reverse
+	}
+	if c.IsInvisible() != 0 {
+		out.Attr |= Invisible
+	}
+	if c.IsStrikethrough() != 0 {
+		out.Attr |= Strike
+	}
+	return out
+}
+
+func (x *xtermEmu) Cursor() (int, int, bool) {
+	return x.t.CursorX(), x.t.CursorY(), !x.t.IsCursorHidden()
+}
+func (x *xtermEmu) Responses() []byte {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	r := x.resp
+	x.resp = nil
+	return r
+}
+func (x *xtermEmu) Title() string {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.title
+}
+func (x *xtermEmu) AltScreen() bool { return x.t.IsAltBufferActive() }
+func (x *xtermEmu) Close()          { x.t.Dispose() }
+package emu
+
+import (
+	"sync"
+
+	cvt "github.com/charmbracelet/x/vt"
+)
+
+type charmEmu struct {
+	e     *cvt.Emulator
+	mu    sync.Mutex
+	resp  []byte
+	title string
+	done  chan struct{}
+}
+
+func init() {
+	register(Factory{Name: "charm", New: func(w, h int) Emulator { return newCharm(w, h) }})
+}
+
+func newCharm(w, h int) *charmEmu {
+	c := &charmEmu{e: cvt.NewEmulator(w, h), done: make(chan struct{})}
+	c.e.SetCallbacks(cvt.Callbacks{Title: func(s string) { c.mu.Lock(); c.title = s; c.mu.Unlock() }})
+	// charm's replies go through an io.Pipe: a Write that produces a reply
+	// blocks until someone reads it, so a reader goroutine is mandatory.
+	go func() {
+		defer close(c.done)
+		buf := make([]byte, 4096)
+		for {
+			n, err := c.e.Read(buf)
+			if n > 0 {
+				c.mu.Lock()
+				c.resp = append(c.resp, buf[:n]...)
+				c.mu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return c
+}
+
+func (c *charmEmu) Name() string        { return "charm" }
+func (c *charmEmu) Write(p []byte)      { _, _ = c.e.Write(p) }
+func (c *charmEmu) Resize(w, h int)     { c.e.Resize(w, h) }
+func (c *charmEmu) Size() (int, int)    { return c.e.Width(), c.e.Height() }
+func (c *charmEmu) CellAt(x, y int) Cell { return fromUV(c.e.CellAt(x, y)) }
+func (c *charmEmu) Cursor() (int, int, bool) {
+	p := c.e.CursorPosition()
+	return p.X, p.Y, !c.e.CursorHidden()
+}
+func (c *charmEmu) Responses() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := c.resp
+	c.resp = nil
+	return r
+}
+func (c *charmEmu) Title() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.title
+}
+func (c *charmEmu) AltScreen() bool { return c.e.IsAltScreen() }
+func (c *charmEmu) Close()          { _ = c.e.Close() }

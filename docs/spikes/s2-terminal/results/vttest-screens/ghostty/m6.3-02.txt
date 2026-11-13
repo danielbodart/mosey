@@ -1,0 +1,23 @@
+Test of Device Status Report 5 (report terminal status).
+Report is: <27> [ 0 n <13>  -- Unknown response!
+
+Test of Device Status Report 6 (report cursor position).
+Report is: <27> [ 5 ; 1 R  -- OK
+
+
+Report is: <27> [ 5 ; 1 R  -- OK
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Push <RETURN>

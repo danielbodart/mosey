@@ -1,0 +1,24 @@
+Exactly half of the box should remain. Push <RETURN>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+┌──────────────────────────────────────┐
+┌──────────────────────────────────────┐
+│                                       │
+│                                       │
+│ * The mad programmer strikes again *  │

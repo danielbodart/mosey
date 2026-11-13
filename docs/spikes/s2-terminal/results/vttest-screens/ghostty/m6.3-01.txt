@@ -1,0 +1,1 @@
+Test of Device Status Report 5 (report terminal status).

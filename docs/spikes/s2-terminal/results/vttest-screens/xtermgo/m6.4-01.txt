@@ -1,0 +1,23 @@
+Test of Device Attributes report (what are you)
+
+Report is: <27> [ ? 1 ; 2 c  -- means VT100 with AVO (could be a VT102)
+ Legend:  AVO = Advanced Video Option
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Push <RETURN>

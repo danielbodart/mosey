@@ -1,0 +1,18 @@
+
+
+         Menu 11.5: ISO-6429 (ECMA-48) Cursor-Movement
+
+         Choose test type:
+
+          0. Exit
+          1. Test Character-Position-Absolute (HPA)
+          2. Test Cursor-Back-Tab (CBT)
+          3. Test Cursor-Character-Absolute (CHA)
+          4. Test Cursor-Horizontal-Index (CHT)
+          5. Test Horizontal-Position-Relative (HPR)
+          6. Test Line-Position-Absolute (VPA)
+          7. Test Next-Line (CNL)
+          8. Test Previous-Line (CPL)
+          9. Test Vertical-Position-Relative (VPR)
+
+          Enter choice number (0 - 9):
