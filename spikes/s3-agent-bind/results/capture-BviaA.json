@@ -1,42 +1,44 @@
 {
   "mode": "capture",
   "host": "spikeB-via-A",
-  "bootstrap_ms": 284.283,
-  "agent_state": "triggered-1717us",
-  "bind": "bind{host SHA256:Y/oNegvk7ZtaHX7dywG+kyoev4BORz6n6AXzZh20iRE, sid dd7f5809737ba621…(32 bytes), fwd true}",
-  "bind_host_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEqrLrmyOn9C+xktZRVrhHugGX/7ojca2IG0RZ8bQyRR\n",
+  "bootstrap_ms": 167.023,
+  "agent_state": "triggered-1442us",
+  "bind": "bind{host SHA256:lakyIXcA0VWYpo3K5M+/UV+v3WTnkmyo+zFFR7ljW+0, sid 18d20c5ae2e2bf25…(32 bytes), fwd true}",
+  "bind_host_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEtqWK81lBTD4lFuJKGROKQuSEN+/IZjlrpTuIYVzXfO\n",
   "capture_peer_is_our_ssh": true,
   "capture_msgs": "Gws=",
+  "bind_host_key_in_known_hosts": true,
   "channels": [
     {
       "id": 1,
       "remote_chain": [
         {
-          "Pid": 135442,
-          "PPid": 135436,
+          "Pid": 268338,
+          "PPid": 268331,
           "UID": 1000,
-          "Comm": "moseys",
+          "Comm": "mosey-server",
           "Cmdline": [
-            "/tmp/claude-1000/s3ab/bin/moseys",
+            "/tmp/claude-1000/s3r/bin/mosey-server",
             "sudo-sign",
             "-hostkeys",
-            "/tmp/claude-1000/s3ab/B/host_ed25519.pub",
+            "/tmp/claude-1000/s3r/B/host_ed25519.pub",
             "-listed",
-            "/tmp/claude-1000/s3ab/client/id_user.pub"
+            "/tmp/claude-1000/s3r/client/id_user.pub"
           ]
         },
         {
-          "Pid": 135436,
+          "Pid": 268331,
           "PPid": 3446,
           "UID": 1000,
-          "Comm": "moseys",
+          "Comm": "mosey-server",
           "Cmdline": [
-            "/tmp/claude-1000/-home-dan-Projects-mosey/c1583940-2f8d-4ca9-afd0-7e8448d730af/scratchpad/s3-agent-bind/bin/moseys",
+            "/tmp/claude-1000/s3r/bin/mosey-server",
             "session",
             "-dir",
-            "/tmp/claude-1000/s3ab/r-spikeB-via-A-capture",
+            "/tmp/claude-1000/s3r/r-spikeB-via-A-capture",
             "-token",
-            "ff60a7dd9d474e2e0163fd9eca5b4fed"
+            "0817e7e2e2b8888220f5079c864bff86",
+            "-honour-noagent=true"
           ]
         },
         {
@@ -69,14 +71,15 @@
         }
       ],
       "frames_to_agent_hex": [
-        "1b0000001873657373696f6e2d62696e64406f70656e7373682e636f6d000000330000000b7373682d65643235353139000000204aab2eb9b23a7f42fb192d65156b847ba0197ffba2371ad881b4459f1b43245100000020dd7f5809737ba621e9293ad0115c8b5cd87ea4aba197706be33730edbe9617ad000000530000000b7373682d656432353531390000004069f8d111889e4d22a780833614d3db6b505840770bfb7b24dc1ac9cd4e396c2e6d845e8b6c24d34cd5fed9d3349d4c81a7db20138b397200fdae61c41e27670001",
+        "1b0000001873657373696f6e2d62696e64406f70656e7373682e636f6d000000330000000b7373682d65643235353139000000204b6a58af359414c3e2516e24a19138a42e48437efc866396ba53b88615cd77ce0000002018d20c5ae2e2bf250d26cacf967d146789916a72be9331b77e750fd628d7c35b000000530000000b7373682d6564323535313900000040cd1c3734de236a6a83f4d2ac8916aaa2d3e039e48e1990cb359c6725eb04cbc9d8d6dc0c2933d0d8431e06b6d30baf00a1d31de4c7c6b8ee414e3069f84a210901",
         "0b",
-        "0d000000330000000b7373682d656432353531390000002095908d762fb67280977798422a1698e6f11b9ca13cba3040860f6336ab654272000000b90000000d71756f696e2d7375646f2d763100000020b735501baf86d4a95a69f09787f9cdb4a2f771959e1e222b5511639922ba444900000001000000330000000b7373682d65643235353139000000204aab2eb9b23a7f42fb192d65156b847ba0197ffba2371ad881b4459f1b4324510000000364616e00000004726f6f74000000092f686f6d652f64616e000000010000001d2f72756e2f63757272656e742d73797374656d2f73772f62696e2f6964000000000000000000000000"
+        "0d000000330000000b7373682d6564323535313900000020a2fbba57e1ed1d6ea2e8fca93bc739313fab1b5cce2e7840bd366ea1c5551c5c000000b90000000d71756f696e2d7375646f2d7631000000205c073e5f0efc6658ded46efab2cb3962a1411292de8dd2e7a7a9cc84f135f48500000001000000330000000b7373682d65643235353139000000204b6a58af359414c3e2516e24a19138a42e48437efc866396ba53b88615cd77ce0000000364616e00000004726f6f74000000092f686f6d652f64616e000000010000001d2f72756e2f63757272656e742d73797374656d2f73772f62696e2f6964000000000000000000000000"
       ]
     }
   ],
   "execs": {
     "1": true,
-    "2": true
+    "2": true,
+    "3": true
   }
 }

@@ -1,0 +1,4 @@
+interleaved, 30 rounds, run 2 (same harness, machine busy with other spikes), 2026-11-13
+capture  n=30 median=171.0ms p10=124.3 p90=253.8
+none     n=30 median=154.3ms p10=119.4 p90=221.2
+xcrypto  n=30 median=65.6ms p10=35.4 p90=144.5

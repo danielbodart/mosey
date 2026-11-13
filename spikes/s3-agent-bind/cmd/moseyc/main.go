@@ -55,6 +55,10 @@ type result struct {
 	BindHostKey   string          `json:"bind_host_key,omitempty"`
 	CapturePeerOK *bool           `json:"capture_peer_is_our_ssh,omitempty"`
 	CaptureMsgs   []byte          `json:"capture_msgs,omitempty"`
+	CaptureErr    string          `json:"capture_err,omitempty"`
+	KnownHostsOK  *bool           `json:"bind_host_key_in_known_hosts,omitempty"`
+	AgentOff      bool            `json:"agent_forwarding_off,omitempty"`
+	Refused       int             `json:"agent_channels_refused,omitempty"`
 	Channels      []channelRecord `json:"channels"`
 	Execs         map[string]bool `json:"execs"`
 	Errors        []string        `json:"errors,omitempty"`
@@ -81,7 +85,11 @@ func main() {
 	execs := flag.String("exec", "", "JSON list of argv lists to run inside the remote session")
 	out := flag.String("out", "", "write the result JSON here")
 	extraSSH := flag.String("sshopt", "", "extra -o option for the bootstrap ssh")
+	rargs := flag.String("rargs", "", "extra arguments for the remote bootstrap (the harness's hostile server flags)")
+	legacy := flag.Bool("legacy-capture", false, "the first prototype's capture: last bind wins, no pid or known_hosts check (to reproduce the review's attack)")
+	mux := flag.Bool("allow-mux", false, "do not add -o ControlMaster=no -o ControlPath=none to the bootstrap ssh (to reproduce the ControlMaster failure)")
 	flag.Parse()
+	legacyCapture, allowMux, remoteExtra = *legacy, *mux, *rargs
 	if *agentPath == "" || *host == "" || *remote == "" || *dir == "" {
 		fmt.Fprintln(os.Stderr, "moseyc: -agent, -host, -remote and -dir are required")
 		os.Exit(2)
@@ -95,15 +103,21 @@ func main() {
 	if *out != "" {
 		os.WriteFile(*out, j, 0o600)
 	}
-	fmt.Fprintf(os.Stderr, "moseyc: mode=%s bootstrap=%.1fms agent=%s bind=%s channels=%d execs=%v errors=%v\n",
-		res.Mode, res.BootstrapMS, res.AgentState, res.Bind, len(res.Channels), res.Execs, res.Errors)
+	fmt.Fprintf(os.Stderr, "moseyc: mode=%s bootstrap=%.1fms agent=%s bind=%s channels=%d refused=%d agent_off=%v capture_err=%q execs=%v errors=%v\n",
+		res.Mode, res.BootstrapMS, res.AgentState, res.Bind, len(res.Channels), res.Refused, res.AgentOff, res.CaptureErr, res.Execs, res.Errors)
 	if err != nil {
 		os.Exit(1)
 	}
 }
 
+var legacyCapture, allowMux bool
+var remoteExtra string
+
 func run(res *result, cfg, host, mode string, hop bool, agentPath, remote, dir, capDir, execs, extraSSH string) error {
 	remoteCmd := fmt.Sprintf("%s bootstrap -dir %s", remote, dir)
+	if remoteExtra != "" {
+		remoteCmd += " " + remoteExtra
+	}
 	var line string
 	var b *bind.Bind
 	t0 := time.Now()
@@ -119,8 +133,16 @@ func run(res *result, cfg, host, mode string, hop bool, agentPath, remote, dir, 
 			if cp, err = bind.NewCapture(capDir); err != nil {
 				return err
 			}
+			cp.Legacy = legacyCapture
 			defer cp.Close()
 			args = append(args, "-o", "ForwardAgent="+cp.Path)
+			if !allowMux {
+				// A live ControlMaster would carry the session: no new key
+				// exchange, so no bind, and the master's own ForwardAgent
+				// (the user's real agent) would serve the trigger. Always a
+				// fresh connection for the bootstrap (review, major #3/#7).
+				args = append(args, "-o", "ControlMaster=no", "-o", "ControlPath=none")
+			}
 		} else {
 			args = append(args, "-o", "ForwardAgent=no")
 			remoteCmd += " -trigger=false"
@@ -135,6 +157,9 @@ func run(res *result, cfg, host, mode string, hop bool, agentPath, remote, dir, 
 		if err := cmd.Start(); err != nil {
 			return err
 		}
+		if cp != nil {
+			cp.Expect(cmd.Process.Pid, os.Getuid())
+		}
 		l, err := bufio.NewReader(stdout).ReadString('\n')
 		werr := cmd.Wait()
 		if err != nil {
@@ -142,17 +167,31 @@ func run(res *result, cfg, host, mode string, hop bool, agentPath, remote, dir, 
 		}
 		line = l
 		if cp != nil {
-			select {
-			case c := <-cp.C:
-				b = c.Bind
+			// ssh has exited, so its agent connection (if any) is closed:
+			// the result is final, with no timer the server controls.
+			cp.Close()
+			c := cp.Result()
+			if c.PeerPID != 0 {
 				ok := int(c.PeerPID) == cmd.Process.Pid
 				res.CapturePeerOK = &ok
-				res.CaptureMsgs = c.Msgs
-			case <-time.After(2 * time.Second):
-				return errors.New("capture: ssh sent no session-bind (agent forwarding refused by the server?)")
 			}
-			for _, e := range cp.Errors() {
-				res.Errors = append(res.Errors, e.Error())
+			res.CaptureMsgs = c.Msgs
+			b = c.Bind
+			if c.Err != nil {
+				res.CaptureErr = c.Err.Error()
+			}
+			if b != nil && !legacyCapture {
+				ok := knownHostsHas(cfg, host, b.HostKey) == nil
+				res.KnownHostsOK = &ok
+				if !ok {
+					res.CaptureErr = fmt.Sprintf("captured bind's host key %s is not a known_hosts key for %s", ssh.FingerprintSHA256(b.HostKey), host)
+					b = nil
+				}
+			}
+			if b == nil {
+				// No trustworthy bind: the session goes on without agent
+				// forwarding (review, minor #7), and says why.
+				res.AgentOff = true
 			}
 		}
 	case "xcrypto":
@@ -185,7 +224,11 @@ func run(res *result, cfg, host, mode string, hop bool, agentPath, remote, dir, 
 		return err
 	}
 	defer ctrl.Close()
-	fmt.Fprintf(ctrl, "CTRL %s\n", token)
+	if mode == "capture" && res.AgentOff {
+		fmt.Fprintf(ctrl, "CTRL %s agent=off\n", token)
+	} else {
+		fmt.Fprintf(ctrl, "CTRL %s\n", token)
+	}
 	var argvs [][]string
 	if execs != "" {
 		if err := json.Unmarshal([]byte(execs), &argvs); err != nil {
@@ -209,6 +252,18 @@ func run(res *result, cfg, host, mode string, hop bool, agentPath, remote, dir, 
 			var m openMsg
 			if err := json.Unmarshal([]byte(l[5:]), &m); err != nil {
 				return err
+			}
+			if res.AgentOff {
+				// The server opened an agent channel it was told not to:
+				// refuse it, never relay (a hostile or confused server).
+				res.mu.Lock()
+				res.Refused++
+				res.mu.Unlock()
+				if c, err := net.Dial("tcp", "127.0.0.1:"+port); err == nil {
+					fmt.Fprintf(c, "CHAN %s %d\n", token, m.ID)
+					c.Close()
+				}
+				continue
 			}
 			wg.Add(1)
 			go func() {
@@ -321,6 +376,9 @@ func xcryptoBootstrap(cfg, host, remoteCmd string) (string, *bind.Bind, error) {
 		return "", nil, err
 	}
 	hkcb, err := knownhosts.New(existing...)
+	for _, f := range existing {
+		os.Remove(f) // knownhosts.New has read them
+	}
 	if err != nil {
 		return "", nil, err
 	}
@@ -365,6 +423,46 @@ func xcryptoBootstrap(cfg, host, remoteCmd string) (string, *bind.Bind, error) {
 		return "", nil, err
 	}
 	return string(o), b, nil
+}
+
+// knownHostsHas checks that k is a key known_hosts holds for host, as ssh
+// -G resolves it (HostKeyAlias, else HostName and Port): the key ssh itself
+// accepted for this destination. Defence in depth behind the strict
+// capture, which already takes only ssh's own first frame.
+func knownHostsHas(cfg, host string, k ssh.PublicKey) error {
+	g, err := sshG(cfg, host)
+	if err != nil {
+		return err
+	}
+	var files []string
+	for _, key := range []string{"userknownhostsfile", "globalknownhostsfile"} {
+		for _, f := range g[key] {
+			for _, x := range strings.Fields(expand(f)) {
+				if _, err := os.Stat(x); err == nil {
+					files = append(files, x)
+				}
+			}
+		}
+	}
+	lowered, err := lowerKnownHosts(files)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, f := range lowered {
+			os.Remove(f)
+		}
+	}()
+	cb, err := knownhosts.New(lowered...)
+	if err != nil {
+		return err
+	}
+	addr := net.JoinHostPort(g["hostname"][0], g["port"][0])
+	name := addr
+	if a := g["hostkeyalias"]; len(a) > 0 && a[0] != "none" {
+		name = net.JoinHostPort(a[0], "22")
+	}
+	return cb(name, fixedAddr(addr), k)
 }
 
 func expand(p string) string {

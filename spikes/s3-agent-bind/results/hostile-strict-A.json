@@ -1,0 +1,15 @@
+{
+  "mode": "capture",
+  "host": "spikeA",
+  "bootstrap_ms": 121.298,
+  "agent_state": "triggered-965us+inject-noreply(EOF)",
+  "capture_peer_is_our_ssh": true,
+  "capture_msgs": "Gwsb",
+  "capture_err": "capture: protocol error: message 27 after the identities answer",
+  "agent_forwarding_off": true,
+  "channels": null,
+  "execs": {
+    "1": false,
+    "2": false
+  }
+}

@@ -32,10 +32,17 @@ type Hop struct {
 	HostKey   []byte
 	Session   string
 	Chain     []Link
-	// Sig is reserved for S7: a signature by the hop's host key (only a root
-	// component there, such as quoin-sudo's gate, could make one) over
-	// SignedData. Empty means channel-bound only: it came down the
-	// connection whose far end the preceding bind names.
+	// Sig is reserved for S7. Empty means channel-bound only: it came down
+	// the connection whose far end the preceding bind names, and says no
+	// more than that host's software chose to say.
+	//
+	// It must NOT be a raw signature by the host key over SignedData: a
+	// session-bind verifier (ssh-agent, quoin's parseBind) accepts any
+	// host-key signature over any byte string as a bind with SID = that
+	// string, so a raw host-key signature over hop data is also a valid
+	// session-bind (cross-protocol oracle; review, minor #5). S7 must use a
+	// separate key, or a format that cannot parse as a session id that the
+	// verifiers enforce (an SSHSIG namespace, "SSHSIG" magic prefix).
 	Sig []byte
 }
 
@@ -62,7 +69,8 @@ func (h *Hop) body() []byte {
 
 func (h *Hop) Marshal() []byte { return putStr(h.body(), h.Sig) }
 
-// SignedData is what Sig would cover (reserved for S7): a domain-separated
+// SignedData is what Sig would cover (reserved for S7; see Sig for why it is
+// never signed raw by the host key): a domain-separated
 // prefix, a digest of the sign request's data the record vouches for, then
 // the body. Not the bound session id: the far end never learns it (sshd
 // does not expose it to the session, and a rootless mosey server only knows

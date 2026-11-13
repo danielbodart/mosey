@@ -1,4 +1,5 @@
-capture  n=30 median=157.9ms p10=123.4 p90=200.6
-none     n=30 median=157.7ms p10=112.9 p90=215.6
-xcrypto  n=30 median=81.0ms p10=58.6 p90=106.2
-trigger (server-side agent round trip, inside capture): n=30 median=1.50ms max=15.94ms
+interleaved, 30 rounds (capture, none, xcrypto each round), spikeA on loopback, run 1 (quiet), 2026-11-13
+capture  n=30 median=124.3ms p10=122.7 p90=127.1
+none     n=30 median=119.6ms p10=117.7 p90=122.5
+xcrypto  n=30 median=37.3ms p10=35.8 p90=38.9
+trigger (server-side agent round trip, inside capture): n=30 median=0.82ms max=1.11ms

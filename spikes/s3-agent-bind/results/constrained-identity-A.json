@@ -1,0 +1,144 @@
+{
+  "mode": "identity",
+  "host": "spikeA",
+  "bootstrap_ms": 120.13,
+  "agent_state": "no-agent",
+  "channels": [
+    {
+      "id": 1,
+      "remote_chain": [
+        {
+          "Pid": 268860,
+          "PPid": 268855,
+          "UID": 1000,
+          "Comm": "mosey-server",
+          "Cmdline": [
+            "/tmp/claude-1000/s3r/bin/mosey-server",
+            "sudo-sign",
+            "-hostkeys",
+            "/tmp/claude-1000/s3r/A/host_ed25519.pub",
+            "-listed",
+            "/tmp/claude-1000/s3r/client/id_user.pub"
+          ]
+        },
+        {
+          "Pid": 268855,
+          "PPid": 3446,
+          "UID": 1000,
+          "Comm": "mosey-server",
+          "Cmdline": [
+            "/tmp/claude-1000/s3r/bin/mosey-server",
+            "session",
+            "-dir",
+            "/tmp/claude-1000/s3r/r-spikeA-identity",
+            "-token",
+            "6f2b51042d7b9287c46ba17c4427975b",
+            "-honour-noagent=true"
+          ]
+        },
+        {
+          "Pid": 3446,
+          "PPid": 1,
+          "UID": 1000,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd",
+            "--user"
+          ]
+        },
+        {
+          "Pid": 1,
+          "PPid": 0,
+          "UID": 0,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/run/current-system/systemd/lib/systemd/systemd",
+            "--switched-root",
+            "--system",
+            "--deserialize=41"
+          ]
+        }
+      ],
+      "prelude_replies": [
+        {
+          "Name": "session-bind@openssh.com",
+          "Code": 6
+        }
+      ],
+      "frames_to_agent_hex": [
+        "1b0000001873657373696f6e2d62696e64406f70656e7373682e636f6d000000330000000b7373682d6564323535313900000020879eda04970664a5ff8e610b8c8c9723a55704052e3fd90c507e1d58df9c7b9e0000002049bcc9a6ba7bdfc607c6011242e624c3b87f04b4464313688a28382dca0aa459000000530000000b7373682d65643235353139000000405103b21c0272e9d7d4428b5b39e19804c51193d2f2ae7b40690fd507b7a9968948673a9c40dd4c4cfeaa494b6e2ec0ca706b8c5bdc316f860022236c2cc9e30901",
+        "0b"
+      ]
+    },
+    {
+      "id": 2,
+      "remote_chain": [
+        {
+          "Pid": 268861,
+          "PPid": 268855,
+          "UID": 1000,
+          "Comm": "ssh",
+          "Cmdline": [
+            "ssh",
+            "-F",
+            "/tmp/claude-1000/s3r/client/onward_config",
+            "spikeB",
+            "echo onward-login-ok"
+          ]
+        },
+        {
+          "Pid": 268855,
+          "PPid": 3446,
+          "UID": 1000,
+          "Comm": "mosey-server",
+          "Cmdline": [
+            "/tmp/claude-1000/s3r/bin/mosey-server",
+            "session",
+            "-dir",
+            "/tmp/claude-1000/s3r/r-spikeA-identity",
+            "-token",
+            "6f2b51042d7b9287c46ba17c4427975b",
+            "-honour-noagent=true"
+          ]
+        },
+        {
+          "Pid": 3446,
+          "PPid": 1,
+          "UID": 1000,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd",
+            "--user"
+          ]
+        },
+        {
+          "Pid": 1,
+          "PPid": 0,
+          "UID": 0,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/run/current-system/systemd/lib/systemd/systemd",
+            "--switched-root",
+            "--system",
+            "--deserialize=41"
+          ]
+        }
+      ],
+      "prelude_replies": [
+        {
+          "Name": "session-bind@openssh.com",
+          "Code": 6
+        }
+      ],
+      "frames_to_agent_hex": [
+        "1b0000001873657373696f6e2d62696e64406f70656e7373682e636f6d000000330000000b7373682d6564323535313900000020879eda04970664a5ff8e610b8c8c9723a55704052e3fd90c507e1d58df9c7b9e00000020df283e8bed3bf5c29c379c61cdb22491478bfcda4568c29f374be7ae85b41da7000000530000000b7373682d65643235353139000000403c62a58555c3c3eb68203f02178edd47f213f8750f97a23bf01a405fc82aa7dcb286d08daf375f0428c60a9c46d92df6a965ecc9c33642237ca7b2efa177630e01",
+        "1b0000001873657373696f6e2d62696e64406f70656e7373682e636f6d000000330000000b7373682d65643235353139000000204b6a58af359414c3e2516e24a19138a42e48437efc866396ba53b88615cd77ce00000020eaa279942b5a0b10bbd11ae5111ad9ad203fc99bd73974a6ad4c9a4cbd32b360000000530000000b7373682d656432353531390000004025d3bb84f585dc8f0b97ee67aa7857c262c98afe26c68a2c1d273e41705c0d2c7b271fc77c1885eb001c8cad5ea2697f46f086f26b847db8e4c6cf42a039710400",
+        "0b"
+      ]
+    }
+  ],
+  "execs": {
+    "1": false,
+    "2": false
+  }
+}

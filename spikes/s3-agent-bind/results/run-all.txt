@@ -1,69 +1,250 @@
-### E1-E6: bind source per option, unconstrained stock agent
-moseyc: mode=capture bootstrap=272.3ms agent=triggered-1557us bind=bind{host SHA256:cesIsFSWvETlqHUiT+9jCB9H5nC/5dGxKmMjHt1PWEY, sid 7090a2a5ed1e217f…(32 bytes), fwd true} channels=1 execs=map[1:true 2:true] errors=[]
-SUDO-SIGNED ok in 2.823863ms (ssh-ed25519)
+quoin worktree rev for quoin-chain: 036b7e9
+### E1-E6: bind source per option, unconstrained stock agent; server comm mosey-server
+moseyc: mode=capture bootstrap=125.2ms agent=triggered-789us bind=bind{host SHA256:i3RcusncBB2wb5RePhTdanUo7jRLXy5ZBMtupRkGhdo, sid f981507543e11f84…(32 bytes), fwd true} channels=1 refused=0 agent_off=false capture_err="" execs=map[1:true 2:true 3:true] errors=[]
+SUDO-SIGNED ok in 390.617µs (ssh-ed25519)
 EXIT <nil>
-quoin-sudo chain.remote: false
+  268288 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  268278 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeA-capture" "-token" "b521218adbdeaf657926d92be31565c6" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
 EXIT <nil>
-moseyc: mode=capture bootstrap=284.3ms agent=triggered-1717us bind=bind{host SHA256:Y/oNegvk7ZtaHX7dywG+kyoev4BORz6n6AXzZh20iRE, sid dd7f5809737ba621…(32 bytes), fwd true} channels=1 execs=map[1:true 2:true] errors=[]
-SUDO-SIGNED ok in 4.360325ms (ssh-ed25519)
+  268278 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
 EXIT <nil>
-quoin-sudo chain.remote: false
+moseyc: mode=capture bootstrap=167.0ms agent=triggered-1442us bind=bind{host SHA256:lakyIXcA0VWYpo3K5M+/UV+v3WTnkmyo+zFFR7ljW+0, sid 18d20c5ae2e2bf25…(32 bytes), fwd true} channels=1 refused=0 agent_off=false capture_err="" execs=map[1:true 2:true 3:true] errors=[]
+SUDO-SIGNED ok in 643.555µs (ssh-ed25519)
 EXIT <nil>
-moseyc: mode=xcrypto bootstrap=142.5ms agent=no-agent bind=bind{host SHA256:cesIsFSWvETlqHUiT+9jCB9H5nC/5dGxKmMjHt1PWEY, sid a0e0b8369bedc285…(32 bytes), fwd false} channels=1 execs=map[1:true 2:true] errors=[]
-SUDO-SIGNED ok in 1.612262ms (ssh-ed25519)
+  268341 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  268331 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeB-via-A-capture" "-token" "0817e7e2e2b8888220f5079c864bff86" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
 EXIT <nil>
-quoin-sudo chain.remote: false
+  268331 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
 EXIT <nil>
-moseyc: mode=xcrypto bootstrap=351.1ms agent=no-agent bind=bind{host SHA256:Y/oNegvk7ZtaHX7dywG+kyoev4BORz6n6AXzZh20iRE, sid 19ff0ecbf473e2c9…(32 bytes), fwd false} channels=1 execs=map[1:true 2:true] errors=[]
-SUDO-SIGNED ok in 12.560084ms (ssh-ed25519)
+moseyc: mode=xcrypto bootstrap=38.3ms agent=no-agent bind=bind{host SHA256:i3RcusncBB2wb5RePhTdanUo7jRLXy5ZBMtupRkGhdo, sid 14d1a5112eb254af…(32 bytes), fwd false} channels=1 refused=0 agent_off=false capture_err="" execs=map[1:true 2:true 3:true] errors=[]
+SUDO-SIGNED ok in 375.619µs (ssh-ed25519)
 EXIT <nil>
-quoin-sudo chain.remote: false
+  268385 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  268377 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeA-xcrypto" "-token" "e3a3daf4ef7312e2a32cdd3ba29b4a85" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
 EXIT <nil>
-moseyc: mode=identity bootstrap=191.1ms agent=no-agent bind= channels=1 execs=map[1:true 2:true] errors=[]
-SUDO-SIGNED ok in 644.857µs (ssh-ed25519)
+  268377 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
 EXIT <nil>
-quoin-sudo chain.remote: false
+moseyc: mode=xcrypto bootstrap=151.3ms agent=no-agent bind=bind{host SHA256:lakyIXcA0VWYpo3K5M+/UV+v3WTnkmyo+zFFR7ljW+0, sid 78ce3e191cbdb1f0…(32 bytes), fwd false} channels=1 refused=0 agent_off=false capture_err="" execs=map[1:true 2:true 3:true] errors=[]
+SUDO-SIGNED ok in 628.085µs (ssh-ed25519)
 EXIT <nil>
-moseyc: mode=none bootstrap=219.0ms agent=no-agent bind= channels=1 execs=map[1:true 2:true] errors=[]
-SUDO-SIGNED ok in 678.102µs (ssh-ed25519)
+  268439 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  268430 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeB-via-A-xcrypto" "-token" "5e8f5043158b83b7798d8e996618dae7" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
 EXIT <nil>
-quoin-sudo chain.remote: false
+  268430 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
+EXIT <nil>
+moseyc: mode=identity bootstrap=120.6ms agent=no-agent bind= channels=1 refused=0 agent_off=false capture_err="" execs=map[1:true 2:true 3:true] errors=[]
+SUDO-SIGNED ok in 687.481µs (ssh-ed25519)
+EXIT <nil>
+  268487 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  268480 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeA-identity" "-token" "853785ba0410221c4d87495649523144" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
+EXIT <nil>
+  268480 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
+EXIT <nil>
+moseyc: mode=none bootstrap=120.5ms agent=no-agent bind= channels=1 refused=0 agent_off=false capture_err="" execs=map[1:true 2:true 3:true] errors=[]
+SUDO-SIGNED ok in 672.414µs (ssh-ed25519)
+EXIT <nil>
+  268534 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  268525 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeA-none" "-token" "dd27e5629fbedbea5540a1bed4c12eeb" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
+EXIT <nil>
+  268525 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
 EXIT <nil>
 ### E10: option (c) hop record after the bind, stock agent
-moseyc: mode=capture bootstrap=251.0ms agent=triggered-1242us bind=bind{host SHA256:cesIsFSWvETlqHUiT+9jCB9H5nC/5dGxKmMjHt1PWEY, sid 14ba542e47357dee…(32 bytes), fwd true} channels=1 execs=map[1:true 2:true] errors=[]
-SUDO-SIGNED ok in 4.152626ms (ssh-ed25519)
+moseyc: mode=capture bootstrap=126.2ms agent=triggered-618us bind=bind{host SHA256:i3RcusncBB2wb5RePhTdanUo7jRLXy5ZBMtupRkGhdo, sid 86878552a5268924…(32 bytes), fwd true} channels=1 refused=0 agent_off=false capture_err="" execs=map[1:true 2:true 3:true] errors=[]
+SUDO-SIGNED ok in 423.042µs (ssh-ed25519)
 EXIT <nil>
-quoin-sudo chain.remote: false
+  268578 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  268570 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeA-capture" "-token" "15a9958f0b04f06d92a37d6f44aede6f" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
 EXIT <nil>
-### E7: server forbids agent forwarding (AllowAgentForwarding no on B)
-moseyc: mode=capture bootstrap=0.0ms agent= bind= channels=0 execs=map[] errors=[capture: ssh sent no session-bind (agent forwarding refused by the server?)]
+  268570 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
+EXIT <nil>
+### E7: server forbids agent forwarding (AllowAgentForwarding no on B): session goes on, agent off
+moseyc: mode=capture bootstrap=128.4ms agent=no-agent bind= channels=0 refused=0 agent_off=true capture_err="ssh never connected: the server did not open the agent channel, or refused agent forwarding" execs=map[1:false 2:true 3:true] errors=[]
+EXIT exit status 1
+  268654 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  268647 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeB-capture" "-token" "ffc6b47e58f792865eed2de97c07fd98" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
+EXIT <nil>
+  268647 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
+EXIT <nil>
+-- E7b: no bind, and a hostile server that opens agent channels anyway
+moseyc: mode=capture bootstrap=121.9ms agent=no-agent bind= channels=0 refused=1 agent_off=true capture_err="ssh never connected: the server did not open the agent channel, or refused agent forwarding" execs=map[1:false 2:true 3:true] errors=[]
+moseys sudo-sign: agent: client error: read unix @->/tmp/claude-1000/s3r/r-spikeA-capture/agent.sock: read: connection reset by peer
+EXIT exit status 1
+  268725 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  268716 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeA-capture" "-token" "c363ec6c7798c57f25c60a10f3f0fe43" "-honour-noagent=false"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
+EXIT <nil>
+  268716 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
+EXIT <nil>
 ### E8: stock ssh-agent destination constraints (ssh-add -h spikeA -h 'spikeA>spikeB')
 -- capture
-moseyc: mode=capture bootstrap=221.4ms agent=triggered-1242us bind=bind{host SHA256:cesIsFSWvETlqHUiT+9jCB9H5nC/5dGxKmMjHt1PWEY, sid bcd9046f69a67472…(32 bytes), fwd true} channels=2 execs=map[1:true 2:false] errors=[]
+moseyc: mode=capture bootstrap=127.7ms agent=triggered-936us bind=bind{host SHA256:i3RcusncBB2wb5RePhTdanUo7jRLXy5ZBMtupRkGhdo, sid 119845458cf746e2…(32 bytes), fwd true} channels=2 refused=0 agent_off=false capture_err="" execs=map[1:true 2:false] errors=[]
 onward-login-ok
 EXIT <nil>
 moseys sudo-sign: the forwarded agent refused: agent: failed to sign challenge
 EXIT exit status 1
 -- xcrypto
-moseyc: mode=xcrypto bootstrap=189.9ms agent=no-agent bind=bind{host SHA256:cesIsFSWvETlqHUiT+9jCB9H5nC/5dGxKmMjHt1PWEY, sid 478420c6c067e643…(32 bytes), fwd false} channels=2 execs=map[1:true 2:false] errors=[]
+moseyc: mode=xcrypto bootstrap=37.8ms agent=no-agent bind=bind{host SHA256:i3RcusncBB2wb5RePhTdanUo7jRLXy5ZBMtupRkGhdo, sid 7db5bc9e01a9bafd…(32 bytes), fwd false} channels=2 refused=0 agent_off=false capture_err="" execs=map[1:true 2:false] errors=[]
 onward-login-ok
 EXIT <nil>
 moseys sudo-sign: the forwarded agent refused: agent: failed to sign challenge
 EXIT exit status 1
 -- identity
-moseyc: mode=identity bootstrap=303.3ms agent=no-agent bind= channels=2 execs=map[1:false 2:false] errors=[]
+moseyc: mode=identity bootstrap=120.1ms agent=no-agent bind= channels=2 refused=0 agent_off=false capture_err="" execs=map[1:false 2:false] errors=[]
 dan@127.0.0.1: Permission denied (publickey).
 EXIT exit status 255
 EXIT exit status 1
 -- none
-moseyc: mode=none bootstrap=266.1ms agent=no-agent bind= channels=2 execs=map[1:false 2:false] errors=[]
+moseyc: mode=none bootstrap=119.6ms agent=no-agent bind= channels=2 refused=0 agent_off=false capture_err="" execs=map[1:false 2:false] errors=[]
 dan@127.0.0.1: Permission denied (publickey).
 EXIT exit status 255
 moseys sudo-sign: the forwarded agent refused: agent: failed to sign challenge
 EXIT exit status 1
 -- control: the constrained agent used directly (origin), not through a session
 dan@127.0.0.1: Permission denied (publickey).
-### E9: bootstrap time, 20 runs each (ms), spikeA
-capture   n=20 median=254.7 p10=200.4 p90=366.2 min=185.9 max=401.2
-none      n=20 median=204.3 p10=171.7 p90=292.0 min=166.8 max=326.4
-xcrypto   n=20 median=136.6 p10=104.3 p90=189.6 min=86.6 max=218.3
+### E11: hostile server injects a session-bind for host X after ssh's own (ssh-add -h spikeA -h spikeX -h 'spikeX>spikeB': X may forward to B, A may not)
+-- control: plain ssh -A spikeA, then ssh spikeB from A (OpenSSH: chain spikeA>spikeB, not allowed)
+dan@127.0.0.1: Permission denied (publickey).
+-- legacy capture (first prototype: last bind wins)
+moseyc: mode=capture bootstrap=10132.0ms agent=triggered-973us+inject-noreply(EOF) bind=bind{host SHA256:wuIMEhRMOztlmyaP7+Sn8tgmFGAnIfaMmLXxIEwN8jc, sid ae1ffa39a219237d…(32 bytes), fwd true} channels=2 refused=0 agent_off=false capture_err="" execs=map[1:true 2:false] errors=[]
+onward-login-ok
+EXIT <nil>
+moseys sudo-sign: the forwarded agent refused: agent: failed to sign challenge
+EXIT exit status 1
+-- strict capture (this revision)
+moseyc: mode=capture bootstrap=121.3ms agent=triggered-965us+inject-noreply(EOF) bind= channels=0 refused=0 agent_off=true capture_err="capture: protocol error: message 27 after the identities answer" execs=map[1:false 2:false] errors=[]
+dan@127.0.0.1: Permission denied (publickey).
+EXIT exit status 255
+EXIT exit status 1
+### E12: ControlMaster auto + ControlPersist, with a live master
+Master running (pid=269052)
+-- -allow-mux (the first prototype's behaviour: bootstrap rides the master)
+moseyc: mode=capture bootstrap=13.7ms agent=no-agent bind= channels=0 refused=0 agent_off=true capture_err="ssh never connected: the server did not open the agent channel, or refused agent forwarding" execs=map[1:false 2:true 3:true] errors=[]
+EXIT exit status 1
+  269082 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  269074 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeA-cm-capture" "-token" "f4add2fb89163fec5c16ad3376c8c438" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
+EXIT <nil>
+  269074 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
+EXIT <nil>
+-- default (ControlMaster=no, ControlPath=none for the bootstrap)
+moseyc: mode=capture bootstrap=126.7ms agent=triggered-783us bind=bind{host SHA256:i3RcusncBB2wb5RePhTdanUo7jRLXy5ZBMtupRkGhdo, sid f199611885eba689…(32 bytes), fwd true} channels=1 refused=0 agent_off=false capture_err="" execs=map[1:true 2:true 3:true] errors=[]
+SUDO-SIGNED ok in 651.803µs (ssh-ed25519)
+EXIT <nil>
+  269126 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  269117 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeA-cm-capture" "-token" "ad0bbce69e4eba80170efac8a523ba3b" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
+EXIT <nil>
+  269117 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
+EXIT <nil>
+-- what the forced fresh connection costs: 'ssh spikeA-cm true', 10 runs each, ms
+mux    n=10 median=9.8 min=8.8 max=10.5
+fresh  n=10 median=117.8 min=116.0 max=241.8
+Exit request sent.
+-- E12b: a master that itself forwards the user's agent (ForwardAgent=yes): with -allow-mux the
+   bootstrap's trigger reaches the user's real agent (agent=triggered-*), never the capture socket
+moseyc: mode=capture bootstrap=59.8ms agent=triggered-6752us bind= channels=0 refused=0 agent_off=true capture_err="ssh never connected: the server did not open the agent channel, or refused agent forwarding" execs=map[1:false 2:true 3:true] errors=[]
+EXIT exit status 1
+  269553 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  269545 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeA-cm-capture" "-token" "c4fd8094d64812a9dbb94a9d419f207e" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
+EXIT <nil>
+  269545 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
+EXIT <nil>
+moseyc: mode=capture bootstrap=227.1ms agent=triggered-2355us bind=bind{host SHA256:i3RcusncBB2wb5RePhTdanUo7jRLXy5ZBMtupRkGhdo, sid 707fa750ac6c798c…(32 bytes), fwd true} channels=1 refused=0 agent_off=false capture_err="" execs=map[1:true 2:true 3:true] errors=[]
+SUDO-SIGNED ok in 3.716794ms (ssh-ed25519)
+EXIT <nil>
+  269633 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  269621 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeA-cm-capture" "-token" "dcf1e90a62132eb9e5df5267fd239a55" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
+EXIT <nil>
+  269621 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
+EXIT <nil>
+Exit request sent.
+### E13: ProxyCommand ssh -W (B via A)
+moseyc: mode=capture bootstrap=398.1ms agent=triggered-10789us bind=bind{host SHA256:lakyIXcA0VWYpo3K5M+/UV+v3WTnkmyo+zFFR7ljW+0, sid 752dbfe928d31932…(32 bytes), fwd true} channels=1 refused=0 agent_off=false capture_err="" execs=map[1:true 2:true 3:true] errors=[]
+SUDO-SIGNED ok in 1.576548ms (ssh-ed25519)
+EXIT <nil>
+  269720 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "chain"]
+  269707 mosey-server uid=1000 ["/tmp/claude-1000/s3r/bin/mosey-server" "session" "-dir" "/tmp/claude-1000/s3r/r-spikeB-pc-capture" "-token" "40434ea953fd92f2e3579e2b758d849a" "-honour-noagent=true"]
+  3446 systemd uid=1000 ["/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd" "--user"]
+  1 systemd uid=0 ["/run/current-system/systemd/lib/systemd/systemd" "--switched-root" "--system" "--deserialize=41"]
+quoin-sudo chain.remote (Go restatement of 0331bf1): true
+EXIT <nil>
+  269707 mosey-server uid=1000
+  3446 systemd uid=1000
+  1 systemd uid=0
+quoin chain.zig remote(): true
+EXIT <nil>

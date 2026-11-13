@@ -6,7 +6,7 @@
 # usage: timing.sh DIR ROUNDS
 set -uo pipefail
 S=${1:?dir}; N=${2:-30}
-H=$(cd "$(dirname "$0")" && pwd)
+H=$(cd "$(dirname "$0")" >/dev/null && pwd)
 R="$S/results"
 export SSH_AUTH_SOCK="$S/local-agent.sock"
 : > "$R/timing.tsv"

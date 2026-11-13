@@ -1,0 +1,150 @@
+{
+  "mode": "capture",
+  "host": "spikeA",
+  "bootstrap_ms": 10132.033,
+  "agent_state": "triggered-973us+inject-noreply(EOF)",
+  "bind": "bind{host SHA256:wuIMEhRMOztlmyaP7+Sn8tgmFGAnIfaMmLXxIEwN8jc, sid ae1ffa39a219237d…(32 bytes), fwd true}",
+  "bind_host_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHAdcRsad6NC7kv12OUIvDZjaFWYyLE/32xaYolM8P29\n",
+  "capture_peer_is_our_ssh": true,
+  "capture_msgs": "Gwsb",
+  "channels": [
+    {
+      "id": 1,
+      "remote_chain": [
+        {
+          "Pid": 268989,
+          "PPid": 268983,
+          "UID": 1000,
+          "Comm": "mosey-server",
+          "Cmdline": [
+            "/tmp/claude-1000/s3r/bin/mosey-server",
+            "sudo-sign",
+            "-hostkeys",
+            "/tmp/claude-1000/s3r/A/host_ed25519.pub",
+            "-listed",
+            "/tmp/claude-1000/s3r/client/id_user.pub"
+          ]
+        },
+        {
+          "Pid": 268983,
+          "PPid": 3446,
+          "UID": 1000,
+          "Comm": "mosey-server",
+          "Cmdline": [
+            "/tmp/claude-1000/s3r/bin/mosey-server",
+            "session",
+            "-dir",
+            "/tmp/claude-1000/s3r/r-spikeA-capture",
+            "-token",
+            "7113624b1ba6ecc856efe817fa9532d9",
+            "-honour-noagent=true"
+          ]
+        },
+        {
+          "Pid": 3446,
+          "PPid": 1,
+          "UID": 1000,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd",
+            "--user"
+          ]
+        },
+        {
+          "Pid": 1,
+          "PPid": 0,
+          "UID": 0,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/run/current-system/systemd/lib/systemd/systemd",
+            "--switched-root",
+            "--system",
+            "--deserialize=41"
+          ]
+        }
+      ],
+      "prelude_replies": [
+        {
+          "Name": "session-bind@openssh.com",
+          "Code": 6
+        }
+      ],
+      "frames_to_agent_hex": [
+        "1b0000001873657373696f6e2d62696e64406f70656e7373682e636f6d000000330000000b7373682d6564323535313900000020701d711b1a77a342ee4bf5d8e508bc3663685598c8b13fdf6c5a62894cf0fdbd00000020ae1ffa39a219237d7a4d4bee43767adba1a1deeea2611718fcf22cfd900ad3bb000000530000000b7373682d65643235353139000000400f6c6f5b9e1e9fab74227d7a0efc737ce97e550390dc3315aab636ab5fc3dbda380fe8520f86ed75402b3df840542f70f6b42a5f714c38acb87e93298c8f3c0a01",
+        "0b",
+        "0d000000330000000b7373682d6564323535313900000020a2fbba57e1ed1d6ea2e8fca93bc739313fab1b5cce2e7840bd366ea1c5551c5c000000b90000000d71756f696e2d7375646f2d7631000000204409718fb8ecf66c0fd1733e53901c35865bdab61032ac7c5d8229ed03b1600600000001000000330000000b7373682d6564323535313900000020eb32d01582a1ba25fd36310753205b0eba436992f764c405c0d6a3842d3d5c320000000364616e00000004726f6f74000000092f686f6d652f64616e000000010000001d2f72756e2f63757272656e742d73797374656d2f73772f62696e2f6964000000000000000000000000"
+      ]
+    },
+    {
+      "id": 2,
+      "remote_chain": [
+        {
+          "Pid": 268990,
+          "PPid": 268983,
+          "UID": 1000,
+          "Comm": "ssh",
+          "Cmdline": [
+            "ssh",
+            "-F",
+            "/tmp/claude-1000/s3r/client/onward_config",
+            "spikeB",
+            "echo onward-login-ok"
+          ]
+        },
+        {
+          "Pid": 268983,
+          "PPid": 3446,
+          "UID": 1000,
+          "Comm": "mosey-server",
+          "Cmdline": [
+            "/tmp/claude-1000/s3r/bin/mosey-server",
+            "session",
+            "-dir",
+            "/tmp/claude-1000/s3r/r-spikeA-capture",
+            "-token",
+            "7113624b1ba6ecc856efe817fa9532d9",
+            "-honour-noagent=true"
+          ]
+        },
+        {
+          "Pid": 3446,
+          "PPid": 1,
+          "UID": 1000,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd",
+            "--user"
+          ]
+        },
+        {
+          "Pid": 1,
+          "PPid": 0,
+          "UID": 0,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/run/current-system/systemd/lib/systemd/systemd",
+            "--switched-root",
+            "--system",
+            "--deserialize=41"
+          ]
+        }
+      ],
+      "prelude_replies": [
+        {
+          "Name": "session-bind@openssh.com",
+          "Code": 6
+        }
+      ],
+      "frames_to_agent_hex": [
+        "1b0000001873657373696f6e2d62696e64406f70656e7373682e636f6d000000330000000b7373682d6564323535313900000020701d711b1a77a342ee4bf5d8e508bc3663685598c8b13fdf6c5a62894cf0fdbd00000020ae1ffa39a219237d7a4d4bee43767adba1a1deeea2611718fcf22cfd900ad3bb000000530000000b7373682d65643235353139000000400f6c6f5b9e1e9fab74227d7a0efc737ce97e550390dc3315aab636ab5fc3dbda380fe8520f86ed75402b3df840542f70f6b42a5f714c38acb87e93298c8f3c0a01",
+        "1b0000001873657373696f6e2d62696e64406f70656e7373682e636f6d000000330000000b7373682d65643235353139000000204b6a58af359414c3e2516e24a19138a42e48437efc866396ba53b88615cd77ce00000020e978ae85f896dfb2b2a347c7972d5e5d814d6c25fe890caab744215ed95f17ab000000530000000b7373682d6564323535313900000040cb509ec785d0936f2ce0a1bc065ffb651e11ea9d6f37b4dd77413e22ad1cc03036403dce0c5e8d2a0a9227aa50904e72438bea203bbc8b1c37fa3012d23eb10f00",
+        "0b",
+        "0d000000330000000b7373682d6564323535313900000020a2fbba57e1ed1d6ea2e8fca93bc739313fab1b5cce2e7840bd366ea1c5551c5c000000e300000020e978ae85f896dfb2b2a347c7972d5e5d814d6c25fe890caab744215ed95f17ab320000000364616e0000000e7373682d636f6e6e656374696f6e000000237075626c69636b65792d686f7374626f756e642d763030406f70656e7373682e636f6d010000000b7373682d65643235353139000000330000000b7373682d6564323535313900000020a2fbba57e1ed1d6ea2e8fca93bc739313fab1b5cce2e7840bd366ea1c5551c5c000000330000000b7373682d65643235353139000000204b6a58af359414c3e2516e24a19138a42e48437efc866396ba53b88615cd77ce00000000"
+      ]
+    }
+  ],
+  "execs": {
+    "1": true,
+    "2": false
+  }
+}

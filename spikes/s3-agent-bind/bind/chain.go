@@ -3,9 +3,12 @@ package bind
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // Link is one process in a chain read from /proc, leaf first. It is what
@@ -21,6 +24,19 @@ type Link struct {
 
 func (l Link) String() string {
 	return fmt.Sprintf("%d %s uid=%d %q", l.Pid, l.Comm, l.UID, l.Cmdline)
+}
+
+// startTime is field 22 of /proc/<pid>/stat, counted after comm.
+func startTime(stat []byte) string {
+	close := bytes.LastIndexByte(stat, ')')
+	if close < 0 {
+		return ""
+	}
+	f := strings.Fields(string(stat[close+1:]))
+	if len(f) < 20 {
+		return ""
+	}
+	return f[19]
 }
 
 // ReadChain walks /proc from pid up to pid 1, at most 16 links.
@@ -71,19 +87,76 @@ func readLink(pid int) (Link, bool) {
 			l.Cmdline = strings.Split(string(cl), "\x00")
 		}
 	}
+	// As quoin's chain.zig does: stat again, and the start time must not
+	// have changed, or the pid was reused between the reads.
+	again, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil || startTime(again) != startTime(stat) || startTime(stat) == "" {
+		return Link{}, false
+	}
 	return l, true
 }
 
-// QuoinRemote is quoin-sudo's rule for remote mode (sudo/chain.zig
-// `remote`, read 2026-11-13): a link named sshd-session running as the user
-// whose parent is a uid-0 sshd-session. Restated here only to show what a
-// mosey session's chain looks like to it.
+// QuoinRemote restates quoin-sudo's rule for remote mode as patched on
+// quoin branch mosey/s3-agent-bind-hop (0331bf1, sudo/chain.zig `remote`):
+// a link named sshd-session running as the user whose parent is a uid-0
+// sshd-session, or a link named mosey-server running as the user. The
+// harness also runs quoin's own chain.zig (quoinchain/) on the same chain,
+// which is the evidence; this is only for the record.
 func QuoinRemote(chain []Link, uid int) bool {
-	for i := 0; i+1 < len(chain); i++ {
-		l, p := chain[i], chain[i+1]
+	for i, l := range chain {
+		if l.UID == uid && l.Comm == "mosey-server" {
+			return true
+		}
+		if i+1 >= len(chain) {
+			break
+		}
+		p := chain[i+1]
 		if l.UID == uid && l.Comm == "sshd-session" && p.UID == 0 && p.Comm == "sshd-session" {
 			return true
 		}
 	}
 	return false
+}
+
+// PeerChain is the chain of the process at the other end of a unix
+// connection, read so that pid reuse cannot attach another process's chain
+// (review, major #2): SO_PEERPIDFD (Linux 6.5+) pins the peer as it was at
+// connect(2); its pid comes from the pidfd's fdinfo; the chain is read from
+// /proc; then the pidfd is polled with signal 0, and if the peer has exited
+// meanwhile (so the pid may have been reused) the chain is dropped. Without
+// SO_PEERPIDFD no chain is sent: an empty chain shows nothing, a wrong one
+// misleads. comm and cmdline remain whatever the process set them to.
+func PeerChain(c *net.UnixConn) []Link {
+	raw, err := c.SyscallConn()
+	if err != nil {
+		return nil
+	}
+	pidfd := -1
+	raw.Control(func(fd uintptr) {
+		if v, err := unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_PEERPIDFD); err == nil {
+			pidfd = v
+		}
+	})
+	if pidfd < 0 {
+		return nil
+	}
+	defer unix.Close(pidfd)
+	info, err := os.ReadFile(fmt.Sprintf("/proc/self/fdinfo/%d", pidfd))
+	if err != nil {
+		return nil
+	}
+	pid := 0
+	for _, line := range strings.Split(string(info), "\n") {
+		if v, ok := strings.CutPrefix(line, "Pid:"); ok {
+			pid, _ = strconv.Atoi(strings.TrimSpace(v))
+		}
+	}
+	if pid <= 0 {
+		return nil
+	}
+	chain := ReadChain(pid)
+	if unix.PidfdSendSignal(pidfd, 0, nil, 0) != nil {
+		return nil
+	}
+	return chain
 }

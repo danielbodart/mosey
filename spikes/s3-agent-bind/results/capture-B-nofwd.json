@@ -1,0 +1,14 @@
+{
+  "mode": "capture",
+  "host": "spikeB",
+  "bootstrap_ms": 128.421,
+  "agent_state": "no-agent",
+  "capture_err": "ssh never connected: the server did not open the agent channel, or refused agent forwarding",
+  "agent_forwarding_off": true,
+  "channels": null,
+  "execs": {
+    "1": false,
+    "2": true,
+    "3": true
+  }
+}

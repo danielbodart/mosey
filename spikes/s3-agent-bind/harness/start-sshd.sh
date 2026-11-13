@@ -11,6 +11,10 @@ SSHD=$(readlink -f "$(command -v sshd)")
 
 [ -f "$S/A/host_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -f "$S/A/host_ed25519" -C hostA
 [ -f "$S/B/host_ed25519" ] || ssh-keygen -q -t ed25519 -N '' -f "$S/B/host_ed25519" -C hostB
+# X is a host the hostile server can mint a session-bind for (it stands for
+# any sshd the server can reach: the host key signs the session id before
+# authentication). Only its key is used; no sshd runs for it.
+[ -f "$S/X/host_ed25519" ] || { mkdir -p "$S/X"; ssh-keygen -q -t ed25519 -N '' -f "$S/X/host_ed25519" -C hostX; }
 [ -f "$S/client/id_user" ] || ssh-keygen -q -t ed25519 -N '' -f "$S/client/id_user" -C user@spike
 
 write_sshd_config() {
@@ -28,6 +32,7 @@ AllowAgentForwarding $fwd
 AllowTcpForwarding yes
 UsePAM no
 LogLevel VERBOSE
+PerSourcePenalties no
 SetEnv MOSEY_SPIKE_HOST=$h
 EOF
 }
@@ -48,6 +53,18 @@ Host spikeB-via-A
   Port 22222
   HostKeyAlias spikeB
   ProxyJump spikeA
+Host spikeB-pc
+  HostName 127.0.0.1
+  Port 22222
+  HostKeyAlias spikeB
+  ProxyCommand ssh -F $S/client/ssh_config -W %h:%p spikeA
+Host spikeA-cm
+  HostName 127.0.0.1
+  Port 22221
+  HostKeyAlias spikeA
+  ControlMaster auto
+  ControlPath $S/cm-%C
+  ControlPersist 60
 Host *
   User $(id -un)
   IdentityFile $S/client/id_user
@@ -78,6 +95,7 @@ EOF
 {
   echo "spikeA $(cat "$S/A/host_ed25519.pub")"
   echo "spikeB $(cat "$S/B/host_ed25519.pub")"
+  echo "spikeX $(cat "$S/X/host_ed25519.pub")"
 } > "$S/client/known_hosts"
 
 "$SSHD" -f "$S/A/sshd_config" -E "$S/A/sshd.log"

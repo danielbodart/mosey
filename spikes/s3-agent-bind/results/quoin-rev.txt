@@ -1,0 +1,1 @@
+036b7e9 (quoin branch mosey/s3-agent-bind-hop; its sudo/chain.zig is identical to 0331bf1's; 036b7e9 was then amended to e004544, which changes only internal/agentsrv and the fixture)

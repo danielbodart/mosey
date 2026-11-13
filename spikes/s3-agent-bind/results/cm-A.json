@@ -1,0 +1,85 @@
+{
+  "mode": "capture",
+  "host": "spikeA-cm",
+  "bootstrap_ms": 126.738,
+  "agent_state": "triggered-783us",
+  "bind": "bind{host SHA256:i3RcusncBB2wb5RePhTdanUo7jRLXy5ZBMtupRkGhdo, sid f199611885eba689…(32 bytes), fwd true}",
+  "bind_host_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOsy0BWCobol/TYxB1MgWw66Q2mS92TEBcDWo4QtPVwy\n",
+  "capture_peer_is_our_ssh": true,
+  "capture_msgs": "Gws=",
+  "bind_host_key_in_known_hosts": true,
+  "channels": [
+    {
+      "id": 1,
+      "remote_chain": [
+        {
+          "Pid": 269127,
+          "PPid": 269117,
+          "UID": 1000,
+          "Comm": "mosey-server",
+          "Cmdline": [
+            "/tmp/claude-1000/s3r/bin/mosey-server",
+            "sudo-sign",
+            "-hostkeys",
+            "/tmp/claude-1000/s3r/B/host_ed25519.pub",
+            "-listed",
+            "/tmp/claude-1000/s3r/client/id_user.pub"
+          ]
+        },
+        {
+          "Pid": 269117,
+          "PPid": 3446,
+          "UID": 1000,
+          "Comm": "mosey-server",
+          "Cmdline": [
+            "/tmp/claude-1000/s3r/bin/mosey-server",
+            "session",
+            "-dir",
+            "/tmp/claude-1000/s3r/r-spikeA-cm-capture",
+            "-token",
+            "ad0bbce69e4eba80170efac8a523ba3b",
+            "-honour-noagent=true"
+          ]
+        },
+        {
+          "Pid": 3446,
+          "PPid": 1,
+          "UID": 1000,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd",
+            "--user"
+          ]
+        },
+        {
+          "Pid": 1,
+          "PPid": 0,
+          "UID": 0,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/run/current-system/systemd/lib/systemd/systemd",
+            "--switched-root",
+            "--system",
+            "--deserialize=41"
+          ]
+        }
+      ],
+      "prelude_replies": [
+        {
+          "Name": "session-bind@openssh.com",
+          "Code": 6
+        }
+      ],
+      "frames_to_agent_hex": [
+        "1b0000001873657373696f6e2d62696e64406f70656e7373682e636f6d000000330000000b7373682d6564323535313900000020eb32d01582a1ba25fd36310753205b0eba436992f764c405c0d6a3842d3d5c3200000020f199611885eba68927ae64e2dda7885e83eb202e26f08fb988c1444416d21b1d000000530000000b7373682d65643235353139000000402eef978bd3e528d49bd182911f2a8c3f06f684e661372ca45a57c1308c84d1b83be90391278f433bc568a020e57596a53e550154a2e8f86bae4a7be9279ac20e01",
+        "0b",
+        "0d000000330000000b7373682d6564323535313900000020a2fbba57e1ed1d6ea2e8fca93bc739313fab1b5cce2e7840bd366ea1c5551c5c000000b90000000d71756f696e2d7375646f2d76310000002049cf91cabb1027f0a92c81235735fb30f51e22c43d7c5412ec54e43c751dff3f00000001000000330000000b7373682d65643235353139000000204b6a58af359414c3e2516e24a19138a42e48437efc866396ba53b88615cd77ce0000000364616e00000004726f6f74000000092f686f6d652f64616e000000010000001d2f72756e2f63757272656e742d73797374656d2f73772f62696e2f6964000000000000000000000000"
+      ]
+    }
+  ],
+  "execs": {
+    "1": true,
+    "2": true,
+    "3": true
+  }
+}
