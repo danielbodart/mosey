@@ -1,0 +1,90 @@
+=== RUN   TestCalibrateAgainstMoshProbe
+=== RUN   TestCalibrateAgainstMoshProbe/rtt100/mosh-observed
+    calibrate_test.go:111: 
+        phase1 per key: c2s 4.3 s2c 3.2
+        phase2 c2s gaps: [50ms 50ms 50ms 50ms 50ms 50ms 109ms]
+        phase3 c2s gaps: [3s 3s 3s]
+        phase4 (s2c blackhole) c2s/s: [20 20 20 20 20 20 20 20 6 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
+        phase4 (s2c blackhole) s2c/s: [7 7 7 6 7 7 6 7 6 5 1 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
+        phase5 (full blackhole) c2s/s: [20 20 20 20 20 20 20 20 20 7 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0]
+        phase5 (full blackhole) s2c/s: [0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
+        phase5 first c2s gaps: [50ms 50ms 50ms 50ms 50ms 50ms 50ms 50ms]
+        
+=== RUN   TestCalibrateAgainstMoshProbe/rtt100/rfc6298
+    calibrate_test.go:111: 
+        phase1 per key: c2s 2.4 s2c 2.4
+        phase2 c2s gaps: [50ms 50ms 50ms 50ms 105ms 104ms 152ms]
+        phase3 c2s gaps: [3s 3s 3s]
+        phase4 (s2c blackhole) c2s/s: [4 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
+        phase4 (s2c blackhole) s2c/s: [5 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
+        phase5 (full blackhole) c2s/s: [4 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
+        phase5 (full blackhole) s2c/s: [0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0]
+        phase5 first c2s gaps: [104ms 208ms 415ms 831ms]
+        
+=== RUN   TestCalibrateAgainstMoshProbe/rtt100/o7-resend
+    calibrate_test.go:111: 
+        phase1 per key: c2s 2.0 s2c 2.0
+        phase2 c2s gaps: [50ms 50ms 50ms 50ms 109ms 150ms]
+        phase3 c2s gaps: [3s 3s 3s]
+        phase4 (s2c blackhole) c2s/s: [1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
+        phase4 (s2c blackhole) s2c/s: [6 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 0]
+        phase5 (full blackhole) c2s/s: [1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
+        phase5 (full blackhole) s2c/s: [0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0]
+        phase5 first c2s gaps: [1s]
+        
+=== RUN   TestCalibrateAgainstMoshProbe/rtt300/mosh-observed
+    calibrate_test.go:111: 
+        phase1 per key: c2s 6.4 s2c 4.2
+        phase2 c2s gaps: [150ms 150ms 109ms 41ms 109ms]
+        phase3 c2s gaps: [3s 3s 3s]
+        phase4 (s2c blackhole) c2s/s: [7 7 6 7 7 6 7 7 5 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
+        phase4 (s2c blackhole) s2c/s: [6 8 9 7 8 9 7 8 9 2 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
+        phase5 (full blackhole) c2s/s: [7 7 6 7 7 6 7 7 6 7 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0]
+        phase5 (full blackhole) s2c/s: [0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
+        phase5 first c2s gaps: [150ms 150ms 150ms 150ms 150ms 150ms 150ms 150ms]
+        
+=== RUN   TestCalibrateAgainstMoshProbe/rtt300/rfc6298
+    calibrate_test.go:111: 
+        phase1 per key: c2s 3.5 s2c 2.6
+        phase2 c2s gaps: [150ms 150ms 109ms 150ms]
+        phase3 c2s gaps: [3s 3s 3s]
+        phase4 (s2c blackhole) c2s/s: [3 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
+        phase4 (s2c blackhole) s2c/s: [4 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 0]
+        phase5 (full blackhole) c2s/s: [3 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
+        phase5 (full blackhole) s2c/s: [0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0]
+        phase5 first c2s gaps: [301ms 602ms 1s]
+        
+=== RUN   TestCalibrateAgainstMoshProbe/rtt300/o7-resend
+    calibrate_test.go:111: 
+        phase1 per key: c2s 2.9 s2c 2.0
+        phase2 c2s gaps: [150ms 150ms 109ms 150ms]
+        phase3 c2s gaps: [3s 3s 3s]
+        phase4 (s2c blackhole) c2s/s: [2 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
+        phase4 (s2c blackhole) s2c/s: [4 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 0]
+        phase5 (full blackhole) c2s/s: [1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
+        phase5 (full blackhole) s2c/s: [0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0]
+        phase5 first c2s gaps: [1s]
+        
+--- PASS: TestCalibrateAgainstMoshProbe (0.03s)
+    --- PASS: TestCalibrateAgainstMoshProbe/rtt100/mosh-observed (0.01s)
+    --- PASS: TestCalibrateAgainstMoshProbe/rtt100/rfc6298 (0.00s)
+    --- PASS: TestCalibrateAgainstMoshProbe/rtt100/o7-resend (0.00s)
+    --- PASS: TestCalibrateAgainstMoshProbe/rtt300/mosh-observed (0.02s)
+    --- PASS: TestCalibrateAgainstMoshProbe/rtt300/rfc6298 (0.00s)
+    --- PASS: TestCalibrateAgainstMoshProbe/rtt300/o7-resend (0.01s)
+=== RUN   TestHSRRTTQuartiles
+    profiles_test.go:78: hsr RTT p25 117.099321ms p50 172.988118ms p75 311.598051ms, round-trip loss 10.6% (POLYCORN carrier A: 123/185/315 ms)
+--- PASS: TestHSRRTTQuartiles (0.02s)
+=== RUN   TestProfileRTTs
+=== RUN   TestProfileRTTs/wired
+    profiles_test.go:93: wired RTT p25 40ms p50 40ms p75 40ms, round-trip loss 0.0%
+=== RUN   TestProfileRTTs/hotel-wifi
+    profiles_test.go:93: hotel-wifi RTT p25 38.703747ms p50 45.677992ms p75 57.794158ms, round-trip loss 6.9%
+=== RUN   TestProfileRTTs/train
+    profiles_test.go:93: train RTT p25 86.711485ms p50 101.605282ms p75 132.758324ms, round-trip loss 11.8%
+--- PASS: TestProfileRTTs (0.07s)
+    --- PASS: TestProfileRTTs/wired (0.02s)
+    --- PASS: TestProfileRTTs/hotel-wifi (0.02s)
+    --- PASS: TestProfileRTTs/train (0.02s)
+PASS
+ok  	mosey.spike/s5-netsim-ssp/sim	0.124s
