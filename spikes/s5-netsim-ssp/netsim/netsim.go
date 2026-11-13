@@ -43,9 +43,60 @@ type Network struct {
 	done    chan struct{}
 	stats   map[string]*LinkStats
 
+	injected LinkStats
+	injLink  *Link
+	hosts    map[string]*Host
+
 	// Trace, if non-nil, is called (with the network lock held) for every
 	// packet decision. Used by determinism tests and debugging.
 	Trace func(ev TraceEvent)
+
+	// Tap, if non-nil, is an on-path adversary. It is called (with the
+	// network lock held; it must not call back into the Network) for every
+	// packet written onto a link, after the link has decided its fate, and
+	// may change that fate by editing p: drop it, rewrite its bytes or
+	// source address, or change when it is delivered. It returns any extra
+	// packets to inject (copies, forgeries). Use a seeded PRNG inside the
+	// tap if it is random, and the run stays a pure function of the seeds.
+	Tap func(p *TapPacket) []Injection
+}
+
+// TapPacket is one packet as the on-path adversary sees it.
+type TapPacket struct {
+	Link     string
+	At       time.Time // when it was written
+	Src, Dst netip.AddrPort
+	Data     []byte // the tap may replace or modify it
+	// Deliver is false if the link dropped it (the tap still sees it: it
+	// sits at the sender's end of the link). Setting it true resurrects
+	// the packet; setting it false drops it.
+	Deliver  bool
+	Delivery time.Time // when it will arrive; the tap may change it
+}
+
+// Injection is a packet the adversary (or a test) puts on the network.
+// It is delivered at At to whatever conn holds Dst then, appearing to come
+// from Src, bypassing every link model.
+type Injection struct {
+	At       time.Time
+	Src, Dst netip.AddrPort
+	Data     []byte
+}
+
+// Inject delivers a packet at inj.At from any address (an off-path
+// spoofer, or a test). Injections at one instant are delivered in the
+// order they were made, after link deliveries.
+func (n *Network) Inject(inj Injection) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.inject(inj)
+}
+
+func (n *Network) inject(inj Injection) {
+	n.nextKey++
+	n.injected.Sent++
+	n.push(&event{at: inj.At, class: classDeliver, a: injectLinkID, b: n.nextKey,
+		dst: inj.Dst, src: inj.Src, data: append([]byte(nil), inj.Data...), link: n.injLink})
 }
 
 // TraceEvent describes what happened to one packet.
@@ -68,7 +119,10 @@ func New(seed uint64) *Network {
 		wake:  make(chan struct{}, 1),
 		done:  make(chan struct{}),
 		stats: map[string]*LinkStats{},
+		hosts: map[string]*Host{},
 	}
+	n.injLink = &Link{id: injectLinkID, name: "injected"}
+	n.stats["injected"] = &n.injLink.Stats
 	go n.run()
 	return n
 }
@@ -99,7 +153,20 @@ type Host struct {
 }
 
 // NewHost creates a host.
-func (n *Network) NewHost(name string) *Host { return &Host{Name: name, net: n} }
+func (n *Network) NewHost(name string) *Host {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	h := &Host{Name: name, net: n}
+	n.hosts[name] = h
+	return h
+}
+
+// HostNamed returns the host created with name, or nil.
+func (n *Network) HostNamed(name string) *Host {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.hosts[name]
+}
 
 // Connect installs a link from a to b with the given parameters (one
 // direction). Call it twice for a bidirectional path.
@@ -154,6 +221,10 @@ func (c *Conn) Rebind(addr netip.AddrPort) error {
 }
 
 // ---- scheduler ----
+
+// injectLinkID sorts injected packets after every real link's packets at
+// the same instant.
+const injectLinkID = ^uint64(0)
 
 const (
 	classDeliver  = 0 // deliveries before deadlines at the same instant
@@ -277,6 +348,8 @@ func (n *Network) deliver(e *event) {
 		return
 	}
 	e.link.Stats.Delivered++
+	c.rxPackets++
+	c.rxBytes += len(e.data)
 	c.queue = append(c.queue, packet{data: e.data, from: e.src})
 	c.signal()
 }
@@ -294,14 +367,23 @@ type Conn struct {
 	host *Host
 
 	// guarded by net.mu
-	addr       netip.AddrPort
-	queue      []packet
-	closed     bool
-	deadline   time.Time
-	dlGen      uint64
-	dlExpired  bool
-	notify     chan struct{}
-	sendSeq    uint64
+	addr      netip.AddrPort
+	queue     []packet
+	closed    bool
+	deadline  time.Time
+	dlGen     uint64
+	dlExpired bool
+	notify    chan struct{}
+	sendSeq   uint64
+	rxPackets int
+	rxBytes   int
+}
+
+// RxStats returns how many packets and bytes have been delivered to c.
+func (c *Conn) RxStats() (packets, bytes int) {
+	c.net.mu.Lock()
+	defer c.net.mu.Unlock()
+	return c.rxPackets, c.rxBytes
 }
 
 var errTimeout = &timeoutError{}
@@ -402,10 +484,30 @@ func (c *Conn) WriteToAddrPort(p []byte, dst netip.AddrPort) (int, error) {
 	if n.Trace != nil {
 		n.Trace(TraceEvent{At: now, Link: l.name, Seq: seq, Size: len(p), Verdict: verdict, Delivery: at})
 	}
-	if verdict != "deliver" {
+	src := c.addr
+	if n.Tap != nil {
+		tp := &TapPacket{Link: l.name, At: now, Src: src, Dst: dst, Data: data, Deliver: verdict == "deliver", Delivery: at}
+		if !tp.Deliver {
+			tp.Delivery = now.Add(l.p.Delay)
+		}
+		extra := n.Tap(tp)
+		for _, inj := range extra {
+			n.inject(inj)
+		}
+		if tp.Deliver != (verdict == "deliver") {
+			l.Stats.Tampered++
+		}
+		if !tp.Deliver {
+			return len(p), nil
+		}
+		data, src, dst, at = tp.Data, tp.Src, tp.Dst, tp.Delivery
+		if at.Before(now) {
+			at = now
+		}
+	} else if verdict != "deliver" {
 		return len(p), nil
 	}
-	n.push(&event{at: at, class: classDeliver, a: l.id, b: seq, dst: dst, src: c.addr, data: data, link: l, seq: seq})
+	n.push(&event{at: at, class: classDeliver, a: l.id, b: seq, dst: dst, src: src, data: data, link: l, seq: seq})
 	return len(p), nil
 }
 

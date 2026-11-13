@@ -25,6 +25,9 @@ type Profile struct {
 	Source    string // provenance of the parameters
 	// Trace, if set, observes every packet decision (calibration tests).
 	Trace func(start time.Time, ev netsim.TraceEvent)
+	// Setup, if set, runs once the network exists (adversary taps,
+	// scripted injections).
+	Setup func(n *netsim.Network, start time.Time)
 }
 
 // OutageWindows returns every window the path is down (scripted outages

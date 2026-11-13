@@ -63,10 +63,11 @@ type DelaySpikes struct {
 
 // LinkStats counts what a link did.
 type LinkStats struct {
-	Sent, Delivered                                       int
+	Sent, Delivered                                      int
 	DroppedMTU, DroppedLoss, DroppedOutage, DroppedQueue int
-	DroppedNoRoute                                        int
-	Bytes                                                 int
+	DroppedNoRoute                                       int
+	Tampered                                             int // fate changed by the Tap
+	Bytes                                                int
 }
 
 // Link is one direction of a path.

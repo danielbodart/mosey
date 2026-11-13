@@ -24,6 +24,9 @@ type Variant struct {
 	Name           string
 	Client, Server ssp.Config
 	Note           string
+	// NaiveRoaming uses the paper's roaming rule (switch to the newest
+	// authentic source) instead of path validation (ssp-spec.md §2.1).
+	NaiveRoaming bool
 }
 
 // Result is what one run measured.
@@ -46,13 +49,39 @@ type Result struct {
 	// FirstContact: time from the end of each outage to the first datagram
 	// the client receives.
 	FirstContact []time.Duration
-	// RoamGap: time from each client address change until the client next
-	// receives a datagram (the server must first learn the new address).
-	RoamGap []time.Duration
+	// RoamRepair: time from each client address change until the server
+	// sends to the new address as its peer (path repaired; with path
+	// validation, validated). Roams within RoamGuard of an outage are
+	// excluded (counted in RoamExcluded): they measure the outage, not
+	// the roam.
+	RoamRepair   []time.Duration
+	RoamExcluded int
+	// RoamKeyLatency: keystroke-to-screen latency of keys typed in the
+	// RoamWindow after each (non-excluded) address change.
+	RoamKeyLatency []time.Duration
+	// PeerSwitches are the times and addresses the server switched to.
+	PeerSwitches []PeerSwitch
+	Path         struct{ Switches, AmpLimited int }
 
 	Client, Server ssp.Stats
 	Links          map[string]netsim.LinkStats
 	Keys           int
+}
+
+// PeerSwitch records the server changing its send target.
+type PeerSwitch struct {
+	At   time.Duration
+	Addr netip.AddrPort
+}
+
+const (
+	RoamGuard  = 10 * time.Second
+	RoamWindow = 5 * time.Second
+)
+
+// RoamAddr is the client's address after its i-th roam.
+func RoamAddr(i int) netip.AddrPort {
+	return netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(10 + i)}), uint16(41000+i))
 }
 
 type versionAt struct {
@@ -84,27 +113,31 @@ func Run(p *Profile, v Variant, w *Workload, seed uint64) (*Result, error) {
 		return nil, err
 	}
 	for i, at := range p.Roams {
-		na := netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(10 + i)}), uint16(41000+i))
+		na := RoamAddr(i)
 		n.At(start.Add(at), func() { cconn.Rebind(na) })
+	}
+	if p.Setup != nil {
+		p.Setup(n, start)
 	}
 
 	res := &Result{Profile: p.Name, Variant: v.Name, Seed: seed, Duration: p.Duration, Keys: len(w.Keys)}
 	end := start.Add(p.Duration)
 
 	var serverVersions []versionAt // server screen version timeline
-	var clientVersions []versionAt  // client receipt timeline
-	var firstRx []time.Duration     // client datagram receipt times
+	var clientVersions []versionAt // client receipt timeline
+	var firstRx []time.Duration    // client datagram receipt times
+	var typedTimes []time.Duration // when each key was typed
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 	var cerr, serr error
 	go func() {
 		defer wg.Done()
-		cerr = runClient(cconn, v.Client, w, end, start, p, res, &clientVersions, &firstRx)
+		cerr = runClient(cconn, v.Client, w, end, start, p, res, &clientVersions, &firstRx, &typedTimes)
 	}()
 	go func() {
 		defer wg.Done()
-		serr = runServer(sconn, v.Server, w, end, start, &serverVersions, res)
+		serr = runServer(sconn, v, w, end, start, &serverVersions, res)
 	}()
 	wg.Wait()
 	if cerr != nil {
@@ -155,11 +188,29 @@ func Run(p *Profile, v Variant, w *Workload, seed uint64) (*Result, error) {
 			}
 		}
 	}
-	for _, r := range p.Roams {
-		for _, t := range firstRx {
-			if t > r {
-				res.RoamGap = append(res.RoamGap, t-r)
+	outs := p.OutageWindows()
+	for i, r := range p.Roams {
+		near := false
+		for _, o := range outs {
+			if r >= o.Start-RoamGuard && r <= o.End+RoamGuard {
+				near = true
+			}
+		}
+		if near || r > p.Duration-RoamGuard {
+			res.RoamExcluded++
+			continue
+		}
+		repaired := p.Duration - r
+		for _, sw := range res.PeerSwitches {
+			if sw.At >= r && sw.Addr == RoamAddr(i) {
+				repaired = sw.At - r
 				break
+			}
+		}
+		res.RoamRepair = append(res.RoamRepair, repaired)
+		for k, at := range typedTimes {
+			if at >= r && at < r+RoamWindow && k < len(res.Latency) {
+				res.RoamKeyLatency = append(res.RoamKeyLatency, res.Latency[k])
 			}
 		}
 	}
@@ -178,7 +229,7 @@ func versionBefore(tl []versionAt, t time.Duration) uint64 {
 }
 
 func runClient(conn *netsim.Conn, cfg ssp.Config, w *Workload, end, start time.Time, p *Profile,
-	res *Result, versions *[]versionAt, rxTimes *[]time.Duration) error {
+	res *Result, versions *[]versionAt, rxTimes *[]time.Duration, typedOut *[]time.Duration) error {
 	keys := &ssp.KeySource{}
 	screen := ssp.NewScreenSink(w.W, w.H)
 	typedAt := make([]time.Duration, 0, len(w.Keys))
@@ -239,6 +290,7 @@ func runClient(conn *netsim.Conn, cfg ssp.Config, w *Workload, end, start time.T
 	}
 	res.Client = tr.Stats
 	res.Unechoed = len(typedAt) - echoed
+	*typedOut = typedAt
 	return nil
 }
 
@@ -273,7 +325,8 @@ const (
 	floodEvery   = 2 * time.Millisecond  // a runaway process writes a line every 2 ms [D]
 )
 
-func runServer(conn *netsim.Conn, cfg ssp.Config, w *Workload, end, start time.Time, versions *[]versionAt, res *Result) error {
+func runServer(conn *netsim.Conn, v Variant, w *Workload, end, start time.Time, versions *[]versionAt, res *Result) error {
+	cfg := v.Server
 	src := ssp.NewScreenSource(w.W, w.H)
 	var q appQueue
 	seq := 0
@@ -358,12 +411,12 @@ func runServer(conn *netsim.Conn, cfg ssp.Config, w *Workload, end, start time.T
 		}
 	}
 
-	var peer netip.AddrPort
-	tr := ssp.NewTransport(cfg, src, ksink, func(b []byte) {
-		if peer.IsValid() {
-			conn.WriteToAddrPort(b, peer)
-		}
-	})
+	path := ssp.NewPathManager(!v.NaiveRoaming)
+	path.OnSwitch = func(a netip.AddrPort) {
+		res.PeerSwitches = append(res.PeerSwitches, PeerSwitch{time.Since(start), a})
+	}
+	write := func(b []byte, to netip.AddrPort) { conn.WriteToAddrPort(b, to) }
+	tr := ssp.NewTransport(cfg, src, ksink, func(b []byte) { path.Send(b, write) })
 	buf := make([]byte, 2048)
 	for {
 		now := time.Now()
@@ -380,9 +433,8 @@ func runServer(conn *netsim.Conn, cfg ssp.Config, w *Workload, end, start time.T
 		conn.SetReadDeadline(wake)
 		nb, from, err := conn.ReadFromAddrPort(buf)
 		if err == nil {
-			if tr.Receive(buf[:nb]) {
-				peer = from // roaming: newest authentic datagram sets the target
-			}
+			info := tr.Receive(buf[:nb])
+			path.OnReceive(from, nb, info, tr, write)
 		} else if !errors.Is(err, os.ErrDeadlineExceeded) {
 			return err
 		}
@@ -394,5 +446,6 @@ func runServer(conn *netsim.Conn, cfg ssp.Config, w *Workload, end, start time.T
 		tr.Tick()
 	}
 	res.Server = tr.Stats
+	res.Path.Switches, res.Path.AmpLimited = path.Switches, path.AmpLimited
 	return nil
 }

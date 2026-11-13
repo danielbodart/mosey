@@ -23,30 +23,46 @@ func Variants() []Variant {
 	out = append(out, Variant{Name: "rfc6298", Client: c, Server: s,
 		Note: "RTO retransmit, doubling backoff, 1 s cap [P §2.2 + RFC 6298 §5.5; cap D]"})
 
+	// 1b. Isolating experiments for O7 (review): rfc6298 with only the
+	// ack-delay term added (backoff kept), and with only resend-on-receive
+	// added (backoff kept, no ack delay).
+	c, s = base()
+	c.AckDelayInRTO, s.AckDelayInRTO = true, true
+	out = append(out, Variant{Name: "rfc6298-ackdelay", Client: c, Server: s,
+		Note: "rfc6298 + peer ack delay in RTO (RFC 9002 §6.2.1); backoff kept"})
+	c, s = base()
+	c.ResendOnRecv, s.ResendOnRecv = true, true
+	out = append(out, Variant{Name: "rfc6298-resendonrecv", Client: c, Server: s,
+		Note: "rfc6298 + resend on a peer datagram showing it is behind; backoff kept"})
+
 	// 2. An approximation of what mosh 1.4.0 was observed to do as a black
-	// box (FINDINGS §4). Client: resend unacked input every frame interval,
-	// no backoff, slowing to every 3 s after 8 s without hearing from the
-	// server. Server: no resend before a delayed ack could arrive; answers
-	// a client datagram that shows the client is behind; slows to 3 s
-	// after ~2 s of silence. The server half is our best fit, not a
-	// confirmed mechanism.
+	// box (FINDINGS §4), fitted to the per-second datagram histograms of
+	// both directions (sim/calibrate_test.go asserts the fit). Both sides:
+	// resend unacknowledged state every frame interval, no backoff; after
+	// 10 s without news from the peer, every 3 s. The server waits one RTO
+	// (including the peer's ack delay) before its first resend of a
+	// version and folds a due ack into a resend. The client counts any
+	// datagram as news; the server counts only datagrams that advance
+	// something (in the s2c blackhole the client keeps resending input the
+	// server already has, and the server still drops to 3 s at ~10 s).
+	// This is a fit of timing, not a confirmed mechanism.
 	obs := func() (ssp.Config, ssp.Config) {
 		c, s := base()
 		for _, x := range []*ssp.Config{&c, &s} {
 			x.Backoff = false
+			x.RetransmitAtFrame = true
+			x.SilentAfter = 10 * time.Second
 			x.SilentInterval = 3 * time.Second
 		}
-		c.RetransmitAtFrame = true
-		c.SilentAfter = 10 * time.Second // ~10 s after last hearing the server
-		s.AckDelayInRTO = true
-		s.ResendOnRecv = true
-		s.SilentAfter = 10 * time.Second // ~10 s after last news from the client
 		s.SilentFromProgress = true
+		s.FirstRetransmitRTO = true
+		s.AckDelayInRTO = true
+		s.PiggybackResend = true
 		return c, s
 	}
 	c, s = obs()
 	out = append(out, Variant{Name: "mosh-observed", Client: c, Server: s,
-		Note: "approximation of black-box mosh 1.4.0 [M]; server half is a fit"})
+		Note: "timing fit to black-box mosh 1.4.0 [M], both directions"})
 
 	// 3. O7 "resend": never back off. Resend current state every RTO
 	// (RTO includes the peer's ack delay, RFC 9002 style) and at once when

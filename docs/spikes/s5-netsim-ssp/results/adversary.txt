@@ -1,0 +1,7 @@
+--- PASS: TestReplayedDatagramsRejected (0.02s)
+--- PASS: TestBitFlipsRejected (0.01s)
+    adversary_test.go:117: naive: victim received 1297255 B (attacker sent 43989 B); unechoed 235; p50 49ms; server switches 2
+    adversary_test.go:123: validated: victim received 54837 B (attacker sent 18528 B); unechoed 0; p50 49ms; server switches 1, amp-limited 33
+--- PASS: TestRoamingRedirect (0.04s)
+    adversary_test.go:144: repair [144.058792ms 161.536107ms 667.328279ms], switches 4, roam-key latency p50 49ms max 60.000063ms
+--- PASS: TestGenuineRoamValidates (0.01s)

@@ -64,16 +64,106 @@ func TestKeyDiffIsCumulative(t *testing.T) {
 func TestReassembly(t *testing.T) {
 	var r reassembly
 	body := bytes.Repeat([]byte("x"), 3000)
-	if _, ok := r.add(9, 1, false, body[1000:2000]); ok {
+	if _, ok := r.add(9, 1, 3, body[1000:2000]); ok {
 		t.Fatal("early")
 	}
-	if _, ok := r.add(9, 2, true, body[2000:]); ok {
+	if _, ok := r.add(9, 2, 3, body[2000:]); ok {
 		t.Fatal("early")
 	}
-	out, ok := r.add(9, 0, false, body[:1000])
+	out, ok := r.add(9, 0, 3, body[:1000])
 	if !ok || !bytes.Equal(out, body) {
 		t.Fatal("reassembly failed")
 	}
+	if r.bytes != 0 || len(r.parts) != 0 {
+		t.Fatal("state left behind")
+	}
+}
+
+// TestReassemblyBounds: a peer (even an authenticated one) cannot make the
+// receiver hold more than MaxReassemblyBytes, or accept an instruction of
+// more than MaxFragments fragments.
+func TestReassemblyBounds(t *testing.T) {
+	var r reassembly
+	if _, ok := r.add(1, 0, MaxFragments+1, []byte("x")); ok || r.Rejected != 1 {
+		t.Fatal("over-long instruction accepted")
+	}
+	if _, ok := r.add(1, 5, 5, []byte("x")); ok || r.Rejected != 2 {
+		t.Fatal("index >= count accepted")
+	}
+	chunk := make([]byte, 1200)
+	for id := uint32(0); id < 1000; id++ {
+		for idx := uint16(0); idx < MaxFragments-1; idx += 7 {
+			r.add(id, idx, MaxFragments, chunk)
+			if r.bytes > MaxReassemblyBytes {
+				t.Fatalf("holding %d bytes", r.bytes)
+			}
+		}
+	}
+	if len(r.parts) > maxPartials {
+		t.Fatalf("%d partials", len(r.parts))
+	}
+}
+
+func TestReplayWindow(t *testing.T) {
+	var w replayWindow
+	acc := func(s uint64) bool {
+		if !w.check(s) {
+			return false
+		}
+		w.accept(s)
+		return true
+	}
+	for _, s := range []uint64{5, 7, 6} {
+		if !acc(s) {
+			t.Fatalf("%d rejected", s)
+		}
+	}
+	for _, s := range []uint64{5, 6, 7} {
+		if acc(s) {
+			t.Fatalf("duplicate %d accepted", s)
+		}
+	}
+	if !acc(5000) || acc(5000-replayW) || !acc(5000-replayW+1) || acc(7) {
+		t.Fatal("window edge wrong")
+	}
+}
+
+// TestAuthenticateFirst: a modified, replayed or reflected datagram is
+// dropped before it can change any state (RTT, high-water mark, acks).
+func TestAuthenticateFirst(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var wire [][]byte
+		keys := &KeySource{}
+		cl := NewTransport(DefaultConfig(false), keys, NewScreenSink(10, 2), func(b []byte) { wire = append(wire, b) })
+		var got []byte
+		sv := NewTransport(DefaultConfig(true), NewScreenSource(10, 2), &KeySink{OnKeys: func(_ uint64, k []byte) { got = append(got, k...) }}, func([]byte) {})
+		keys.Type('a')
+		cl.Tick()
+		d := wire[0]
+		for i := range d { // every single-bit flip anywhere is rejected
+			for bit := 0; bit < 8; bit++ {
+				m := bytes.Clone(d)
+				m[i] ^= 1 << bit
+				if sv.Receive(m).Authentic {
+					t.Fatalf("flip at byte %d bit %d accepted", i, bit)
+				}
+			}
+		}
+		if sv.gotAny || sv.haveRemoteTS || len(got) != 0 {
+			t.Fatal("state changed by forged datagrams")
+		}
+		if !sv.Receive(d).Authentic || string(got) != "a" {
+			t.Fatal("genuine datagram rejected")
+		}
+		if sv.Receive(d).Authentic || sv.Stats.Replays != 1 {
+			t.Fatal("replay accepted")
+		}
+		// A client datagram reflected back at the client fails (direction
+		// bit and per-direction keys).
+		if cl.Receive(d).Authentic {
+			t.Fatal("reflection accepted")
+		}
+	})
 }
 
 // TestParityRecoversOneLoss sends incremental keystroke instructions with

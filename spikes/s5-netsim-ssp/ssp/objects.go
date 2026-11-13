@@ -61,9 +61,9 @@ type KeySink struct {
 	OnKeys   func(first uint64, keys []byte)
 }
 
-func (k *KeySink) Latest() uint64       { return k.latest }
-func (k *KeySink) Has(v uint64) bool    { return v <= k.latest && v >= k.released }
-func (k *KeySink) Release(v uint64)     { k.released = max(k.released, min(v, k.latest)) }
+func (k *KeySink) Latest() uint64    { return k.latest }
+func (k *KeySink) Has(v uint64) bool { return v <= k.latest && v >= k.released }
+func (k *KeySink) Release(v uint64)  { k.released = max(k.released, min(v, k.latest)) }
 func (k *KeySink) Apply(from, to uint64, diff []byte) error {
 	if uint64(len(diff)) != to-from {
 		return errors.New("keysink: diff length mismatch")
@@ -87,11 +87,11 @@ func (k *KeySink) Apply(from, to uint64, diff []byte) error {
 // "the echo is visible") and EchoAck (the newest keystroke the app has had
 // for >= 50 ms, [P §3.2]).
 type Screen struct {
-	W, H         int
-	Rows         []string
-	CurR, CurC   int
-	Applied      uint64
-	EchoAck      uint64
+	W, H       int
+	Rows       []string
+	CurR, CurC int
+	Applied    uint64
+	EchoAck    uint64
 }
 
 func NewScreen(w, h int) *Screen {
@@ -292,9 +292,9 @@ type ScreenSink struct {
 func NewScreenSink(w, h int) *ScreenSink {
 	return &ScreenSink{versions: map[uint64]*Screen{0: NewScreen(w, h)}}
 }
-func (s *ScreenSink) Latest() uint64       { return s.latest }
-func (s *ScreenSink) Has(v uint64) bool    { _, ok := s.versions[v]; return ok }
-func (s *ScreenSink) Screen() *Screen      { return s.versions[s.latest] }
+func (s *ScreenSink) Latest() uint64    { return s.latest }
+func (s *ScreenSink) Has(v uint64) bool { _, ok := s.versions[v]; return ok }
+func (s *ScreenSink) Screen() *Screen   { return s.versions[s.latest] }
 func (s *ScreenSink) Release(v uint64) {
 	for k := range s.versions {
 		if k < v && k != s.latest {

@@ -1,17 +1,19 @@
 === RUN   TestCalibrateAgainstMoshProbe
 === RUN   TestCalibrateAgainstMoshProbe/rtt100/mosh-observed
-    calibrate_test.go:111: 
-        phase1 per key: c2s 4.3 s2c 3.2
+    calibrate_test.go:176: 
+        phase1 per key: c2s 5.3 s2c 3.7
         phase2 c2s gaps: [50ms 50ms 50ms 50ms 50ms 50ms 109ms]
         phase3 c2s gaps: [3s 3s 3s]
         phase4 (s2c blackhole) c2s/s: [20 20 20 20 20 20 20 20 6 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
-        phase4 (s2c blackhole) s2c/s: [7 7 7 6 7 7 6 7 6 5 1 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
-        phase5 (full blackhole) c2s/s: [20 20 20 20 20 20 20 20 20 7 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0]
+        phase4 (s2c blackhole) s2c/s: [17 20 20 20 20 20 20 20 20 20 1 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
+        phase5 (full blackhole) c2s/s: [20 20 20 20 20 20 20 20 20 9 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0]
         phase5 (full blackhole) s2c/s: [0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
         phase5 first c2s gaps: [50ms 50ms 50ms 50ms 50ms 50ms 50ms 50ms]
+        p4: client last heard the server at -1.7s; client fast phase ends 9.9s after that; server fast phase ends 9.95s into the phase
+        p5: client last heard the server at -550ms; client fast phase ends 9.9s after that; server fast phase ends 0s into the phase
         
 === RUN   TestCalibrateAgainstMoshProbe/rtt100/rfc6298
-    calibrate_test.go:111: 
+    calibrate_test.go:176: 
         phase1 per key: c2s 2.4 s2c 2.4
         phase2 c2s gaps: [50ms 50ms 50ms 50ms 105ms 104ms 152ms]
         phase3 c2s gaps: [3s 3s 3s]
@@ -19,10 +21,12 @@
         phase4 (s2c blackhole) s2c/s: [5 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
         phase5 (full blackhole) c2s/s: [4 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
         phase5 (full blackhole) s2c/s: [0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0]
-        phase5 first c2s gaps: [104ms 208ms 415ms 831ms]
+        phase5 first c2s gaps: [101ms 202ms 404ms 808ms]
+        p4: client last heard the server at -1.739s; client fast phase ends 2.446s after that; server fast phase ends 816ms into the phase
+        p5: client last heard the server at -1.326s; client fast phase ends 2.033s after that; server fast phase ends 0s into the phase
         
 === RUN   TestCalibrateAgainstMoshProbe/rtt100/o7-resend
-    calibrate_test.go:111: 
+    calibrate_test.go:176: 
         phase1 per key: c2s 2.0 s2c 2.0
         phase2 c2s gaps: [50ms 50ms 50ms 50ms 109ms 150ms]
         phase3 c2s gaps: [3s 3s 3s]
@@ -31,20 +35,24 @@
         phase5 (full blackhole) c2s/s: [1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
         phase5 (full blackhole) s2c/s: [0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0]
         phase5 first c2s gaps: [1s]
+        p4: client last heard the server at -1.841s; client fast phase ends 1.841s after that; server fast phase ends 24.655s into the phase
+        p5: client last heard the server at -1.9s; client fast phase ends 1.9s after that; server fast phase ends 0s into the phase
         
 === RUN   TestCalibrateAgainstMoshProbe/rtt300/mosh-observed
-    calibrate_test.go:111: 
-        phase1 per key: c2s 6.4 s2c 4.2
+    calibrate_test.go:176: 
+        phase1 per key: c2s 7.4 s2c 4.7
         phase2 c2s gaps: [150ms 150ms 109ms 41ms 109ms]
         phase3 c2s gaps: [3s 3s 3s]
         phase4 (s2c blackhole) c2s/s: [7 7 6 7 7 6 7 7 5 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
-        phase4 (s2c blackhole) s2c/s: [6 8 9 7 8 9 7 8 9 2 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
-        phase5 (full blackhole) c2s/s: [7 7 6 7 7 6 7 7 6 7 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0]
+        phase4 (s2c blackhole) s2c/s: [5 7 7 6 7 7 6 7 7 6 1 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
+        phase5 (full blackhole) c2s/s: [7 7 6 7 7 6 7 7 6 7 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0]
         phase5 (full blackhole) s2c/s: [0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0]
         phase5 first c2s gaps: [150ms 150ms 150ms 150ms 150ms 150ms 150ms 150ms]
+        p4: client last heard the server at -1.2s; client fast phase ends 9.75s after that; server fast phase ends 9.85s into the phase
+        p5: client last heard the server at 100ms; client fast phase ends 9.8s after that; server fast phase ends 0s into the phase
         
 === RUN   TestCalibrateAgainstMoshProbe/rtt300/rfc6298
-    calibrate_test.go:111: 
+    calibrate_test.go:176: 
         phase1 per key: c2s 3.5 s2c 2.6
         phase2 c2s gaps: [150ms 150ms 109ms 150ms]
         phase3 c2s gaps: [3s 3s 3s]
@@ -53,28 +61,32 @@
         phase5 (full blackhole) c2s/s: [3 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
         phase5 (full blackhole) s2c/s: [0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0]
         phase5 first c2s gaps: [301ms 602ms 1s]
+        p4: client last heard the server at -1.14s; client fast phase ends 1.441s after that; server fast phase ends 24.153s into the phase
+        p5: client last heard the server at -1.638s; client fast phase ends 1.939s after that; server fast phase ends 0s into the phase
         
 === RUN   TestCalibrateAgainstMoshProbe/rtt300/o7-resend
-    calibrate_test.go:111: 
+    calibrate_test.go:176: 
         phase1 per key: c2s 2.9 s2c 2.0
         phase2 c2s gaps: [150ms 150ms 109ms 150ms]
         phase3 c2s gaps: [3s 3s 3s]
         phase4 (s2c blackhole) c2s/s: [2 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
-        phase4 (s2c blackhole) s2c/s: [4 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 0]
+        phase4 (s2c blackhole) s2c/s: [4 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 4 3 3 3 3 3 3 3 0]
         phase5 (full blackhole) c2s/s: [1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0]
         phase5 (full blackhole) s2c/s: [0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 1 0 0 0]
         phase5 first c2s gaps: [1s]
+        p4: client last heard the server at -1.441s; client fast phase ends 1.441s after that; server fast phase ends 24.656s into the phase
+        p5: client last heard the server at -1.69s; client fast phase ends 1.69s after that; server fast phase ends 0s into the phase
         
---- PASS: TestCalibrateAgainstMoshProbe (0.03s)
-    --- PASS: TestCalibrateAgainstMoshProbe/rtt100/mosh-observed (0.01s)
+--- PASS: TestCalibrateAgainstMoshProbe (0.01s)
+    --- PASS: TestCalibrateAgainstMoshProbe/rtt100/mosh-observed (0.00s)
     --- PASS: TestCalibrateAgainstMoshProbe/rtt100/rfc6298 (0.00s)
     --- PASS: TestCalibrateAgainstMoshProbe/rtt100/o7-resend (0.00s)
-    --- PASS: TestCalibrateAgainstMoshProbe/rtt300/mosh-observed (0.02s)
+    --- PASS: TestCalibrateAgainstMoshProbe/rtt300/mosh-observed (0.00s)
     --- PASS: TestCalibrateAgainstMoshProbe/rtt300/rfc6298 (0.00s)
-    --- PASS: TestCalibrateAgainstMoshProbe/rtt300/o7-resend (0.01s)
+    --- PASS: TestCalibrateAgainstMoshProbe/rtt300/o7-resend (0.00s)
 === RUN   TestHSRRTTQuartiles
     profiles_test.go:78: hsr RTT p25 117.099321ms p50 172.988118ms p75 311.598051ms, round-trip loss 10.6% (POLYCORN carrier A: 123/185/315 ms)
---- PASS: TestHSRRTTQuartiles (0.02s)
+--- PASS: TestHSRRTTQuartiles (0.01s)
 === RUN   TestProfileRTTs
 === RUN   TestProfileRTTs/wired
     profiles_test.go:93: wired RTT p25 40ms p50 40ms p75 40ms, round-trip loss 0.0%
@@ -82,9 +94,9 @@
     profiles_test.go:93: hotel-wifi RTT p25 38.703747ms p50 45.677992ms p75 57.794158ms, round-trip loss 6.9%
 === RUN   TestProfileRTTs/train
     profiles_test.go:93: train RTT p25 86.711485ms p50 101.605282ms p75 132.758324ms, round-trip loss 11.8%
---- PASS: TestProfileRTTs (0.07s)
-    --- PASS: TestProfileRTTs/wired (0.02s)
-    --- PASS: TestProfileRTTs/hotel-wifi (0.02s)
-    --- PASS: TestProfileRTTs/train (0.02s)
+--- PASS: TestProfileRTTs (0.04s)
+    --- PASS: TestProfileRTTs/wired (0.01s)
+    --- PASS: TestProfileRTTs/hotel-wifi (0.01s)
+    --- PASS: TestProfileRTTs/train (0.01s)
 PASS
-ok  	mosey.spike/s5-netsim-ssp/sim	0.124s
+ok  	mosey.spike/s5-netsim-ssp/sim	0.067s

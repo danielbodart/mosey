@@ -150,17 +150,39 @@ func encodeDiff(old, cur snapshot) []byte {
 
 // EmulatorPanics counts panics recovered from the emulator's Write.
 // charmbracelet/x/vt v0.1.0 panics (index out of range in ultraviolet's
-// buffer) when output written for 120x40 is replayed at 80x24: a finding
-// for spike S2, since the server feeds it attacker-controlled bytes.
-var EmulatorPanics int
+// buffer) when output written for 120x40 is replayed at 80x24. That is a
+// security finding for spike S2: any program's output (or a file the user
+// cats) can panic the server's emulator. After a panic the emulator's
+// state is undefined, so Frames stops the session there (ExcludedFrames
+// counts what was dropped) rather than carrying on with suspect frames.
+var EmulatorPanics, ExcludedChunks int
 
-func safeWrite(e *vt.Emulator, b []byte) {
+func safeWrite(e *vt.Emulator, b []byte) (ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			EmulatorPanics++
+			ok = false
 		}
 	}()
 	e.Write(b)
+	return true
+}
+
+// ScreenText serialises a snapshot's characters row by row: the dictionary
+// for FlateDelta (what the receiver already has).
+func ScreenText(s snapshot) []byte {
+	var b bytes.Buffer
+	for y := 0; y < s.h; y++ {
+		for x := 0; x < s.w; x++ {
+			c := s.cells[y*s.w+x].content
+			if c == "" {
+				c = " "
+			}
+			b.WriteString(c)
+		}
+		b.WriteByte('\n')
+	}
+	return b.Bytes()
 }
 
 // Frames replays a capture at w x h and returns the diff frames SSP's
@@ -168,6 +190,14 @@ func safeWrite(e *vt.Emulator, b []byte) {
 // 8 ms after the first write, then at most one frame per interval), each
 // diffed against the previous frame.
 func Frames(chunks []Chunk, w, h int, interval time.Duration) [][]byte {
+	fr, _ := FramesWithBase(chunks, w, h, interval)
+	return fr
+}
+
+// FramesWithBase is Frames, also returning for each frame ScreenText of
+// the screen it is diffed from.
+func FramesWithBase(chunks []Chunk, w, h int, interval time.Duration) ([][]byte, [][]byte) {
+	var bases [][]byte
 	e := vt.NewEmulator(w, h)
 	go io.Copy(io.Discard, e) // drain replies (DA, DSR) so writes never block
 	defer e.Close()
@@ -179,17 +209,26 @@ func Frames(chunks []Chunk, w, h int, interval time.Duration) [][]byte {
 	for i < len(chunks) {
 		first := chunks[i].T
 		at := max(first+collect, lastFrame+interval)
+		broken := false
 		for i < len(chunks) && chunks[i].T <= at {
-			safeWrite(e, chunks[i].Data)
+			if !safeWrite(e, chunks[i].Data) {
+				broken = true
+				break
+			}
 			i++
+		}
+		if broken {
+			ExcludedChunks += len(chunks) - i
+			break
 		}
 		cur := snap(e)
 		d := encodeDiff(prev, cur)
 		if len(d) > 3 {
 			out = append(out, d)
+			bases = append(bases, ScreenText(prev))
 		}
 		prev = cur
 		lastFrame = at
 	}
-	return out
+	return out, bases
 }

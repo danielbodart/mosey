@@ -27,9 +27,15 @@ type Config struct {
 	// RetransmitAtFrame resends unacknowledged state every frame interval
 	// instead of every RTO (what mosh 1.4.0 is observed to do, FINDINGS §4).
 	RetransmitAtFrame bool
+	// FirstRetransmitRTO (with RetransmitAtFrame): the first retransmit of
+	// a version waits one RTO, later ones the frame interval.
+	FirstRetransmitRTO bool
+	// PiggybackResend: when an ack is due and our state is unacknowledged,
+	// resend the state (which carries the ack) instead of an empty ack.
+	PiggybackResend bool
 	// SilentAfter: once nothing has been heard from the peer for this long,
-	// unacknowledged state is resent only every SilentInterval (observed:
-	// client ~8 s, server ~2 s after the client goes quiet; then 3 s).
+	// unacknowledged state is resent only every SilentInterval (mosh 1.4.0
+	// observed, FINDINGS §4: ~10 s on both sides, then 3 s).
 	SilentAfter, SilentInterval time.Duration
 	// SilentFromProgress measures SilentAfter from the last datagram that
 	// told us something new (advanced our ack or the peer's state) rather
@@ -55,6 +61,11 @@ type Config struct {
 	Parity int
 	// Compress, if set, transforms each diff before framing (O8 hook).
 	Compress func([]byte) []byte
+
+	// Server selects the direction bit and keys.
+	Server bool
+	// Secret is the session secret (a fixed test secret in the spike).
+	Secret []byte
 }
 
 // DefaultConfig returns the D11 baseline for one side.
@@ -64,6 +75,7 @@ func DefaultConfig(server bool) Config {
 		AckDelay: 100 * time.Millisecond, Heartbeat: 3 * time.Second,
 		RTOMin: 50 * time.Millisecond, RTOMax: time.Second,
 		InitialRTO: time.Second, MTU: 1280, Backoff: true,
+		Server: server, Secret: TestSecret,
 	}
 	if server {
 		c.Collection = 8 * time.Millisecond
@@ -74,15 +86,18 @@ func DefaultConfig(server bool) Config {
 
 // Stats counts what a transport sent.
 type Stats struct {
-	Datagrams, Bytes        int
-	DataDatagrams           int
-	Retransmits             int
-	AckOnly, Heartbeats     int
-	ParityDatagrams         int
-	ResendOnRecv            int
-	Recovered               int // instructions rebuilt from parity
-	Unappliable             int // instructions dropped for want of a source
-	Fragments               int
+	Datagrams, Bytes    int
+	DataDatagrams       int
+	Retransmits         int
+	AckOnly, Heartbeats int
+	ParityDatagrams     int
+	ResendOnRecv        int
+	Recovered           int // instructions rebuilt from parity
+	Unappliable         int // instructions dropped for want of a source
+	Fragments           int
+	// Receive-side security counters.
+	AuthFailures, Replays int
+	PathChallenges        int
 }
 
 type sentRec struct {
@@ -98,13 +113,15 @@ type Transport struct {
 	sink Sink
 	out  func([]byte)
 
-	epoch time.Time
-	seq   uint64
+	epoch  time.Time
+	seq    uint64
+	sealer sealer
+	replay replayWindow
 
 	// RTT
 	srtt, rttvar time.Duration
 	haveRTT      bool
-	remoteTS     uint16
+	remoteTS     uint32
 	remoteTSAt   time.Time
 	haveRemoteTS bool
 
@@ -116,6 +133,7 @@ type Transport struct {
 	lastAnySend  time.Time
 	changeAt     time.Time // first unsent change, zero if none
 	backoff      uint
+	rexmits      int       // retransmits since acked last advanced
 	inflight     []sentRec // sent versions > acked, oldest first
 	instrID      uint32
 	parityBuf    [][]byte
@@ -123,13 +141,13 @@ type Transport struct {
 	lastResend   time.Time
 
 	// receiver
-	ackDue   time.Time
-	frags    reassembly
-	pending  map[uint64]instruction // incremental instructions awaiting their source, by from
-	recent   map[uint32][]byte      // recent instruction bodies by id (parity recovery)
-	recentQ  []uint32
-	maxSeq   uint64
-	gotAny   bool
+	ackDue       time.Time
+	frags        reassembly
+	pending      map[uint64]instruction // incremental instructions awaiting their source, by from
+	recent       map[uint32][]byte      // recent instruction bodies by id (parity recovery)
+	recentQ      []uint32
+	maxSeq       uint64
+	gotAny       bool
 	LastRecv     time.Time
 	lastProgress time.Time
 
@@ -139,12 +157,17 @@ type Transport struct {
 // NewTransport creates a transport. out sends one datagram to the peer.
 func NewTransport(cfg Config, src Source, sink Sink, out func([]byte)) *Transport {
 	now := time.Now()
-	return &Transport{cfg: cfg, src: src, sink: sink, out: out, epoch: now,
-		lastAnySend: now, pending: map[uint64]instruction{}, recent: map[uint32][]byte{}}
+	tr := &Transport{cfg: cfg, src: src, sink: sink, out: out, epoch: now,
+		lastAnySend: now, pending: map[uint64]instruction{}, recent: map[uint32][]byte{},
+		sealer: newSealer(cfg.Secret, cfg.Server)}
+	if cfg.Server {
+		tr.seq = dirBit
+	}
+	return tr
 }
 
-func (t *Transport) ms16(now time.Time) uint16 {
-	return uint16(now.Sub(t.epoch).Milliseconds())
+func (t *Transport) us32(now time.Time) uint32 {
+	return uint32(now.Sub(t.epoch).Microseconds())
 }
 
 // SRTT returns the smoothed RTT (0 if unknown).
@@ -194,6 +217,9 @@ func (t *Transport) retransmitInterval(now time.Time) time.Duration {
 		}
 	}
 	if t.cfg.RetransmitAtFrame {
+		if t.cfg.FirstRetransmitRTO && t.rexmits == 0 {
+			return t.RTO()
+		}
 		return t.frameInterval()
 	}
 	return t.effectiveRTO()
@@ -257,12 +283,17 @@ func (t *Transport) Tick() {
 	} else if t.sentAny && cur > t.acked && !now.Before(t.lastDataSend.Add(t.retransmitInterval(now))) {
 		t.sendData(now, true)
 		t.Stats.Retransmits++
+		t.rexmits++
 		if t.cfg.Backoff {
 			t.backoff++
 		}
 		sentData = true
 	}
-	if !sentData && !t.ackDue.IsZero() && !now.Before(t.ackDue) {
+	if !sentData && !t.ackDue.IsZero() && !now.Before(t.ackDue) && t.cfg.PiggybackResend && t.sentAny && cur > t.acked {
+		t.sendData(now, true)
+		t.Stats.Retransmits++
+		t.rexmits++
+	} else if !sentData && !t.ackDue.IsZero() && !now.Before(t.ackDue) {
 		t.sendEmpty(now)
 		t.Stats.AckOnly++
 	} else if !sentData && !now.Before(t.lastAnySend.Add(t.cfg.Heartbeat)) {
@@ -288,7 +319,7 @@ func (t *Transport) sendData(now time.Time, retransmit bool) {
 	if t.cfg.Compress != nil {
 		diff = t.cfg.Compress(diff)
 	}
-	in := instruction{from: from, to: cur, ack: t.sink.Latest(), throwaway: t.acked, diff: diff}
+	in := instruction{from: from, to: cur, ack: t.sink.Latest(), floor: t.acked, diff: diff}
 	t.src.Sent(cur)
 	nfrag := t.sendInstruction(now, in.encode(), true)
 	t.Stats.DataDatagrams += nfrag
@@ -304,33 +335,27 @@ func (t *Transport) sendData(now time.Time, retransmit bool) {
 
 func (t *Transport) sendEmpty(now time.Time) {
 	v := t.lastSentVer
-	in := instruction{from: v, to: v, ack: t.sink.Latest(), throwaway: t.acked}
+	in := instruction{from: v, to: v, ack: t.sink.Latest(), floor: t.acked}
 	t.sendInstruction(now, in.encode(), false)
 	t.ackDue = time.Time{}
 }
 
 func (t *Transport) header(now time.Time, kind byte) []byte {
 	t.seq++
-	reply := uint16(noTS)
+	h := header{seq: t.seq, kind: kind, ts: t.us32(now)}
 	if t.haveRemoteTS {
-		held := now.Sub(t.remoteTSAt)
-		if held < time.Second {
-			reply = t.remoteTS + uint16(held.Milliseconds())
-			if reply == noTS {
-				reply++
-			}
-		}
-		t.haveRemoteTS = false // each reply is sent once
+		// The echo is the peer's timestamp advanced by how long we held
+		// it, so our hold time (delayed ack, frame pacing) is not counted
+		// as path delay [P §2.2]. Each timestamp is echoed once.
+		h.hasEcho = true
+		h.echo = t.remoteTS + uint32(now.Sub(t.remoteTSAt).Microseconds())
+		t.haveRemoteTS = false
 	}
-	ts := t.ms16(now)
-	if ts == noTS {
-		ts++
-	}
-	return putHeader(make([]byte, 0, t.cfg.MTU), header{seq: t.seq, ts: ts, tsReply: reply, kind: kind})
+	return putHeader(make([]byte, 0, t.cfg.MTU), h)
 }
 
 func (t *Transport) emit(now time.Time, b []byte) {
-	b = append(b, make([]byte, tagLen)...)
+	b = t.sealer.seal(b)
 	t.Stats.Datagrams++
 	t.Stats.Bytes += len(b)
 	t.lastAnySend = now
@@ -344,78 +369,117 @@ func (t *Transport) sendInstruction(now time.Time, body []byte, data bool) int {
 	t.instrID++
 	id := t.instrID
 	maxPayload := t.cfg.MTU - Overhead
-	n := 0
-	for idx := 0; ; idx++ {
-		chunk := body
-		final := true
-		if len(chunk) > maxPayload {
-			chunk = chunk[:maxPayload]
-			final = false
-		}
+	count := max(1, (len(body)+maxPayload-1)/maxPayload)
+	if count > MaxFragments {
+		return 0 // the object must never produce this; the receiver would refuse it
+	}
+	for idx := 0; idx < count; idx++ {
+		chunk := body[:min(len(body), maxPayload)]
 		body = body[len(chunk):]
 		b := t.header(now, kindFrag)
 		b = binary.BigEndian.AppendUint32(b, id)
-		fi := uint16(idx)
-		if final {
-			fi |= finalBit
-		}
-		b = binary.BigEndian.AppendUint16(b, fi)
+		b = binary.BigEndian.AppendUint16(b, uint16(idx))
+		b = binary.BigEndian.AppendUint16(b, uint16(count))
 		b = append(b, chunk...)
 		t.emit(now, b)
-		n++
-		if final {
-			break
-		}
 	}
-	t.Stats.Fragments += n
-	if t.cfg.Parity > 0 && n == 1 && data {
+	t.Stats.Fragments += count
+	if t.cfg.Parity > 0 && count == 1 && data {
 		t.addParity(now, id, whole)
 	}
-	return n
+	return count
+}
+
+// SealPathChallenge returns an authenticated path-challenge datagram
+// carrying token. The caller sends it to the address being validated
+// (not through out). It counts towards Stats.
+func (t *Transport) SealPathChallenge(token [8]byte) []byte {
+	now := time.Now()
+	b := t.header(now, kindPathChl)
+	b = append(b, token[:]...)
+	b = t.sealer.seal(b)
+	t.Stats.Datagrams++
+	t.Stats.Bytes += len(b)
+	t.Stats.PathChallenges++
+	return b
 }
 
 // ---- receive ----
 
-// Receive processes one datagram. It returns true if the datagram has the
-// highest sequence number seen so far (the caller then updates its peer
-// address: roaming [P §2.2]).
-func (t *Transport) Receive(d []byte) bool {
+// RecvInfo says what Receive made of a datagram.
+type RecvInfo struct {
+	// Authentic: it authenticated and passed the replay window. Nothing
+	// else in RecvInfo is meaningful otherwise, and no state was changed.
+	Authentic bool
+	// Newest: it has the highest sequence number accepted so far.
+	Newest bool
+	// PathResponse is set when it was a path response carrying Token.
+	PathResponse bool
+	Token        [8]byte
+}
+
+// Receive processes one datagram. Order matters: authenticate, then the
+// replay window, and only then touch any state (sequence high-water mark,
+// RTT, timestamps, acks, instructions).
+func (t *Transport) Receive(d []byte) RecvInfo {
 	now := time.Now()
-	h, body, err := parseHeader(d)
-	if err != nil {
-		return false
+	if len(d) >= seqLen && !t.replay.check(binary.BigEndian.Uint64(d)) {
+		t.Stats.Replays++
+		return RecvInfo{}
 	}
+	h, body, err := t.sealer.open(d)
+	if err != nil {
+		t.Stats.AuthFailures++
+		return RecvInfo{}
+	}
+	t.replay.accept(h.seq)
+	info := RecvInfo{Authentic: true}
 	newest := !t.gotAny || h.seq > t.maxSeq
 	if newest {
 		t.maxSeq = h.seq
 		t.gotAny = true
 	}
+	info.Newest = newest
 	t.LastRecv = now
-	if h.tsReply != noTS {
-		sample := time.Duration(uint16(t.ms16(now)-h.tsReply)) * time.Millisecond
-		if sample < 10*time.Second {
+	if h.hasEcho {
+		sample := time.Duration(t.us32(now)-h.echo) * time.Microsecond
+		if sample < time.Minute { // a wrapped or bogus echo is ignored
 			t.rttSample(sample)
 		}
 	}
-	t.remoteTS, t.remoteTSAt, t.haveRemoteTS = h.ts, now, true
+	if newest {
+		t.remoteTS, t.remoteTSAt, t.haveRemoteTS = h.ts, now, true
+	}
 	switch h.kind {
 	case kindFrag:
 		if len(body) < fragHdrLen {
-			return newest
+			return info
 		}
 		id := binary.BigEndian.Uint32(body)
-		fi := binary.BigEndian.Uint16(body[4:])
+		idx := binary.BigEndian.Uint16(body[4:])
+		count := binary.BigEndian.Uint16(body[6:])
 		payload := body[fragHdrLen:]
-		if fi == finalBit {
+		if count == 1 {
 			t.remember(id, payload)
 		}
-		if full, ok := t.frags.add(id, fi&^finalBit, fi&finalBit != 0, payload); ok {
+		if full, ok := t.frags.add(id, idx, count, payload); ok {
 			t.handleInstruction(now, full)
 		}
 	case kindParity:
 		t.handleParity(now, body)
+	case kindPathChl:
+		if len(body) == 8 {
+			// Answer at once, from wherever we are now.
+			b := t.header(now, kindPathRsp)
+			t.emit(now, append(b, body...))
+		}
+	case kindPathRsp:
+		if len(body) == 8 {
+			info.PathResponse = true
+			copy(info.Token[:], body)
+		}
 	}
-	return newest
+	return info
 }
 
 func (t *Transport) rttSample(r time.Duration) {
@@ -441,6 +505,7 @@ func (t *Transport) handleInstruction(now time.Time, body []byte) {
 		t.acked = in.ack
 		t.lastProgress = now
 		t.backoff = 0
+		t.rexmits = 0
 		t.src.Release(t.acked)
 		k := 0
 		for _, s := range t.inflight {
@@ -454,9 +519,12 @@ func (t *Transport) handleInstruction(now time.Time, body []byte) {
 	if in.from != in.to {
 		t.applyIncoming(now, in)
 	}
-	// O7: the peer evidently lacks our latest state.
+	// O7: the peer evidently lacks our latest state. At most once per
+	// RTO, so a stream of small peer datagrams cannot make us send a
+	// stream of large ones (the path layer separately limits what goes to
+	// an address that has not been validated).
 	if t.cfg.ResendOnRecv && t.sentAny && t.acked < t.lastSentVer && t.lastSentVer == t.src.Version() &&
-		now.Sub(t.lastDataSend) >= t.srtt+t.rttvar && now.Sub(t.lastResend) >= t.frameInterval() {
+		now.Sub(t.lastDataSend) >= t.srtt+t.rttvar && now.Sub(t.lastResend) >= t.RTO() {
 		t.sendData(now, true)
 		t.Stats.ResendOnRecv++
 		t.lastResend = now
@@ -485,7 +553,7 @@ func (t *Transport) applyIncoming(now time.Time, in instruction) {
 	if err := t.sink.Apply(in.from, in.to, in.diff); err != nil {
 		return
 	}
-	t.sink.Release(in.throwaway)
+	t.sink.Release(in.floor)
 	t.lastProgress = now
 	t.scheduleAck(now)
 	// Drain instructions that were waiting for this state (in a fixed
