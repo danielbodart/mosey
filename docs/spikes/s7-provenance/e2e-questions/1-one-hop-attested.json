@@ -1,0 +1,49 @@
+{
+  "Title": "SSHSIG signature",
+  "Text": "key SHA256:KpkGzS7A/Ws6Qm5ApKpQnfpl1noJpJBNmP9IUYE8nfc (e2e)\nforwarded\nSSHSIG namespace \"git\"\non [127.0.0.1]:33623: claimed by its attester SHA256:2Jwl+RxERLvIJTxK08baAS+TmjmZqjEwIp+YDN8APr4 (delegated by host key SHA256:Th+sjr02diup1QNCxGHOH6lr9aysDUI60BQdmr1vp1A until 2026-11-14), as dan",
+  "Level": "normal",
+  "Grantable": false,
+  "Password": false,
+  "Allow": "",
+  "Chain": {
+    "Rows": [
+      [
+        "here",
+        "134382",
+        "agentsrv.test",
+        ""
+      ],
+      [
+        "",
+        "134423",
+        "ssh",
+        "ssh -F /dev/null -p 33623 -o \\\n    UserKnownHostsFile=/tmp/TestEndToEndOverStockOpenSSH3337487557/001/known_hosts \\\n    -o StrictHostKeyChecking=yes -o \\\n    IdentityFile=/tmp/TestEndToEndOverStockOpenSSH3337487557/001/client -o \\\n    IdentitiesOnly=yes -o \\\n    IdentityAgent=/tmp/TestEndToEndOverStockOpenSSH3337487557/001/agent -o \\\n    BatchMode=yes -o \\\n    ForwardAgent=/tmp/TestEndToEndOverStockOpenSSH3337487557/001/agent \\\n    127.0.0.1 env E2E_ROOT=/tmp/TestEndToEndOverStockOpenSSH3337487557/001 \\\n    E2E_ATTEST=alpha /tmp/claude-1000/s7p/agentsrv.test \\\n    -test.run=^TestSSHE2EHelper$ -test.v"
+      ],
+      [
+        "[127.0.0.1]:33623",
+        "134431",
+        "agentsrv.test",
+        ""
+      ],
+      [
+        "",
+        "134447",
+        "ssh-keygen",
+        "ssh-keygen -Y sign -n git -f \\\n    /tmp/TestEndToEndOverStockOpenSSH3337487557/001/user.pub \\\n    /tmp/TestEndToEndOverStockOpenSSH3337487557/001/to-sign"
+      ]
+    ],
+    "Summary": "[127.0.0.1]:33623: agentsrv.test ← ssh-keygen -Y sign -n git -f /tmp/TestEndToEndOverStockOpenSSH3337487557/001/user.pub /tmp/TestEndToEndOverStockOpenSSH3337487557/001/to-sign",
+    "Columns": [
+      "Host",
+      "PID",
+      "Process",
+      "Command"
+    ],
+    "Monospace": [
+      3
+    ]
+  },
+  "Diff": null,
+  "Always": false,
+  "AlwaysText": ""
+}
