@@ -1,0 +1,69 @@
+### E1-E6: bind source per option, unconstrained stock agent
+moseyc: mode=capture bootstrap=272.3ms agent=triggered-1557us bind=bind{host SHA256:cesIsFSWvETlqHUiT+9jCB9H5nC/5dGxKmMjHt1PWEY, sid 7090a2a5ed1e217f…(32 bytes), fwd true} channels=1 execs=map[1:true 2:true] errors=[]
+SUDO-SIGNED ok in 2.823863ms (ssh-ed25519)
+EXIT <nil>
+quoin-sudo chain.remote: false
+EXIT <nil>
+moseyc: mode=capture bootstrap=284.3ms agent=triggered-1717us bind=bind{host SHA256:Y/oNegvk7ZtaHX7dywG+kyoev4BORz6n6AXzZh20iRE, sid dd7f5809737ba621…(32 bytes), fwd true} channels=1 execs=map[1:true 2:true] errors=[]
+SUDO-SIGNED ok in 4.360325ms (ssh-ed25519)
+EXIT <nil>
+quoin-sudo chain.remote: false
+EXIT <nil>
+moseyc: mode=xcrypto bootstrap=142.5ms agent=no-agent bind=bind{host SHA256:cesIsFSWvETlqHUiT+9jCB9H5nC/5dGxKmMjHt1PWEY, sid a0e0b8369bedc285…(32 bytes), fwd false} channels=1 execs=map[1:true 2:true] errors=[]
+SUDO-SIGNED ok in 1.612262ms (ssh-ed25519)
+EXIT <nil>
+quoin-sudo chain.remote: false
+EXIT <nil>
+moseyc: mode=xcrypto bootstrap=351.1ms agent=no-agent bind=bind{host SHA256:Y/oNegvk7ZtaHX7dywG+kyoev4BORz6n6AXzZh20iRE, sid 19ff0ecbf473e2c9…(32 bytes), fwd false} channels=1 execs=map[1:true 2:true] errors=[]
+SUDO-SIGNED ok in 12.560084ms (ssh-ed25519)
+EXIT <nil>
+quoin-sudo chain.remote: false
+EXIT <nil>
+moseyc: mode=identity bootstrap=191.1ms agent=no-agent bind= channels=1 execs=map[1:true 2:true] errors=[]
+SUDO-SIGNED ok in 644.857µs (ssh-ed25519)
+EXIT <nil>
+quoin-sudo chain.remote: false
+EXIT <nil>
+moseyc: mode=none bootstrap=219.0ms agent=no-agent bind= channels=1 execs=map[1:true 2:true] errors=[]
+SUDO-SIGNED ok in 678.102µs (ssh-ed25519)
+EXIT <nil>
+quoin-sudo chain.remote: false
+EXIT <nil>
+### E10: option (c) hop record after the bind, stock agent
+moseyc: mode=capture bootstrap=251.0ms agent=triggered-1242us bind=bind{host SHA256:cesIsFSWvETlqHUiT+9jCB9H5nC/5dGxKmMjHt1PWEY, sid 14ba542e47357dee…(32 bytes), fwd true} channels=1 execs=map[1:true 2:true] errors=[]
+SUDO-SIGNED ok in 4.152626ms (ssh-ed25519)
+EXIT <nil>
+quoin-sudo chain.remote: false
+EXIT <nil>
+### E7: server forbids agent forwarding (AllowAgentForwarding no on B)
+moseyc: mode=capture bootstrap=0.0ms agent= bind= channels=0 execs=map[] errors=[capture: ssh sent no session-bind (agent forwarding refused by the server?)]
+### E8: stock ssh-agent destination constraints (ssh-add -h spikeA -h 'spikeA>spikeB')
+-- capture
+moseyc: mode=capture bootstrap=221.4ms agent=triggered-1242us bind=bind{host SHA256:cesIsFSWvETlqHUiT+9jCB9H5nC/5dGxKmMjHt1PWEY, sid bcd9046f69a67472…(32 bytes), fwd true} channels=2 execs=map[1:true 2:false] errors=[]
+onward-login-ok
+EXIT <nil>
+moseys sudo-sign: the forwarded agent refused: agent: failed to sign challenge
+EXIT exit status 1
+-- xcrypto
+moseyc: mode=xcrypto bootstrap=189.9ms agent=no-agent bind=bind{host SHA256:cesIsFSWvETlqHUiT+9jCB9H5nC/5dGxKmMjHt1PWEY, sid 478420c6c067e643…(32 bytes), fwd false} channels=2 execs=map[1:true 2:false] errors=[]
+onward-login-ok
+EXIT <nil>
+moseys sudo-sign: the forwarded agent refused: agent: failed to sign challenge
+EXIT exit status 1
+-- identity
+moseyc: mode=identity bootstrap=303.3ms agent=no-agent bind= channels=2 execs=map[1:false 2:false] errors=[]
+dan@127.0.0.1: Permission denied (publickey).
+EXIT exit status 255
+EXIT exit status 1
+-- none
+moseyc: mode=none bootstrap=266.1ms agent=no-agent bind= channels=2 execs=map[1:false 2:false] errors=[]
+dan@127.0.0.1: Permission denied (publickey).
+EXIT exit status 255
+moseys sudo-sign: the forwarded agent refused: agent: failed to sign challenge
+EXIT exit status 1
+-- control: the constrained agent used directly (origin), not through a session
+dan@127.0.0.1: Permission denied (publickey).
+### E9: bootstrap time, 20 runs each (ms), spikeA
+capture   n=20 median=254.7 p10=200.4 p90=366.2 min=185.9 max=401.2
+none      n=20 median=204.3 p10=171.7 p90=292.0 min=166.8 max=326.4
+xcrypto   n=20 median=136.6 p10=104.3 p90=189.6 min=86.6 max=218.3

@@ -1,0 +1,82 @@
+{
+  "mode": "capture",
+  "host": "spikeB-via-A",
+  "bootstrap_ms": 284.283,
+  "agent_state": "triggered-1717us",
+  "bind": "bind{host SHA256:Y/oNegvk7ZtaHX7dywG+kyoev4BORz6n6AXzZh20iRE, sid dd7f5809737ba621…(32 bytes), fwd true}",
+  "bind_host_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEqrLrmyOn9C+xktZRVrhHugGX/7ojca2IG0RZ8bQyRR\n",
+  "capture_peer_is_our_ssh": true,
+  "capture_msgs": "Gws=",
+  "channels": [
+    {
+      "id": 1,
+      "remote_chain": [
+        {
+          "Pid": 135442,
+          "PPid": 135436,
+          "UID": 1000,
+          "Comm": "moseys",
+          "Cmdline": [
+            "/tmp/claude-1000/s3ab/bin/moseys",
+            "sudo-sign",
+            "-hostkeys",
+            "/tmp/claude-1000/s3ab/B/host_ed25519.pub",
+            "-listed",
+            "/tmp/claude-1000/s3ab/client/id_user.pub"
+          ]
+        },
+        {
+          "Pid": 135436,
+          "PPid": 3446,
+          "UID": 1000,
+          "Comm": "moseys",
+          "Cmdline": [
+            "/tmp/claude-1000/-home-dan-Projects-mosey/c1583940-2f8d-4ca9-afd0-7e8448d730af/scratchpad/s3-agent-bind/bin/moseys",
+            "session",
+            "-dir",
+            "/tmp/claude-1000/s3ab/r-spikeB-via-A-capture",
+            "-token",
+            "ff60a7dd9d474e2e0163fd9eca5b4fed"
+          ]
+        },
+        {
+          "Pid": 3446,
+          "PPid": 1,
+          "UID": 1000,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/nix/store/y3fqx697649kqv1a9c0z1jsk4wy2zlqa-systemd-260.5/lib/systemd/systemd",
+            "--user"
+          ]
+        },
+        {
+          "Pid": 1,
+          "PPid": 0,
+          "UID": 0,
+          "Comm": "systemd",
+          "Cmdline": [
+            "/run/current-system/systemd/lib/systemd/systemd",
+            "--switched-root",
+            "--system",
+            "--deserialize=41"
+          ]
+        }
+      ],
+      "prelude_replies": [
+        {
+          "Name": "session-bind@openssh.com",
+          "Code": 6
+        }
+      ],
+      "frames_to_agent_hex": [
+        "1b0000001873657373696f6e2d62696e64406f70656e7373682e636f6d000000330000000b7373682d65643235353139000000204aab2eb9b23a7f42fb192d65156b847ba0197ffba2371ad881b4459f1b43245100000020dd7f5809737ba621e9293ad0115c8b5cd87ea4aba197706be33730edbe9617ad000000530000000b7373682d656432353531390000004069f8d111889e4d22a780833614d3db6b505840770bfb7b24dc1ac9cd4e396c2e6d845e8b6c24d34cd5fed9d3349d4c81a7db20138b397200fdae61c41e27670001",
+        "0b",
+        "0d000000330000000b7373682d656432353531390000002095908d762fb67280977798422a1698e6f11b9ca13cba3040860f6336ab654272000000b90000000d71756f696e2d7375646f2d763100000020b735501baf86d4a95a69f09787f9cdb4a2f771959e1e222b5511639922ba444900000001000000330000000b7373682d65643235353139000000204aab2eb9b23a7f42fb192d65156b847ba0197ffba2371ad881b4459f1b4324510000000364616e00000004726f6f74000000092f686f6d652f64616e000000010000001d2f72756e2f63757272656e742d73797374656d2f73772f62696e2f6964000000000000000000000000"
+      ]
+    }
+  ],
+  "execs": {
+    "1": true,
+    "2": true
+  }
+}

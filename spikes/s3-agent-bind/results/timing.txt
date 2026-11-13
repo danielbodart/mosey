@@ -1,0 +1,4 @@
+capture  n=30 median=157.9ms p10=123.4 p90=200.6
+none     n=30 median=157.7ms p10=112.9 p90=215.6
+xcrypto  n=30 median=81.0ms p10=58.6 p90=106.2
+trigger (server-side agent round trip, inside capture): n=30 median=1.50ms max=15.94ms
