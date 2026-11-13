@@ -1,0 +1,5 @@
+cmd: GOOS=darwin GOARCH={arm64,amd64} CGO_ENABLED=0 go build ./cmd/seatbelt-probe; go run ./cmd/machover <bins>  (go1.27.3)
+built darwin/arm64 ok
+built darwin/amd64 ok
+seatbelt-probe-darwin-arm64: LC_BUILD_VERSION platform=1 minos=13.0 sdk=26.2
+seatbelt-probe-darwin-amd64: LC_BUILD_VERSION platform=1 minos=13.0 sdk=26.2

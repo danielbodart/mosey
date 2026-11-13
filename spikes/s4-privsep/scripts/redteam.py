@@ -57,8 +57,9 @@ def listeners(tag):
         "MOSEY_SPIKE_RT_ABSTRACT": aname,
     }
 
-def cell(layout, sandbox, extra_env=None):
-    tag = f"{layout}-{sandbox}"
+def cell(layout, sandbox, extra_env=None, label=None):
+    label = label or layout
+    tag = f"{label}-{sandbox}"
     home = os.path.join(WORK, "home-" + tag)
     shutil.rmtree(home, ignore_errors=True)
     os.makedirs(home + "/.ssh")
@@ -68,9 +69,12 @@ def cell(layout, sandbox, extra_env=None):
     sl = subprocess.Popen([BIN, "sleeper"], stdout=subprocess.PIPE, text=True)
     slpid = int(sl.stdout.readline().split()[1])
     env = {"PATH": os.environ["PATH"], "HOME": home, "MOSEY_SPIKE_LAYOUT": layout,
-           "MOSEY_SPIKE_SANDBOX": sandbox, "MOSEY_SPIKE_SECCOMP_ACTION": "errno",
+           "MOSEY_SPIKE_SANDBOX": sandbox,
            "MOSEY_SPIKE_REDTEAM": "1", "MOSEY_SPIKE_RT_HOME": home,
+           "MOSEY_SPIKE_SECCOMP_ACTION": os.environ.get("RT_ACTION", "errno"),
            "MOSEY_SPIKE_RT_SLEEPER": str(slpid), **tenv, **(extra_env or {})}
+    if label == "B2c":
+        env["MOSEY_SPIKE_B2_CONNECT"] = tenv["MOSEY_SPIKE_RT_UDP"]
     srv = subprocess.Popen([BIN, "server"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     lines, results = [], []
     deadline = time.time() + 20
@@ -93,10 +97,15 @@ def cell(layout, sandbox, extra_env=None):
         "abstract unix accepted": got["abstract"] > 0,
         "udp datagrams received": sorted(set(got["udp"])),
     }
-    return {"layout": layout, "sandbox": sandbox, "results": results, "side_effects": side,
+    return {"layout": label, "sandbox": sandbox, "results": results, "side_effects": side,
             "log": [l for l in lines if not l.startswith("REDTEAM")]}
 
-cells = [cell(l, s) for l in ("A", "B", "B2") for s in ("none", "landlock", "seccomp", "both")]
+SB = ("none", "landlock", "seccomp", "both")
+cells = [cell(l, s) for l in ("A", "B", "B2", "C") for s in SB]
+# the battery inside the emulator helper (layout B2's session as its peer)
+cells += [cell("B2", s, {"MOSEY_SPIKE_REDTEAM": "emu"}, label="E") for s in SB]
+# counterfactual: B2 with the shared UDP socket connected by the session
+cells += [cell("B2", "both", label="B2c")]
 json.dump(cells, open(os.path.join(WORK, "results.json"), "w"), indent=1)
 
 # markdown: one row per attack, one column per cell
@@ -115,5 +124,5 @@ for k in cells[0]["side_effects"]:
     print(f"| _side effect_: {k} | " + " | ".join(str(c["side_effects"][k]) for c in cells) + " |")
 for c in cells:
     for l in c["log"]:
-        if "landlock:" in l or "seccomp:" in l or "FATAL" in l:
+        if "landlock:" in l or "seccomp:" in l or "FATAL" in l or "DENIED" in l or "COUNTERFACTUAL" in l:
             print(f"<!-- {c['layout']}/{c['sandbox']}: {l} -->")

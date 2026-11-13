@@ -1,0 +1,16 @@
+MOSEY-SPIKE PIDS session=287391 net=287402 emu=287403 shell=287404 pts=/dev/pts/5 layout=B2
+[net pid=287402] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+425.622µs)
+[emu pid=287403] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+308.495µs)
+[emu pid=287403] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (288.002µs)
+[emu pid=287403] policy: dropped pread64
+[emu pid=287403] seccomp: how=tsync policy=emu insns=42 skipped=[] threads-at-install=4 (250.787µs, t+1.000152ms)
+[net pid=287402] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (1.681433ms)
+[net pid=287402] policy: dropped pread64
+[net pid=287402] seccomp: how=tsync policy=net-recvonly insns=43 skipped=[] threads-at-install=4 (215.355µs, t+2.52509ms)
+CHILD-EXIT role=net pid=287402 status=signal: bad system call lived=1m0.008s
+CHILD-EXIT role=emu pid=287403 status=signal: bad system call
+SUPERVISOR: net respawned pid=293120 53.157494ms after EOF
+[net pid=293120] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+595.04µs)
+[net pid=293120] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (358.137µs)
+[net pid=293120] policy: dropped pread64
+[net pid=293120] seccomp: how=tsync policy=net-recvonly insns=43 skipped=[] threads-at-install=4 (506.9µs, t+1.877224ms)

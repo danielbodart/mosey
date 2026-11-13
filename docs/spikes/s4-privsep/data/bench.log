@@ -1,0 +1,12 @@
+cmd: scripts/bench.sh $SCRATCH/bin/mosey-spike  kernel=6.18.60 cpus=24 2026-11-13T19:29:49+00:00
+seqpacket round trip (1200 B, sandbox=none): p50=6.007µs p90=9.891µs p99=17.69µs p99.9=30.761µs max=1.025933ms
+seqpacket round trip (1200 B, sandbox=both): p50=6.055µs p90=10.075µs p99=17.517µs p99.9=29.449µs max=2.993383ms
+seqpacket round trip (1200 B, sandbox=none): p50=6.121µs p90=10.263µs p99=18.095µs p99.9=28.983µs max=999.279µs
+seqpacket round trip (1200 B, sandbox=both): p50=6.073µs p90=10.314µs p99=17.987µs p99.9=29.256µs max=3.008707ms
+seqpacket round trip (1200 B, sandbox=none): p50=6.069µs p90=10.343µs p99=18.19µs p99.9=32.319µs max=3.38425ms
+seqpacket round trip (1200 B, sandbox=both): p50=6.081µs p90=10.721µs p99=19.906µs p99.9=73.21µs max=2.022672ms
+getpid: 158ns/call unfiltered, 153ns/call with 45-insn filter (+-5ns)
+getpid: 159ns/call unfiltered, 103ns/call with 45-insn filter (+-56ns)
+getpid: 78ns/call unfiltered, 93ns/call with 45-insn filter (+15ns)
+getpid: 72ns/call unfiltered, 97ns/call with 45-insn filter (+25ns)
+getpid: 151ns/call unfiltered, 91ns/call with 45-insn filter (+-60ns)

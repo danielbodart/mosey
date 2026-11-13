@@ -1,0 +1,66 @@
+[
+ {
+  "layout": "B2",
+  "roam": "trust",
+  "client_saw_after_lines": 0,
+  "victim_datagrams": 25,
+  "victim_bytes": 1049,
+  "replayed_cmd_ran_times": 1,
+  "server": [
+   "RELABEL replayed first packet",
+   "RELABEL starting: 127.0.0.1:46893 -> 127.0.0.1:45391",
+   "MOSEY-SPIKE STATS roam=trust peer=127.0.0.1:45391 challenges=0 switches=2 ratelimited=0 emu-replies ok=0 denied=0 net-starts=1",
+   "CHILD-EXIT role=emu pid=332891 status=signal: killed",
+   "CHILD-EXIT role=net pid=332890 status=signal: killed lived=4.519s"
+  ],
+  "client_stderr": "client: challenges answered=0"
+ },
+ {
+  "layout": "B2",
+  "roam": "validate",
+  "client_saw_after_lines": 10,
+  "victim_datagrams": 6,
+  "victim_bytes": 252,
+  "replayed_cmd_ran_times": 1,
+  "server": [
+   "RELABEL replayed first packet",
+   "RELABEL starting: 127.0.0.1:53087 -> 127.0.0.1:52214",
+   "MOSEY-SPIKE STATS roam=validate peer=127.0.0.1:53087 challenges=7 switches=1 ratelimited=5 emu-replies ok=0 denied=0 net-starts=1",
+   "CHILD-EXIT role=emu pid=333581 status=signal: killed",
+   "CHILD-EXIT role=net pid=333580 status=signal: killed lived=4.546s"
+  ],
+  "client_stderr": "client: challenges answered=1"
+ },
+ {
+  "layout": "B",
+  "roam": "trust",
+  "client_saw_after_lines": 10,
+  "victim_datagrams": 0,
+  "victim_bytes": 0,
+  "replayed_cmd_ran_times": 1,
+  "server": [
+   "RELABEL replayed first packet",
+   "RELABEL starting: 127.0.0.1:44213 -> 127.0.0.1:59547",
+   "MOSEY-SPIKE STATS roam=trust peer=127.0.0.1:59547 challenges=0 switches=2 ratelimited=0 emu-replies ok=0 denied=0 net-starts=1",
+   "CHILD-EXIT role=net pid=334234 status=signal: killed lived=4.532s",
+   "CHILD-EXIT role=emu pid=334235 status=signal: killed"
+  ],
+  "client_stderr": "client: challenges answered=0"
+ },
+ {
+  "layout": "B",
+  "roam": "validate",
+  "client_saw_after_lines": 10,
+  "victim_datagrams": 0,
+  "victim_bytes": 0,
+  "replayed_cmd_ran_times": 1,
+  "server": [
+   "RELABEL replayed first packet",
+   "RELABEL starting: 127.0.0.1:38846 -> 127.0.0.1:40035",
+   "MOSEY-SPIKE STATS roam=validate peer=127.0.0.1:40035 challenges=2 switches=2 ratelimited=0 emu-replies ok=0 denied=0 net-starts=1",
+   "CHILD-EXIT role=emu pid=334802 status=signal: killed",
+   "CHILD-EXIT role=net pid=334801 status=signal: killed lived=4.532s"
+  ],
+  "client_stderr": "client: challenges answered=2"
+ }
+]

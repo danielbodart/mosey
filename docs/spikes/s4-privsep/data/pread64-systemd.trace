@@ -1,0 +1,8 @@
+# first-pass trace (pre-review binary, same Go 1.27.3 runtime): systemd --user unit with CPUQuota=200%, strace -f; shows the runtime opening cgroup cpu.max at start-up and pread64-ing it from sysmon
+156216 openat(AT_FDCWD, "/sys/kernel/mm/transparent_hugepage/hpage_pmd_size", O_RDONLY) = 3
+156216 openat(AT_FDCWD, "/proc/self/cgroup", O_RDONLY|O_CLOEXEC) = 3
+156216 openat(AT_FDCWD, "/proc/self/mountinfo", O_RDONLY|O_CLOEXEC) = 3
+156216 openat(AT_FDCWD, "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice/mosey-spike-pread.service/cpu.max", O_RDONLY|O_CLOEXEC) = 3
+156216 pread64(3, "200000 100000\n", 64, 0) = 14
+156217 pread64(3, "200000 100000\n", 64, 0) = 14
+156216 openat(AT_FDCWD, "/proc/self/status", O_RDONLY|O_CLOEXEC) = 12

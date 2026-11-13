@@ -1,0 +1,75 @@
+cmd: scripts/soak-server.sh systemd B2 600 $SCRATCH/bin/mosey-spike-soak $SCRATCH/soak600  QUOTA=200%  start=2026-11-13T19:19:39+00:00  kernel=6.18.60
+unit=mosey-spike-soak-systemd-B2-273652 cgroup=/user.slice/user-1000.slice/user@1000.service/app.slice/mosey-spike-soak-systemd-B2-273652.service cpu.max=200000 100000
+load t=10.0s window-bytes=193943 total=193943
+load t=20.1s window-bytes=201148 total=395091
+load t=30.1s window-bytes=199069 total=594160
+load t=40.1s window-bytes=200829 total=794989
+load t=50.2s window-bytes=216947 total=1011936
+load t=60.2s window-bytes=239731 total=1251667
+load t=70.2s window-bytes=238710 total=1490377
+load t=80.2s window-bytes=239993 total=1730370
+load t=90.3s window-bytes=241141 total=1971511
+load t=100.3s window-bytes=238710 total=2210221
+load t=110.3s window-bytes=240008 total=2450229
+load t=120.4s window-bytes=238770 total=2688999
+load t=130.4s window-bytes=241231 total=2930230
+load t=140.5s window-bytes=239918 total=3170148
+load t=150.5s window-bytes=239948 total=3410096
+load t=160.5s window-bytes=240098 total=3650194
+load t=170.5s window-bytes=239918 total=3890112
+load t=180.5s window-bytes=234996 total=4125108
+load t=190.6s window-bytes=242349 total=4367457
+load t=200.6s window-bytes=239948 total=4607405
+load t=210.6s window-bytes=238710 total=4846115
+load t=220.7s window-bytes=242454 total=5088569
+load t=230.7s window-bytes=238770 total=5327339
+load t=240.7s window-bytes=239873 total=5567212
+load t=250.8s window-bytes=239918 total=5807130
+load t=260.8s window-bytes=239918 total=6047048
+load t=270.8s window-bytes=239993 total=6287041
+load t=280.9s window-bytes=241051 total=6528092
+load t=290.9s window-bytes=239948 total=6768040
+load t=300.9s window-bytes=236279 total=7004319
+load t=310.9s window-bytes=238665 total=7242984
+load t=321.0s window-bytes=241201 total=7484185
+load t=331.0s window-bytes=238770 total=7722955
+load t=341.0s window-bytes=241096 total=7964051
+load t=351.0s window-bytes=241156 total=8205207
+load t=361.1s window-bytes=239963 total=8445170
+load t=371.1s window-bytes=236294 total=8681464
+load t=381.1s window-bytes=239873 total=8921337
+load t=391.2s window-bytes=238635 total=9159972
+load t=401.2s window-bytes=239858 total=9399830
+load t=411.2s window-bytes=239978 total=9639808
+load t=421.2s window-bytes=238755 total=9878563
+load t=431.3s window-bytes=238725 total=10117288
+load t=441.3s window-bytes=241216 total=10358504
+load t=451.3s window-bytes=241336 total=10599840
+load t=461.3s window-bytes=238785 total=10838625
+load t=471.4s window-bytes=237577 total=11076202
+load t=481.4s window-bytes=238785 total=11314987
+load t=491.5s window-bytes=239903 total=11554890
+load t=501.5s window-bytes=238665 total=11793555
+load t=511.5s window-bytes=254138 total=12047693
+load t=521.6s window-bytes=276622 total=12324315
+load t=531.6s window-bytes=279751 total=12604066
+load t=541.6s window-bytes=273979 total=12878045
+load t=551.6s window-bytes=275490 total=13153535
+load t=561.6s window-bytes=278291 total=13431826
+load t=571.7s window-bytes=278359 total=13710185
+load t=581.7s window-bytes=278427 total=13988612
+load t=591.7s window-bytes=276797 total=14265409
+LOAD DONE 600s total-bytes=14498070 empty-windows=0 challenges=1
+client-load exit=0
+[emu pid=273801] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (134.771µs)
+[emu pid=273801] seccomp: how=tsync policy=emu insns=43 skipped=[] threads-at-install=4 (191.713µs, t+903.454µs)
+MOSEY-SPIKE PIDS session=273778 net=273800 emu=273801 shell=273806 pts=/dev/pts/4 layout=B2
+[net pid=273800] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (1.855883ms)
+[net pid=273800] seccomp: how=tsync policy=net-recvonly insns=44 skipped=[] threads-at-install=4 (132.84µs, t+2.391908ms)
+[stress pid=273800] done 600s: numGC=8071 goroutines=4
+[stress pid=273801] done 600s: numGC=9180 goroutines=2
+MOSEY-SPIKE STATS roam=validate peer=127.0.0.1:47611 challenges=1 switches=1 ratelimited=0 emu-replies ok=0 denied=0 net-starts=1
+CHILD-EXIT role=emu pid=273801 status=signal: killed
+CHILD-EXIT role=net pid=273800 status=signal: killed
+MOSEY-SPIKE EXIT shell=<nil>
+end=2026-11-13T19:29:43+00:00 sandboxed-process deaths/respawns: 0

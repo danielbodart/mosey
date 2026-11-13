@@ -9,8 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"mosey.spike/s4-privsep/sandbox"
@@ -56,6 +56,9 @@ func spawn(role string, extra ...*os.File) (*exec.Cmd, error) {
 	c := exec.Command(self, role)
 	c.Env = childEnv()
 	c.Stderr = os.Stderr
+	if role == "proto" {
+		c.Stdout = os.Stdout // proto prints the CONNECT line (key) itself
+	}
 	c.ExtraFiles = extra
 	c.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 
@@ -94,6 +97,9 @@ func runServer(args []string) error {
 		addr = args[0]
 	}
 	layout := env("MOSEY_SPIKE_LAYOUT", "B")
+	if layout == "C" {
+		return runSpawner(addr)
+	}
 
 	key := make([]byte, 32)
 	rand.Read(key)
@@ -113,38 +119,53 @@ func runServer(args []string) error {
 	if err != nil {
 		return err
 	}
-	if layout != "B2" {
+	if layout == "B2" {
+		// B2 invariant: the UDP socket the network process shares with us
+		// must stay unconnected. The net filter keeps write(2) (it writes
+		// IPC with it), and write on a connected UDP socket sends a
+		// datagram. MOSEY_SPIKE_B2_CONNECT is the counterfactual.
+		if c := os.Getenv("MOSEY_SPIKE_B2_CONNECT"); c != "" {
+			ap := netip.MustParseAddrPort(c)
+			if err := unix.Connect(int(udpFile.Fd()), &unix.SockaddrInet4{Port: int(ap.Port()), Addr: ap.Addr().As4()}); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "session: COUNTERFACTUAL shared UDP socket connected to %s\n", c)
+		} else if _, err := unix.Getpeername(int(udpFile.Fd())); err != unix.ENOTCONN {
+			return fmt.Errorf("B2 invariant violated: shared UDP socket is connected (getpeername: %v)", err)
+		}
+	} else {
 		udp.Close()
-	} // B2: the session keeps the socket and is the only sender
-
-	netIPC, netEnd, err := seqpacketPair("net")
-	if err != nil {
-		return err
 	}
+
 	emuIPC, emuEnd, err := seqpacketPair("emu")
 	if err != nil {
 		return err
 	}
-
 	master, slave, ptsName, err := openPTY()
 	if err != nil {
 		return err
 	}
-	if os.Getenv("MOSEY_SPIKE_REDTEAM") == "1" {
+	if os.Getenv("MOSEY_SPIKE_REDTEAM") != "" {
 		os.Setenv("MOSEY_SPIKE_RT_PTS", ptsName)
 	}
 
-	netCmd, err := spawn("net", udpFile, netEnd)
-	if err != nil {
+	if layout == "A" {
+		return runLayoutA(key, udp, udpFile, emuIPC, emuEnd, master, slave, ptsName)
+	}
+
+	ns := &netSupervisor{udpFile: udpFile}
+	if err := ns.start(); err != nil {
 		return fmt.Errorf("spawn net: %w", err)
 	}
-	udpFile.Close()
-	netEnd.Close()
 	emuCmd, err := spawn("emu", emuEnd)
 	if err != nil {
 		return fmt.Errorf("spawn emu: %w", err)
 	}
 	emuEnd.Close()
+	go func() {
+		st, _ := emuCmd.Process.Wait()
+		fmt.Fprintf(os.Stderr, "CHILD-EXIT role=emu pid=%d status=%v\n", emuCmd.Process.Pid, st)
+	}()
 
 	shell := env("MOSEY_SPIKE_SHELL", "/bin/sh")
 	shellCmd, err := startShell(shell, slave, append(os.Environ(), "TERM=dumb", "PS1=$ "))
@@ -153,26 +174,78 @@ func runServer(args []string) error {
 	}
 	slave.Close()
 
-	port := udp.LocalAddr().(*net.UDPAddr).Port
+	port := udpFile2Port(udpFile)
 	fmt.Printf("MOSEY-SPIKE CONNECT %d %s\n", port, base64.StdEncoding.EncodeToString(key))
+	_, netPid := ns.current()
 	fmt.Fprintf(os.Stderr, "MOSEY-SPIKE PIDS session=%d net=%d emu=%d shell=%d pts=%s layout=%s\n",
-		os.Getpid(), netCmd.Process.Pid, emuCmd.Process.Pid, shellCmd.Process.Pid, ptsName, layout)
+		os.Getpid(), netPid, emuCmd.Process.Pid, shellCmd.Process.Pid, ptsName, layout)
 	os.Stdout.Sync()
 
-	s, err := newSealer(key, dirS2C)
+	core, err := newProtoCore(layout, key, master, emuIPC)
 	if err != nil {
 		return err
 	}
-	var mu sync.Mutex
-	var peer netip.AddrPort
-
-	if layout == "A" {
-		if _, err := netIPC.Write(append([]byte{ipcKey}, key...)); err != nil {
-			return err
+	if layout == "B2" {
+		core.send = func(pkt []byte, to netip.AddrPort) { udp.WriteToUDPAddrPort(pkt, to) }
+	} else {
+		core.send = func(pkt []byte, to netip.AddrPort) {
+			c, _ := ns.current()
+			c.Write(append(putAddr([]byte{ipcSend}, to), pkt...))
 		}
 	}
+	go ns.loop(core)
+	core.run()
 
-	// net -> session
+	err = shellCmd.Wait()
+	fmt.Fprintf(os.Stderr, "MOSEY-SPIKE STATS %s net-starts=%d\n", core.stats(), len(ns.starts))
+	_, netPid = ns.current()
+	unix.Kill(netPid, unix.SIGKILL)
+	emuCmd.Process.Kill()
+	time.Sleep(50 * time.Millisecond)
+	fmt.Fprintf(os.Stderr, "MOSEY-SPIKE EXIT shell=%v\n", err)
+	return nil
+}
+
+func udpFile2Port(f *os.File) int {
+	sa, err := unix.Getsockname(int(f.Fd()))
+	if err != nil {
+		return 0
+	}
+	return sa.(*unix.SockaddrInet4).Port
+}
+
+// runLayoutA is O4 as written: the network process holds the traffic key
+// and hands the session decrypted keystrokes. Kept for the red-team matrix.
+func runLayoutA(key []byte, udp *net.UDPConn, udpFile *os.File, emuIPC *net.UnixConn, emuEnd *os.File, master, slave *os.File, ptsName string) error {
+	netIPC, netEnd, err := seqpacketPair("net")
+	if err != nil {
+		return err
+	}
+	netCmd, err := spawn("net", udpFile, netEnd)
+	if err != nil {
+		return fmt.Errorf("spawn net: %w", err)
+	}
+	port := udpFile2Port(udpFile)
+	udpFile.Close()
+	netEnd.Close()
+	emuCmd, err := spawn("emu", emuEnd)
+	if err != nil {
+		return fmt.Errorf("spawn emu: %w", err)
+	}
+	emuEnd.Close()
+	shell := env("MOSEY_SPIKE_SHELL", "/bin/sh")
+	shellCmd, err := startShell(shell, slave, append(os.Environ(), "TERM=dumb", "PS1=$ "))
+	if err != nil {
+		return err
+	}
+	slave.Close()
+	fmt.Printf("MOSEY-SPIKE CONNECT %d %s\n", port, base64.StdEncoding.EncodeToString(key))
+	fmt.Fprintf(os.Stderr, "MOSEY-SPIKE PIDS session=%d net=%d emu=%d shell=%d pts=%s layout=A\n",
+		os.Getpid(), netCmd.Process.Pid, emuCmd.Process.Pid, shellCmd.Process.Pid, ptsName)
+	os.Stdout.Sync()
+	if _, err := netIPC.Write(append([]byte{ipcKey}, key...)); err != nil {
+		return err
+	}
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -181,32 +254,13 @@ func runServer(args []string) error {
 				fmt.Fprintf(os.Stderr, "session: net ipc closed: %v\n", err)
 				return
 			}
-			if n < 1 {
-				continue
-			}
-			switch {
-			case layout == "A" && buf[0] == ipcInput:
-				// Layout A: whatever the network process says is a keystroke
-				// IS a keystroke. This is the line the red team exploits.
+			// Layout A: whatever the network process says is a keystroke
+			// IS a keystroke. This is the line the red team exploits.
+			if n > 0 && buf[0] == ipcInput {
 				master.Write(buf[1:n])
-			case layout != "A" && buf[0] == ipcPkt:
-				from, ct, err := getAddr(buf[1:n])
-				if err != nil {
-					continue
-				}
-				mu.Lock()
-				pt, err := s.open(ct)
-				if err == nil {
-					peer = from
-				}
-				mu.Unlock()
-				if err == nil {
-					master.Write(pt)
-				}
 			}
 		}
 	}()
-	// pty -> emu
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -217,7 +271,6 @@ func runServer(args []string) error {
 			emuIPC.Write(append([]byte{ipcEmuIn}, buf[:n]...))
 		}
 	}()
-	// emu -> net
 	go func() {
 		buf := make([]byte, 65536)
 		for {
@@ -229,27 +282,10 @@ func runServer(args []string) error {
 				continue
 			}
 			for off := 1; off < n; off += 1024 {
-				end := min(off+1024, n)
-				if layout == "A" {
-					netIPC.Write(append([]byte{ipcOutput}, buf[off:end]...))
-					continue
-				}
-				mu.Lock()
-				p := peer
-				var pkt []byte
-				if p.IsValid() {
-					pkt = s.seal(buf[off:end])
-				}
-				mu.Unlock()
-				if pkt != nil && layout == "B2" {
-					udp.WriteToUDPAddrPort(pkt, p)
-				} else if pkt != nil {
-					netIPC.Write(append(putAddr([]byte{ipcSend}, p), pkt...))
-				}
+				netIPC.Write(append([]byte{ipcOutput}, buf[off:min(off+1024, n)]...))
 			}
 		}
 	}()
-
 	err = shellCmd.Wait()
 	netCmd.Process.Kill()
 	emuCmd.Process.Kill()

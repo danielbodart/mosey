@@ -1,0 +1,76 @@
+cmd: scripts/soak-server.sh systemd C 600 $SCRATCH/bin/mosey-spike-soak $SCRATCH/soak600  QUOTA=200%  start=2026-11-13T19:19:39+00:00  kernel=6.18.60
+unit=mosey-spike-soak-systemd-C-273653 cgroup=/user.slice/user-1000.slice/user@1000.service/app.slice/mosey-spike-soak-systemd-C-273653.service cpu.max=200000 100000
+load t=10.0s window-bytes=190701 total=190701
+load t=20.0s window-bytes=201031 total=391732
+load t=30.1s window-bytes=199998 total=591730
+load t=40.1s window-bytes=198062 total=789792
+load t=50.2s window-bytes=221615 total=1011407
+load t=60.2s window-bytes=240791 total=1252198
+load t=70.2s window-bytes=234861 total=1487059
+load t=80.2s window-bytes=242229 total=1729288
+load t=90.2s window-bytes=239783 total=1969071
+load t=100.3s window-bytes=241051 total=2210122
+load t=110.3s window-bytes=242244 total=2452366
+load t=120.3s window-bytes=238560 total=2690926
+load t=130.4s window-bytes=237247 total=2928173
+load t=140.4s window-bytes=244660 total=3172833
+load t=150.5s window-bytes=241036 total=3413869
+load t=160.5s window-bytes=241006 total=3654875
+load t=170.5s window-bytes=237322 total=3892197
+load t=180.5s window-bytes=239813 total=4132010
+load t=190.5s window-bytes=237382 total=4369392
+load t=200.5s window-bytes=242304 total=4611696
+load t=210.6s window-bytes=238545 total=4850241
+load t=220.6s window-bytes=239798 total=5090039
+load t=230.6s window-bytes=239753 total=5329792
+load t=240.6s window-bytes=238575 total=5568367
+load t=250.7s window-bytes=243437 total=5811804
+load t=260.7s window-bytes=238575 total=6050379
+load t=270.7s window-bytes=237352 total=6287731
+load t=280.7s window-bytes=244765 total=6532496
+load t=290.7s window-bytes=237367 total=6769863
+load t=300.8s window-bytes=241051 total=7010914
+load t=310.8s window-bytes=233711 total=7244625
+load t=320.8s window-bytes=247093 total=7491718
+load t=330.8s window-bytes=234861 total=7726579
+load t=340.8s window-bytes=244630 total=7971209
+load t=350.9s window-bytes=236099 total=8207308
+load t=360.9s window-bytes=242274 total=8449582
+load t=370.9s window-bytes=239768 total=8689350
+load t=380.9s window-bytes=243557 total=8932907
+load t=391.0s window-bytes=236069 total=9168976
+load t=401.0s window-bytes=237397 total=9406373
+load t=411.0s window-bytes=238590 total=9644963
+load t=421.1s window-bytes=243467 total=9888430
+load t=431.1s window-bytes=237307 total=10125737
+load t=441.1s window-bytes=243437 total=10369174
+load t=451.1s window-bytes=237382 total=10606556
+load t=461.2s window-bytes=240931 total=10847487
+load t=471.2s window-bytes=240961 total=11088448
+load t=481.2s window-bytes=236084 total=11324532
+load t=491.3s window-bytes=243465 total=11567997
+load t=501.3s window-bytes=237348 total=11805345
+load t=511.3s window-bytes=259846 total=12065191
+load t=521.3s window-bytes=278102 total=12343293
+load t=531.3s window-bytes=278172 total=12621465
+load t=541.3s window-bytes=276780 total=12898245
+load t=551.4s window-bytes=276729 total=13174974
+load t=561.4s window-bytes=279581 total=13454555
+load t=571.4s window-bytes=278121 total=13732676
+load t=581.4s window-bytes=278172 total=14010848
+load t=591.5s window-bytes=278138 total=14288986
+LOAD DONE 600s total-bytes=14532970 empty-windows=0 challenges=1
+client-load exit=0
+[proto pid=273799] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (100.533µs)
+[proto pid=273799] seccomp: how=tsync policy=proto insns=47 skipped=[] threads-at-install=4 (139.323µs, t+1.847798ms)
+[emu pid=273814] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (105.763µs)
+[emu pid=273814] seccomp: how=tsync policy=emu insns=43 skipped=[] threads-at-install=4 (124.746µs, t+600.305µs)
+MOSEY-SPIKE PIDS session=273779 net=273799 emu=273814 shell=273816 pts=/dev/pts/3 layout=C
+spawner: pty master passed over SCM_RIGHTS (32.885µs)
+[stress pid=273814] done 600s: numGC=9096 goroutines=2
+[stress pid=273799] done 600s: numGC=8023 goroutines=5
+MOSEY-SPIKE STATS roam=validate peer=127.0.0.1:58174 challenges=1 switches=1 ratelimited=1 emu-replies ok=0 denied=0
+CHILD-EXIT role=proto pid=273799 status=exit status 0
+CHILD-EXIT role=emu pid=273814 status=exit status 0
+MOSEY-SPIKE EXIT shell=<nil>
+end=2026-11-13T19:29:43+00:00 sandboxed-process deaths/respawns: 0

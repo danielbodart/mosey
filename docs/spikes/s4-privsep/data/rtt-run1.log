@@ -1,0 +1,12 @@
+round 1: keystroke->echo RTT layout=A n=3000 lost=0: p50=134.375µs p90=198.53µs p99=1.092292ms max=4.84766ms
+round 1: keystroke->echo RTT layout=B n=3000 lost=0: p50=153.537µs p90=268.693µs p99=2.757944ms max=6.849328ms
+round 1: keystroke->echo RTT layout=B2 n=3000 lost=0: p50=139.311µs p90=219.857µs p99=2.104954ms max=4.111369ms
+round 1: keystroke->echo RTT layout=C n=3000 lost=0: p50=121.374µs p90=196.706µs p99=2.109502ms max=4.892423ms
+round 2: keystroke->echo RTT layout=A n=3000 lost=0: p50=151.113µs p90=220.109µs p99=2.270132ms max=5.102396ms
+round 2: keystroke->echo RTT layout=B n=3000 lost=0: p50=144.128µs p90=227.023µs p99=2.423975ms max=5.656944ms
+round 2: keystroke->echo RTT layout=B2 n=3000 lost=0: p50=130.337µs p90=200.828µs p99=2.013834ms max=5.637814ms
+round 2: keystroke->echo RTT layout=C n=3000 lost=0: p50=114.077µs p90=215.232µs p99=2.638513ms max=4.561974ms
+round 3: keystroke->echo RTT layout=A n=3000 lost=0: p50=143.975µs p90=294.198µs p99=2.136034ms max=6.472871ms
+round 3: keystroke->echo RTT layout=B n=3000 lost=0: p50=245.177µs p90=709.213µs p99=3.210257ms max=6.496984ms
+round 3: keystroke->echo RTT layout=B2 n=3000 lost=0: p50=150.989µs p90=338.982µs p99=2.435366ms max=6.11952ms
+round 3: keystroke->echo RTT layout=C n=3000 lost=0: p50=129.923µs p90=403.495µs p99=2.654366ms max=4.436696ms

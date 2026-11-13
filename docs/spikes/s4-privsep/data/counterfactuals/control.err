@@ -1,0 +1,7 @@
+[net pid=303661] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+551.368µs)
+[emu pid=303662] pre-sandbox status: seccomp=0 filters=0 nnp=0 threads=4 (t+337.124µs)
+[net pid=303661] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (219.581µs)
+[emu pid=303662] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (108.557µs)
+MOSEY-SPIKE PIDS session=303651 net=303661 emu=303662 shell=303671 pts=/dev/pts/5 layout=B2
+[emu pid=303662] seccomp: how=tsync policy=emu insns=43 skipped=[] threads-at-install=4 (222.191µs, t+759.152µs)
+[net pid=303661] seccomp: how=tsync policy=net-recvonly insns=44 skipped=[] threads-at-install=4 (247.283µs, t+1.282905ms)

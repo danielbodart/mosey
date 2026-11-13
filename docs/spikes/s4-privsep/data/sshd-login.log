@@ -1,0 +1,49 @@
+##### layout B2
+== remote environment as the server will see it
+Warning: Permanently added '[127.0.0.1]:30161' (ED25519) to the list of known hosts.
+cgroup: 0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-dbus\x2d:1.1\x2dorg.gnome.Console.slice/vte-spawn-60e3f852-da98-4e34-9473-3795d55ee828.scope
+NoNewPrivs:	0 Seccomp:	0 Seccomp_filters:	0 
+XDG_RUNTIME_DIR=<unset> SSH_CONNECTION=set
+== start the server detached from the ssh channel (as mosh-server does), read CONNECT
+MOSEY-SPIKE CONNECT 54135 kbHYsUptMDMzK2Br/A8Nq9quUEpmIjm2y6Xg/Avv1Kc=
+ssh exited; server pid 306265 still alive: yes
+client: challenges answered=1
+MOSEY-SPIKE PIDS session=306265 net=306273 emu=306274 shell=306275 pts=/dev/pts/5 layout=B2
+[net pid=306273] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (190.598µs)
+[net pid=306273] seccomp: how=tsync policy=net-recvonly insns=44 skipped=[] threads-at-install=5 (290.398µs, t+1.02234ms)
+[emu pid=306274] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (1.989842ms)
+[emu pid=306274] seccomp: how=tsync policy=emu insns=43 skipped=[] threads-at-install=4 (233.474µs, t+2.964643ms)
+MOSEY-SPIKE STATS roam=validate peer=127.0.0.1:56263 challenges=1 switches=1 ratelimited=0 emu-replies ok=0 denied=0 net-starts=1
+CHILD-EXIT role=net pid=306273 status=signal: killed lived=577ms
+CHILD-EXIT role=emu pid=306274 status=signal: killed
+MOSEY-SPIKE EXIT shell=<nil>
+SSHD LOGIN OK
+== can the ssh login hand the server to the user manager? (systemd-run --user)
+Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined (consider using --machine=<user>@.host --user to connect to bus of other user)
+systemd-run --user: FAILED (exit 1)
+with XDG_RUNTIME_DIR set: ok
+##### layout C
+== remote environment as the server will see it
+Warning: Permanently added '[127.0.0.1]:28892' (ED25519) to the list of known hosts.
+cgroup: 0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-dbus\x2d:1.1\x2dorg.gnome.Console.slice/vte-spawn-60e3f852-da98-4e34-9473-3795d55ee828.scope
+NoNewPrivs:	0 Seccomp:	0 Seccomp_filters:	0 
+XDG_RUNTIME_DIR=<unset> SSH_CONNECTION=set
+== start the server detached from the ssh channel (as mosh-server does), read CONNECT
+MOSEY-SPIKE CONNECT 36944 Xev440LZWblMrg3Rqp6dvII3slhMAMsPFfpyDKh9d20=
+ssh exited; server pid 306874 still alive: yes
+client: challenges answered=1
+MOSEY-SPIKE PIDS session=306874 net=306884 emu=306886 shell=306887 pts=/dev/pts/5 layout=C
+spawner: pty master passed over SCM_RIGHTS (36.883µs)
+[proto pid=306884] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (1.606142ms)
+[proto pid=306884] seccomp: how=tsync policy=proto insns=47 skipped=[] threads-at-install=5 (379.167µs, t+5.648944ms)
+[emu pid=306886] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (3.33072ms)
+[emu pid=306886] seccomp: how=tsync policy=emu insns=43 skipped=[] threads-at-install=5 (282.507µs, t+5.491415ms)
+MOSEY-SPIKE STATS roam=validate peer=127.0.0.1:39472 challenges=1 switches=1 ratelimited=0 emu-replies ok=0 denied=0
+CHILD-EXIT role=proto pid=306884 status=exit status 0
+CHILD-EXIT role=emu pid=306886 status=exit status 0
+MOSEY-SPIKE EXIT shell=<nil>
+SSHD LOGIN OK
+== can the ssh login hand the server to the user manager? (systemd-run --user)
+Failed to connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS and $XDG_RUNTIME_DIR not defined (consider using --machine=<user>@.host --user to connect to bus of other user)
+systemd-run --user: FAILED (exit 1)
+with XDG_RUNTIME_DIR set: ok

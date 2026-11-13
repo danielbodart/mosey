@@ -1,0 +1,15 @@
+== B2
+net pid 336136:
+336136 --- SIGURG {si_signo=SIGURG, si_code=SI_TKILL, si_pid=336136, si_uid=1000} ---
+336136 +++ killed by SIGSYS +++
+REDTEAM lines emitted: 0
+CHILD-EXIT role=net pid=336136 status=signal: bad system call lived=21ms
+SUPERVISOR: net respawned pid=336186 62.891591ms after EOF
+CHILD-EXIT role=net pid=336186 status=signal: bad system call lived=21ms
+SUPERVISOR: net respawned pid=336219 116.819303ms after EOF
+== C
+net pid 336468:
+336468 +++ killed by SIGSYS +++
+REDTEAM lines emitted: 0
+CHILD-EXIT role=proto pid=336468 status=signal: bad system call
+CHILD-EXIT role=emu pid=336470 status=exit status 0

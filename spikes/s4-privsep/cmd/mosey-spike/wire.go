@@ -5,7 +5,10 @@ package main
 //
 //	dir(1) || seq(8, big-endian) || AES-256-GCM(key, nonce = 0x000000||dir||seq, aad = dir||seq)
 //
-// with a strictly-increasing-seq replay check per direction.
+// with a 64-packet sliding replay window per direction (RFC 6479 shape,
+// one word of bitmap; a toy, not the S1 design). The plaintext's first byte
+// is a frame type: ptData, or the path-validation pair ptChallenge /
+// ptResponse used by the roaming check (roam.go).
 
 import (
 	"crypto/aes"
@@ -25,6 +28,7 @@ type sealer struct {
 	sendDir byte
 	sendSeq uint64
 	recvSeq uint64 // highest accepted
+	recvWin uint64 // bit i set: recvSeq-i already accepted
 }
 
 func newSealer(key []byte, sendDir byte) (*sealer, error) {
@@ -66,16 +70,35 @@ func (s *sealer) open(pkt []byte) ([]byte, error) {
 		return nil, errAuth
 	}
 	seq := binary.BigEndian.Uint64(pkt[1:9])
-	if seq <= s.recvSeq {
-		return nil, errAuth
+	if seq == 0 || (seq <= s.recvSeq && (s.recvSeq-seq >= 64 || s.recvWin&(1<<(s.recvSeq-seq)) != 0)) {
+		return nil, errAuth // too old, or a replay
 	}
 	pt, err := s.aead.Open(nil, nonce(dir, seq), pkt[9:], pkt[:9])
 	if err != nil {
 		return nil, errAuth
 	}
-	s.recvSeq = seq
+	// window updated only after authentication
+	if seq > s.recvSeq {
+		sh := seq - s.recvSeq
+		if sh >= 64 {
+			s.recvWin = 0
+		} else {
+			s.recvWin <<= sh
+		}
+		s.recvWin |= 1
+		s.recvSeq = seq
+	} else {
+		s.recvWin |= 1 << (s.recvSeq - seq)
+	}
 	return pt, nil
 }
+
+// plaintext frame types (first byte)
+const (
+	ptData      = 'd'
+	ptChallenge = 'c' // S2C: 16-byte nonce; sent only to the address being validated
+	ptResponse  = 'r' // C2S: echoes the nonce
+)
 
 // IPC message types over the SOCK_SEQPACKET socketpair. Seqpacket keeps
 // message boundaries, so there is no length field to parse.
@@ -88,8 +111,9 @@ const (
 	ipcInput  = 'I' // net -> session: decrypted keystrokes
 	ipcOutput = 'O' // session -> net: plaintext screen bytes
 	// emulator helper
-	ipcEmuIn  = 'E' // session -> emu: pty bytes
-	ipcEmuOut = 'D' // emu -> session: "diff" (identity in the spike)
+	ipcEmuIn    = 'E' // session -> emu: pty bytes
+	ipcEmuOut   = 'D' // emu -> session: "diff" (identity in the spike)
+	ipcEmuReply = 'Q' // emu -> session: query reply for the pty (DA, CPR); filtered by allowReply
 )
 
 func putAddr(b []byte, a netip.AddrPort) []byte {

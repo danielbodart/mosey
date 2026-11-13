@@ -11,15 +11,15 @@ import (
 // the program is a flat allow-list plus two argument checks, which is small
 // enough that pulling in golang.org/x/net/bpf's assembler buys nothing.
 const (
-	bpfLD  = 0x00
-	bpfJMP = 0x05
-	bpfRET = 0x06
-	bpfW   = 0x00
-	bpfABS = 0x20
-	bpfJEQ = 0x10
-	bpfJGE = 0x30
+	bpfLD   = 0x00
+	bpfJMP  = 0x05
+	bpfRET  = 0x06
+	bpfW    = 0x00
+	bpfABS  = 0x20
+	bpfJEQ  = 0x10
+	bpfJGE  = 0x30
 	bpfJSET = 0x40
-	bpfK   = 0x00
+	bpfK    = 0x00
 
 	// offsets into struct seccomp_data
 	offNr   = 0
@@ -40,7 +40,9 @@ const (
 )
 
 // Errno returns SECCOMP_RET_ERRNO with the given errno.
-func Errno(e unix.Errno) Action { return Action(unix.SECCOMP_RET_ERRNO | (uint32(e) & unix.SECCOMP_RET_DATA)) }
+func Errno(e unix.Errno) Action {
+	return Action(unix.SECCOMP_RET_ERRNO | (uint32(e) & unix.SECCOMP_RET_DATA))
+}
 
 // Arch is a target architecture for the filter.
 type Arch struct {

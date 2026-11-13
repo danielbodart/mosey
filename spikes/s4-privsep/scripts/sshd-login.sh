@@ -33,7 +33,7 @@ echo "== remote environment as the server will see it"
 "${SSH[@]}" 'echo "cgroup: $(cat /proc/self/cgroup)"; grep -E "Seccomp|NoNewPrivs" /proc/self/status | tr "\n" " "; echo; echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-<unset>} SSH_CONNECTION=${SSH_CONNECTION:+set}"'
 
 echo "== start the server detached from the ssh channel (as mosh-server does), read CONNECT"
-"${SSH[@]}" "setsid -f env MOSEY_SPIKE_SANDBOX=both $BIN server >$W/srv.out 2>$W/srv.err </dev/null; sleep 0.5; cat $W/srv.out"
+"${SSH[@]}" "setsid -f env MOSEY_SPIKE_SANDBOX=both MOSEY_SPIKE_LAYOUT=${MOSEY_SPIKE_LAYOUT:-B2} MOSEY_SPIKE_SECCOMP_ACTION=kill $BIN server >$W/srv.out 2>$W/srv.err </dev/null; sleep 0.5; cat $W/srv.out"
 SPID=$(sed -n 's/.*session=\([0-9]*\).*/\1/p' "$W/srv.err"); echo "$SPID" >"$W/srv.pid"
 read -r _ _ CPORT KEY <"$W/srv.out"
 echo "ssh exited; server pid $SPID still alive: $(kill -0 "$SPID" 2>/dev/null && echo yes || echo no)"

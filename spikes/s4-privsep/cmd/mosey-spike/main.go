@@ -10,11 +10,15 @@
 //
 // Environment (read by every role):
 //
-//	MOSEY_SPIKE_LAYOUT          A (net holds key) | B (session holds key, default)
+//	MOSEY_SPIKE_LAYOUT          A (net holds key) | B (session holds key, default) |
+//	                            B2 (B, session sends) | C (spawner + sandboxed proto)
+//	MOSEY_SPIKE_ROAM            validate (default) | trust (Mosh's rule)
 //	MOSEY_SPIKE_SANDBOX         none | landlock | seccomp | both (default)
 //	MOSEY_SPIKE_SECCOMP_ACTION  kill (default) | errno | log
 //	MOSEY_SPIKE_SECCOMP_HOW     tsync (default) | prethread | entry
-//	MOSEY_SPIKE_REDTEAM         1: the net process runs the attack battery
+//	MOSEY_SPIKE_REDTEAM         1: net (A/B/B2) or proto (C) runs the attack battery;
+//	                            emu: the emulator helper runs it; relabel: net relays
+//	                            but replays and relabels genuine packets
 //	MOSEY_SPIKE_STRESS          N: the net process churns the runtime for N seconds
 //
 // SPIKE CODE: a record, not production.
@@ -45,6 +49,12 @@ func main() {
 		err = runNet()
 	case "emu":
 		err = runEmu()
+	case "proto":
+		err = runProto()
+	case "client-rtt":
+		err = runClientRTT(os.Args[2:])
+	case "client-load":
+		err = runClientLoad(os.Args[2:])
 	case "client":
 		err = runClient(os.Args[2:])
 	case "sleeper":
@@ -111,7 +121,9 @@ func applySandbox(role string, pol sandbox.Policy) {
 	mode := env("MOSEY_SPIKE_SANDBOX", "both")
 	how := env("MOSEY_SPIKE_SECCOMP_HOW", "tsync")
 	st := procStatus("Seccomp", "Seccomp_filters", "NoNewPrivs", "Threads")
-	logf := func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[%s pid=%d] "+f+"\n", append([]any{role, os.Getpid()}, a...)...) }
+	logf := func(f string, a ...any) {
+		fmt.Fprintf(os.Stderr, "[%s pid=%d] "+f+"\n", append([]any{role, os.Getpid()}, a...)...)
+	}
 	logf("pre-sandbox status: seccomp=%s filters=%s nnp=%s threads=%s (t+%v)", st["Seccomp"], st["Seccomp_filters"], st["NoNewPrivs"], st["Threads"], time.Since(processStart))
 
 	// Not dumpable: a SIGSYS (or any crash) must not write this process's

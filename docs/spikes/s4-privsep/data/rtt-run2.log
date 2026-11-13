@@ -1,0 +1,14 @@
+cmd: scripts/rtt.sh BIN 3000 3; loadavg before: 25.35 26.39 22.19 22/4609 341354
+round 1: keystroke->echo RTT layout=A n=3000 lost=0: p50=150.103µs p90=382.351µs p99=2.593473ms max=5.224999ms
+round 1: keystroke->echo RTT layout=B n=3000 lost=0: p50=216.197µs p90=473.339µs p99=1.594027ms max=4.242576ms
+round 1: keystroke->echo RTT layout=B2 n=3000 lost=0: p50=214.832µs p90=513.314µs p99=1.67114ms max=3.828764ms
+round 1: keystroke->echo RTT layout=C n=3000 lost=0: p50=304.702µs p90=627.408µs p99=1.963447ms max=4.53372ms
+round 2: keystroke->echo RTT layout=A n=3000 lost=0: p50=289.283µs p90=552.566µs p99=1.442413ms max=3.746163ms
+round 2: keystroke->echo RTT layout=B n=3000 lost=0: p50=266.728µs p90=506.518µs p99=1.473918ms max=4.13686ms
+round 2: keystroke->echo RTT layout=B2 n=3000 lost=0: p50=259.3µs p90=481.975µs p99=1.484154ms max=3.84567ms
+round 2: keystroke->echo RTT layout=C n=3000 lost=0: p50=172.448µs p90=351.581µs p99=959.872µs max=4.439273ms
+round 3: keystroke->echo RTT layout=A n=3000 lost=0: p50=210.425µs p90=422.77µs p99=1.357148ms max=4.97904ms
+round 3: keystroke->echo RTT layout=B n=3000 lost=0: p50=154.932µs p90=346.26µs p99=2.140201ms max=5.994935ms
+round 3: keystroke->echo RTT layout=B2 n=3000 lost=0: p50=141.248µs p90=564.856µs p99=2.603049ms max=4.204424ms
+round 3: keystroke->echo RTT layout=C n=3000 lost=0: p50=120.336µs p90=312.401µs p99=2.280822ms max=7.406364ms
+loadavg after: 26.20 26.17 22.53 32/4605 342531

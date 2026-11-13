@@ -28,7 +28,7 @@ systemctl --user show "$U-srv.service" -p ActiveState -p Result 2>/dev/null
 
 echo "== 2. soak with CPUQuota (cpu.max exists -> runtime keeps an fd and pread64s it)"
 systemd-run --user --quiet --unit="$U-soak" --collect --wait \
-  -p CPUQuota=200% -p StandardOutput=file:"$W/soak.out" -p StandardError=file:"$W/soak.err" \
+  -p CPUQuota="${QUOTA:-200%}" -p StandardOutput=file:"$W/soak.out" -p StandardError=file:"$W/soak.err" \
   --setenv=MOSEY_SPIKE_SANDBOX=both --setenv=MOSEY_SPIKE_STRESS=${SOAK_SECS:-30} "$BIN" soak
-echo "unit exit: $?"
+echo "unit exit: $? (CPUQuota=${QUOTA:-200%})"
 cat "$W/soak.err" "$W/soak.out"

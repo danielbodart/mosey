@@ -1,0 +1,97 @@
+== layout B2
+t=5s  kill -KILL 253807
+t=10s kill -SYS 254460
+client-load exit: 0
+load t=0.5s window-bytes=9172 total=9172
+load t=1.0s window-bytes=9335 total=18507
+load t=1.5s window-bytes=9435 total=27942
+load t=2.0s window-bytes=9535 total=37477
+load t=2.5s window-bytes=9635 total=47112
+load t=3.0s window-bytes=9735 total=56847
+load t=3.5s window-bytes=9835 total=66682
+load t=4.0s window-bytes=9935 total=76617
+load t=4.6s window-bytes=10035 total=86652
+load t=5.1s window-bytes=10135 total=96787
+load t=5.6s window-bytes=10200 total=106987
+load t=6.1s window-bytes=10200 total=117187
+load t=6.6s window-bytes=10200 total=127387
+load t=7.1s window-bytes=10200 total=137587
+load t=7.6s window-bytes=10200 total=147787
+load t=8.1s window-bytes=10200 total=157987
+load t=8.6s window-bytes=10200 total=168187
+load t=9.1s window-bytes=10200 total=178387
+load t=9.6s window-bytes=10200 total=188587
+load t=10.1s window-bytes=10200 total=198787
+load t=10.6s window-bytes=10200 total=208987
+load t=11.1s window-bytes=10200 total=219187
+load t=11.6s window-bytes=10200 total=229387
+load t=12.1s window-bytes=10200 total=239587
+load t=12.6s window-bytes=10200 total=249787
+load t=13.1s window-bytes=10200 total=259987
+load t=13.6s window-bytes=10200 total=270187
+load t=14.2s window-bytes=10200 total=280387
+load t=14.7s window-bytes=10200 total=290587
+load t=15.2s window-bytes=10200 total=300787
+load t=15.7s window-bytes=10200 total=310987
+load t=16.2s window-bytes=10200 total=321187
+load t=16.7s window-bytes=10200 total=331387
+load t=17.2s window-bytes=10200 total=341587
+load t=17.7s window-bytes=10200 total=351787
+load t=18.2s window-bytes=10200 total=361987
+load t=18.7s window-bytes=10200 total=372187
+load t=19.2s window-bytes=10200 total=382387
+load t=19.7s window-bytes=10200 total=392587
+LOAD DONE 20s total-bytes=398726 empty-windows=0 challenges=1
+CHILD-EXIT role=net pid=253807 status=signal: killed
+SUPERVISOR: net respawned pid=254460 50.592038ms after EOF
+CHILD-EXIT role=net pid=254460 status=exit status 2
+SUPERVISOR: net respawned pid=254810 50.504883ms after EOF
+MOSEY-SPIKE STATS roam=validate peer=127.0.0.1:54466 challenges=1 switches=1 ratelimited=0 emu-replies ok=0 denied=0 net-starts=3
+CHILD-EXIT role=emu pid=253808 status=signal: killed
+CHILD-EXIT role=net pid=254810 status=signal: killed
+== layout C
+t=5s  kill -KILL 255067
+client-load exit: 1
+load t=0.5s window-bytes=9183 total=9183
+load t=1.0s window-bytes=9335 total=18518
+load t=1.5s window-bytes=9435 total=27953
+load t=2.0s window-bytes=9535 total=37488
+load t=2.5s window-bytes=9635 total=47123
+load t=3.0s window-bytes=9735 total=56858
+load t=3.5s window-bytes=9835 total=66693
+load t=4.0s window-bytes=9935 total=76628
+load t=4.6s window-bytes=10035 total=86663
+load t=5.1s window-bytes=9117 total=95780
+load t=5.6s window-bytes=0 total=95780
+load t=6.1s window-bytes=0 total=95780
+load t=6.6s window-bytes=0 total=95780
+load t=7.1s window-bytes=0 total=95780
+load t=7.6s window-bytes=0 total=95780
+load t=8.1s window-bytes=0 total=95780
+load t=8.6s window-bytes=0 total=95780
+load t=9.1s window-bytes=0 total=95780
+load t=9.6s window-bytes=0 total=95780
+load t=10.1s window-bytes=0 total=95780
+load t=10.6s window-bytes=0 total=95780
+load t=11.1s window-bytes=0 total=95780
+load t=11.6s window-bytes=0 total=95780
+load t=12.1s window-bytes=0 total=95780
+load t=12.6s window-bytes=0 total=95780
+load t=13.1s window-bytes=0 total=95780
+load t=13.6s window-bytes=0 total=95780
+load t=14.1s window-bytes=0 total=95780
+load t=14.6s window-bytes=0 total=95780
+load t=15.1s window-bytes=0 total=95780
+load t=15.6s window-bytes=0 total=95780
+load t=16.1s window-bytes=0 total=95780
+load t=16.6s window-bytes=0 total=95780
+load t=17.1s window-bytes=0 total=95780
+load t=17.6s window-bytes=0 total=95780
+load t=18.1s window-bytes=0 total=95780
+load t=18.6s window-bytes=0 total=95780
+load t=19.1s window-bytes=0 total=95780
+load t=19.6s window-bytes=0 total=95780
+LOAD DONE 20s total-bytes=95780 empty-windows=29 challenges=1
+mosey-spike client-load: 29 empty windows
+CHILD-EXIT role=proto pid=255067 status=signal: killed
+CHILD-EXIT role=emu pid=255068 status=exit status 0

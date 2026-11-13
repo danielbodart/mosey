@@ -1,0 +1,74 @@
+cmd: scripts/soak-server.sh shell B2 600 $SCRATCH/bin/mosey-spike-soak $SCRATCH/soak600  QUOTA=200%  start=2026-11-13T19:19:39+00:00  kernel=6.18.60
+load t=10.0s window-bytes=192690 total=192690
+load t=20.0s window-bytes=200979 total=393669
+load t=30.1s window-bytes=200011 total=593680
+load t=40.1s window-bytes=199933 total=793613
+load t=50.1s window-bytes=216265 total=1009878
+load t=60.2s window-bytes=239486 total=1249364
+load t=70.2s window-bytes=239798 total=1489162
+load t=80.2s window-bytes=239753 total=1728915
+load t=90.2s window-bytes=238575 total=1967490
+load t=100.3s window-bytes=239783 total=2207273
+load t=110.3s window-bytes=237337 total=2444610
+load t=120.3s window-bytes=240961 total=2685571
+load t=130.4s window-bytes=238590 total=2924161
+load t=140.4s window-bytes=240991 total=3165152
+load t=150.4s window-bytes=239813 total=3404965
+load t=160.4s window-bytes=238530 total=3643495
+load t=170.5s window-bytes=239753 total=3883248
+load t=180.5s window-bytes=238515 total=4121763
+load t=190.5s window-bytes=239783 total=4361546
+load t=200.6s window-bytes=239708 total=4601254
+load t=210.6s window-bytes=239813 total=4841067
+load t=220.6s window-bytes=239738 total=5080805
+load t=230.7s window-bytes=239753 total=5320558
+load t=240.7s window-bytes=239753 total=5560311
+load t=250.7s window-bytes=239753 total=5800064
+load t=260.7s window-bytes=239723 total=6039787
+load t=270.8s window-bytes=238500 total=6278287
+load t=280.8s window-bytes=240976 total=6519263
+load t=290.8s window-bytes=239738 total=6759001
+load t=300.9s window-bytes=239798 total=6998799
+load t=310.9s window-bytes=239768 total=7238567
+load t=320.9s window-bytes=238515 total=7477082
+load t=331.0s window-bytes=239768 total=7716850
+load t=341.0s window-bytes=237337 total=7954187
+load t=351.0s window-bytes=238545 total=8192732
+load t=361.0s window-bytes=239783 total=8432515
+load t=371.1s window-bytes=240991 total=8673506
+load t=381.1s window-bytes=239783 total=8913289
+load t=391.1s window-bytes=238500 total=9151789
+load t=401.1s window-bytes=238545 total=9390334
+load t=411.1s window-bytes=239783 total=9630117
+load t=421.2s window-bytes=239768 total=9869885
+load t=431.2s window-bytes=238500 total=10108385
+load t=441.2s window-bytes=238530 total=10346915
+load t=451.2s window-bytes=239708 total=10586623
+load t=461.3s window-bytes=238515 total=10825138
+load t=471.3s window-bytes=240946 total=11066084
+load t=481.3s window-bytes=238530 total=11304614
+load t=491.4s window-bytes=237322 total=11541936
+load t=501.4s window-bytes=238530 total=11780466
+load t=511.4s window-bytes=254932 total=12035398
+load t=521.4s window-bytes=275084 total=12310482
+load t=531.5s window-bytes=281007 total=12591489
+load t=541.5s window-bytes=276712 total=12868201
+load t=551.5s window-bytes=278138 total=13146339
+load t=561.5s window-bytes=276695 total=13423034
+load t=571.5s window-bytes=276712 total=13699746
+load t=581.5s window-bytes=278206 total=13977952
+load t=591.5s window-bytes=276678 total=14254630
+LOAD DONE 600s total-bytes=14489973 empty-windows=0 challenges=1
+client-load exit=0
+MOSEY-SPIKE PIDS session=273680 net=273692 emu=273698 shell=273699 pts=/dev/pts/1 layout=B2
+[emu pid=273698] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (71.758µs)
+[emu pid=273698] seccomp: how=tsync policy=emu insns=43 skipped=[] threads-at-install=5 (79.203µs, t+335.681µs)
+[net pid=273692] landlock: abi=7 fs=0xffff net=0x3 scoped=0x3 futureUDP=false futureUnix=false tsync=false allthreads=true (65.996µs)
+[net pid=273692] seccomp: how=tsync policy=net-recvonly insns=44 skipped=[] threads-at-install=4 (75.182µs, t+321.063µs)
+[stress pid=273698] done 600s: numGC=23927 goroutines=2
+[stress pid=273692] done 600s: numGC=24165 goroutines=4
+MOSEY-SPIKE STATS roam=validate peer=127.0.0.1:58037 challenges=1 switches=1 ratelimited=0 emu-replies ok=0 denied=0 net-starts=1
+CHILD-EXIT role=emu pid=273698 status=signal: killed
+CHILD-EXIT role=net pid=273692 status=signal: killed
+MOSEY-SPIKE EXIT shell=<nil>
+end=2026-11-13T19:29:42+00:00 sandboxed-process deaths/respawns: 0

@@ -16,7 +16,6 @@ import (
 	"runtime"
 	"strconv"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -62,7 +61,16 @@ func sockaddr(s string) unix.Sockaddr {
 	return &unix.SockaddrInet4{Port: int(ap.Port()), Addr: ap.Addr().As4()}
 }
 
-func runRedteam(t rtTargets, udp *net.UDPConn, ipc *net.UnixConn, layout string, key []byte) {
+// rtCtx is what the compromised process holds.
+type rtCtx struct {
+	role, layout string
+	udp          *net.UDPConn // nil in the emulator helper
+	key          []byte       // traffic key, if this process holds it
+	forge        func() (bool, string)
+}
+
+func runRedteam(t rtTargets, c rtCtx) {
+	udp := c.udp
 	var res []rtResult
 	try := func(name string, f func() (bool, string)) {
 		ok, d := f()
@@ -119,10 +127,16 @@ func runRedteam(t rtTargets, udp *net.UDPConn, ipc *net.UnixConn, layout string,
 		return plain(unix.Sendto(fd, []byte("exfil-new"), 0, sockaddr(t.UDP)))
 	})
 	try("net.inherited UDP sendto anywhere", func() (bool, string) {
+		if udp == nil {
+			return false, "n/a (no UDP fd)"
+		}
 		_, err := udp.WriteToUDPAddrPort([]byte("exfil-inherited"), netip.MustParseAddrPort(t.UDP))
 		return plain(err)
 	})
 	try("net.write() on inherited UDP fd", func() (bool, string) {
+		if udp == nil {
+			return false, "n/a (no UDP fd)"
+		}
 		f, _ := udp.File()
 		if f == nil {
 			return false, "no fd"
@@ -155,7 +169,10 @@ func runRedteam(t rtTargets, udp *net.UDPConn, ipc *net.UnixConn, layout string,
 		}
 		return true, "connected"
 	})
-	try("unix.connect via inherited UDP fd (SCM_RIGHTS path)", func() (bool, string) {
+	try("connect() re-targets the inherited UDP fd", func() (bool, string) {
+		if udp == nil {
+			return false, "n/a (no UDP fd)"
+		}
 		// Can the attacker re-use an inherited socket to reach somewhere
 		// new? connect(2) on the UDP fd re-targets it.
 		f, _ := udp.File()
@@ -168,6 +185,9 @@ func runRedteam(t rtTargets, udp *net.UDPConn, ipc *net.UnixConn, layout string,
 	})
 
 	try("net.setsockopt on inherited UDP fd", func() (bool, string) {
+		if udp == nil {
+			return false, "n/a (no UDP fd)"
+		}
 		f, _ := udp.File()
 		if f == nil {
 			return false, "no fd"
@@ -249,19 +269,30 @@ func runRedteam(t rtTargets, udp *net.UDPConn, ipc *net.UnixConn, layout string,
 		}
 		return plain(e)
 	})
-	try("unshare(CLONE_NEWUSER)", func() (bool, string) {
-		// run on a throwaway locked thread: unshare(USER) affects the thread
-		ch := make(chan error)
-		go func() {
-			runtime.LockOSThread() // never unlocked: thread dies with goroutine
-			_, _, e := unix.RawSyscall(unix.SYS_UNSHARE, unix.CLONE_NEWUSER, 0, 0)
-			if e != 0 {
-				ch <- e
-				return
-			}
-			ch <- nil
-		}()
-		return plain(<-ch)
+	try("clone(CLONE_NEWUSER) from a forked child", func() (bool, string) {
+		// unshare(CLONE_NEWUSER) needs a single-threaded caller, so from a
+		// Go process it fails with EINVAL whatever the sandbox (the first
+		// version of this row measured that, not a defence). clone(2) with
+		// CLONE_NEWUSER and no CLONE_THREAD makes a new single-threaded
+		// process in a new user namespace; the child only calls
+		// exit_group(42).
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		syscall.ForkLock.Lock()
+		pid, _, e := unix.RawSyscall6(unix.SYS_CLONE, unix.CLONE_NEWUSER|uintptr(unix.SIGCHLD), 0, 0, 0, 0, 0)
+		if e == 0 && pid == 0 {
+			unix.RawSyscall(unix.SYS_EXIT_GROUP, 42, 0, 0)
+		}
+		syscall.ForkLock.Unlock()
+		if e != 0 {
+			return plain(e)
+		}
+		var ws unix.WaitStatus
+		_, werr := unix.Wait4(int(pid), &ws, 0, nil)
+		if werr != nil {
+			return true, fmt.Sprintf("clone ok (pid %d); wait4: %s", pid, errDetail(werr))
+		}
+		return true, fmt.Sprintf("child pid %d ran in a new user namespace, exit %d", pid, ws.ExitStatus())
 	})
 	try("keyctl(user keyring)", func() (bool, string) {
 		_, err := unix.KeyctlGetKeyringID(unix.KEY_SPEC_USER_KEYRING, false)
@@ -269,37 +300,18 @@ func runRedteam(t rtTargets, udp *net.UDPConn, ipc *net.UnixConn, layout string,
 	})
 
 	// --- the session itself
-	try("secret: net process holds the session traffic key", func() (bool, string) {
-		if key != nil {
-			return true, fmt.Sprintf("layout A: %d-byte key in memory", len(key))
+	try("secret: this process holds the session traffic key", func() (bool, string) {
+		if c.key != nil {
+			return true, fmt.Sprintf("%s/%s: %d-byte key in memory", c.role, c.layout, len(c.key))
 		}
-		return false, "layout B: never sent"
+		return false, "never sent to this process"
 	})
-	try("ipc: forge keystrokes to the shell", func() (bool, string) {
-		cmd := "touch " + t.Home + "/pwned-ipc\n"
-		var msg []byte
-		if layout == "A" {
-			msg = append([]byte{ipcInput}, cmd...)
-		} else {
-			// Best an attacker without the key can do: a plausible packet
-			// from the client's address with a fresh seq. It won't open.
-			msg = putAddr([]byte{ipcPkt}, netip.MustParseAddrPort("127.0.0.1:1"))
-			msg = append(msg, dirC2S, 0, 0, 0, 0, 0, 0, 0, 99)
-			msg = append(msg, cmd...)
-			msg = append(msg, make([]byte, 16)...)
-		}
-		_, err := ipc.Write(msg)
-		if err != nil {
-			return plain(err)
-		}
-		time.Sleep(700 * time.Millisecond)
-		// The harness checks for ~/pwned-ipc; we can't stat it from here.
-		return true, "message delivered; see harness check for ~/pwned-ipc"
-	})
+	try("forge input to the shell", c.forge)
 
 	for _, r := range res {
 		b, _ := json.Marshal(r)
 		fmt.Fprintf(os.Stderr, "REDTEAM %s\n", b)
+		_ = c.role
 	}
 	fmt.Fprintf(os.Stderr, "REDTEAM-DONE\n")
 }

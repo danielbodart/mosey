@@ -2,7 +2,8 @@
 # Syscall discovery: run the server tree unsandboxed under strace -ff with the
 # net (and emu) process churning the Go runtime for STRESS seconds while the
 # toy client drives traffic; print the per-role syscall sets.
-# usage: discover.sh BIN OUTDIR [STRESS]
+# usage: [MOSEY_SPIKE_LAYOUT=B2|C] discover.sh BIN OUTDIR [STRESS]
+# (layout C: the "net" role below is the proto process)
 set -euo pipefail
 BIN=$(realpath "${1:?bin}"); OUT=${2:?outdir}; STRESS=${3:-20}
 mkdir -p "$OUT"; rm -f "$OUT"/trace.*
@@ -15,8 +16,8 @@ read -r _ _ PORT KEY <"$OUT/server.out"
 { for i in $(seq $((STRESS * 4))); do echo "echo line-$i"; sleep 0.25; done; echo exit; } \
   | "$BIN" client "$PORT" "$KEY" 1500 >"$OUT/client.out" || true
 wait $SPID || true
-NETPID=$(sed -n 's/.*net=\([0-9]*\).*/\1/p' "$OUT/server.err" | head -1)
-EMUPID=$(sed -n 's/.*emu=\([0-9]*\).*/\1/p' "$OUT/server.err" | head -1)
+NETPID=$(grep PIDS "$OUT/server.err" | sed -n 's/.* net=\([0-9]*\).*/\1/p')
+EMUPID=$(grep PIDS "$OUT/server.err" | sed -n 's/.* emu=\([0-9]*\).*/\1/p')
 echo "net=$NETPID emu=$EMUPID client lines back: $(grep -c '^line-' "$OUT/client.out" || true)"
 # strace -ff writes one file per *thread* (tid). Group threads by tgid via
 # the clone() return values recorded in the parent's trace.
