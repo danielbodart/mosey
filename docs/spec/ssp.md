@@ -119,9 +119,11 @@ connection to the same session (resume, D8; takeover, D26) gets a new
 `Endpoint`, and both directions start again from version 0. The server's
 first instruction on it is therefore a full redraw from the empty screen.
 SSP state is per transport so that a shared attach mode can come later
-(D26). How the server maps a new input stream onto the shell's pty after a
-resume is the resume slice's to specify; slice 1 has one connection per
-session.
+(D26). After a resume the server writes the new stream's events to the
+pty from its event 0: the old stream's events it had written stay written,
+any it had not are dropped with the old connection (they were never
+acknowledged as consumed, so the old client could not have counted on
+them), and `InputConsumed` counts the new stream from 0.
 
 ## 2. Roles
 
@@ -619,8 +621,8 @@ keys and is broken or hostile. Rather than drop and wait for a
 retransmission that would fail the same way (a silent stall), `Run` stops
 and returns an error wrapping `ssp.ErrProtocol` that says which rule was
 broken [D]. On the client that ends the session with that message; on the
-server it closes that connection only, so a later slice can resume the
-shell.
+server it closes that connection only, and the session waits for a
+resume (`bootstrap.md` §9.3).
 
 | Event | Handling |
 |---|---|

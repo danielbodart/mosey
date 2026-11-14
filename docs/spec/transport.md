@@ -614,8 +614,8 @@ The kind is the first byte of the plaintext. These match `transport.Kind`.
 | `0x06` | PATH_RESPONSE | the 8 bytes of a challenge | 38 | any live receive key | slice 1 |
 | `0x07` | CHAFF | any bytes, ignored | 30–1232 | any live receive key | reserved: D11, O10 |
 | `0x08` | CHANNEL | channel id (u32 LE) ‖ datagram | ≤ 1232 | any live receive key | reserved: D15 agent and later channels; the agent slice fixes the body |
-| `0x09` | REVOKED | §8.3 | 45 or 57 | any live receive key | reserved for resume (D26) |
-| `0x0A` | END | 1 B: why (`0x01` the shell exited, `0x02` the client quit; any other value still ends) | 31 | any live receive key | slice 1, added at integration (§8.4) |
+| `0x09` | REVOKED | §8.3 | 45 or 57 | any live receive key | slice 1; fires from the resume slice (D26) |
+| `0x0A` | END | 1 B: why (`0x01` the shell exited, `0x02` the client detached; any other value still ends the connection) | 31 | any live receive key | slice 1, added at integration (§8.4) |
 | `0x0B`–`0xFF` | | | | | reserved |
 
 Rules for every kind:
@@ -1064,8 +1064,9 @@ within its budget.
 
 ## 8. Resume (D8) and revocation (D26)
 
-Resume is a later slice. Its wire format is fixed here so slice 1 doesn't
-rule it out; nothing below is built in slice 1 except what §8.3 marks.
+Built in the resume slice. The transport itself needed no new wire
+format for it: a resume is a handshake like any other (§8.1), and the
+revocation of §8.3 was built in slice 1 and now fires.
 
 ### 8.1 Resume is a new handshake
 
@@ -1091,8 +1092,10 @@ transport needs from them, and where the three disagree, those two win.
    uid with `SO_PEERCRED` against its own and refuses any other. That is
    the authentication: the SSH login proved the user, and the kernel
    proves the connecting `mosey --serve` is that user.
-3. The spawner forwards the client's `s_C` (and terminal size) to proto
-   over IPC (`server.md` §3.2, the reserved `Resume` message, 0x05), and
+3. The spawner forwards the client's `s_C` to proto over IPC
+   (`server.md` §3.3, the `Resume` message, 0x05; the terminal size is
+   not forwarded: the client sends it as its first input event once
+   confirmed, `bootstrap.md` §9.2 step 6), and
    proto mints a fresh credential for the **same `sid`** (§3.4), bound to
    the new `s_C`, with a new `cred_id`, `psk` and `s_S`. The usual TTL and
    cap of 2 unused per session apply. The credential comes back as
@@ -1127,8 +1130,8 @@ or parsed (§9); and the parsers are exact-length and fuzzed.
 ### 8.3 Revocation
 
 When a connection of a session is confirmed, `Listener.Accept` revokes
-every other connection of that `sid` (D26). In slice 1 a session mints
-one credential, so this never fires; the code path exists and is tested.
+every other connection of that `sid` (D26). Every resume does this to the
+connection it replaces, whether its client is still there or not.
 
 To revoke a connection the server:
 
@@ -1174,10 +1177,12 @@ quiet, so the end is said out loud (`server.md` §2.4, §11 item 7):
   (until the client acknowledges it, or T6), then calls
   `Conn.End(EndShellExited)`. The client reports `transport.Ended`, closes
   its connection with `ErrEnded`, restores the terminal and exits 0.
-- **The client's user quits** (a signal, or the end of its terminal), or
-  the client fails: it calls `Conn.End(EndClientQuit)`. Proto reports
-  `Ended`, and since slice 1 has no resume, the session ends
-  (`Exit{ClientClosed}`).
+- **The client detaches** (a signal, or the end of its terminal's
+  input), or the client fails: it calls `Conn.End(EndDetached)`. Proto
+  reports `Ended`, closes that connection and keeps the session for a
+  resume (`bootstrap.md` §9.3, `server.md` §2.4). The reason byte 0x02
+  meant "the client quit" before the resume slice; only its meaning for
+  the server changed, so the wire is unchanged.
 
 `End` seals **3 END frames**, each when it is sent, **100 ms apart**
 [ours: one loss, or a burst shorter than 100 ms, still gets one through,
@@ -1191,7 +1196,10 @@ keys can end it, and it is replay-protected like every frame, so a
 recorded END cannot end a later epoch. If every copy is lost (an outage
 longer than T6 + 200 ms as the shell exits), the client is left waiting
 on a session that has gone, as it would be without END, until its user
-quits; the resume slice (D8) has to revisit this.
+detaches. The resume slice leaves it so [choice]: a detached client that
+then tries `mosey -r` is told there is no session, which is the truth,
+and no timer on the client could tell a finished session from a long
+outage any better.
 
 ## 9. Erasing secrets
 

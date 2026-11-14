@@ -270,16 +270,21 @@ screen under synchronised output; `emu.New(cols, rows, Options)` is tuios. The
 server's IPC-backed Emulator implements the same interface, which is what
 lets `server.Session` run in process for tests.
 
-**server.** `Session{Listener, Terminal, Emulator, Log, Attached}.Run(ctx)`,
-where `Terminal` is the pty (`Read`, `Write`, `Resize`, `EchoOff`); it
-returns nil when the shell exited, `ErrNoClient` or `ErrClientClosed`.
+**server.** `Session{Listener, Terminal, Emulator, Log, Attached,
+Detached}.Run(ctx)`, where `Terminal` is the pty (`Read`, `Write`,
+`Resize`, `EchoOff`); it serves one connection at a time, for as long as
+the shell runs, taking each new one the listener accepts (resume, D8;
+the listener has revoked the old one, D26) and outliving a client that
+detaches; it returns nil when the shell exited, or `ErrNoClient` if no
+client ever attached. `Minted` tells it a resume credential was minted,
+which keeps a never-attached session waiting.
 `Launcher`, `RunSpawner`, `RunProto` and `RunEmu` are the roles' mains.
 
 **ipc.** `Pair()`, `Conn.Send(Message)`, `Conn.Recv()`; messages, with
 fixed layouts and a fuzzed `Parse` (`server.md` §3): launcher↔spawner
 `ClientLine`, `Ready`, `Failed`; spawner→proto `Start`, `EmuLink`,
-`ShellExit`, `EmuPaused`; proto→spawner `Credential`, `Attached`,
-`KillEmu`, `Exit`; proto→emu `Init`, `Output`, `Resize`, `Flush`;
+`ShellExit`, `EmuPaused`, `Resume`; proto→spawner `Credential`,
+`Attached{Peer}`, `Detached`, `KillEmu`, `Exit`; proto→emu `Init`, `Output`, `Resize`, `Flush`;
 emu→proto `Update`, `Replies`.
 
 **bootstrap.** As `bootstrap.md` §10.1: `ClientLine`, `CredentialLine`,
@@ -287,18 +292,23 @@ emu→proto `Update`, `Replies`.
 `ParseSSHOptions`, `Config` (from `SSH.Resolve`, which runs `ssh -G`),
 `SSH.Command(ctx, Config)`, `AgentSocket` and `ChooseAddr`. The spawner
 uses `ParseClientLine`, `MarshalCredentialLine` and `MarshalErrorLine`.
+The resume slice adds `SessionLine` (the attach socket's greeting) with
+`MarshalSessionLine`, `ParseSessionLine` and `SessionLineVersion`,
+`AnySession`, `CodeAmbiguous`, and `SSH.Role` for `--serve=list`.
 
 **terminal.** `Terminal` (`Read`, `Write`, `Size`, `Resized`, `Raw`,
 `Restore`); `Open(in, out)` leaves the mode alone, since the terminal
 stays cooked for ssh's prompts until the handshake is done.
 
 **client.** `Run(ctx, Options{SSH, Version, Terminal, Stderr, Log,
-Getenv})` for the binary; `Session{Conn, Server, Credential, Key,
+Getenv, Resume, SessionID})` for the binary, and `List(ctx, ListOptions)`
+for `-list`; `Session{Conn, Server, Credential, Key,
 Terminal, Log, Capabilities}.Run(ctx)` for after the bootstrap, which the
 netsim end-to-end test drives; it returns nil when the server ends the
 session, and otherwise tells the server with `End` before it returns.
 Errors are `*Failure`,
-`*TakenOverError` and `*bootstrap.UsageError`; `ExitStatus` maps them.
+`*TakenOverError`, `*DetachedError` (exit 0) and `*bootstrap.UsageError`;
+`ExitStatus` maps them.
 
 ## 6. Tests
 
@@ -328,8 +338,8 @@ Errors are `*Failure`,
 
 | Later | Reserved now |
 |---|---|
-| Resume (D8) | `Credential.SessionID`; `Listener` routes by credential, not by process; `handshake.Credentials` is per session |
-| Exclusive attach (D26) | `Hello.Attach`, `transport.KindRevoked`, `transport.Revoked` event |
+| Resume (D8) | **built** (resume slice): the attach socket (`server.md` §2.6), `ipc.Resume`, `bootstrap.md` §9.2–§9.4 |
+| Exclusive attach (D26) | **built** (resume slice) on `Hello.Attach`, `transport.KindRevoked`, the `Revoked` event |
 | Agent channel (D15, D25) | `ChannelAgent`, `transport.KindChannel`, `bootstrap.SSH.AgentCapture` |
 | Provenance (D28) | `Conn.HandshakeHash` |
 | Prediction (D12) | `Grid.EchoOff`, `Grid.EchoAck`, `userinput.Stream.Len` |

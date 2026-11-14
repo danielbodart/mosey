@@ -2,9 +2,10 @@
 
 What mosey protects, from whom, where the trust boundaries are, what each
 mechanism defends, and which risks are accepted. It grows with the slices
-(PLAN §6.2). This version covers **slice 1**: `mosey host` gives an
-interactive login shell end to end, with no resume, agent forwarding,
-prediction, auto-upload or chaff. Items marked **[later]** describe the
+(PLAN §6.2). This version covers **slice 1** and **resume**: `mosey host`
+gives an interactive login shell end to end, and `mosey -r host` takes a
+running session over from wherever the user can SSH from (§4.5). There is
+no agent forwarding, prediction, auto-upload or chaff yet. Items marked **[later]** describe the
 slice that brings them, so slice 1 reserves the right hooks and claims
 nothing it doesn't do.
 
@@ -318,15 +319,36 @@ path logic. In S4's layout B a compromised packet pump defeated validation
 by carrying the challenge to the real client and relabelling the answer
 [S4 §3.7].
 
-### 4.5 Exclusive attach (D26) — T8 **[later: needs resume]**
+### 4.5 Resume and exclusive attach (D8, D26) — T8, T13
 
 A new attach revokes every other transport of the session and wipes its
 keys; the kicked client exits with "session taken over from <addr> at
 <time>". Only this turns "SSH in again" into recovery from a stolen client
-[S1 §3.1, review item 3]. Slice 1 reserves it (`Hello.Attach`,
-`transport.KindRevoked`, the `Revoked` event, `Credentials` per session),
-but has no second attach, so **in slice 1 the only way to cut off a stolen
-client is to SSH in and end the session's processes** (R5).
+[S1 §3.1, review item 3]: `mosey -r host` from any device the user can
+SSH from cuts the stolen one off, and its keys are erased on the server
+at once (`transport.md` §8.3).
+
+The resume itself (`bootstrap.md` §9.2, `server.md` §2.6):
+
+- **Who may resume.** Only someone who can SSH in as the user: the attach
+  socket is in a 0700 directory owned by the user, checked with `lstat`
+  (no symlinks, no group or other bits) by both the spawner that makes it
+  and the launcher that connects, and the spawner checks the peer's uid
+  with `SO_PEERCRED`. Another local user (T13) can neither reach the
+  socket nor plant one the launcher would follow.
+- **What a resume reuses.** Nothing secret: a new one-shot key on each
+  side, a new PSK and credential, new indices and counters; only the
+  session id (public) is the same. No key, counter or PSK is ever written
+  to disk, by either side (D8).
+- **The spawner's new input.** It now parses a `ClientLine` from any
+  process of the user that connects to the socket (the same fuzzed,
+  canonical parser as at bootstrap) and two more fixed-layout messages from
+  proto (`Attached` with an address, `Detached`); it forwards only an
+  X-Wing key it has checked. Proto's new input is `Resume`, a fixed-length
+  key.
+- **What a resume does not do**: it does not reach a session whose proto
+  has died (R17), and it does not cross versions (`bootstrap.md` §9.2
+  step 5).
 
 ### 4.6 SSP bounds and compression (D11, D24) — T5, A9
 
@@ -665,7 +687,7 @@ with Dan.
 | **R2** | **Keystroke timing.** D11 sends every keystroke as its own datagram, so an on-path observer sees when the user types, including at password prompts (Song et al. 2001) | T2 | Until chaff (O10, [later]) as with SSH before OpenSSH 9.5's `ObscureKeystrokeTiming` | `KindChaff` is reserved. No echo-ack-only server frames while the pty has echo off (D11, [later] with prediction: S6 measured 129 such frames at no-echo prompts falling to 9 [M S6 §6]). Slice 1 has no prediction and so no echo-ack frames at all; a password typed at a no-echo prompt changes no screen state and draws only SSP's delayed acks |
 | **R3** | **No rekey on idleness** (D20). The keys in memory after a burst of typing protected that burst until the next 120 s rekey | T8 | Decided in D20 | Exposure is bounded by `RekeyAfter` + `KeepPrevFor` (≤ 130 s) **provided the 120 s timer runs on epoch age and fires on any send, SSP heartbeats included** (`transport.md` §6.2 does this); and, whatever an on-path attacker does to rekey frames, by `RejectAfterTime` + `KeepPrevFor` (≤ 190 s), because no data is sealed under keys older than 180 s (§4.3) |
 | **R4** | **A compromised proto is the user.** It holds the pty master and the keys | T7 | Inherent: whatever reads the network and writes the pty can type into the shell (S4 red team: every layout with a key holder) | proto's pre-auth surface is a fixed header, a map lookup and the standard library's AEAD; everything else needs the keys. Every parser is fuzzed. Landlock + seccomp stop the likely Go bug class (confused deputy) from reaching files, sockets or other processes directly. It can still `sendto` anywhere from its socket: seccomp cannot filter `sockaddr` |
-| **R5** | **A stolen client keeps the session** in slice 1, until someone ends the session's processes over SSH. There is no idle timeout | T8 | D26's exclusive attach needs resume [later] | Rekey bounds what stolen keys reveal of the past (§4.3). D26 [later] revokes and wipes on the next attach |
+| **R5** | **A stolen client keeps the session until the user resumes it** from somewhere else, and a detached session lives until its shell exits: there is no idle timeout | T8 | A session is resumable for as long as its shell runs (`bootstrap.md` §9.3), as Mosh's server and tmux are | Rekey bounds what stolen keys reveal of the past (§4.3). Any resume revokes the stolen client and wipes its keys (§4.5, D26) |
 | **R6** | **Erasure is "after GC reuse"** on darwin and in non-release builds; `crypto/hpke` keys can't be erased on demand | T8 | Go offers no other way. Likewise **swap and hibernation**: Go cannot pin or exclude the pages a key lands on, so a key can reach a swap device or hibernation image; an encrypted swap is the user's defence | `runtimesecret` on linux release builds (§4.10). The 30 s credential TTL bounds how long an unused one-shot key lives. Core dumps are suppressed in every process that holds a secret (§4.10) |
 | **R7** | **A leaked bootstrap line plus a sustained msg1 flood** can keep the genuine client from finishing within the TTL | T9 + T1 (or T3) | A flood needs *distinct* msg1s that pass `mac1` and decapsulate, so it needs the PSK: a replay of the genuine msg1 is answered from the cache and evicts nothing (§4.1). With the leak, the worst case is DoS, never impersonation | ≤ 4 responders per credential, oldest evicted, replays never counted; confirmation-based consumption [S1 §3.1] |
 | **R8** | **On-path denial of service**: a T3 that drops packets stops the session, including one that drops only rekey frames until the keys reach `RejectAfterTime` | T3 | No protocol can prevent it | SSP keeps state and recovers when the path comes back; a blocked rekey stalls the session rather than stretching the epoch (§4.3) |
@@ -677,7 +699,7 @@ with Dan.
 | **R14** | **`crypto/hpke` is outside the 2025 Trail of Bits audit** | all | Composing X-Wing ourselves is closer to writing our own crypto (D19) | Recorded in `DEPENDENCIES.md`; part of the external review before 1.0 (PLAN §6.5) |
 | **R15** | **tuios is young, mostly one author**, and has no bound on OSC 8 link storage | T4 | Best candidate by a wide margin (S2); fork if upstream stalls (D23) | Pinned; fuzzed; the emu sandbox and its memory limits (512 MiB cgroup, 1 GiB `RLIMIT_DATA`; R18) contain it; upstream fixes listed in S2 |
 | **R16** | **Fuzzing so far is minutes, not hours** (S1: 38.5 min across targets; S2: 15–20 min per target) | all | Spikes, not production | Every attacker-reachable parser has a target, each run for minutes locally before it lands and 10 s in CI; continuous fuzzing before 1.0 (PLAN §6.5) |
-| **R17** | **Slice 1 has no resume**, so a proto that dies ends the network side of the session; the shell survives because the spawner holds the pty [M S4 §3.8] but can't be reached | T7, bugs | Resume is the next slice (D8) | Requirement: in slice 1, when proto exits the spawner hangs up the pty so no unreachable shell is left running |
+| **R17** | **A proto that dies ends the session**: resume brings back a client that went away, not a proto that crashed, so the shell is hung up | T7, bugs | Restarting proto on the same pty is a later slice (`server.md` §5.4) | When proto exits the spawner hangs up the pty, so no unreachable shell is left running |
 | **R18** | **Without a systemd user manager, emu's memory bound is `RLIMIT_DATA` alone**: 1 GiB per session instead of 512 MiB, counted in address space rather than charged memory, with swap not excluded | T4, T6 | Many hosts have no user manager (non-systemd distributions, containers, sshd without PAM [S4 §3.10]); refusing to run there would rule them out for no security gain, since `RLIMIT_DATA` is still a hard bound | `RLIMIT_DATA` set by emu on itself before its sandbox, not raisable (no `setrlimit`/`prlimit64` in its policy); the spawner logs once that the cgroup is missing; if neither limit can be set, emu does not start (§4.8). `TestEmuMemoryLimitRestartsEmu` checks S2's link flood is stopped (`server.md` §6.3) |
 
 ## 6. Who can do what (slice 1)
@@ -768,13 +790,14 @@ target (architecture §6).
 | `ValidReply` admits only fixed templates | `server` | `FuzzValidReply`: anything accepted contains no CR, LF or free C0 |
 | Each role's policy allows exactly its list | `sandbox` | the BPF interpreter, amd64 and arm64 |
 | emu under its sandbox cannot open, connect, exec, create sockets or signal another process | `sandbox` (linux) | a red-team battery run inside the sandboxed role, as S4's, plus `tgkill` at a sibling and `fcntl(F_SETOWN)` + `O_ASYNC`, with Landlock's signal scope off |
+| A resume revokes the old client and erases its keys; the old client exits saying who took over; nothing secret is reused | `e2e`, `server` | netsim: a client vanishes and another attaches with a new credential for the same SID; the first gets `Revoked`; real sshd: `mosey -r` takes over and the first exits 3 |
+| Only the user reaches the attach socket | `server` | the directory checks refuse group/other bits, a foreign owner and a symlink; a foreign uid is closed unanswered |
 | End to end under every netsim profile | `e2e` | client and server sessions in process; real binaries over loopback through a throwaway sshd |
 
 ## 9. Later slices
 
 | Slice | What it adds to this model |
 |---|---|
-| Resume (D8) | A unix socket in a 0700 directory with an `SO_PEERCRED` uid check; exclusive attach (D26) closes R5; transport and crypto state never on disk [S1 §1.4] |
 | Agent forwarding (D25) | A11. The strict capture state machine (one connection, the ssh child's pid and uid, exactly bind-with-fwd=1 then REQUEST_IDENTITIES then EOF), the bind pinned to known_hosts, and the agent off when no trustworthy bind exists; a hostile server's injected bind was refused [M S3 E11]. The client refuses agent channels it didn't negotiate [M S3 E7b]. proto's policy gains argument-filtered `accept4` |
 | Prediction (D12) | Passwords: the echo-off bit and informative-keystroke confirmation showed 0 of 555 password keys [M S6 §5]; no echo-ack-only frames while echo is off. The input log is zeroed on eviction and nothing is logged while echo is off [S6 §9] |
 | Chaff (D11, O10) | Closes R2 to the extent the tick allows; the cost is measured in netsim first |
