@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/netip"
 
+	"github.com/danielbodart/mosey/internal/agent"
+	"github.com/danielbodart/mosey/internal/channel"
 	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/render"
 	"github.com/danielbodart/mosey/internal/screen"
@@ -33,6 +35,10 @@ type Session struct {
 	// the locale's UTF-8 among it: without it the renderer writes no byte
 	// at or above 0x80 (screen.md §8.3).
 	Capabilities render.Capabilities
+	// Agent, if set, forwards the user's agent: the client offers the
+	// agent channel and serves the ones the server opens (agent.md §3).
+	// Nil is no agent: the channel is not offered, so none can be opened.
+	Agent *agent.Forwarder
 }
 
 // transport.Conn must be an ssp.Chaffer: NewEndpoint only chaffs over
@@ -59,6 +65,16 @@ func (s *Session) Run(ctx context.Context) error {
 		return err
 	}
 	defer conn.Close()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if s.Agent != nil {
+		if conn.Carries(handshake.ChannelAgent) {
+			mux := channel.NewMux(conn, channel.Config{Role: channel.Client, Accept: s.Agent.Accept, Log: log})
+			go mux.Run(ctx)
+		} else {
+			log.Warn("the server does not forward an agent")
+		}
+	}
 
 	if err := s.Terminal.Raw(); err != nil {
 		return fail(err, "putting the terminal in raw mode: %v", err)
@@ -116,7 +132,11 @@ func (s *Session) dial(ctx context.Context, log *slog.Logger) (*transport.Conn, 
 	dctx, cancel := context.WithTimeout(ctx, handshake.CredentialTTL)
 	defer cancel()
 	log.Info("dialling", "server", s.Server)
-	conn, err := transport.Dial(dctx, s.Conn, s.Server, s.Credential, s.Key, log)
+	var offer []handshake.ChannelType
+	if s.Agent != nil {
+		offer = append(offer, handshake.ChannelAgent)
+	}
+	conn, err := transport.DialOffering(dctx, s.Conn, s.Server, s.Credential, s.Key, offer, log)
 	if err == nil {
 		log.Info("connected", "server", s.Server)
 		return conn, nil

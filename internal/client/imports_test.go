@@ -12,7 +12,7 @@ import (
 // only the server's emu role may reach it.
 var clientPath = []string{
 	"client", "render", "screen", "terminal", "userinput",
-	"ssp", "transport", "handshake", "bootstrap", "nocore",
+	"ssp", "transport", "handshake", "bootstrap", "nocore", "channel", "agent",
 }
 
 // The client never parses a remote escape sequence (D9), so nothing on its

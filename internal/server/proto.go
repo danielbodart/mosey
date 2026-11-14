@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/danielbodart/mosey/internal/agent"
+	"github.com/danielbodart/mosey/internal/channel"
 	"github.com/danielbodart/mosey/internal/emu"
 	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/ipc"
@@ -124,6 +126,11 @@ type Session struct {
 	// broken is an endpoint whose client broke the input protocol, for
 	// the main loop to drop.
 	broken chan *ssp.Endpoint[*screen.Grid, *userinput.Stream]
+	// mux is the attached connection's agent channels, or nil while no
+	// client that negotiated the agent is attached (agent.md §4.2).
+	mux *channel.Mux
+	// agentIn carries local agent connections to serveAgents.
+	agentIn chan io.ReadWriteCloser
 }
 
 func (s *Session) init() {
@@ -146,7 +153,51 @@ func (s *Session) init() {
 		s.broken = make(chan *ssp.Endpoint[*screen.Grid, *userinput.Stream], 1)
 		s.shellExit = make(chan struct{})
 		s.done = make(chan struct{})
+		s.agentIn = make(chan io.ReadWriteCloser, channel.MaxStreams)
 	})
+}
+
+// AgentConn hands the session a connection to its agent socket (server.md
+// §2.7): it is carried to the attached client over an agent channel, or
+// closed if no attached client forwards an agent, or too many are open
+// (agent.md §4.2).
+func (s *Session) AgentConn(c io.ReadWriteCloser) {
+	s.init()
+	select {
+	case s.agentIn <- c:
+	case <-s.done:
+		c.Close()
+	default:
+		c.Close() // a backlog this deep is already over the limit
+	}
+}
+
+// serveAgents serves each agent connection over the current client's
+// agent channels, until ctx is done.
+func (s *Session) serveAgents(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			for {
+				select {
+				case c := <-s.agentIn:
+					c.Close()
+				default:
+					return nil
+				}
+			}
+		case c := <-s.agentIn:
+			s.mu.Lock()
+			m := s.mux
+			s.mu.Unlock()
+			if m == nil || m.Live() >= channel.MaxStreams {
+				s.Log.Info("refusing an agent connection: no attached client forwards an agent, or too many are open")
+				c.Close()
+				continue
+			}
+			go agent.Serve(ctx, m, c, s.Log)
+		}
+	}
 }
 
 // ShellExited tells the session the spawner saw the login shell exit. The
@@ -178,6 +229,7 @@ type attachment struct {
 	sspDone chan struct{}
 	gone    chan error
 	quit    chan struct{}
+	mux     *channel.Mux
 }
 
 // Run serves the session: it moves output from the terminal through the
@@ -207,6 +259,7 @@ func (s *Session) Run(ctx context.Context) error {
 	run(s.readPTY)
 	run(s.writePTY)
 	run(s.watch)
+	run(s.serveAgents)
 	conns := make(chan *transport.Conn)
 	run(func(ctx context.Context) error { return s.accept(ctx, conns) })
 
@@ -329,8 +382,16 @@ func (s *Session) attach(parent context.Context, c *transport.Conn) *attachment 
 	}, screen.NewGrid(0, 0), userinput.NewStream())
 	sctx, stop := context.WithCancel(parent)
 	a := &attachment{conn: c, ep: ep, stop: stop, sspDone: make(chan struct{}), gone: make(chan error, 1), quit: make(chan struct{})}
+	// The agent's channels, if this client forwards an agent (agent.md
+	// §4.2). They end with the connection: detach or takeover resets
+	// every one, and the far programs see their connections close.
+	if c.Carries(handshake.ChannelAgent) {
+		a.mux = channel.NewMux(c, channel.Config{Role: channel.Server, Log: s.Log})
+		go a.mux.Run(sctx)
+	}
 	s.mu.Lock()
 	s.ep, s.consumed = ep, 0
+	s.mux = a.mux
 	s.mu.Unlock()
 	s.wake(s.switched)
 	go func() {
@@ -375,6 +436,9 @@ func (s *Session) drop(a *attachment) {
 	s.mu.Lock()
 	if s.ep == a.ep {
 		s.ep = nil
+	}
+	if a.mux != nil && s.mux == a.mux {
+		s.mux = nil
 	}
 	s.mu.Unlock()
 	s.wake(s.switched)

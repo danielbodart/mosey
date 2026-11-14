@@ -260,16 +260,20 @@ func TestTheSpawnerRefusesAResumeLineThatIsNotForIt(t *testing.T) {
 	if _, err := checkResumeLine(resumeLine(t, "v1", bootstrap.AnySession), "v1", sid); err != nil {
 		t.Errorf("AnySession: %v", err)
 	}
+	// A resuming client may forward its agent: its own login triggered
+	// its own bind (bootstrap.md §9.2 step 2).
+	agent := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Resume: true, SessionID: sid, Agent: true,
+		Cols: 80, Rows: 24, Public: oneShotKey(t)})
+	if _, err := checkResumeLine(agent, "v1", sid); err != nil {
+		t.Errorf("agent=yes: %v", err)
+	}
 	badKey := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Resume: true, SessionID: sid,
 		Cols: 80, Rows: 24, Public: bytes.Repeat([]byte{0xff}, bootstrap.PublicKeySize)})
 	newLine := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Cols: 80, Rows: 24, Public: oneShotKey(t)})
-	agent := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Resume: true, SessionID: sid, Agent: true,
-		Cols: 80, Rows: 24, Public: oneShotKey(t)})
 	for name, line := range map[string][]byte{
 		"another session": resumeLine(t, "v1", [16]byte{6}),
 		"another version": resumeLine(t, "v2", sid),
 		"a new session":   newLine,
-		"agent":           agent,
 		"a bad key":       badKey,
 		"malformed":       append(bytes.Clone(good[:len(good)-1]), ' ', '\n'),
 	} {

@@ -3,6 +3,8 @@ package client
 import (
 	"testing"
 
+	"github.com/danielbodart/mosey/internal/channel"
+	"github.com/danielbodart/mosey/internal/transport"
 	"github.com/danielbodart/mosey/internal/userinput"
 )
 
@@ -45,5 +47,14 @@ func TestTheFlowControlBoundsAreConsistent(t *testing.T) {
 	}
 	if userinput.RetainBytes < 2*userinput.MaxDiffBytes {
 		t.Errorf("RetainBytes %d is under twice MaxDiffBytes", userinput.RetainBytes)
+	}
+}
+
+// The stream layer's largest body is the transport's largest payload:
+// channel never imports transport (architecture.md §1), so the two are
+// checked to agree here, where both are used.
+func TestAChannelBodyIsExactlyATransportPayload(t *testing.T) {
+	if channel.MaxBody != transport.MaxPayload {
+		t.Errorf("channel.MaxBody %d, transport.MaxPayload %d", channel.MaxBody, transport.MaxPayload)
 	}
 }

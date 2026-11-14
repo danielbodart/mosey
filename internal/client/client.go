@@ -128,6 +128,9 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
+	if b.forward != nil {
+		b.forward.Log = o.Log
+	}
 
 	addr, err := bootstrap.ChooseAddr(ctx, line, cfg, lookupIP, localPrefixes(o.Log))
 	if err != nil {
@@ -155,6 +158,7 @@ func Run(ctx context.Context, o Options) error {
 		Terminal:     o.Terminal,
 		Log:          o.Log,
 		Capabilities: render.FromEnv(o.Getenv),
+		Agent:        b.forward,
 	}
 	// The Session has its own copy, which dial wipes once msg1 is built
 	// (threat-model.md §4.10).

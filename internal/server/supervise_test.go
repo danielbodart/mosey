@@ -175,7 +175,7 @@ func TestTheShellGetsSSHDsEnvironmentWithTheClientsLocale(t *testing.T) {
 		"TERM": "alacritty", "COLORTERM": "truecolor", "LANG": "en_GB.UTF-8",
 		"LC_ALL": "bad value with spaces", "EVIL": "x",
 	}
-	env := shellEnv(base, from, discardLog())
+	env := shellEnv(base, from, "", discardLog())
 	got := map[string]string{}
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
@@ -231,4 +231,21 @@ func s(a netip.Addr) string {
 		return ""
 	}
 	return a.String()
+}
+
+// With the agent forwarded, the shell's SSH_AUTH_SOCK is mosey's own
+// socket, never sshd's, which dies with the bootstrap login (server.md
+// §2.5, §2.7).
+func TestTheShellsAgentIsMoseysSocketWhenTheAgentIsForwarded(t *testing.T) {
+	base := []string{"PATH=/bin", "SSH_AUTH_SOCK=/tmp/ssh-x/agent.1"}
+	env := shellEnv(base, nil, "/run/user/1/mosey/abc/agent.sock", discardLog())
+	var socks []string
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "SSH_AUTH_SOCK="); ok {
+			socks = append(socks, v)
+		}
+	}
+	if len(socks) != 1 || socks[0] != "/run/user/1/mosey/abc/agent.sock" {
+		t.Errorf("SSH_AUTH_SOCK %q", socks)
+	}
 }

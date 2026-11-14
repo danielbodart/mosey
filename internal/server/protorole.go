@@ -188,8 +188,8 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 // at once (server.md §7).
 var errSpawnerGone = errors.New("the spawner closed the control socket")
 
-// readControl is proto's C reader: EmuLink, EmuPaused, ShellExit and
-// Resume from the spawner. A malformed message is a bug in a more trusted process, so
+// readControl is proto's C reader: EmuLink, EmuPaused, AgentConn,
+// ShellExit and Resume from the spawner. A malformed message is a bug in a more trusted process, so
 // proto logs it and ends (server.md §5.3).
 func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, resume func([]byte) error, cancel context.CancelCauseFunc, log *slog.Logger) {
 	gen := uint32(1)
@@ -220,6 +220,8 @@ func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, resume func([]by
 			}()
 		case ipc.EmuPaused:
 			em.pause(m.Seconds)
+		case ipc.AgentConn:
+			sess.AgentConn(m.Conn)
 		case ipc.Resume:
 			// The spawner checked the key (server.md §2.6), so a mint that
 			// fails is a bug, and the session ends on it rather than leave

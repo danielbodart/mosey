@@ -32,10 +32,9 @@ type SSH struct {
 	// Version is this client's swver, which the probe looks for. Only the
 	// probe uses it.
 	Version string
-	// AgentCapture is the capture socket for D25's bind capture: the agent
-	// slice sets it, and the bootstrap then runs with
-	// ForwardAgent=AgentCapture. Empty is ForwardAgent=no, slice 1's only
-	// setting.
+	// AgentCapture is the capture socket for D25's bind capture (§8):
+	// when set, the bootstrap runs with ForwardAgent=AgentCapture. Empty
+	// is ForwardAgent=no.
 	AgentCapture string
 	// Role is the server role to run: "" for the bootstrap's own
 	// `--serve`, or RoleList for `--serve=list` (§9.4), which reads no

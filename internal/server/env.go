@@ -48,7 +48,7 @@ func validVar(v string) bool {
 // this session, sshd's SSH_AUTH_SOCK dies with the bootstrap connection,
 // TERM is the emulator's, and COLORTERM and the locale come from the
 // client.
-func shellEnv(base []string, from map[string]string, log *slog.Logger) []string {
+func shellEnv(base []string, from map[string]string, agentSock string, log *slog.Logger) []string {
 	var env []string
 	for _, kv := range base {
 		name, _, _ := strings.Cut(kv, "=")
@@ -59,6 +59,11 @@ func shellEnv(base []string, from map[string]string, log *slog.Logger) []string 
 		env = append(env, kv)
 	}
 	env = append(env, "TERM="+shellTERM)
+	if agentSock != "" {
+		// mosey's own agent socket replaces sshd's, which dies with the
+		// bootstrap login (server.md §2.5, §2.7).
+		env = append(env, "SSH_AUTH_SOCK="+agentSock)
+	}
 	names := make([]string, 0, len(from))
 	for name := range from {
 		names = append(names, name)

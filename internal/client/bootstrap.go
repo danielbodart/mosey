@@ -9,11 +9,15 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
+	"github.com/danielbodart/mosey/internal/agent"
 	"github.com/danielbodart/mosey/internal/bootstrap"
 )
 
@@ -42,6 +46,12 @@ type spawn struct {
 	getenv func(string) string
 	// cfg is what ssh -G said, once run has asked it.
 	cfg bootstrap.Config
+	// forward is the agent forwarding the bootstrap set up, or nil for
+	// none (bootstrap.md §5, §8); saidAgentOff is whether the user has
+	// been told why not, which run, tried again after a D7 copy, says
+	// only once.
+	forward      *agent.Forwarder
+	saidAgentOff bool
 }
 
 func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Config, error) {
@@ -58,23 +68,12 @@ func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Co
 		return bootstrap.CredentialLine{}, nil, fail(err, "ssh -G %s failed", dest)
 	}
 	b.cfg = cfg
-	// D25: slice 1 always bootstraps with ForwardAgent=no, but works out
-	// what the user's config asks for, for the log and the agent slice.
-	sock, on := bootstrap.AgentSocket(cfg, b.getenv)
-	b.log.Debug("agent forwarding", "config", cfg.Get("forwardagent"), "wanted", on, "socket", sock, "forwarded", false)
-
-	// AGENT SLICE HOOK (bootstrap.md §8, S3 option a'). When `on`, the
-	// agent slice, here and nowhere else:
-	//   1. listens on a capture socket in a fresh 0700 directory and sets
-	//      b.ssh.AgentCapture to its path, so Command passes
-	//      ForwardAgent=<capture socket> instead of no;
-	//   2. sends agent=yes in b.line;
-	//   3. after startPiped, tells the capture its only acceptable peer:
-	//      cmd.Process.Pid and our uid;
-	//   4. reads the capture's result only after reap has seen ssh exit
-	//      (so the far side controls no timer), pins the bind to
-	//      known_hosts, and on NoBind carries on with the agent off.
-	// Until then AgentCapture stays "" and the line says agent=no.
+	// D25: forward the agent exactly when ssh would (bootstrap.md §5),
+	// through a capture socket that takes ssh's own session-bind (§8).
+	capt, sock := b.startCapture(cfg)
+	if capt != nil {
+		defer capt.Close()
+	}
 
 	cmd := b.ssh.Command(ctx, cfg)
 	p, err := startPiped(cmd)
@@ -82,6 +81,10 @@ func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Co
 		return bootstrap.CredentialLine{}, nil, fail(err, "running %s: %v", cmd.Path, err)
 	}
 	b.log.Info("bootstrap ssh started", "pid", cmd.Process.Pid, "destination", dest, "server", b.ssh.Server)
+	if capt != nil {
+		// The only connection the capture takes is our ssh's.
+		capt.Expect(cmd.Process.Pid)
+	}
 
 	// ssh's stderr goes to the user until the line, and then only to the
 	// log, both through the filter: it carries the far side's stderr, and
@@ -121,9 +124,84 @@ func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Co
 	}
 	sink.set(&logLines{log: b.log})
 	go drain(p.stdout)
-	go reap(cmd, b.log)
+	exited := make(chan struct{})
+	go func() { reap(cmd, b.log); close(exited) }()
 	b.log.Info("credential line read", "server", cred.SoftwareVersion, "addr", cred.Addr, "port", cred.Port)
+	if capt != nil {
+		b.finishCapture(ctx, capt, cfg, sock, exited)
+	}
 	return cred, cfg, nil
+}
+
+// startCapture decides whether to forward the agent (bootstrap.md §5) and,
+// if so, listens on a capture socket, points the bootstrap ssh's
+// ForwardAgent at it, and says agent=yes in the line (§8 steps 1–2). It
+// returns the capture and the agent socket to forward, or nil.
+func (b *spawn) startCapture(cfg bootstrap.Config) (*agent.Capture, string) {
+	sock, on := bootstrap.AgentSocket(cfg, b.getenv)
+	fa := cfg.Get("forwardagent")
+	b.log.Info("agent forwarding", "config", fa, "wanted", on, "socket", sock)
+	if !on {
+		if fa != "" && fa != "no" {
+			name := "SSH_AUTH_SOCK"
+			if strings.HasPrefix(fa, "$") {
+				name = fa[1:]
+			}
+			b.agentOff(name + " is not set")
+		}
+		return nil, ""
+	}
+	capt, err := agent.ListenCapture(agent.CaptureDir(b.getenv))
+	if err != nil {
+		b.agentOff(err.Error())
+		return nil, ""
+	}
+	b.ssh.AgentCapture = capt.Path
+	b.line.Agent = true
+	return capt, sock
+}
+
+// finishCapture waits for the capture's final state, pins the bind to
+// known_hosts, and, if both hold, sets up forwarding (bootstrap.md §8
+// steps 4–7). Anything else leaves the agent off, said once on stderr.
+func (b *spawn) finishCapture(ctx context.Context, capt *agent.Capture, cfg bootstrap.Config, sock string, exited <-chan struct{}) {
+	// The bind normally came before the line did; the bound is for a
+	// far side that holds the channel, and the time ssh may take to exit.
+	ctx, cancel := context.WithTimeout(ctx, agent.CaptureDeadline+sshExitWait)
+	defer cancel()
+	bind, err := capt.Result(ctx, exited)
+	if err != nil {
+		b.agentOff(err.Error())
+		return
+	}
+	host := cfg.Get("hostkeyalias")
+	if host == "" || host == "none" {
+		host = cfg.Get("hostname")
+	}
+	port, err := strconv.Atoi(cfg.Get("port"))
+	if err != nil {
+		port = 22
+	}
+	files := append(strings.Fields(cfg.Get("userknownhostsfile")), strings.Fields(cfg.Get("globalknownhostsfile"))...)
+	if err := agent.Pin(bind.HostKey, host, port, files); err != nil {
+		b.agentOff(err.Error())
+		return
+	}
+	b.log.Info("agent forwarding on", "socket", sock, "host key", ssh.FingerprintSHA256(bind.HostKey))
+	b.forward = &agent.Forwarder{Dial: agent.DialUnix(sock), Bind: bind, Log: b.log}
+}
+
+// agentOff says once, before the screen is up, why the agent is not
+// forwarded (agent.md §2.4); the session goes on without it.
+func (b *spawn) agentOff(why string) {
+	b.log.Warn("not forwarding the agent", "why", why)
+	if b.saidAgentOff {
+		return
+	}
+	b.saidAgentOff = true
+	w := bootstrap.Sanitize(b.stderr)
+	fmt.Fprintf(w, "mosey: not forwarding the agent: %s\n", why)
+	w.Close()
 }
 
 // explain turns a bootstrap failure into what the user reads

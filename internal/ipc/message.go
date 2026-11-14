@@ -72,6 +72,7 @@ const (
 	typeStart      = 0x01
 	typeEmuLink    = 0x02
 	typeShellExit  = 0x03
+	typeAgentConn  = 0x04
 	typeResume     = 0x05
 	typeEmuPaused  = 0x06
 	typeInit       = 0x10
@@ -132,6 +133,11 @@ type EmuLink struct {
 	Status int32
 	Conn   *os.File
 }
+
+// AgentConn hands proto one connection accepted on the session's agent
+// socket (server.md §2.7, §3.3), non-blocking so proto can wrap it inside
+// its sandbox. Proto serves it over an agent channel or closes it.
+type AgentConn struct{ Conn *os.File }
 
 // ShellExit tells proto the login shell has exited.
 type ShellExit struct{ Status int32 }
@@ -244,6 +250,7 @@ type Failed struct{ Text string }
 func (Start) typ() byte      { return typeStart }
 func (EmuLink) typ() byte    { return typeEmuLink }
 func (ShellExit) typ() byte  { return typeShellExit }
+func (AgentConn) typ() byte  { return typeAgentConn }
 func (Resume) typ() byte     { return typeResume }
 func (EmuPaused) typ() byte  { return typeEmuPaused }
 func (Init) typ() byte       { return typeInit }
@@ -271,6 +278,7 @@ var routes = map[byte]route{
 	typeStart:      {Spawner, Proto, 2},
 	typeEmuLink:    {Spawner, Proto, 1},
 	typeShellExit:  {Spawner, Proto, 0},
+	typeAgentConn:  {Spawner, Proto, 1},
 	typeResume:     {Spawner, Proto, 0},
 	typeEmuPaused:  {Spawner, Proto, 0},
 	typeInit:       {Proto, Emu, 0},
@@ -304,6 +312,8 @@ func files(m Message) []*os.File {
 		return []*os.File{m.UDP, m.PTY}
 	case EmuLink:
 		return []*os.File{m.Conn}
+	case AgentConn:
+		return []*os.File{m.Conn}
 	}
 	return nil
 }
@@ -315,6 +325,9 @@ func withFiles(m Message, fs []*os.File) Message {
 		v.UDP, v.PTY = fs[0], fs[1]
 		return v
 	case EmuLink:
+		v.Conn = fs[0]
+		return v
+	case AgentConn:
 		v.Conn = fs[0]
 		return v
 	}
@@ -363,7 +376,7 @@ func Marshal(m Message) ([]byte, error) {
 		if m.Peer.Addr().IsValid() {
 			b = binary.BigEndian.AppendUint16(b, m.Peer.Port())
 		}
-	case Flush, Detached:
+	case Flush, Detached, AgentConn:
 	case Update:
 		var flags byte
 		if m.More {
@@ -481,6 +494,8 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 			return nil, malformed("EmuLink generation %d, reason %d, status %d", m.Generation, m.Reason, m.Status)
 		}
 		return m, nil
+	case typeAgentConn:
+		return AgentConn{}, fixed(0)
 	case typeShellExit:
 		if err := fixed(4); err != nil {
 			return nil, err

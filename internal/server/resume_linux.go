@@ -122,7 +122,7 @@ func (s *spawner) serveResume(f *os.File) error {
 // checkResumeLine is what the spawner checks of a resuming client's line
 // before proto hears of it (server.md §2.6): the whole canonical parse, a
 // resume of this session (or AnySession, which the launcher resolved to
-// this one), this version, no agent, and a key proto can mint for.
+// this one), this version, and a key proto can mint for.
 func checkResumeLine(line []byte, version string, sid [16]byte) (bootstrap.ClientLine, error) {
 	cl, err := bootstrap.ParseClientLine(line)
 	switch {
@@ -134,8 +134,6 @@ func checkResumeLine(line []byte, version string, sid [16]byte) (bootstrap.Clien
 		return cl, errors.New("a resume of another session")
 	case cl.SoftwareVersion != version:
 		return cl, fmt.Errorf("the client is version %s, the session %s", printableASCII(cl.SoftwareVersion, 64), version)
-	case cl.Agent:
-		return cl, errors.New("agent forwarding is not supported yet")
 	}
 	if err := handshake.CheckPublicKey(cl.Public); err != nil {
 		return cl, err
@@ -175,5 +173,47 @@ func (s *spawner) setState(st bootstrap.SessionState, peer netip.AddrPort) {
 	s.state, s.since = st, time.Now()
 	if peer.IsValid() {
 		s.peer = peer
+	}
+}
+
+// serveAgent accepts on the agent socket until it closes, and passes each
+// connection from this user to the supervision loop for proto, unless the
+// host has an attester, which this mosey cannot yet hand off to: then the
+// connection is refused (agent.md §4.3, fail closed). Only a closed socket
+// ends it.
+func (s *spawner) serveAgent() {
+	warned := false
+	for {
+		f, err := s.agent.Accept()
+		switch {
+		case errors.Is(err, os.ErrClosed):
+			return
+		case errors.Is(err, errForeignPeer):
+			s.log.Warn("refused an agent-socket connection", "err", err)
+			continue
+		case err != nil:
+			s.log.Warn("accepting on the agent socket; trying again", "err", err)
+			time.Sleep(acceptBackoff)
+			continue
+		}
+		if attesterPresent(AttesterSocket) {
+			up, err := handOff(f)
+			if err != nil {
+				if !warned {
+					s.log.Warn("refusing agent connections", "attester", AttesterSocket, "err", err)
+					warned = true
+				}
+				f.Close()
+				continue
+			}
+			f.Close()
+			f = up
+		}
+		select {
+		case s.agentConns <- f:
+		case <-s.agentDone:
+			f.Close()
+			return
+		}
 	}
 }

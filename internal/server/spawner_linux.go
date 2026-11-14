@@ -135,6 +135,12 @@ type spawner struct {
 	sid     [16]byte
 	started time.Time
 	attach  *attachListener
+	// agent is the session's agent socket (server.md §2.7), or nil, and
+	// agentConns carries its connections to the supervision loop, which
+	// hands them to proto.
+	agent      *agentListener
+	agentConns chan *os.File
+	agentDone  chan struct{}
 	// resumes carries each resume the attach socket has checked to the
 	// supervision loop, which forwards it to proto; pending is those
 	// forwarded and not yet answered, in order (proto answers in order).
@@ -304,13 +310,6 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 		}
 	}
 
-	// The shell starts this late so a failure earlier leaves none behind,
-	// and so its start-up overlaps the client's handshake.
-	if err := s.startShell(cl.Env, slave); err != nil {
-		return err
-	}
-	slave.Close()
-
 	// The credential names the session, so its attach socket can be made
 	// now (server.md §2.6). Without one the session goes on, but nobody
 	// can resume it.
@@ -326,6 +325,28 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	} else {
 		s.log.Info("attach socket", "path", s.attach.path)
 	}
+	// The agent socket, before the shell, whose SSH_AUTH_SOCK names it
+	// (server.md §2.7). Without one the shell has no agent, as under ssh
+	// without -A.
+	agentSock := ""
+	if cl.Agent && s.attach != nil {
+		if s.agent, err = listenAgent(s.attach.dir); err != nil {
+			s.log.Warn("no agent socket: the shell gets no agent", "err", err)
+			s.agent = nil
+		} else {
+			agentSock = s.agent.path
+			s.agentConns = make(chan *os.File)
+			s.agentDone = make(chan struct{})
+			s.log.Info("agent socket", "path", agentSock)
+		}
+	}
+
+	// The shell starts this late so a failure earlier leaves none behind,
+	// and so its start-up overlaps the client's handshake.
+	if err := s.startShell(cl.Env, agentSock, slave); err != nil {
+		return err
+	}
+	slave.Close()
 
 	if err := s.launcher.Send(ipc.Ready{Line: line}); err != nil {
 		s.log.Warn("telling the launcher", "err", err)
@@ -530,13 +551,13 @@ func oomKilled(cgroup string) bool {
 	return false
 }
 
-func (s *spawner) startShell(env map[string]string, slave *os.File) error {
+func (s *spawner) startShell(env map[string]string, agentSock string, slave *os.File) error {
 	passwd, _ := os.Open(s.cfg.Passwd)
 	path, home := pty.LoginShell(s.getenv, passwd, os.Getuid())
 	if passwd != nil {
 		passwd.Close()
 	}
-	proc, err := pty.Shell{Path: path, Dir: home, Env: shellEnv(s.cfg.Environ, env, s.log)}.Start(slave)
+	proc, err := pty.Shell{Path: path, Dir: home, Env: shellEnv(s.cfg.Environ, env, agentSock, s.log)}.Start(slave)
 	if err != nil {
 		return fmt.Errorf("starting the shell %s: %w", path, err)
 	}
@@ -569,6 +590,9 @@ func (s *spawner) supervise(ctx context.Context) error {
 
 	if s.attach != nil {
 		go s.serveAttach()
+	}
+	if s.agent != nil {
+		go s.serveAgent()
 	}
 	attached := false
 	backstopTimer := time.NewTimer(backstop)
@@ -643,6 +667,13 @@ func (s *spawner) supervise(ctx context.Context) error {
 			if err != nil {
 				s.teardown("proto gone")
 				return nil
+			}
+		case f := <-s.agentConns:
+			// proto serves it or closes it; the spawner keeps no copy.
+			err := s.ctl.Send(ipc.AgentConn{Conn: f})
+			f.Close()
+			if err != nil {
+				s.log.Warn("handing proto an agent connection", "err", err)
 			}
 		case r := <-s.resumes:
 			if err := s.ctl.Send(ipc.Resume{ClientPublic: r.public}); err != nil {
@@ -763,6 +794,10 @@ func (s *spawner) teardown(why string) {
 	// §2.6).
 	if s.attach != nil {
 		s.attach.Close()
+	}
+	if s.agent != nil {
+		s.agent.Close()
+		close(s.agentDone)
 	}
 	if s.proto != nil {
 		if s.ctl != nil {

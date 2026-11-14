@@ -26,6 +26,7 @@ func examples() []Message {
 		EmuLink{Generation: 2, Reason: EmuSignalled, Status: -31},
 		EmuLink{Generation: 0xffffffff, Reason: EmuKilled, Status: 0x7fffffff},
 		ShellExit{Status: 0}, ShellExit{Status: -9}, ShellExit{Status: 255},
+		AgentConn{},
 		Resume{ClientPublic: key()},
 		EmuPaused{Seconds: 1}, EmuPaused{Seconds: MaxEmuPause},
 		Init{Cols: 1, Rows: 1, ScrollbackCells: 1},
@@ -219,7 +220,7 @@ func TestATypeFromTheWrongPeerIsRefused(t *testing.T) {
 }
 
 func TestUnknownTypesAndTheRetiredExitCodeAreRefused(t *testing.T) {
-	for _, typ := range []byte{0x00, 0x04, 0x07, 0x14, 0x22, 0x35, 0x43, 0xff} {
+	for _, typ := range []byte{0x00, 0x08, 0x07, 0x14, 0x22, 0x35, 0x43, 0xff} {
 		for _, from := range []Peer{Launcher, Spawner, Proto, Emu} {
 			for _, to := range []Peer{Launcher, Spawner, Proto, Emu} {
 				if _, err := Parse(from, to, []byte{typ, 0, 0, 0, 0}); err == nil {

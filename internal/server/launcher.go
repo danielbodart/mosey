@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/danielbodart/mosey/internal/agent"
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/ipc"
 	"github.com/danielbodart/mosey/internal/nocore"
@@ -45,6 +46,9 @@ type Launcher struct {
 	Version string
 	// Env is the spawner's environment: the launcher's own, unchanged.
 	Env []string
+	// Trigger opens sshd's forwarded agent to make the client's ssh send
+	// its bind (bootstrap.md §8): agent.Trigger, unless a test sets it.
+	Trigger func(ctx context.Context, sock string) error
 }
 
 // LaunchError is a bootstrap failure the client is told about with an
@@ -86,8 +90,9 @@ func (l *Launcher) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if cl, err := bootstrap.ParseClientLine(line); err == nil && cl.Resume {
-		return l.resume(line, cl)
+	cl, err := bootstrap.ParseClientLine(line)
+	if err == nil && cl.Resume {
+		return l.resume(ctx, line, cl)
 	}
 	if err := checkClientLine(line, l.Version); err != nil {
 		return err
@@ -131,6 +136,7 @@ func (l *Launcher) run(ctx context.Context) error {
 	}
 	switch m := m.(type) {
 	case ipc.Ready:
+		l.trigger(ctx, cl)
 		// One write: the client reads a whole line. Then the line is
 		// wiped: harmless to leak by D20, but no reason to keep it
 		// (threat-model.md §4.10).
@@ -154,10 +160,7 @@ func (l *Launcher) run(ctx context.Context) error {
 // and 5): find the session's attach socket, compare versions with the
 // session's own, not this launcher's, hand the spawner the client's line,
 // and print the credential line it answers with.
-func (l *Launcher) resume(line []byte, cl bootstrap.ClientLine) error {
-	if cl.Agent {
-		return &LaunchError{Code: bootstrap.CodeUnsupported, Detail: "agent", Text: "agent forwarding is not supported yet"}
-	}
+func (l *Launcher) resume(ctx context.Context, line []byte, cl bootstrap.ClientLine) error {
 	f, greeting, err := findSession(sessionsDir(l.getenv), cl.SessionID)
 	if err != nil {
 		return err
@@ -187,6 +190,7 @@ func (l *Launcher) resume(line []byte, cl bootstrap.ClientLine) error {
 	}
 	switch m := m.(type) {
 	case ipc.Ready:
+		l.trigger(ctx, cl)
 		_, err := l.Stdout.Write(m.Line)
 		clear(m.Line)
 		if err != nil {
@@ -197,6 +201,26 @@ func (l *Launcher) resume(line []byte, cl bootstrap.ClientLine) error {
 		return errors.New(m.Text)
 	}
 	return errors.New("the session did not answer")
+}
+
+// trigger makes the client's ssh send its session-bind to the client's
+// capture socket, before the line goes out (bootstrap.md §8, "Server"), by
+// opening the agent sshd forwarded for this login. With none (the host
+// has AllowAgentForwarding no) there is nothing to do, and the client
+// carries on without the agent. A failure is not the session's: the
+// client then sees no bind, and says so.
+func (l *Launcher) trigger(ctx context.Context, cl bootstrap.ClientLine) {
+	sock := l.getenv("SSH_AUTH_SOCK")
+	if !cl.Agent || sock == "" {
+		return
+	}
+	trigger := l.Trigger
+	if trigger == nil {
+		trigger = agent.Trigger
+	}
+	// Its failure is the capture's to explain: the client says why it
+	// has no bind, so nothing is printed here too.
+	_ = trigger(ctx, sock)
 }
 
 func (l *Launcher) getenv(name string) string {
@@ -314,7 +338,7 @@ func readClientLine(ctx context.Context, r io.Reader) ([]byte, error) {
 
 // checkClientLine is what both the launcher and the spawner check of the
 // client's line: that it parses, then its protocol version, its software
-// version, and that it asks for nothing reserved (bootstrap.md §6.2, §6.4).
+// version, and that it is not a resume (bootstrap.md §6.2, §6.4).
 func checkClientLine(line []byte, version string) error {
 	cl, err := bootstrap.ParseClientLine(line)
 	if err != nil {
@@ -333,9 +357,6 @@ func checkClientLine(line []byte, version string) error {
 		// The launcher sends a resume to resume, never here; a spawner
 		// started for a session never takes one.
 		return &LaunchError{Code: bootstrap.CodeLine, Text: "a resume where a new session was asked for"}
-	}
-	if cl.Agent {
-		return &LaunchError{Code: bootstrap.CodeUnsupported, Detail: "agent", Text: "agent forwarding is not supported yet"}
 	}
 	return nil
 }
