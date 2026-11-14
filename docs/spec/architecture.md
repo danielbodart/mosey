@@ -347,7 +347,7 @@ Errors are `*Failure`,
 | Agent channel (D15, D25) | `ChannelAgent`, `transport.KindChannel`, `bootstrap.SSH.AgentCapture` |
 | Provenance (D28) | `Conn.HandshakeHash` |
 | Prediction (D12) | `Grid.EchoOff`, `Grid.EchoAck`, `userinput.Stream.Len` |
-| Chaff (D11, O10) | `transport.KindChaff` |
+| Chaff (D11, O10) | **built** (chaff slice): `ssp.Chaffer`, `transport.Conn.SendChaff` and `ChaffArrived`, `ssp.md` §9.1 |
 | Auto-upload (D7) | Landed: `bootstrap.md` §4.7, `internal/install` |
 | NAT traversal (O6) | packet type `0x05` |
 | macOS server (D22) | `pty_other.go`, `sandbox_other.go` return `ErrUnsupported` |

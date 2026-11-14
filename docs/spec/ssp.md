@@ -96,7 +96,8 @@ measure the round-trip time [P §2.2], is SSP's and lives in the SSP header
 (§3).
 
 The transport delivers only `KindTerminal` frames to SSP; rekeys,
-keepalives, path challenges and (later) chaff never reach it. A rekey does
+keepalives, path challenges and chaff never reach it (a CHAFF frame only
+tells the server to chaff, §9.1.4). A rekey does
 not touch SSP's state or timers.
 
 ### 1.2 Channels (D15)
@@ -162,7 +163,7 @@ offset  size   field
 | echo | The paper's optional timestamp reply [P §2.2], absent when there is nothing to echo, which saves 4 bytes on most datagrams [D]. Its value is in §7.1. |
 | ack | In every datagram, not inside the instruction [D]. Acks then flow even in datagrams that carry only part of an instruction, and an instruction's bytes never depend on the ack, so a retransmission can repeat them exactly and the receiver can complete an instruction from fragments of two transmissions (§5). |
 | id, index, count | An explicit count lets the receiver bound and size reassembly before the last fragment arrives, and refuse inconsistent fragments (§5) [D, S5 spec §2.4]. |
-| padding | Hides the compressed length (§9.2): a sender sets P on every datagram it sends and chooses k by §9.2's rule; a receiver strips whatever step 2 below allows and does not check the sender's rule, since the peer holds the keys and could send any length it liked by other means [D]. Putting the length last means a sender can pad after it has built everything else [D]. Chaff (O10, §9.1) will use the same field. |
+| padding | Hides the compressed length (§9.2): a sender sets P on every datagram it sends and chooses k by §9.2's rule; a receiver strips whatever step 2 below allows and does not check the sender's rule, since the peer holds the keys and could send any length it liked by other means [D]. Putting the length last means a sender can pad after it has built everything else [D]. Chaff (§9.1) is sized to the same floors. |
 
 A datagram without F carries no instruction: it is an **ack** (delayed
 ack, heartbeat or probe answer; §6.3, §6.4). After the fields its flags
@@ -650,28 +651,129 @@ behind.
 ### 9.1 Chaff (D11, O10)
 
 D11 says that while the user types, SSP sends chaff on a fixed tick, as
-OpenSSH 9.5's `ObscureKeystrokeTiming` does (its default tick is 20 ms,
-per `ssh_config(5)`). Without it the size and timing of the client's
-datagrams give away keystroke timing, including at password prompts, since
-every keystroke is a datagram (S6 FINDINGS §6). The tick and its cost are
-O10, to be measured in netsim before a value is fixed.
+OpenSSH 9.5's `ObscureKeystrokeTiming` does. Its `ssh_config(5)` entry
+describes the behaviour this section adapts: while typing, keystrokes go
+at fixed intervals (20 ms by default) and fake keystroke packets go "for
+some time after typing ceases" (OpenSSH 9.5 release notes and
+`ssh_config(5)`; nothing here is taken from its source). Without chaff the
+times of the client's datagrams are the times of the user's keys, every
+keystroke being a datagram (§6.2), and the server's echoes, acks and
+echo-ack frames follow each key by a fixed delay, so an on-path observer
+reads inter-keystroke timing off either direction, including at password
+prompts (Song, Wagner and Tian, USENIX Security 2001; S6 FINDINGS §6;
+threat model R2).
 
-Slice 1 sends no chaff. What is reserved so that adding it changes no
-format:
+**What it hides.** Within a run of typing, which ticks carried a key, in
+either direction. **What it does not.** That someone is typing and when a
+run of typing starts (its first key goes at once, below); when it ends,
+to within the random linger; gaps longer than the linger, which start a
+new run; and anything that makes a datagram bigger than the chaff, such as
+keys piling up unacknowledged, a paste, or the output a command prints
+(R1, R2).
 
-- the frame kind `transport.KindChaff` (0x07), which the transport
-  discards on receipt and never passes to SSP, so chaff costs SSP nothing
-  to receive;
-- the datagram padding (P, §3), so that a keystroke datagram and a chaff
-  frame can be made the same size.
+#### 9.1.1 The mode
 
-The shape to measure in O10: while a key has been typed within the last
-few seconds, the client sends exactly one datagram per tick, an SSP
-datagram if a keystroke or ack is waiting and chaff otherwise, all padded
-to one size; a keystroke waits for the next tick. Metrics: added keystroke
-latency, datagrams and bytes per minute, and whether an observer can tell
-keys from chaff in the S5 workloads. The server side (echoes about 50 ms
-after keys) is part of the same measurement.
+Each endpoint is either **chaffing** or not. While chaffing it sends only
+on its own **tick grid**, instants `start + n·T` for the tick `T`
+(§9.1.5), and sends exactly one datagram per tick unless SSP has more than
+one due (a burst of fragments, §5).
+
+| | Client | Server |
+|---|---|---|
+| Starts or extends | on every `Set` that changes `pending` (a key or a resize; §10.1) | on every CHAFF frame from the client |
+| Until | `now + L`, `L` drawn afresh, uniformly from [1 s, 2 s), on each input | `now + 1 s` |
+| Chaff size (sealed plaintext) | 40, its floor `F` (§9.2) | 64, its floor `F` |
+
+- **Starting.** An endpoint that was not chaffing starts its grid at
+  `now`: the input that starts the mode goes at once, as the first key
+  after idle does without chaff (§6.2) [D]. Delaying it would hide nothing,
+  since the first chaff gives the start of the run away just the same.
+- **At each tick**, §6.3 runs as usual. Then, if it queued nothing and an
+  ack is owed (`ackDue` set, even if not yet reached), the ack goes now:
+  the delayed ack exists to save a datagram, and one goes this tick
+  regardless [D]. If still nothing is queued, one CHAFF frame goes, of the
+  side's chaff size. Every SSP datagram is padded by §9.2 as always.
+- **Between ticks** the endpoint receives as usual and sends nothing. A
+  key typed, a screen change, an ack or retransmission falling due between
+  ticks waits for the next tick, which is at most `T` away.
+- **The grid holds.** After a late wake-up (a busy scheduler) the next tick
+  is the first grid point after `now`; missed ticks are not made up in a
+  burst [D].
+- **Ending.** At `until` the mode ends and §6.3 applies as before; anything
+  deferred goes at once.
+- **Heartbeats** need nothing new: a chaffing endpoint sends far more often
+  than every 3 s, and SSP's datagrams among its ticks keep `lastAny`
+  current.
+- **The receiver** of a CHAFF frame is the transport, which drops it after
+  authenticating it. Chaff never reaches SSP's parser, its state, its RTT
+  estimate or its silence clock (§6.2); the only thing it does is tell the
+  server's endpoint to chaff (`Chaffer.ChaffArrived`, §9.1.4).
+
+Why the linger is random and between 1 and 2 s [D]: a fixed linger would
+put the end of the chaff exactly `L` after the last key, which is often
+the Enter after a password; a random one blurs that over a second. The
+1 s floor keeps every ordinary gap between keys inside one run: S5's typist
+model (log-normal gaps, median 140 ms, σ 0.6; `padding.md` §4) has one
+gap in 2000 over a second, while its pauses after Enter (0.3–6 s) mostly
+end a run, as they should, since nothing is typed in them.
+
+#### 9.1.2 Why the server chaffs too
+
+The client's chaff alone hides nothing: the server answers a key and not
+a chaff, with an echo 8 ms after the key arrives (§6.2), an echo-ack
+frame (D12), or a delayed ack 100 ms after it (§6.4), so the observer reads
+off the server's direction which client ticks carried keys. §9.1.5
+measures this. So the server chaffs on its own grid while the client does,
+and an echo, an echo ack or an ack is one more 64-byte datagram among the
+server's ticks.
+
+The server learns that the client is chaffing from the CHAFF frames
+themselves. It does not chaff on the client's data alone, so the very
+first key of a run is echoed at once, before any chaff has arrived; that
+key's time is given away by the start of the client's chaff in any case.
+The server lingers 1 s after the last CHAFF frame [D], which is more than
+the jitter of every netsim profile but the train's delay spikes, so a
+chaff frame that is late or lost does not end the server's mode in the
+middle of a run.
+
+#### 9.1.3 Prediction and echo-off (D12)
+
+- **Chaff delays a key on the wire, not on the screen.** The client
+  predicts a key the moment it reads it; only its datagram waits for the
+  tick, and the confirmation waits for the server's tick too.
+- **Echo off.** The client chaffs at a no-echo prompt exactly as anywhere
+  else; that is where it matters most. D11's rule that the server sends no
+  echo-ack-only frame while the pty has echo off still holds, and is now a
+  second line of defence: while chaffing, such a frame would be a 64-byte
+  datagram on the server's grid, like the chaff around it, and once the
+  mode has ended it would be the one datagram that names the last key.
+- **Echo acks** are screen changes like any other (§10.2) and go on the
+  server's ticks while it chaffs, so they add nothing an observer can see.
+
+#### 9.1.4 Interface
+
+`Datagrams` that can send cover traffic also implement `ssp.Chaffer`:
+
+```go
+type Chaffer interface {
+	// SendChaff sends one CHAFF frame whose sealed plaintext, frame kind
+	// included, is size bytes; an error is a loss, as for Send.
+	SendChaff(size int) error
+	// ChaffArrived is signalled, without blocking, when a CHAFF frame
+	// from the peer authenticates. One signal may stand for several.
+	ChaffArrived() <-chan struct{}
+}
+```
+
+An `Endpoint` whose `Datagrams` is a `Chaffer` chaffs; one whose
+`Datagrams` is not (SSP's own small path in tests) behaves as §6 alone
+says. `transport.Conn` implements it (`transport.md` §4.2), so production
+always chaffs: it is D11, not an option.
+
+#### 9.1.5 The tick (O10)
+
+[to be measured: the tick T, its latency, cost and what it hides, on
+netsim's profiles, before a value is fixed]
 
 ### 9.2 Compression padding and dictionary (D24, O12)
 
@@ -1014,6 +1116,14 @@ in the commit message):
 - a decompression bomb, an oversized `count` and each row of §8's table
   end `Run` with `ErrProtocol`, or are ignored, as the table says;
 - every datagram SSP sends is at most `MaxPayload` bytes;
+- **chaff** (§9.1): while the user types, every client datagram, SSP or
+  CHAFF, leaves on the client's tick grid, one per tick, at 40 bytes of
+  sealed plaintext for a single key or chaff; the server, once chaff
+  arrives, sends one datagram per tick on its own grid, at 64; a key
+  waits at most one tick; the mode ends between 1 and 2 s after the last
+  key on the client and 1 s after the last chaff on the server; an idle
+  session sends no chaff at all, only heartbeats; an endpoint whose
+  `Datagrams` is not a `Chaffer` sends exactly what it did before;
 - **padding** (§9.2): Padmé matches hand-worked values, including the
   paper's Table 1; over a simulated session every datagram either side
   sends has P set and exactly the sealed length the rule gives, every

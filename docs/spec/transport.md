@@ -612,7 +612,7 @@ The kind is the first byte of the plaintext. These match `transport.Kind`.
 | `0x04` | KEEPALIVE | 1 B: `0x01` = answer requested, `0x00` = no answer | 31 | any live receive key | slice 1 |
 | `0x05` | PATH_CHALLENGE | 8 random bytes | 38 | any live receive key | slice 1 |
 | `0x06` | PATH_RESPONSE | the 8 bytes of a challenge | 38 | any live receive key | slice 1 |
-| `0x07` | CHAFF | any bytes, ignored | 30–1232 | any live receive key | reserved: D11, O10 |
+| `0x07` | CHAFF | sent as zeros, received as any bytes | 30–1232 | any live receive key | chaff slice: `ssp.md` §9.1 |
 | `0x08` | CHANNEL | channel id (u32 LE) ‖ datagram | ≤ 1232 | any live receive key | reserved: D15 agent and later channels; the agent slice fixes the body |
 | `0x09` | REVOKED | §8.3 | 45 or 57 | any live receive key | slice 1; fires from the resume slice (D26) |
 | `0x0A` | END | 1 B: why (`0x01` the shell exited, `0x02` the client detached; any other value still ends the connection) | 31 | any live receive key | slice 1, added at integration (§8.4) |
@@ -639,7 +639,14 @@ Rules for every kind:
   8 bytes, sent to the receiver's normal destination (the client always
   sends to the server's one address, §7.1). A server that receives one
   answers it too, for O6.
-- **CHAFF** is accepted and dropped. Its tick and sizes are O10's.
+- **CHAFF** is accepted and dropped: it never reaches `Recv`. Its only
+  effect is a signal on `Conn.ChaffArrived`, which tells the server's SSP
+  endpoint that the client is chaffing (`ssp.md` §9.1.4).
+  `Conn.SendChaff(size)` sends one with a zero body, sized so that its
+  sealed plaintext is `size` bytes, under the same rules as `Send`
+  (closed, keys past their limit, anti-amplification); SSP decides when
+  and how big (`ssp.md` §9.1). The body is zeros because the AEAD hides it
+  and nothing reads it [D].
 
 ### 4.3 Receiver indices
 
