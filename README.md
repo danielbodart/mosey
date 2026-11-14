@@ -42,10 +42,11 @@ config, keys and agent, exactly as Mosh does. It aims to be:
   (X-Wing: ML-KEM-768 plus X25519), forward secrecy, rekeying, and
   replay-proof roaming. A leaked SSH log line doesn't hand anyone your
   session. The designs are checked with ProVerif. While you type, both
-  ends send on a fixed 20 ms tick with cover traffic between your keys, so
-  someone watching the network can't read your typing rhythm (or your
-  password's) off the packet timing, as OpenSSH's `ObscureKeystrokeTiming`
-  does for SSH.
+  ends send on a fixed 20 ms tick with cover traffic between your keys,
+  which hides the timing of keys within a run of typing from someone
+  watching the network, as OpenSSH's `ObscureKeystrokeTiming` does for
+  SSH. It can't hide when a run starts or stops, or keys that pile up
+  while the network stalls.
 - **Isolated from the terminal.** The terminal emulator runs on the server,
   inside its own Landlock and seccomp sandbox, and sends your machine
   structured screen diffs. Your local terminal never parses escape

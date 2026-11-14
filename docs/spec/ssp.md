@@ -6,7 +6,8 @@ amended by PLAN D11 and D24 and by what spike S5 measured, and it fixes
 our own wire format. Nothing here comes from Mosh's source code, which no
 one working on mosey reads (PLAN §4).
 
-Owner: **ssp**. Status: slice 1, plus chaff (§9.1, closing O10). A
+Owner: **ssp**. Status: slice 1, plus chaff (§9.1; its tick, O10, is
+provisional, §9.1.5). A
 change to anything marked as a wire format or a constant is a change to
 this file first, then to the code.
 
@@ -827,10 +828,34 @@ calm / lte):
 | 30 ms | +35 / +34 / +32 / +36 / +37 ms | 2.2 / 2.4 / 5.2 / 4.7 / 11.9% | about 3 400 | about 270 |
 | 50 ms | +63 / +58 / +57 / +64 / +63 ms | 2.7 / 2.8 / 5.3 / 4.7 / 11.6% | about 2 000 | about 165 |
 
+The same tick sweep on the `hotel-wifi`, `train` and `hsr` profiles **as
+defined**, with netsim's per-packet delay spikes left in (re-run
+2026-11-14; runs differ by a point or two, since goroutine order within a
+bubble is not fixed). Each cell is keys exposed (by size), then key→echo
+p50 / p95; for `lte-driving`, which has no spike model to remove, the
+table above already is the profile as defined:
+
+| T | hotel-wifi | train | hsr | lte-driving |
+|---|---|---|---|---|
+| none | 100%; 57 / 461 ms | 100%; 127 / 1342 ms | 100%; 274 / 684 ms | 100%; 75 / 2930 ms |
+| 10 ms | 18.4% (16.4%); 452 / 933 ms | 71.6% (69.0%); 1401 / 2564 ms | 46.7% (43.7%); 765 / 1110 ms | 12.4% (10.4%); 85 / 4390 ms |
+| **20 ms** | **9.0% (7.0%); 240 / 696 ms** | **50.2% (47.3%); 890 / 2164 ms** | **32.6% (29.7%); 639 / 1016 ms** | **12.2% (10.3%); 97 / 3887 ms** |
+| 30 ms | 6.9% (4.9%); 140 / 611 ms | 35.9% (33.2%); 551 / 1874 ms | 21.8% (18.8%); 542 / 912 ms | 11.9% (9.9%); 113 / 3472 ms |
+| 50 ms | 5.6% (3.3%); 131 / 575 ms | 25.4% (22.1%); 288 / 1553 ms | 17.4% (14.5%); 452 / 831 ms | 11.6% (9.5%); 139 / 2942 ms |
+| 20 ms, client 64 B | 2.2% (0.2%); 225 / 682 ms | 6.8% (4.0%); 896 / 2215 ms | 4.0% (1.0%); 638 / 987 ms | 8.3% (6.2%); 97 / 3960 ms |
+
 *What this shows.*
 
-- **Hiding does not depend on the tick.** From 10 to 50 ms the share of
-  keys exposed is the same to within half a point on every profile. What
+- **On the calm profiles and the LAN, hiding does not depend on the
+  tick; on the spiky profiles it does, and 50 ms beats 20 ms.** Without
+  delay spikes, from 10 to 50 ms the share of keys exposed is the same to
+  within half a point. With netsim's spikes left in, a longer tick both
+  hides more and echoes sooner: on the train as defined, 50 ms exposes
+  25% of keys with a 288 ms median echo, 20 ms exposes 50% at 890 ms. On
+  the LTE trace, 50 ms brings the 95th-percentile echo back to what it is
+  without chaff (2.94 s), where 20 ms adds about a second. Which result
+  holds on a real path depends on whether netsim's per-packet spike model
+  is right (below), and that is not settled. On the calm profiles what
   is left is structural: the first key of each run of typing (about 2% of
   keys with this typist, one in 40 being followed by a pause longer than
   the linger), and keys that pile up unacknowledged until a datagram is
@@ -844,8 +869,8 @@ calm / lte):
   `T` to the median echo, a little more on paths where SSP's frame
   interval also binds.
 
-*Why 20 ms.* Hiding is the same at every candidate, so the choice is
-latency against bytes. 20 ms is SSP's own minimum frame interval, the
+*Why 20 ms, provisionally.* On the calm profiles hiding is the same at
+every candidate, so there the choice is latency against bytes. 20 ms is SSP's own minimum frame interval, the
 50 Hz cap [P §2.3 fn. 1], so a chaffing end never sends faster than SSP is
 already allowed to send data, and it is OpenSSH's default. It adds about
 20–30 ms to the median echo, which prediction (D12) hides for the keys it
@@ -855,28 +880,35 @@ LAN echo 72 ms, on top of whatever the path adds, for the keys prediction
 cannot show. The cost, about 5 000
 datagrams and 410 kB a minute both ways while typing (7 kB/s, 55 kbit/s),
 is paid only while typing: an idle session sends no chaff
-(`TestAnIdleSessionSendsNoChaff`).
+(`TestAnIdleSessionSendsNoChaff`). If netsim's spike model is right, this
+reasoning is wrong for spiky paths, where 50 ms dominates 20 ms on both
+hiding and latency; O10 stays open until that is settled.
 
 *What the measurement does not settle.*
 
 - **netsim's delay spikes are drawn per packet.** On the as-defined
   `hotel-wifi`, `train` and `hsr` profiles, chaff made keys much later
-  (median echo at 20 ms: 233, 848 and 635 ms against 57, 127 and 274 ms
-  without chaff) and exposed more of them by size (7.7%, 45.5%, 28.3%).
-  Each profile delays a share of packets, and its links are FIFO, so every
+  and exposed more of them by size (the second table). Each profile delays a share of packets, and its links are FIFO, so every
   packet behind a delayed one waits too: a sender of six times the packets
   meets six times the spikes. That fits a packet's own losses; it does not
   fit bufferbloat, a queue that fills over time whoever sends. The "calm"
   rows above are those profiles with their spikes removed and everything
-  else kept (`netsim.Link.Params`). Which is closer to a real hotel or
-  train is not something netsim can answer; a black-box check on a real
-  path is (listed in Review notes).
+  else kept (`netsim.Link.Params`). That the per-packet model is an
+  artefact is a hypothesis, not a measurement. Two things would settle
+  it: a time-based spike model in netsim (a spike delays whatever is in
+  the queue while it lasts, not a share of packets), and a black-box
+  check on a real lossy path (listed in Review notes). Until one has, the
+  tick is provisional (O10 open).
 - **The client's chaff size** stays at its §9.2 floor, 40 [D]. Raising the
   client's floor to 64 while chaffing exposed fewer keys by size (train
   calm 1.9 → 1.3%, lte 10.3 → 6.2%) for 35% more client bytes; it is not
   done, since O12 fixed 40 and most of the gain is on paths whose outages
-  hold keys for seconds. The knob is `chaffing.size`, and the measurement
-  keeps the rows (`client 48 B`, `client 64 B`).
+  hold keys for seconds. On the spiky profiles as defined, where nearly
+  all exposure is by size, a 64-byte client floor cut it far more (train
+  50 → 7%, hsr 33 → 4%) at the same latency, so if the spike model holds,
+  the client's chaff size matters more than the tick. The knob is
+  `chaffing.size`, and the measurement keeps the rows (`client 48 B`,
+  `client 64 B`).
 
 ### 9.2 Compression padding and dictionary (D24, O12)
 
@@ -1147,7 +1179,7 @@ What SSP needs from it:
 | Padding | every datagram; sealed plaintext `min(max(F, Padmé(U)), FrameOverhead + MaxPayload)` | [D] (O12), [PURBs], [M S5 padding.md]; §9.2 |
 | Padding floor `F`, server / client | 64 / 40 bytes of sealed plaintext | [D] (O12), [M S5 padding.md §5]; 40 is S5's 16 plus a keystroke's framing (§9.2) |
 | `FrameOverhead` | 1 (the transport's frame kind) | transport.md, §9.2 |
-| Chaff tick `T` | 20 ms, both ends | [M] §9.1.5 (O10), equal to the 50 Hz cap [P §2.3 fn. 1] |
+| Chaff tick `T` | 20 ms, both ends (provisional) | [M] §9.1.5 (O10, open), equal to the 50 Hz cap [P §2.3 fn. 1] |
 | Chaff linger, client / server | uniform 1–2 s after each input / 1 s after each CHAFF frame | [D] §9.1.1, §9.1.2 |
 | Chaff size, client / server | 40 / 64 bytes of sealed plaintext, the §9.2 floors | [D] §9.1.1, [M] §9.1.5 |
 | `Window` (versions outstanding) | 16 | [D], §6.1 |
