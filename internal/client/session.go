@@ -14,19 +14,6 @@ import (
 	"github.com/danielbodart/mosey/internal/terminal"
 	"github.com/danielbodart/mosey/internal/transport"
 	"github.com/danielbodart/mosey/internal/userinput"
-	"github.com/danielbodart/mosey/internal/wire"
-)
-
-// The SSP limits the client's endpoint is set up with.
-const (
-	// maxPayload is transport.MaxPayload (architecture.md §4): a datagram
-	// of wire.MaxDatagram less the data packet's 13-byte clear header,
-	// its 1-byte frame kind and its 16-byte tag.
-	maxPayload = wire.MaxDatagram - 30
-	// maxScreenDiff bounds one decompressed screen instruction:
-	// screen.MaxDiff, 48 MiB, the largest diff the server can produce at
-	// the D23 size clamp (screen.md §5.12).
-	maxScreenDiff = 48 << 20
 )
 
 // Session is the client after the bootstrap: what Run does once it has a
@@ -82,8 +69,11 @@ func (s *Session) Run(ctx context.Context) error {
 	input := userinput.NewStream()
 	ep := ssp.NewEndpoint(conn, ssp.Config{
 		Role:           ssp.Client,
-		MaxPayload:     maxPayload,
-		MaxRemoteBytes: maxScreenDiff,
+		// The owners' bounds, not copies (architecture.md §4): the largest
+		// payload the transport carries, and the largest screen diff the
+		// server can make at the D23 clamp (screen.md §5.12).
+		MaxPayload:     transport.MaxPayload,
+		MaxRemoteBytes: screen.MaxDiff,
 	}, input.Clone(), screen.NewGrid(0, 0))
 	l := &loop[*userinput.Stream, *screen.Grid]{
 		sync:   ep,

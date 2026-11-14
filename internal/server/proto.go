@@ -11,6 +11,7 @@ import (
 
 	"github.com/danielbodart/mosey/internal/emu"
 	"github.com/danielbodart/mosey/internal/handshake"
+	"github.com/danielbodart/mosey/internal/ipc"
 	"github.com/danielbodart/mosey/internal/screen"
 	"github.com/danielbodart/mosey/internal/ssp"
 	"github.com/danielbodart/mosey/internal/transport"
@@ -23,23 +24,11 @@ var (
 	_ ssp.State[*userinput.Stream] = (*userinput.Stream)(nil)
 )
 
-// The input stream's bounds that proto relies on (ssp.md §10.1). They are
-// userinput's; restated here so this file says what it depends on.
-const (
-	// maxInputDiff is userinput.MaxDiffBytes: the largest diff a client may
-	// send, which is the server endpoint's MaxRemoteBytes.
-	maxInputDiff = 128 << 10
-	// consumedStep is userinput.ConsumedStep: how far the consumed index
-	// must move, in encoded bytes, before it is published, so ordinary
-	// typing never costs a frame of its own (ssp.md §10.1).
-	consumedStep = 16 << 10
-)
-
 // Timings of server.md §7 and §8.
 const (
 	// ptyReadChunk is how much of the pty proto reads at once, which is
 	// also ipc.MaxOutput: one read, one emu request.
-	ptyReadChunk = 16 << 10
+	ptyReadChunk = ipc.MaxOutput
 	// T5 bounds the drain after the spawner says the shell has exited: a
 	// job the shell left behind may hold the pty's slave open, so EIO may
 	// never come [derived].
@@ -188,7 +177,8 @@ func (s *Session) Run(ctx context.Context) error {
 	ep := ssp.NewEndpoint(conn, ssp.Config{
 		Role:           ssp.Server,
 		MaxPayload:     transport.MaxPayload,
-		MaxRemoteBytes: maxInputDiff,
+		// The largest diff a client may send (ssp.md §10.1).
+		MaxRemoteBytes: userinput.MaxDiffBytes,
 	}, screen.NewGrid(0, 0), userinput.NewStream())
 	s.mu.Lock()
 	s.ep = ep
@@ -459,7 +449,9 @@ func (s *Session) writePTY(ctx context.Context) error {
 			}
 			applied++
 			unpublished += encodedLen(ev)
-			if unpublished >= consumedStep {
+			// Published once it has moved ConsumedStep, so ordinary typing
+			// never costs a frame of its own (ssp.md §10.1).
+			if unpublished >= userinput.ConsumedStep {
 				unpublished = 0
 				s.mu.Lock()
 				s.consumed = applied
