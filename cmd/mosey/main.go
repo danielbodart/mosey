@@ -1,7 +1,3 @@
-// Command mosey is the one mosey binary: the client, `mosey host`, which
-// logs in with the system ssh, starts `mosey --serve` there, and then talks
-// to it over UDP, roaming with the network and drawing the screen the
-// server sends; and the server, `mosey --serve`, with its roles (server.go).
 package main
 
 import (

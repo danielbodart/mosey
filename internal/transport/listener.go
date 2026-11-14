@@ -48,7 +48,7 @@ type pending struct {
 
 type budget struct{ recv, sent int }
 
-// maxPendingAddrs bounds the per-pending address table (ours).
+// maxPendingAddrs bounds the per-pending address table [D].
 const maxPendingAddrs = 4
 
 // Listen serves handshakes for the credentials in creds on pc, which the

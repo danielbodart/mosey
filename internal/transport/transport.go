@@ -19,7 +19,7 @@ const (
 	// starts a rekey (D20; WireGuard's REKEY_AFTER_TIME).
 	RekeyAfter = 120 * time.Second
 	// serverRekeyAfter is the server's backstop, 10 s later so the two
-	// rarely collide, for a client that never rekeys (ours).
+	// rarely collide, for a client that never rekeys [D].
 	serverRekeyAfter = RekeyAfter + 10*time.Second
 	// RekeyAfterMessages is D20's "N packets" (WireGuard's
 	// REKEY_AFTER_MESSAGES).
@@ -61,12 +61,12 @@ const (
 	candidateLife  = 10 * time.Second
 
 	// handshakeFirst and handshakeCap time msg1 and confirmation resends:
-	// RFC 6298 §2.1's initial RTO, doubling to 4 s (ours).
+	// RFC 6298 §2.1's initial RTO, doubling to 4 s [D].
 	handshakeFirst = time.Second
 	handshakeCap   = 4 * time.Second
 
 	// revokedCopies is how many REVOKED frames a revocation seals, and
-	// tombstoneLife how long the revoked indices answer with them (ours).
+	// tombstoneLife how long the revoked indices answer with them [D].
 	revokedCopies  = 4
 	tombstoneLife  = 60 * time.Second
 	tombstoneEvery = 250 * time.Millisecond
@@ -74,15 +74,20 @@ const (
 	// endCopies and endSpacing are how End repeats its END frame: three
 	// copies 100 ms apart, so one loss, or a burst of loss shorter than
 	// 100 ms, still gets one through, and a quitting client is held up
-	// 200 ms at most (ours). The peer may be gone a moment later, so
+	// 200 ms at most [D]. The peer may be gone a moment later, so
 	// nothing waits for an answer.
 	endCopies  = 3
 	endSpacing = 100 * time.Millisecond
 
 	// recvQueue is how many terminal payloads wait for Recv before more are
-	// dropped. SSP treats a drop as loss and sends its state again.
+	// dropped. SSP treats a drop as loss and sends its state again, so the
+	// queue only has to ride out a scheduling hiccup: 256 payloads is a
+	// full 16-fragment burst sixteen times over, about 300 KiB [D].
 	recvQueue = 256
 	// eventQueue is how many events wait for a reader before the oldest go.
+	// Events are rare (a rekey every 120 s, a path change, the end) and
+	// only logged or acted on once, so a short queue loses nothing a
+	// reader that keeps up would see [D].
 	eventQueue = 16
 
 	maxDatagram = wire.MaxDatagram
