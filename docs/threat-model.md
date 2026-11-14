@@ -694,9 +694,11 @@ that has none, and the copy then runs as the user there.
   path, which is the usual one, uses no network and trusts nothing but
   the file the user is already running.
 - **The installer** (`mosey --serve=install`, `bootstrap.md` §4.7.7) is the
-  only writer of `~/.cache/mosey`. It checks length and SHA-256 through the
-  descriptor it then renames, so a cut-short or altered copy is never
-  installed; works below `~/.cache` only through `O_NOFOLLOW` descriptors,
+  only writer of `~/.cache/mosey`. It checks length and SHA-256 through
+  one descriptor; the rename that follows goes by name, inside a
+  directory only the user can write, and what it moved is then checked to
+  be that same file (device and inode) and removed if not, so a
+  cut-short, altered or swapped copy is never left installed; works below `~/.cache` only through `O_NOFOLLOW` descriptors,
   so a planted symlink cannot redirect the write; requires every directory
   to be the user's and writable by nobody else; and never replaces a file
   that is not the user's (D7). **T13** (another local user) cannot plant

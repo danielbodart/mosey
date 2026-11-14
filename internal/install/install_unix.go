@@ -17,6 +17,10 @@ import (
 // make.
 var owner = func(path string, st *unix.Stat_t) int { return int(st.Uid) }
 
+// beforeRename runs between the checks and the rename. Tests set it to
+// swap the upload's name for another file, as the same user could.
+var beforeRename = func() {}
+
 // Install puts r's upload into ~/.cache/mosey/<Version>/mosey, or refuses
 // (bootstrap.md §4.7.7). Every step works through the descriptor of the
 // step before, so no path is looked up twice.
@@ -77,8 +81,26 @@ func Install(r Request) error {
 	if err := unix.Fsync(fd); err != nil {
 		return fmt.Errorf("syncing the upload: %w", err)
 	}
+	var checked unix.Stat_t
+	if err := unix.Fstat(fd, &checked); err != nil {
+		return fmt.Errorf("looking at the upload: %w", err)
+	}
+	beforeRename()
+	// rename(2) takes names, not descriptors, so TEMP is looked up once
+	// more here. What it moved is checked to be the very file that was
+	// hashed, by device and inode, and removed if not: the hash then
+	// holds for what is installed, not only for what was read.
 	if err := unix.Renameat(mosey, r.Temp, vdir, "mosey"); err != nil {
 		return fmt.Errorf("moving the upload to %s: %w", dest, err)
+	}
+	var moved unix.Stat_t
+	if err := unix.Fstatat(vdir, "mosey", &moved, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		unix.Unlinkat(vdir, "mosey", 0)
+		return fmt.Errorf("looking at %s: %w", dest, err)
+	}
+	if moved.Dev != checked.Dev || moved.Ino != checked.Ino {
+		unix.Unlinkat(vdir, "mosey", 0)
+		return refuse("%s is not the file that was checked: it was replaced during the install, and is removed", dest)
 	}
 	if err := unix.Fsync(vdir); err != nil {
 		return fmt.Errorf("syncing %s: %w", vname, err)

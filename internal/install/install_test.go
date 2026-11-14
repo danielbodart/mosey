@@ -201,6 +201,28 @@ func TestADirectoryOfAnotherUserIsRefused(t *testing.T) {
 	mustRefuse(t, Install(r), "belongs to uid")
 }
 
+// The rename goes by name, so a file put at the upload's name after the
+// hash was checked would be what is installed: the installer sees that
+// what it moved is not what it hashed, removes it and refuses (§4.7.7).
+func TestAnUploadSwappedAfterItsCheckIsNotInstalled(t *testing.T) {
+	f := newFixture(t, "the checked build")
+	saved := beforeRename
+	t.Cleanup(func() { beforeRename = saved })
+	beforeRename = func() {
+		other := f.temp + ".other"
+		if err := os.WriteFile(other, []byte("never hashed"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(other, f.temp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustRefuse(t, f.install(t, "1.2.3"), "not the file that was checked")
+	if _, err := os.Lstat(f.installed("1.2.3")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("something is installed: %v", err)
+	}
+}
+
 func TestADirectoryOthersMayWriteIsRefused(t *testing.T) {
 	f := newFixture(t, "build")
 	dir := filepath.Join(f.home, ".cache", "mosey")

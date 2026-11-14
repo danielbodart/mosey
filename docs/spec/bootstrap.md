@@ -758,15 +758,21 @@ the user's home) and reads nothing from the network. In order:
    symlink, a directory, anything else, or **a file owned by anyone else**
    is refused and left exactly as it is (D7: never replaces a file someone
    else owns).
-7. **Install.** `fchmod 0700` and `fsync` on the upload, then
+7. **Install.** `fchmod 0700`, `fsync` and `fstat` on the upload, then
    `renameat(~/.cache/mosey, TEMP, V-dir, "mosey")`, atomic within the
-   filesystem, then `fsync` of the version directory. A session running
+   filesystem. `rename(2)` takes names, so TEMP is looked up again here:
+   `fstatat(V-dir, "mosey", AT_SYMLINK_NOFOLLOW)` must then show the
+   device and inode of the descriptor that was hashed, or the file is
+   unlinked and the installer refuses. Then `fsync` of the version
+   directory. A session running
    from the file it replaces is unaffected: its spawner re-executes
    `/proc/self/exe` (`server.md`, threat-model §4.11).
 
 Every step works through the descriptors of the step before
-(`openat`, `mkdirat`, `fstatat`, `renameat`), so no path is looked up twice
-and nothing can be swapped between a check and its use. Exit 0 and nothing
+(`openat`, `mkdirat`, `fstatat`, `renameat`), so no directory is looked up
+twice and no symlink can redirect a step. The one name looked up twice is
+TEMP, by the rename, inside `~/.cache/mosey`, which only the user can
+write; step 7's inode check catches a swap there after the fact. Exit 0 and nothing
 on stdout on success; on any refusal one line on stderr,
 `mosey --serve=install: WHAT`, naming the path and the rule, and exit 1.
 
