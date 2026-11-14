@@ -92,7 +92,9 @@ func serve(t *testing.T, bin string, env ...string) *served {
 	state := filepath.Join(home, "state")
 	cmd := exec.Command(bin, "--serve")
 	cmd.Env = append([]string{
-		"PATH=/usr/bin:/bin:/run/current-system/sw/bin",
+		// The test's own PATH first, so the session's shell finds stty
+		// where there is no /usr/bin (the Nix build sandbox).
+		"PATH=" + os.Getenv("PATH") + ":/usr/bin:/bin:/run/current-system/sw/bin",
 		"HOME=" + home,
 		"XDG_STATE_HOME=" + state,
 		"SHELL=/bin/sh",
@@ -250,15 +252,19 @@ func checkNoCores(t *testing.T, state string) {
 	}
 }
 
-// notDumpable reports whether pid's /proc entries belong to root, which
-// the kernel does for a process that is not dumpable.
+// notDumpable reports whether pid's /proc entries have been taken from
+// us, which the kernel does for a process that is not dumpable: it gives
+// them to root, which inside a user namespace that does not map root (the
+// Nix build sandbox's) shows as the overflow uid, not 0. A dumpable
+// process's entries are its own uid's, which is ours (checkNoCores does
+// not run as root).
 func notDumpable(t *testing.T, pid int) bool {
 	t.Helper()
 	var st syscall.Stat_t
 	if err := syscall.Stat(fmt.Sprintf("/proc/%d/status", pid), &st); err != nil {
 		t.Fatalf("pid %d: %v", pid, err)
 	}
-	return st.Uid == 0
+	return int(st.Uid) != os.Getuid()
 }
 
 // coreLimit is pid's soft and hard RLIMIT_CORE, from /proc/PID/limits.
