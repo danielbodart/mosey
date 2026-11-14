@@ -2,10 +2,11 @@
 
 What mosey protects, from whom, where the trust boundaries are, what each
 mechanism defends, and which risks are accepted. It grows with the slices
-(PLAN §6.2). This version covers **slice 1** and **resume**: `mosey host`
-gives an interactive login shell end to end, and `mosey -r host` takes a
-running session over from wherever the user can SSH from (§4.5). There is
-no agent forwarding, prediction, auto-upload or chaff yet. Items marked **[later]** describe the
+(PLAN §6.2). This version covers **slice 1**, **resume** and
+**auto-upload**: `mosey host` gives an interactive login shell end to end,
+copying mosey to the host first if it has none (D7, §4.13), and `mosey -r
+host` takes a running session over from wherever the user can SSH from
+(§4.5). There is no agent forwarding, prediction or chaff yet. Items marked **[later]** describe the
 slice that brings them, so slice 1 reserves the right hooks and claims
 nothing it doesn't do.
 
@@ -676,6 +677,47 @@ execution (R4).
 | On-path drop | being on path | the session stalls | unbounded (R8) |
 | Log flooding via evictions | leaked PSK | log lines | **Requirement:** eviction and rejection logs are rate-limited per session |
 
+### 4.13 Auto-upload (D7) — T5, T12, T13, and the release channel
+
+`bootstrap.md` §4.7. The client copies a build of its own version to a host
+that has none, and the copy then runs as the user there.
+
+- **What is sent** is the client's own running file, or, for another
+  platform, the release asset of exactly the client's version, whose
+  SHA-256 must match the release's `SHA256SUMS` before a byte goes to the
+  far host (`bootstrap.md` §4.7.4). Downloads are HTTPS only, redirects
+  included, size-bounded, with a deadline. **This is integrity, not
+  authenticity:** a compromised GitHub account or CI can publish matching
+  `SHA256SUMS` and binary. Until releases are signed (`bootstrap.md` §14
+  C) the trust placed in the download is the trust placed in the GitHub
+  release, the same as a user who downloads it by hand. The same-platform
+  path, which is the usual one, uses no network and trusts nothing but
+  the file the user is already running.
+- **The installer** (`mosey --serve=install`, `bootstrap.md` §4.7.7) is the
+  only writer of `~/.cache/mosey`. It checks length and SHA-256 through the
+  descriptor it then renames, so a cut-short or altered copy is never
+  installed; works below `~/.cache` only through `O_NOFOLLOW` descriptors,
+  so a planted symlink cannot redirect the write; requires every directory
+  to be the user's and writable by nobody else; and never replaces a file
+  that is not the user's (D7). **T13** (another local user) cannot plant
+  or replace anything there. **T12** (same uid) can, as it can with any
+  file the user runs: that is why the copy is never a trust anchor, for
+  provenance or anything else [S7 §10].
+- **The probe line** comes from the far host (T5). It is parsed strictly
+  and fuzzed, and it chooses only which public build is sent. Nothing the
+  far host says appears unfiltered in the consent question, which is made
+  of the client's own values.
+- **Consent.** The first copy to each `user@host:port` is asked for
+  (`-upload ask`); the answer is remembered in the client's state
+  directory, 0600. A user who wants nothing copied says `-upload=no`.
+- **No secret** travels with the upload: its stdin is the binary, its
+  argv the version, hash and size. The one-shot key in the ClientLine
+  sent to the probe is public by design (B3), and the same line is sent
+  again after the upload because no launcher ever read it.
+- **Costs** to the far host: one file of at most 128 MiB per version, in the
+  user's own quota. Old versions are not yet removed (`bootstrap.md` §14
+  E).
+
 ## 5. Accepted residual risks
 
 Each is a deliberate trade, with the reason and the evidence. Revisit only
@@ -801,7 +843,7 @@ target (architecture §6).
 | Agent forwarding (D25) | A11. The strict capture state machine (one connection, the ssh child's pid and uid, exactly bind-with-fwd=1 then REQUEST_IDENTITIES then EOF), the bind pinned to known_hosts, and the agent off when no trustworthy bind exists; a hostile server's injected bind was refused [M S3 E11]. The client refuses agent channels it didn't negotiate [M S3 E7b]. proto's policy gains argument-filtered `accept4` |
 | Prediction (D12) | Passwords: the echo-off bit and informative-keystroke confirmation showed 0 of 555 password keys [M S6 §5]; no echo-ack-only frames while echo is off. The input log is zeroed on eviction and nothing is logged while echo is off [S6 §9] |
 | Chaff (D11, O10) | Closes R2 to the extent the tick allows; the cost is measured in netsim first |
-| Auto-upload (D7) | Hash-checked, installed to `~/.cache/mosey/<version>/`, asks the first time, never replaces a file another user owns. The binary is user-writable, so it is never a trust anchor for provenance [S7 §10]. A binary for another platform is fetched from the client's own version's GitHub Release and checked against that release's `SHA256SUMS` (`bootstrap.md` §4.6): integrity, not authenticity against a compromised GitHub account or CI, until releases are signed (`bootstrap.md` §14 C) |
+| Auto-upload (D7) | Landed: §4.13. Still to come: signed releases (`bootstrap.md` §14 C) |
 | Provenance (D28) | `Conn.HandshakeHash` exposed for quoin-attest; a keyless, fail-closed forwarder; mosey never signs |
 | macOS server (D22) | Seatbelt or nothing; until then the sandbox returns `ErrUnsupported` and the server says it runs unconfined |
 

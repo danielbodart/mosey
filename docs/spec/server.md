@@ -40,7 +40,8 @@ the same file, re-executed with a flag. A plain word never selects a role
 | `mosey --serve=spawner` | **spawner**: binds UDP, opens the pty, starts the shell, starts and supervises proto and emu | no | the session |
 | `mosey --serve=proto` | **proto**: keys, UDP, transport, SSP, every protocol parser, the pty master, the reply grammar | Landlock + seccomp | the session |
 | `mosey --serve=emu` | **emu**: tuios.dev/vt and nothing else | Landlock + seccomp | until it dies; restarted |
-| `mosey --serve=version` | prints the version (D7's version check) | no | instant |
+| `mosey --serve=version` | prints the version (D7's probe, `bootstrap.md` §4.7.2) | no | instant |
+| `mosey --serve=install V HASH SIZE TEMP` | installs the uploaded copy it is running from into `~/.cache/mosey/V/` (D7, `bootstrap.md` §4.7.7) | no | instant |
 | `mosey --serve=list` | **lister**: reads every session's greeting (§2.6) and prints one line each (`bootstrap.md` §9.4) | no | instant |
 
 Any other `--serve=` value prints `mosey --serve: unknown role` and exits

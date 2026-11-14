@@ -37,6 +37,7 @@ decision wins.
 | `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | launcher, spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
 | `internal/server` | The four roles (launcher, spawner, proto, emu); proto's `Session`, runnable in process for tests; the emu reply grammar | all server roles | **server-proc** | `doc.go`, `proto.go`, `launcher.go`, `spawner_linux.go`, `protorole.go`, `emurole.go`, `ipcemu.go`, `reply.go` |
 | `internal/bootstrap` | The SSH command line, the stdin and stdout lines (D6, D20, D25) | client, spawner | **bootstrap-client** | `doc.go`, `line.go`, `ssh.go` |
+| `internal/install` | `mosey --serve=install`: puts an uploaded copy into `~/.cache/mosey/<version>/` safely (D7, `bootstrap.md` §4.7.7) | server host (one-shot) | **bootstrap-client** | `doc.go`, `install.go` |
 | `internal/terminal` | The client's own tty: raw mode, size, SIGWINCH | client | **bootstrap-client** | `terminal.go` |
 | `internal/client` | `mosey host`: bootstrap, then `Session` (SSP + render + input) | client | **bootstrap-client** | `client.go` |
 | `cmd/mosey` | The one binary: `main.go` is the client (`mosey host`), `server.go` the server (`mosey --serve`, re-executing itself as `mosey --serve=proto` and `mosey --serve=emu`; a flag, so it never collides with a host called server) | | **bootstrap-client** (`main.go`), **server-proc** (`server.go`) | `main.go`, `server.go` |
@@ -69,10 +70,11 @@ render                          (screen)
 emu                             (screen)
 bootstrap                       ()              -- raw bytes; never handshake
 pty, sandbox, ipc, nocore       ()
+install                         (bootstrap)     -- the version and path rules only
 terminal                        ()
 server                          (all of the above but client, terminal, render)
 client                          (all of the above but server, pty, sandbox, ipc, emu)
-cmd/mosey                       (client, server, bootstrap, terminal, nocore)
+cmd/mosey                       (client, server, install, bootstrap, terminal, nocore)
 e2e                             (everything; tests only)
 ```
 
@@ -290,7 +292,9 @@ emu→proto `Update`, `Replies`.
 **bootstrap.** As `bootstrap.md` §10.1: `ClientLine`, `CredentialLine`,
 `ErrorLine`, their `Marshal`/`Parse`, `ReadCredential(r)`, `Sanitize`,
 `ParseSSHOptions`, `Config` (from `SSH.Resolve`, which runs `ssh -G`),
-`SSH.Command(ctx, Config)`, `AgentSocket` and `ChooseAddr`. The spawner
+`SSH.Command(ctx, Config)`, `AgentSocket` and `ChooseAddr`; for D7 the
+`ProbeLine`, `NoServerError`, `SSH.UploadCommand`, `Platform`,
+`IsRelease`, `AssetName`, `ParseSums` and `CachePath`. The spawner
 uses `ParseClientLine`, `MarshalCredentialLine` and `MarshalErrorLine`.
 The resume slice adds `SessionLine` (the attach socket's greeting) with
 `MarshalSessionLine`, `ParseSessionLine` and `SessionLineVersion`,
@@ -301,8 +305,8 @@ The resume slice adds `SessionLine` (the attach socket's greeting) with
 stays cooked for ssh's prompts until the handshake is done.
 
 **client.** `Run(ctx, Options{SSH, Version, Terminal, Stderr, Log,
-Getenv, Resume, SessionID})` for the binary, and `List(ctx, ListOptions)`
-for `-list`; `Session{Conn, Server, Credential, Key,
+Getenv, Resume, SessionID, Upload, Ask, Releases})` for the binary, and
+`List(ctx, ListOptions)` for `-list`; `Session{Conn, Server, Credential, Key,
 Terminal, Log, Capabilities}.Run(ctx)` for after the bootstrap, which the
 netsim end-to-end test drives; it returns nil when the server ends the
 session, and otherwise tells the server with `End` before it returns.
@@ -344,6 +348,6 @@ Errors are `*Failure`,
 | Provenance (D28) | `Conn.HandshakeHash` |
 | Prediction (D12) | `Grid.EchoOff`, `Grid.EchoAck`, `userinput.Stream.Len` |
 | Chaff (D11, O10) | `transport.KindChaff` |
-| Auto-upload (D7) | `bootstrap.SSH.Server`, `bootstrap.Version` |
+| Auto-upload (D7) | Landed: `bootstrap.md` §4.7, `internal/install` |
 | NAT traversal (O6) | packet type `0x05` |
 | macOS server (D22) | `pty_other.go`, `sandbox_other.go` return `ErrUnsupported` |

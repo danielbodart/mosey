@@ -75,7 +75,7 @@ enter raw mode, run Session
 ## 2. The command line the client accepts
 
 ```
-mosey [-remote PATH] [-ssh PROGRAM] [-A | -a] [-r | -r=SESSION | -list] [-- SSH-OPTION...] DESTINATION
+mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-r | -r=SESSION | -list] [-- SSH-OPTION...] DESTINATION
 ```
 
 - `DESTINATION` is passed to ssh unchanged: `host`, `user@host`, an alias
@@ -83,7 +83,11 @@ mosey [-remote PATH] [-ssh PROGRAM] [-A | -a] [-r | -r=SESSION | -list] [-- SSH-
   most 1024 bytes, must not start with `-`, and must not contain bytes below
   0x21 or 0x7F (ssh would read a space as the start of the command). Anything
   else is a usage error (exit 2).
-- `-remote PATH` is the remote mosey binary (§4.2). Default `mosey`.
+- `-remote PATH` is the remote mosey binary (§4.2). Without it the client
+  looks for its own version and copies it over if it is missing (D7,
+  §4.7).
+- `-upload ask|yes|no` is what to do when the far host has no mosey of
+  this version (§4.7.5). Default `ask`. Any other value is a usage error.
 - `-ssh PROGRAM` is the local ssh. Default `ssh`, found on `PATH`. Tests
   point it at a fake (§12).
 - `-A` and `-a` are ssh's own flags (D25): force agent forwarding on or off.
@@ -259,26 +263,26 @@ argument: `cmd/mosey` tests only `os.Args[1]`.
 
 ### 4.2 Where the server binary comes from
 
-Slice 1: `mosey` on the remote `PATH`, or `-remote PATH`. A non-interactive
-SSH session's `PATH` is often shorter than an interactive one's (no
-`~/.local/bin`); `-remote` is the answer until D7.
+Two ways, chosen by whether the user named one:
 
-D7 (auto-upload slice) changes only the remote command and adds a step after
-a failure; the two lines in §6 do not change. Its hooks:
-
-- **Missing binary.** `/bin/sh`'s exit status for a command it cannot find
-  is 127, and 126 for one it cannot run (POSIX); the §4.1 wrapper makes
-  this hold whatever the user's login shell is [shells]. ssh exits with the
-  remote command's status. The client reports exit 127 or 126 with no
-  protocol line as `ErrNoServer` (§10); D7 answers it with an upload and
-  one retry. A launcher never exits 126 or 127 itself (its failures are
-  exit 1, §4.4), so the two cannot be confused.
-- **Wrong version.** The server refuses a client of another version with
-  `MOSEY-ERROR ... version` before starting anything (§6.4). D7 answers that
-  the same way.
-- **`mosey --serve=version`** prints the server's version and exits, for a
-  probe that wants to ask before uploading. Reserved; slice 1 does not call
-  it.
+- **`-remote PATH` given.** That file and nothing else, run with the
+  §4.1 command exactly as slice 1 had it. No probe, no upload: the user
+  has said where mosey is. A missing or unrunnable file is reported from
+  `/bin/sh`'s exit status: 127 for a command it cannot find and 126 for one
+  it cannot run (POSIX), which the §4.1 wrapper makes hold whatever the
+  user's login shell is [shells]. ssh exits with the remote command's
+  status, and the client reports 126 or 127 with no protocol line as
+  `ErrNoServer` (§10). A launcher never exits 126 or 127 itself (its
+  failures are exit 1, §4.4), so the two cannot be confused. A server of
+  another version refuses with `MOSEY-ERROR ... version` (§6.4), and the
+  client says so.
+- **No `-remote` (the default): D7.** The remote command becomes §4.7's
+  probe, which runs `~/.cache/mosey/<V>/mosey` or `mosey` on the remote
+  `PATH`, whichever says it is this client's version `V`, and otherwise
+  prints the remote's platform; the client then copies a matching build
+  over, with the user's consent, and starts again once (§4.7). The two
+  lines of §6 do not change. `mosey --serve=version`, reserved in slice 1,
+  is what the probe asks each candidate.
 
 ### 4.3 The client's process handling
 
@@ -471,6 +475,314 @@ the same release, so it catches corruption and a wrong file, not a
 compromised GitHub account or CI; whether releases are also signed is
 §14 question C. A client of a development build (`dev`, or a local
 build's timestamp patch) has no release, so it can upload only itself.
+
+### 4.7 Auto-upload (D7)
+
+D7: if the far host has no mosey of the client's version, the client copies
+over a matching static build, hash-checked, installed to
+`~/.cache/mosey/<V>/mosey`, asking the first time, and never replacing a file
+someone else owns. `V` is the client's own version, exactly as it sends it in
+`swver` (§6.2). This section is the whole of it; nothing here changes the two
+lines of §6 or what a server does once it is running.
+
+```
+client                                                     far host
+------                                                     --------
+ssh … "PROBE"   + ClientLine  ──────────────────────────►  ~/.cache/mosey/V/mosey --serve=version = V ?  exec it --serve
+                                                           mosey --serve=version = V ?                  exec it --serve
+                              ◄──────── MOSEY-PROBE 1 Linux x86_64      (neither: say what this host is)
+ask the user (first time per host)
+pick the binary: our own file, or the release asset, SHA-256 checked
+ssh … "UPLOAD"  + the binary  ──────────────────────────►  mktemp in ~/.cache/mosey; cat; run it as
+                                                           --serve=install V HASH SIZE TEMP: checks, hash, rename
+                              ◄──────── exit 0
+ssh … "PROBE"   + ClientLine  ──────────────────────────►  ~/.cache/mosey/V/mosey --serve   (as §4.4)
+```
+
+#### 4.7.1 When it applies
+
+Only when the user gave no `-remote` (§4.2), and only if `V` can name a
+directory: a valid `swver` (§6.1) other than `.` and `..`. Every `swver`
+byte is a `pathchar` (§4.1), so `~/.cache/mosey/V/mosey` needs no quoting
+anywhere. A version that cannot (none that `scripts/version.sh` or the
+flake makes) runs slice 1's `mosey --serve`, with no probe and no upload,
+and the log says why.
+
+`~/.cache` is literal: the remote's `XDG_CACHE_HOME` is not consulted. The
+probe, the upload and the installer must agree on one path without a round
+trip to ask, and D7 names this one.
+
+#### 4.7.2 The probe
+
+The remote command (one argument, as §4.1, `V` substituted):
+
+```
+exec /bin/sh -c 'v=V; for m in "$HOME/.cache/mosey/$v/mosey" mosey; do if [ "$("$m" --serve=version </dev/null 2>/dev/null)" = "$v" ]; then exec "$m" --serve; fi; done; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
+```
+
+- **The cache first**, then `mosey` on the remote `PATH`. Each candidate is
+  asked its version by running `--serve=version` (server.md §1), with stdin
+  on `/dev/null` (the ClientLine waiting on stdin is for the launcher, and
+  a program that is not mosey must not eat it) and stderr dropped (`sh:
+  mosey: not found` is the normal case). The first that prints exactly `V`
+  is exec'd as the launcher, which reads the ClientLine as in §4.4. A file
+  in the cache is asked too rather than trusted for its path: it may be a
+  half-written copy from a crashed upload, or another build of the same
+  version string (two `dev` builds).
+- **Neither:** one `MOSEY-PROBE` line on stdout, then exit 0. The probe
+  never exits 126 or 127, so `ErrNoServer` from an exit status means only
+  what it meant in slice 1.
+- **Quoting.** The text inside the single quotes has no `'`, no `\` (fish
+  reads `\'` and `\\` inside single quotes), no `!` and no newline (csh
+  refuses a newline inside quotes), so every login shell of §4.1 passes it
+  to `/bin/sh` unchanged [shells: run under each in §12's test].
+- **Cost.** In the everyday case one exec of `/bin/sh` and one or two of
+  `mosey --serve=version` (a Go binary's start, a few milliseconds) on top
+  of slice 1's command; no extra round trip.
+
+**The probe line**, read by `ReadCredential` (§6.5) like the other lines of
+ours and fuzzed with them:
+
+```
+probe-line = "MOSEY-PROBE" SP proto SP sysname SP machine LF
+proto      = decimal                 ; must be Version
+sysname    = 1*64(%x21-7E)           ; uname -s, or "unknown"
+machine    = 1*64(%x21-7E)           ; uname -m, or "unknown"
+```
+
+At most 148 bytes [derived: 11 + 1 + 5 + 1 + 64 + 1 + 64 + LF];
+**`MaxProbeLine` = 160**. Canonical as §6.1 asks. `ReadCredential` returns
+it as a `*NoServerError` (`errors.Is(err, ErrNoServer)`) carrying the two
+fields. A `uname` that prints a space or something longer gives a line that
+does not parse, which is `ErrBadLine`: a host that odd has no release asset
+anyway.
+
+The far side chooses these fields, and a hostile one can claim any
+platform. All it gains is which public build the client sends it.
+
+#### 4.7.3 The remote's platform
+
+| `uname -s` | os | | `uname -m` | arch |
+|---|---|---|---|---|
+| `Linux` | `linux` | | `x86_64`, `amd64` | `amd64` |
+| `Darwin` | `darwin` | | `aarch64`, `arm64` | `arm64` |
+
+Exact, case-sensitive matches [derived from uname(1) on Linux and macOS].
+Anything else: `mosey: DEST is SYSNAME MACHINE, which mosey has no build
+for`. A `darwin` remote, though there is a darwin build, is refused with
+`mosey: the mosey server runs on Linux only for now, and DEST is Darwin`:
+the server's roles return `ErrUnsupported` there (D22, `server.md`), so
+copying 10 MB over to be told so would waste the user's time. That check
+goes when a macOS server lands.
+
+#### 4.7.4 Which file is sent
+
+- **Same os and arch as the client:** the client's own file, the very bytes
+  it is running (D7: "the copy sent over is the very file the client
+  runs"). On Linux it is read through `/proc/self/exe`, which is the running
+  image even if a package upgrade has replaced the path since; elsewhere
+  through `os.Executable`. A non-dumpable process may open its own
+  `/proc/self/exe` (the kernel lets a process inspect itself), so §4.3's
+  `PR_SET_DUMPABLE 0` does not get in the way. Read whole, at most
+  `MaxBinary` = 128 MiB [choice; a release is about 10 MB], and hashed as
+  read. No network.
+- **Otherwise:** the release asset of §4.6 for **exactly `V`** and the
+  remote's os/arch. Only a release version has one: `V` must match
+  `MAJOR.MINOR.PATCH` with each part a decimal of at most 9 digits, no
+  leading zero, and `PATCH` ≥ 1 (CI's run number) [derived from
+  `scripts/version.sh`: a local build's patch is a 14-digit timestamp, the
+  flake's version says `unstable`, a plain `go build` says `dev`]. Anything
+  else is a development build: `mosey: this is a development build (V) and
+  DEST is OS/ARCH, which it cannot copy itself to: build mosey for OS/ARCH
+  and pass -remote, or put it at ~/.cache/mosey/V/mosey there`.
+
+  The download: `SHA256SUMS` first, then the binary, both from
+  `https://github.com/danielbodart/mosey/releases/download/v<V>/`. HTTPS
+  only, redirects included (a redirect to anything but `https` is
+  refused); GitHub redirects release downloads to its object store. The
+  whole fetch has a deadline of 5 minutes [choice: 10 MB at 300 kbit/s].
+  `SHA256SUMS` is read up to 64 KiB, the binary up to `MaxBinary`; more is
+  an error. `SHA256SUMS` is parsed strictly (`ParseSums`, fuzzed): every
+  line exactly 64 lower-case hex digits, two spaces, a name of
+  1 to 256 `pathchar`s other than `/`, LF; a name at most once; the asset's name must be there.
+  The binary's SHA-256 must equal that line's, and its length must be
+  non-zero, **before** anything is sent to the far host. A 404 on either
+  file: `mosey: there is no release vV on GitHub to fetch mosey for
+  OS/ARCH from`. Any other failure, offline included: `mosey: fetching
+  mosey V for OS/ARCH from GITHUB-URL: ERR`, followed by the same advice as
+  for a development build. Nothing is cached locally; a second host of the
+  same platform downloads again (§14 question D).
+
+  What this proves: the bytes are the ones the release lists, so
+  corruption and a wrong file are caught. It does not prove that CI made
+  them (§4.6, §14 question C).
+
+The SHA-256 of what is sent, and its length, go to the far host on the
+upload's command line (§4.7.6), and the installer refuses anything else.
+
+#### 4.7.5 Consent
+
+`-upload` says what happens when the probe finds nothing:
+
+| `-upload` | |
+|---|---|
+| `ask` (default) | if this host is remembered, go on; else ask; `y` or `yes` (any case) goes on and remembers the host; anything else, or end of input, is no |
+| `yes` | go on without asking; remember nothing |
+| `no` | never copy: `mosey: DEST has no mosey V: install it there, or run without -upload=no` |
+
+**The question**, on stderr while the terminal is still cooked (§4.3),
+after the probe's ssh has exited, so no ssh is reading `/dev/tty`:
+
+```
+mosey: DEST has no mosey V. Copy this one (OS/ARCH, N.N MB) to ~/.cache/mosey/V/ there? [y/N] 
+mosey: DEST has no mosey V. Download mosey V for OS/ARCH from GitHub and copy it to ~/.cache/mosey/V/ there? [y/N] 
+```
+
+(the first for the client's own platform, the second for another, which is
+asked before anything is downloaded), and the answer is one line read from the terminal, at most 64 bytes
+counted. Every field in it is the client's own (the destination as typed,
+its version, the platform mapped through §4.7.3), never a remote string.
+
+**The first time** is per `user@hostname:port` as `ssh -G` resolved them
+(§3; `user`, `hostname` and `port`), so an alias and its target are one
+host, and two accounts on one host are two. Not per version: under D10
+every commit is a release, and a question at each upgrade would teach
+people to type `y` without reading. A remembered host is a line in
+`$XDG_STATE_HOME/mosey/upload-hosts` (else `~/.local/state/mosey/`),
+beside the log (§7.4): the file is 0600 in a 0700 directory, at most
+1 MiB, one key per line, rewritten whole through a temporary file and a
+rename. A key holds only bytes 0x21–0x7E and is at most 1100 bytes; a
+host whose key cannot be written is asked each time. Failing to read or
+write the file is logged, and the host is asked again next time; it never
+stops a session. The state directory, not the config one: the client
+writes it, and a home-manager user's `~/.config` may be read-only.
+
+The prompt goes through an interface (`client.Options.Ask`) so tests
+answer it. `cmd/mosey` reads the answer from the terminal it already
+requires (§4.3: stdin and stdout must be one).
+
+#### 4.7.6 The upload
+
+The same ssh as §4.1, every option the same (one fresh connection, nothing
+forwarded), with this remote command (`V`, `HASH` as 64 lower-case hex
+digits, `SIZE` in decimal):
+
+```
+exec /bin/sh -c 'umask 077; d="$HOME/.cache/mosey"; mkdir -p "$d" || exit 1; t=$(mktemp "$d/.upload.XXXXXXXX") || exit 1; cat >"$t" && chmod 700 "$t" && "$t" --serve=install V HASH SIZE "$t"; s=$?; rm -f "$t"; exit $s'
+```
+
+- **stdin is the binary**, written whole and then closed; nothing else.
+  ssh's stdout is drained (at most 64 KiB, then discarded: rc files
+  print). ssh's stderr goes to the user through §6.5's filter, which is
+  how the installer's refusals are read.
+- **`umask 077`**: every directory and file the shell makes is the user's
+  alone. **`mktemp`** creates the file with `O_EXCL`, so the shell never
+  writes through a name someone planted [mktemp(1): GNU coreutils,
+  busybox and macOS all create mode 0600 with `O_EXCL`]. The temporary file
+  sits in `~/.cache/mosey`, not `/tmp`: `/tmp` is often `noexec`, and the
+  rename into place must stay on one filesystem.
+- **The copy installs itself.** The shell runs the uploaded file as
+  `--serve=install` (§4.7.7). Running it proves it runs on that host, and
+  the checks are Go's, not whatever `sha256sum` or `shasum` the host has
+  (macOS has no `sha256sum`). A copy cut short in transit does not start
+  (its ELF segments run past the end of the file) and so installs nothing;
+  one that starts hashes its own file through the descriptor it checks,
+  and refuses any byte that differs.
+- **`rm -f "$t"`** after the installer, whatever it said: after a success
+  the name is gone already (renamed), after anything else the partial
+  file goes. `exit $s` passes the installer's status to ssh.
+
+ssh's exit status:
+
+| Status | Meaning | Client says (exit 1) |
+|---|---|---|
+| 0 | installed | `mosey: copied mosey V to DEST` and goes on (§4.7.8) |
+| 126 | the copy would not run | `mosey: the copy of mosey would not run on DEST: is ~/.cache on a filesystem mounted noexec?` |
+| 255 | ssh failed | `mosey: ssh to DEST failed` |
+| other | refused or failed; stderr has said why | `mosey: copying mosey to DEST failed (exit N; see above)` |
+
+#### 4.7.7 The installer: `mosey --serve=install V HASH SIZE TEMP`
+
+A server role (`server.md` §1) that runs once, from the uploaded file, and
+is the only code that writes the cache. It is not sandboxed (it must write
+the user's home) and reads nothing from the network. In order:
+
+1. **Arguments.** Exactly four. `V` a `swver` that §4.7.1 accepts; `HASH`
+   64 lower-case hex digits; `SIZE` a decimal from 1 to `MaxBinary`;
+   `TEMP` exactly `$HOME/.cache/mosey/.upload.` followed by 1 to 64
+   `pathchar`s other than `/`. `HOME` must be absolute. Anything else:
+   refused.
+2. **Home.** `open($HOME, O_DIRECTORY)`, following symlinks (a home under
+   `/home → /usr/home` is ordinary). It must be owned by the user or root
+   and writable by neither group nor others: sshd's own `StrictModes` rule
+   for the home directory [sshd_config(5)].
+3. **`~/.cache`.** Created 0700 if absent. Opened relative to the home's
+   descriptor, **following a symlink** here only: a `~/.cache` that is a
+   link to another disk is common and is the user's own doing. What it
+   resolves to must be a directory owned by the user and writable by
+   neither group nor others.
+4. **`~/.cache/mosey`** and **`~/.cache/mosey/V`**. Each created 0700 if
+   absent, then opened relative to its parent's descriptor with
+   `O_NOFOLLOW | O_DIRECTORY`: a symlink is refused (`ELOOP` or
+   `ENOTDIR`), so nothing planted can send the install elsewhere. Each must
+   be owned by the user and writable by neither group nor others.
+5. **The upload.** `TEMP`'s last component, opened relative to
+   `~/.cache/mosey` with `O_NOFOLLOW`: a regular file, owned by the user,
+   one link, exactly `SIZE` bytes, and SHA-256 equal to `HASH`, all read
+   through that one descriptor. On a mismatch it is unlinked and the
+   installer refuses.
+6. **What is there now.** `fstatat(V-dir, "mosey", AT_SYMLINK_NOFOLLOW)`:
+   absent is fine; a regular file owned by the user is replaced; a
+   symlink, a directory, anything else, or **a file owned by anyone else**
+   is refused and left exactly as it is (D7: never replaces a file someone
+   else owns).
+7. **Install.** `fchmod 0700` and `fsync` on the upload, then
+   `renameat(~/.cache/mosey, TEMP, V-dir, "mosey")`, atomic within the
+   filesystem, then `fsync` of the version directory. A session running
+   from the file it replaces is unaffected: its spawner re-executes
+   `/proc/self/exe` (`server.md`, threat-model §4.11).
+
+Every step works through the descriptors of the step before
+(`openat`, `mkdirat`, `fstatat`, `renameat`), so no path is looked up twice
+and nothing can be swapped between a check and its use. Exit 0 and nothing
+on stdout on success; on any refusal one line on stderr,
+`mosey --serve=install: WHAT`, naming the path and the rule, and exit 1.
+
+Other users: the cache is under the user's home and every directory in it
+is the user's alone, so another user can neither plant nor replace a file
+there. The same user can (threat-model T12), which is why the copy is never
+a trust anchor (S7 §10, threat-model §4.13).
+
+Old versions are not removed (§14 question E).
+
+#### 4.7.8 Starting again
+
+After a 0 exit the client runs §4.1 once more with the probe, the same
+config and the **same** ClientLine: its one-shot key was never used, since
+no launcher read the first line, and the key is public anyway (B3 needs
+SSH authentic, not confidential). If this second probe also says
+`MOSEY-PROBE`, the client stops: `mosey: copied mosey V to DEST, but it is
+still not found there` (no loop). Anything else proceeds or fails exactly
+as a first attempt would.
+
+#### 4.7.9 Costs and failures
+
+The first session at a new version costs three SSH logins (probe, upload,
+start) instead of one, and one prompt the first time ever per host; every
+later session at that version, one login. A user with a key that asks for
+a touch per login touches three times, once per upgrade per host.
+
+| Situation | What happens |
+|---|---|
+| offline, same platform | nothing needs the network: the copy is the client's own file |
+| offline, other platform | §4.7.4's fetch error and the advice to copy it by hand |
+| development build, other platform | §4.7.4's message, before any download |
+| no consent | `mosey: not copying mosey to DEST` |
+| `~/.cache/mosey` is a symlink, or a version directory or the file is someone else's | the installer refuses (stderr says which), exit 1 |
+| `~/.cache` on a `noexec` mount | upload exit 126, §4.7.6 |
+| the probe line does not parse | `ErrBadLine`, as for any malformed line of ours |
+| a `-remote` was given | none of this: §4.2 |
+
 
 ---
 
@@ -677,14 +989,15 @@ The remote login shell may print before the server runs: bash reads
 therefore:
 
 1. Reads lines. A line that starts with `MOSEY-` is a **protocol line** and
-   must parse as a CredentialLine or an ErrorLine; if it does not, that is
+   must parse as a CredentialLine, an ErrorLine or a ProbeLine (§4.7.2);
+   if it does not, that is
    fatal (`ErrBadLine`), never skipped. No lookalike may be taken for
    ours, nor a malformed line of ours be stepped over to a later one.
 2. Skips every other line, counting its bytes. More than
    **`MaxPreamble` = 64 KiB** [choice: well above any motd-like rc noise]
    of skipped bytes in total is fatal (`ErrNoLine`).
 3. A protocol line longer than its maximum (2048 for CONNECT, 128 for
-   ERROR) is fatal. A skipped line may be any length; it counts against
+   ERROR, 160 for PROBE) is fatal. A skipped line may be any length; it counts against
    `MaxPreamble`.
 4. Returns at the first protocol line; it reads nothing past its LF.
    (Afterwards, the client drains stdout to EOF in the background, at most
@@ -693,8 +1006,8 @@ therefore:
    the kept tail (below), which the client maps to a message by ssh's exit
    status (§10).
 
-An ErrorLine is returned as a `*RemoteError`; a CredentialLine as the
-value (§10.1).
+An ErrorLine is returned as a `*RemoteError`, a ProbeLine as a
+`*NoServerError`; a CredentialLine as the value (§10.1).
 
 It never reads more than `MaxPreamble + MaxCredentialLine` bytes.
 
@@ -1127,7 +1440,8 @@ its greeting and does nothing.
 | `ssh -G` fails | filtered stderr of `ssh -G`, then `mosey: ssh -G DEST failed` | 1 |
 | ssh cannot start | `mosey: running PROGRAM: ERR` | 1 |
 | `ErrNoLine`, ssh exit 255 | (ssh has already said why on stderr) `mosey: ssh to DEST failed` | 1 |
-| `ErrNoLine`, ssh exit 126/127 (`ErrNoServer`) | `mosey: no mosey at SERVER on DEST: install it there or pass -remote` | 1 |
+| `ErrNoLine`, ssh exit 126/127 (`ErrNoServer`, with `-remote`) | `mosey: no mosey at SERVER on DEST: install it there or pass -remote` | 1 |
+| ProbeLine (`ErrNoServer`, no `-remote`) | the upload of §4.7, and its messages | 1 |
 | `ErrNoLine`, other exit | `mosey: the remote mosey exited with status N` | 1 |
 | `ErrBadLine` | `mosey: DEST sent a malformed mosey line` | 1 |
 | `ErrBadAddr` | §7.2 | 1 |
@@ -1223,9 +1537,35 @@ func ParseCredentialLine([]byte) (CredentialLine, error)
 func MarshalErrorLine(ErrorLine) []byte
 func ParseErrorLine([]byte) (ErrorLine, error)
 
-// ReadCredential is §6.5. On an ErrorLine it returns *RemoteError; on
-// EOF or MaxPreamble, *NoLineError; on a bad protocol line, ErrBadLine.
+// ReadCredential is §6.5. On an ErrorLine it returns *RemoteError; on a
+// ProbeLine, *NoServerError; on EOF or MaxPreamble, *NoLineError; on a
+// bad protocol line, ErrBadLine.
 func ReadCredential(r io.Reader) (CredentialLine, error)
+
+// ProbeLine is §4.7.2: what the probe prints when no mosey of this
+// version is there. Marshal always writes proto = Version.
+type ProbeLine struct {
+	System  string // uname -s
+	Machine string // uname -m
+}
+
+func MarshalProbeLine(ProbeLine) []byte
+func ParseProbeLine([]byte) (ProbeLine, error)
+
+// NoServerError is the probe's answer; errors.Is(err, ErrNoServer).
+type NoServerError struct{ Probe ProbeLine }
+
+// Platform maps a probe to Go's os and arch (§4.7.3).
+func Platform(p ProbeLine) (goos, goarch string, ok bool)
+// IsRelease says whether v has a GitHub Release (§4.7.4).
+func IsRelease(v string) bool
+// AssetName is §4.6's mosey-V-OS-ARCH.
+func AssetName(v, goos, goarch string) string
+// ParseSums finds name's hash in a SHA256SUMS file (§4.6, §4.7.4).
+func ParseSums(sums []byte, name string) ([32]byte, error)
+// CanUpload is §4.7.1's rule on V; CachePath is ~/.cache/mosey/V/mosey.
+func CanUpload(v string) bool
+func CachePath(v string) string
 
 var (
 	ErrBadLine  = errors.New("bootstrap: malformed mosey line")
@@ -1270,7 +1610,8 @@ type SSH struct {
 	Program      string // "ssh" looks it up on PATH
 	Destination  string
 	Options      SSHOptions
-	Server       string // the remote mosey binary, §4.1's charset
+	Server       string // the remote mosey binary, §4.1's charset; "" is §4.7's probe
+	Version      string // this client's swver, for the probe (§4.7.2)
 	AgentCapture string // agent slice; "" is ForwardAgent=no
 	Role         string // "" runs --serve; "list" runs --serve=list (§9.4)
 }
@@ -1278,6 +1619,8 @@ type SSH struct {
 func (s SSH) Check() error // §2 and §4.1: destination and Server rules
 func (s SSH) Resolve(ctx context.Context) (Config, error) // runs ssh -G
 func (s SSH) Command(ctx context.Context, c Config) *exec.Cmd
+// UploadCommand is §4.7.6's ssh, which reads the binary on stdin.
+func (s SSH) UploadCommand(ctx context.Context, c Config, hash [32]byte, size int64) *exec.Cmd
 
 // AgentSocket is §5: the socket to forward, or ok false for agent off.
 func AgentSocket(c Config, getenv func(string) string) (path string, ok bool)
@@ -1288,8 +1631,12 @@ func ChooseAddr(ctx context.Context, line CredentialLine, c Config,
 	local []netip.Prefix) (netip.Addr, error)
 ```
 
-`ErrNoServer` is not returned by `ReadCredential`: `client.Run` wraps a
-`*NoLineError` in it when ssh exited 126 or 127 (§4.2, §10).
+`ReadCredential` returns `ErrNoServer` only as a `*NoServerError`, for a
+ProbeLine; `client.Run` also wraps a `*NoLineError` in it when ssh exited
+126 or 127 (§4.2, §10).
+
+The installer of §4.7.7 is `internal/install` (`install.Run(args,
+getenv, uid) error`), a server-side package the client never imports.
 
 The implementation adds, beside the above: `*UsageError` (what
 `ParseSSHOptions` and `SSH.Check` return; exit 2), `*ResolveError` (ssh
@@ -1318,6 +1665,13 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Spawner backstop (requirement on server.md) | CredentialTTL + 10 s | [choice] §4.5 |
 | Client log rotation | 1 MiB, one old file | [choice] §7.4 |
 | `MaxPreamble` | 64 KiB | [choice] |
+| `MaxProbeLine` | 160 B | [derived] §4.7.2: at most 148 B used |
+| `MaxBinary` (upload, download, installer) | 128 MiB | [choice]; a release is about 10 MB |
+| `SHA256SUMS` read bound | 64 KiB | [choice]; four lines today |
+| Release fetch deadline | 5 min | [choice] §4.7.4 |
+| Consent answer bound | 64 B | [choice] |
+| `upload-hosts` file bound, key bound | 1 MiB, 1100 B | [choice] §4.7.5 |
+| Release version parts | at most 9 digits each, patch ≥ 1 | [derived] §4.7.4, `scripts/version.sh` |
 | Env value length | 1–64 B | [choice]; keeps §6.2's bound |
 | `-remote` length | 1–256 B | [choice] |
 | X-Wing public key | 1216 B (1622 base64url chars) | [S1] measured from `crypto/hpke` |
@@ -1380,6 +1734,24 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
   invalid UTF-8, a long line; output never contains a byte below 0x20 but
   LF and TAB, nor 0x7F.
 - The agent decision table of §5.
+- The probe and the upload command (§4.7) under each outer shell that is
+  installed, as for §4.1: the probe execs a cached or `PATH` mosey that
+  says `V`, skips one that says anything else, and prints a ProbeLine
+  that parses when there is none; the upload command installs through a
+  stand-in installer and removes its temporary file.
+- `Platform`, `IsRelease`, `AssetName` and `ParseSums`, each row and rule.
+
+**Unit, `internal/install`:** a fresh install; replacing the user's own
+older file; refusing, and leaving untouched, a `~/.cache/mosey` or version
+directory that is a symlink, a file that is a symlink, a directory or
+someone else's (the "user" is a field, so a test can play another uid), a
+group- or world-writable directory, a size or hash mismatch (the upload is
+removed), a `TEMP` outside `~/.cache/mosey`, a relative `HOME`.
+
+**Unit, `internal/client`:** the consent table of §4.7.5 and the
+remembered-hosts file; the release fetch against a local HTTPS server:
+the right asset is chosen, a hash mismatch, a missing asset, a 404, an
+oversized body and an `http` redirect are each refused before any upload.
 
 **Fuzz** (each run locally for at least a few minutes before it lands,
 durations in the commit message; 10 s each in CI):
@@ -1395,6 +1767,11 @@ durations in the commit message; 10 s each in CI):
 - `FuzzSSHOptions`: no panic; any accepted argv, re-parsed, gives the same
   normalised argv, and never contains a refused letter.
 - `FuzzSanitize`: the stderr filter's output invariant.
+- `FuzzParseProbeLine`: as the other lines; `FuzzReadCredential` covers
+  probe lines too.
+- `FuzzParseSums`: no panic; a hash it returns is that of a line of the
+  input naming exactly that name; anything accepted has no line outside
+  the grammar.
 - `FuzzParseSessionLine`: no panic; anything accepted re-marshals to the
   identical bytes; `SessionLineVersion` agrees with it on every line it
   accepts, and never panics on any input.
@@ -1437,6 +1814,17 @@ durations in the commit message; 10 s each in CI):
   over; the second, sent SIGHUP, detaches (exit 0) and the session stays
   (`-list` shows it `detached`); a third (`-r=SID`) resumes it and ends it
   with `exit`, after which nothing of the session is running.
+- **Auto-upload through the real sshd** (§4.7), with the remote's `HOME`
+  a temporary directory (the throwaway sshd's `SetEnv HOME=`), no
+  `-remote`, and a version nothing on the remote `PATH` can have: the
+  client asks, is told `y`, copies itself, and ends with a working
+  session and `~/.cache/mosey/V/mosey` byte-for-byte the client's file;
+  a second client of another version upgrades beside it; a cached file
+  of the wrong version is replaced; and a `~/.cache/mosey` that is a
+  symlink is refused with nothing written through it.
+- **NixOS VM** (`tests/install.nix`, CI's `vm-install`): a host with no
+  mosey gets one by consent and runs the session from the cache; a
+  second run asks nothing.
 - The netsim end-to-end test starts at `client.Session` and does not involve
   ssh at all; this document's part is that a `CredentialLine` round-tripped
   through Marshal/Parse yields the `handshake.Credential` it is given.
@@ -1460,6 +1848,9 @@ durations in the commit message; 10 s each in CI):
 | a compromised proto chooses where the client sends UDP | the spawner checks `addr`, `port`, `swver` against its own (§4.4 step 3) |
 | failed bootstraps pile up detached shells | a session with no confirmed credential ends after CredentialTTL (§4.5) |
 | late remote bytes corrupt the session screen | ssh's stderr after the line goes, filtered, only to the log file (§7.4) |
+| a planted symlink or another user's file redirects the auto-upload's install (D7) | the installer works through `O_NOFOLLOW` descriptors below `~/.cache`, checks owner and mode at every level, and never replaces what is not the user's (§4.7.7) |
+| a corrupt, cut-short or substituted binary is installed (D7) | the installer checks the length and SHA-256 the client computed or read from `SHA256SUMS` before the rename (§4.7.4, §4.7.7) |
+| a hostile remote lies about its platform | it chooses which public build it is sent, nothing more (§4.7.2) |
 
 ---
 
@@ -1476,8 +1867,20 @@ B. **The spawner's confirmation backstop** (§4.5): the `Attached`
 C. **Signed releases** (§4.6): `SHA256SUMS` is only as trustworthy as
    the GitHub release it comes from. Signing it (an SSH signature from a
    key CI holds, or Sigstore's keyless signing of the workflow) would let
-   the client check that CI made it. For the auto-upload slice, which is
-   the first to download anything.
+   the client check that CI made it. The auto-upload slice, the first to
+   download anything, checks `SHA256SUMS` only (§4.7.4) and leaves this
+   open for Dan.
+
+D. **A local cache of downloaded releases** (§4.7.4). Each host of a
+   foreign platform downloads the release again; keeping it under
+   `$XDG_CACHE_HOME/mosey/` would save that, at the cost of one more
+   file the client must re-verify before trusting.
+
+E. **Old versions in `~/.cache/mosey`** (§4.7.7). Under D10 each upgrade
+   leaves about 10 MB per host. Removing a version is safe for running
+   sessions (they run `/proc/self/exe`), but a resume from an old client
+   (question A) would then upload that version again, so pruning waits
+   for the resume slice's answer to A.
 
 D. **Telling a client taken over long ago** (§9.1). [listed for Dan] The
    REVOKED frames last 60 s, so a client asleep through a takeover never
