@@ -83,7 +83,7 @@ Everything from the first version of this section (O1–O9) was settled on
 |---|---|---|
 | O6 | NAT and firewall traversal (ICE/STUN over the SSH bootstrap) | After v1. B3 doesn't rule it out. |
 | O9 | DPLPMTUD (RFC 8899) and ECN | After v1. Base 1200, as QUIC uses (D5). |
-| O10 | Chaff tick and cost (D11) | Measure in netsim before fixing the value. Reserve the frame type now. |
+| O10 | Chaff tick and cost (D11) | **Closed** by measurement, in `docs/spec/ssp.md` §9.1.5 (for Dan to confirm): a **20 ms** tick at both ends, the server chaffing too (without it its echoes named every key). Hiding was the same at every tick from 10 to 50 ms (2.0–5.0% of keys still exposed on the LAN and spike-free profiles, against 100% without chaff); 20 ms adds about 20–30 ms to the median echo and costs about 5000 datagrams and 410 kB a minute both ways while typing, nothing when idle. netsim's per-packet delay spikes make any higher send rate look far worse; a time-based spike model and a real-path check are follow-ups. |
 | O11 | Cell-diff wire format (D9) | S2's prototype was bigger than raw output at its cadence. Redesign it in the spec, and measure it with SSP timing and compression on. |
 | O12 | Compression padding and dictionary (D24) | **Closed** by Dan's decision, in `docs/spec/ssp.md` §9.2: no dictionary, ever; every SSP datagram (data, acks, heartbeats) is padded so its sealed plaintext is at least 64 bytes from the server and 40 from the client (S5's 16 bytes of input plus a keystroke's framing, so every keystroke is one size), rounded up with Padmé (PURBs, PoPETs 2019) above that and capped at the D5 limit. S5 measured the server rule to keep 88% of flate's saving and give every keystroke echo one size (`docs/spikes/s5-netsim-ssp/padding.md`). The residual leak is threat-model R1. |
 
@@ -126,8 +126,8 @@ request). The decisions are in §2. Gaps they left:
    SSH bootstrap (B3 plus bind capture), the handshake, SSP over netsim and
    real UDP, layout C, tuios with cell diffs, and the client's renderer. Then
    resume, the agent channel, prediction, auto-upload, and chaff.
-   (Done: slice 1, resume with exclusive attach, D8 and D26, and
-   auto-upload, D7.)
+   (Done: slice 1, resume with exclusive attach, D8 and D26,
+   auto-upload, D7, and chaff, D11 and O10.)
 2. `docs/threat-model.md` grows with the slices.
 3. Release pipeline (D10) from the first commit. Then use it daily, on
    trains. (Done: CI releases every green trunk commit to GitHub Releases,

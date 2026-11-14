@@ -2,11 +2,13 @@
 
 What mosey protects, from whom, where the trust boundaries are, what each
 mechanism defends, and which risks are accepted. It grows with the slices
-(PLAN §6.2). This version covers **slice 1**, **resume** and
-**auto-upload**: `mosey host` gives an interactive login shell end to end,
+(PLAN §6.2). This version covers **slice 1**, **resume**,
+**auto-upload** and **chaff** (§4.14): `mosey host` gives an interactive login shell end to end,
 copying mosey to the host first if it has none (D7, §4.13), and `mosey -r
 host` takes a running session over from wherever the user can SSH from
-(§4.5). There is no agent forwarding, prediction or chaff yet. Items marked **[later]** describe the
+(§4.5); while the user types, both ends send cover traffic on a fixed
+tick (§4.14). There is no agent forwarding or prediction yet. Items
+marked **[later]** describe the
 slice that brings them, so slice 1 reserves the right hooks and claims
 nothing it doesn't do.
 
@@ -727,6 +729,42 @@ that has none, and the copy then runs as the user there.
   user's own quota. Old versions are not yet removed (`bootstrap.md` §14
   E).
 
+### 4.14 Chaff (D11, O10) — T2, T3
+
+`ssp.md` §9.1. Without it every keystroke is its own datagram and the
+server answers each one, so a passive observer reads inter-keystroke
+timing off either direction, at password prompts too (R2; Song, Wagner
+and Tian, USENIX Security 2001).
+
+- **Both ends chaff while the user types.** The client from any input
+  until a random 1–2 s after the last; the server while the client's
+  CHAFF frames arrive, and 1 s after. A chaffing end sends exactly one
+  datagram per 20 ms tick of its own grid: SSP data if due, an owed ack
+  early, else a CHAFF frame of its padding floor (40 B client, 64 B
+  server), so keys, echoes, echo acks, acks and chaff are one size on one
+  grid. The server's half is not optional: with the client alone
+  chaffing, the server's echoes named every key [M `ssp.md` §9.1.5].
+- **What it hides, measured** [M `ssp.md` §9.1.5]: an observer at both
+  ends, knowing the tick and the floors, picks out 2.0% of keys on the
+  LAN and 2.4–5.0% on the hotel, train and HSR profiles without netsim's
+  per-packet delay spikes, against 100% without chaff. What it still
+  picks out is structural: the first key of each run of typing (about 2%
+  with S5's typist), and keys piled up unacknowledged until a datagram is
+  over the floor (10.3% on the LTE driving trace, whose outages hold keys
+  for seconds). Hiding was the same at every tick from 10 to 50 ms.
+- **What it costs**: about 20–30 ms on the median echo (less where
+  prediction shows the key at once), and about 5000 datagrams and 410 kB
+  a minute both ways while typing. An idle session sends no chaff.
+- **What it does not hide**: that a session is active and when a run of
+  typing starts; its end to within the 1–2 s linger; gaps longer than
+  that, which start a new run; datagrams over the floor (keys piled up,
+  pastes, a command's output); and the transport's own frames (rekeys,
+  keepalives, path validation), which are not keystroke-timed (R2, R10).
+- **The CHAFF frame** is authenticated like any other and then dropped;
+  it never reaches SSP's parser, state or RTT estimate. Its one effect is
+  to keep the server chaffing, which an active attacker (T3) cannot
+  forge, and can only stop by dropping packets, which it could do anyway.
+
 ## 5. Accepted residual risks
 
 Each is a deliberate trade, with the reason and the evidence. Revisit only
@@ -735,7 +773,7 @@ with Dan.
 | # | Risk | Who | Why it is accepted | Mitigation in place / planned |
 |---|---|---|---|---|
 | **R1** | **Compression length side channel** (CRIME/BREACH class). AEAD hides content, not length. Output the attacker influences (a log line, chat, a web page in a terminal browser) compressed in the same frame as a secret on screen lets an on-path observer test guesses by datagram size | T2 + T4 together | D24: compression is always on. Mosh 1.4.0 compresses every update with no padding [M S5 mosh-compression]. Flate cuts screen bytes to 0.35x [M S5 §8] | Per frame, never across frames. **The acknowledged screen is never a preset dictionary**: it puts the whole screen in the compressor's window, so the secret need not even be in the changed cells, and it is the leakiest variant [S5 §8]. Padding and dictionary (O12) are decided in `ssp.md` §9.2: no dictionary ever, and every SSP datagram padded on its whole sealed plaintext to at least 64 bytes from the server and 16 from the client, with Padmé (PURBs, PoPETs 2019) above and the D5 limit as a cap. That keeps 88% of flate's saving and makes every keystroke echo, ack and heartbeat from the server one size [M S5 padding.md]. Padding blunts the leak and does not close it: an attacker can still add filler to push a frame across a Padmé boundary and count samples, at most 8 bits per frame up to 64 KiB [M S5 padding.md]. That residual leak is accepted, owned by **ssp**; timing is chaff's (O10). A frame under 32 B never compressed smaller, so small frames go raw [M S5 §8] |
-| **R2** | **Keystroke timing.** D11 sends every keystroke as its own datagram, so an on-path observer sees when the user types, including at password prompts (Song et al. 2001) | T2 | Until chaff (O10, [later]) as with SSH before OpenSSH 9.5's `ObscureKeystrokeTiming` | `KindChaff` is reserved. No echo-ack-only server frames while the pty has echo off (D11, [later] with prediction: S6 measured 129 such frames at no-echo prompts falling to 9 [M S6 §6]). Slice 1 has no prediction and so no echo-ack frames at all; a password typed at a no-echo prompt changes no screen state and draws only SSP's delayed acks |
+| **R2** | **Keystroke timing, what chaff leaves.** Chaff (§4.14) hides which ticks carry keys within a run of typing; an on-path observer still sees when a run starts, when it ends to within 1–2 s, gaps longer than that, and keys whose datagram grows past the floor because earlier keys are unacknowledged (2.0–5.0% of keys on the LAN and spike-free profiles, 12.3% on the LTE trace) | T2 | Making every client datagram as big as the largest pile-up costs on every tick; 40 B is the §9.2 floor (O12), and a 64 B floor while chaffing cut the LTE trace's 10.3% by size to 6.2% for 35% more client bytes [M `ssp.md` §9.1.5] | 20 ms tick both ways, random linger, server chaff, early acks on the tick so keys are acknowledged sooner; no echo-ack-only server frames while the pty has echo off (D11; prediction slice), so the end of a run does not name the last key of a password |
 | **R3** | **No rekey on idleness** (D20). The keys in memory after a burst of typing protected that burst until the next 120 s rekey | T8 | Decided in D20 | Exposure is bounded by `RekeyAfter` + `KeepPrevFor` (≤ 130 s) **provided the 120 s timer runs on epoch age and fires on any send, SSP heartbeats included** (`transport.md` §6.2 does this); and, whatever an on-path attacker does to rekey frames, by `RejectAfterTime` + `KeepPrevFor` (≤ 190 s), because no data is sealed under keys older than 180 s (§4.3) |
 | **R4** | **A compromised proto is the user.** It holds the pty master and the keys | T7 | Inherent: whatever reads the network and writes the pty can type into the shell (S4 red team: every layout with a key holder) | proto's pre-auth surface is a fixed header, a map lookup and the standard library's AEAD; everything else needs the keys. Every parser is fuzzed. Landlock + seccomp stop the likely Go bug class (confused deputy) from reaching files, sockets or other processes directly. It can still `sendto` anywhere from its socket: seccomp cannot filter `sockaddr` |
 | **R5** | **A stolen client keeps the session until the user resumes it** from somewhere else, and a detached session lives until its shell exits: there is no idle timeout | T8 | A session is resumable for as long as its shell runs (`bootstrap.md` §9.3), as Mosh's server and tmux are | Rekey bounds what stolen keys reveal of the past (§4.3). Any resume revokes the stolen client and wipes its keys (§4.5, D26) |
@@ -760,8 +798,8 @@ Y = can, . = cannot, given the mechanisms above.
 | | Read input/output | Type into the shell | Make the server reflect traffic | Run code on the client host | Exhaust server memory | Learn when the user types |
 |---|---|---|---|---|---|---|
 | T1 off-path | . | . | . (≤ 3x) | . | . | . |
-| T2 passive | . (lengths only: R1) | . | . | . | . | **Y** (R2) |
-| T3 active | . | . (replays rejected) | . (≤ 3x, §4.4) | . | . | **Y** |
+| T2 passive | . (lengths only: R1) | . | . | . | . | runs of typing only, not keys within them (§4.14, R2) |
+| T3 active | . | . (replays rejected) | . (≤ 3x, §4.4) | . | . | as T2 |
 | T4 hostile output | its own output | . | . | . (D9) | . (cgroup or `RLIMIT_DATA`: ≤ 512 MiB or ≤ 1 GiB per session, R18; budgets) | . |
 | T5 hostile server | — (it is the server) | — | — | . (D9, bounded decoder, no forwarding in the bootstrap ssh: §4.9) | — | — |
 | T6 compromised emu | output only | . (reply grammar) | . | . | . (cgroup or `RLIMIT_DATA`, R18) | . |
@@ -800,6 +838,7 @@ Y = can, . = cannot, given the mechanisms above.
 | Largest input diff (the server's `MaxRemoteBytes`) | 128 KiB | [`ssp.md` §10.1] |
 | Fragments per instruction / instructions in reassembly / bytes held | `ceil(MaxInstruction / Chunk)` (≤ 65535) / 4 / `MaxPartialBytes = 2 × MaxFragments × Chunk` | [`ssp.md` §5, derived] |
 | Compression | always attempted; sent stored when DEFLATE is not shorter (in practice every frame under 32 B) | [`ssp.md` §4.1, M S5 §8] |
+| Chaff tick / linger / size | 20 ms both ways / client 1–2 s random, server 1 s / 40 B client, 64 B server | [M `ssp.md` §9.1.5, O10] / [D] / [D, the §9.2 floors] |
 | Length padding | every SSP datagram: sealed plaintext at least 64 B (server) / 40 B (client), Padmé above, capped at the D5 limit | [`ssp.md` §9.2, D (O12), M S5 padding.md] |
 | Window clamp | 1000 × 500 | [D23, S2] |
 | Scrollback | min(10000, 1e6 / cols) lines | [D23, M S2 memworst] |
@@ -843,6 +882,7 @@ target (architecture §6).
 | emu under its sandbox cannot open, connect, exec, create sockets or signal another process | `sandbox` (linux) | a red-team battery run inside the sandboxed role, as S4's, plus `tgkill` at a sibling and `fcntl(F_SETOWN)` + `O_ASYNC`, with Landlock's signal scope off |
 | A resume revokes the old client and erases its keys; the old client exits saying who took over; nothing secret is reused | `e2e`, `server` | netsim: a client vanishes and another attaches with a new credential for the same SID; the first gets `Revoked`; real sshd: `mosey -r` takes over and the first exits 3 |
 | Only the user reaches the attach socket | `server` | the directory checks refuse group/other bits, a foreign owner and a symlink; a foreign uid is closed unanswered |
+| Chaff hides keys within a run, in both directions, and idle costs nothing | `ssp` | one client datagram per 20 ms tick, all 40 B, ending 1–2 s after the last key; the server on its own grid at 64 B; an idle session sends no chaff; on every netsim profile the server's datagrams name at most 5% of keys and the LAN's wire at most 5% (`TestChaffHidesKeysOnEveryProfile`) |
 | End to end under every netsim profile | `e2e` | client and server sessions in process; real binaries over loopback through a throwaway sshd |
 
 ## 9. Later slices
@@ -851,7 +891,7 @@ target (architecture §6).
 |---|---|
 | Agent forwarding (D25) | A11. The strict capture state machine (one connection, the ssh child's pid and uid, exactly bind-with-fwd=1 then REQUEST_IDENTITIES then EOF), the bind pinned to known_hosts, and the agent off when no trustworthy bind exists; a hostile server's injected bind was refused [M S3 E11]. The client refuses agent channels it didn't negotiate [M S3 E7b]. proto's policy gains argument-filtered `accept4` |
 | Prediction (D12) | Passwords: the echo-off bit and informative-keystroke confirmation showed 0 of 555 password keys [M S6 §5]; no echo-ack-only frames while echo is off. The input log is zeroed on eviction and nothing is logged while echo is off [S6 §9] |
-| Chaff (D11, O10) | Closes R2 to the extent the tick allows; the cost is measured in netsim first |
+| Chaff (D11, O10) | Landed: §4.14, R2 |
 | Auto-upload (D7) | Landed: §4.13. Still to come: signed releases (`bootstrap.md` §14 C) |
 | Provenance (D28) | `Conn.HandshakeHash` exposed for quoin-attest; a keyless, fail-closed forwarder; mosey never signs |
 | macOS server (D22) | Seatbelt or nothing; until then the sandbox returns `ErrUnsupported` and the server says it runs unconfined |
