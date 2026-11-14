@@ -126,7 +126,8 @@ request). The decisions are in §2. Gaps they left:
    SSH bootstrap (B3 plus bind capture), the handshake, SSP over netsim and
    real UDP, layout C, tuios with cell diffs, and the client's renderer. Then
    resume, the agent channel, prediction, auto-upload, and chaff.
-   (Done: slice 1, and resume with exclusive attach, D8 and D26.)
+   (Done: slice 1, resume with exclusive attach, D8 and D26, and
+   auto-upload, D7.)
 2. `docs/threat-model.md` grows with the slices.
 3. Release pipeline (D10) from the first commit. Then use it daily, on
    trains. (Done: CI releases every green trunk commit to GitHub Releases,
