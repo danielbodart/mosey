@@ -60,6 +60,21 @@ jobs:
         env:
           FUZZTIME: 10s
 
+  # The tests again under the race detector. Its runtime is C, so this job
+  # alone builds with cgo (mise run race sets CGO_ENABLED=1 for itself; the
+  # runner has gcc); nothing it builds ships, and every release stays
+  # static (D1). The tests that run a sandboxed copy of the test binary skip
+  # under -race (internal/server's raceEnabled; internal/sandbox's
+  # requireSeccomp), because the race runtime makes syscalls the release
+  # policies rightly leave out, and a cgo build cannot apply NO_NEW_PRIVS
+  # to every thread: the kill-soak job covers those, as released.
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: mise run race
+
   # The KILL soak of D22 and server.md §9: the real server with its roles
   # under seccomp Kill, carrying a busy session for 150 s inside a scope
   # with a CPU quota (so the runtime's pread64 of cpu.max runs), on amd64
@@ -106,32 +121,72 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  # CONTINUOUS RELEASE (D10): every push to trunk that passes the checks
-  # above, and changed RELEASE_PATHS since the last release, is published,
-  # with the binaries attached, under the derived version
-  # (major.commit-count.run-number, scripts/version.sh).
+  # CONTINUOUS RELEASE (D10). Trunk-based: every push to trunk that passes
+  # every job above and changed RELEASE_PATHS (mise.toml) since the last
+  # release is published, with no manual step and no tag cut by hand, as in
+  # quoin, frisket and chase. Gated on a push or a dispatch on trunk (never
+  # a pull request) and on every job having succeeded, so a red commit
+  # never ships.
   #
-  # TODO: disabled until Dan confirms where releases go (GitHub Releases on
-  # this repository, as here, or elsewhere). The linux binaries are already
-  # built with GOEXPERIMENT=runtimesecret (D20, scripts/build.sh), and check
-  # vets and tests that configuration (mise run secret). Remove the
-  # `false &&` to turn it on.
+  # Unlike those, which ship through Nix and release only a tag, a mosey
+  # release carries its binaries, because D7 copies them onto hosts that
+  # have no Nix. The assets are fixed by docs/spec/bootstrap.md §4.6, and the
+  # auto-upload slice computes their URLs from them, so do not rename them:
+  #
+  #   tag      v<V>, V = scripts/version.sh (major.commit-count.run-number)
+  #   binary   mosey-<V>-<os>-<arch>, os in linux/darwin, arch in amd64/arm64
+  #            (Go's names), the bare static executable the build job made
+  #   sums     SHA256SUMS, sha256sum(1) format, one line per binary
+  #
+  # i.e. https://github.com/danielbodart/mosey/releases/download/v<V>/mosey-<V>-<os>-<arch>.
+  # scripts/release-assets.sh lays them out and refuses to go on unless the
+  # linux/amd64 binary says it is V: the build job stamped it from the same
+  # commit and run number, so they agree, and the check keeps it so.
+  #
+  # The derived version makes every run a unique, monotonic release, so two
+  # pushes cannot collide on a tag. A re-run of a run keeps its run number:
+  # re-running one whose release was already made fails at gh release
+  # create, which never overwrites a release.
   release:
-    needs: [check, slow, fuzz-smoke, kill-soak, build]
-    if: false && github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
+    needs: [check, slow, fuzz-smoke, race, kill-soak, build]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # To start CI on trunk's head, where this commit cannot be tagged.
+      actions: write
     steps:
+      # fetch-depth: 0 because the minor is the commit count, which
+      # scripts/version.sh REFUSES to count in a shallow clone; fetch-tags so
+      # the previous tag resolves, for release-due and the notes below.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
+
       # For release-due, which reads RELEASE_PATHS from mise.toml.
       - uses: jdx/mise-action@v5
+
+      # The build job's four binaries, one directory per artifact.
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+          pattern: mosey-*
+
+      # Notes from the COMMITS since the last release. Trunk-based means
+      # direct pushes and no pull requests, so GitHub's PR-based
+      # --generate-notes would come out empty. On the first release there is
+      # no prior tag, so fall back to the head commit rather than dumping the
+      # whole history.
+      #
+      # GitHub refuses GITHUB_TOKEN, which can never hold the workflows
+      # permission, a new ref whose .github/workflows differ from trunk's
+      # head ("HTTP 403: Resource not accessible by integration"): a tag of
+      # this commit, once trunk has moved on to a commit that changed a
+      # workflow, would be one. Then the release is trunk head's to make,
+      # its commits including this one's: its own run makes it, or, where it
+      # has none (a [skip ci] push, a push made with GITHUB_TOKEN), one
+      # started here.
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -141,20 +196,22 @@ jobs:
             echo "Nothing in RELEASE_PATHS changed since the last release: no release."
             exit 0
           fi
-          V="$(scripts/version.sh)"
-          # One archive per platform, holding the one binary.
-          mkdir -p release
-          for dir in artifacts/*/*/; do
-            platform=$(basename "$dir")
-            tar -C "$dir" -czf "release/mosey-$V-$platform.tar.gz" mosey
-          done
-          (cd release && sha256sum ./*.tar.gz > SHA256SUMS)
-          # Notes from the commits since the last release: trunk-based means
-          # no pull requests for GitHub's --generate-notes to read.
+          git fetch -q origin trunk
+          head=$(git rev-parse FETCH_HEAD)
+          if [ "$head" != "$GITHUB_SHA" ] && ! git diff --quiet "$GITHUB_SHA" "$head" -- .github/workflows; then
+            echo "::warning::trunk is at ${head:0:7}, which changed a workflow since ${GITHUB_SHA:0:7}: GITHUB_TOKEN cannot tag ${GITHUB_SHA:0:7}, so the release is ${head:0:7}'s"
+            if [ "$(gh run list --workflow ci.yml --commit "$head" --json databaseId --jq length)" = 0 ]; then
+              gh workflow run ci.yml --ref trunk -f release="$FORCE"
+            fi
+            exit 0
+          fi
+          V="$(./scripts/version.sh)"
+          scripts/release-assets.sh "$V" release artifacts
           PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
           if [ -n "$PREV" ]; then
             git log "$PREV..HEAD" --pretty='- %s (%h)' > notes.md
           else
             { echo 'First automated release.'; echo; git log -1 --pretty='- %s (%h)'; } > notes.md
           fi
+          printf '\n%s\n' "Static binaries for linux and darwin on amd64 and arm64. To check what you downloaded: sha256sum --ignore-missing -c SHA256SUMS" >> notes.md
           gh release create "v$V" --title "v$V" --notes-file notes.md --target "$GITHUB_SHA" release/*

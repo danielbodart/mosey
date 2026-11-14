@@ -3,6 +3,7 @@
 [tools]
 go = "1.27.3"
 shellcheck = "0.11.0"
+actionlint = "1.7.12"
 
 [env]
 # Static binaries with no libc (D1): a copied-over mosey (D7) must
@@ -14,8 +15,8 @@ CGO_ENABLED = "0"
 RELEASE_PATHS = "cmd internal go.mod go.sum VERSION"
 
 [tasks.check]
-description = "Lint, unit tests, the runtimesecret build's checks and shellcheck: the dev loop and CI's fast job"
-depends = ["lint", "test", "secret", "shellcheck"]
+description = "Lint, unit tests, the runtimesecret build's checks, shellcheck and actionlint: the dev loop and CI's fast job"
+depends = ["lint", "test", "secret", "shellcheck", "actionlint"]
 
 # Vetted for both operating systems and both architectures every release
 # ships for (D10), so a Linux-only call outside a _linux.go file fails here
@@ -48,6 +49,16 @@ go test ./internal/handshake ./internal/transport ./internal/client ./internal/s
 description = "go test, every package"
 run = "go test ./..."
 
+# The race detector's runtime is C, so this is the one task that turns cgo
+# on, for itself, and needs a C compiler (CI's race job has gcc; locally,
+# `nix shell nixpkgs#gcc -c mise run race`). Nothing it builds ships: every
+# release stays static (D1). Tests that run a sandboxed copy of the test
+# binary skip under -race (internal/server's raceEnabled), and the sandbox's
+# own tests skip in a cgo build, so kill-soak, not this, covers those.
+[tasks.race]
+description = "go test -race, every package (needs cgo and a C compiler: CI's race job)"
+run = "CGO_ENABLED=1 go test -race ./..."
+
 [tasks.test-slow]
 description = "The tests that wait in real time (an abandoned session's 30 s credential), skipped by test"
 run = "MOSEY_SLOW_TESTS=1 go test -count=1 -run TestAnAbandonedSessionEndsByItself ./internal/e2e"
@@ -61,6 +72,14 @@ description = "shellcheck the scripts"
 sources = ["scripts/*.sh"]
 outputs = { auto = true }
 run = "shellcheck scripts/*.sh"
+
+# actionlint runs shellcheck over every run: block too, so a workflow's
+# shell is held to the scripts' standard.
+[tasks.actionlint]
+description = "actionlint the workflows"
+sources = [".github/workflows/*.yml"]
+outputs = { auto = true }
+run = "actionlint"
 
 [tasks.build]
 description = "The static mosey binary for linux and darwin on amd64 and arm64, in dist/"
