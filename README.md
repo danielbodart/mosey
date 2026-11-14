@@ -55,7 +55,7 @@ config, keys and agent, exactly as Mosh does. It aims to be:
 - **Released on every commit.** Trunk-based development: every green
   commit is a release, for linux and darwin on amd64 and arm64.
 
-mosey is clean-room: it contains no Mosh code (Mosh is GPLv3). The rules
+mosey is clean-room: it contains no Mosh code. The rules
 are in [PLAN.md](PLAN.md#4-clean-room-rules-d3).
 
 ## Building
