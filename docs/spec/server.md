@@ -330,11 +330,13 @@ triggers above (nothing emu does is one of them):
 | 0x10 | Init | proto → emu | 0 |
 | 0x11 | Output | proto → emu | 0 |
 | 0x12 | Resize | proto → emu | 0 |
+| 0x13 | Flush | proto → emu | 0 |
 | 0x20 | Update | emu → proto | 0 |
 | 0x21 | Replies | emu → proto | 0 |
 | 0x30 | Credential | proto → spawner | 0 |
 | 0x31 | Exit | proto → spawner | 0 |
 | 0x32 | KillEmu | proto → spawner | 0 |
+| 0x33 | Attached | proto → spawner | 0 |
 | 0x40 | ClientLine | launcher → spawner | 0 |
 | 0x41 | Ready | spawner → launcher | 0 |
 | 0x42 | Failed | spawner → launcher | 0 |
@@ -408,12 +410,18 @@ program output. `MaxOutput` = 16384 [derived: proto reads the pty in
 **0x12 Resize** (proto → emu): type, cols (2), rows (2), both in range
 as for `Init`. Length 5.
 
+**0x13 Flush** (proto → emu): type only. Length 1. A request with no
+output, answered like any other (no `Replies`, then the diff), which
+proto sends when its `SyncHold` timer fires after a held answer, so a
+program that opens synchronised output and never closes it frees its
+screen (`screen.md` §6.3). Its allowance is 0.
+
 **0x20 Update** (emu → proto): one fragment of a screen diff.
 
 | off | len | field | valid |
 |---|---|---|---|
 | 0 | 1 | type 0x20 | |
-| 1 | 1 | flags | bit 0 MORE: another fragment follows; bits 1–7 zero |
+| 1 | 1 | flags | bit 0 MORE: another fragment follows; bit 1 HELD: emu's snapshot is held under synchronised output (`screen.md` §6.3), only on a fragment with MORE clear; bits 2–7 zero |
 | 2 | 0..65534 | fragment | |
 
 A diff is the concatenation of a run of fragments ending in one with
@@ -422,8 +430,10 @@ MORE clear. Proto refuses the run as soon as its total passes
 buffer for one diff is at most 48 MiB, and decodes the whole diff with
 `Grid.Apply` only once it is complete. The diff is in the client's own
 format (`screen.md`), relative to the grid after the previous complete
-`Update` on this E, the first on each E being relative to version 0
-(`screen.NewGrid(0, 0)`, `screen.md` §2.3, §7.3).
+`Update` on this E, the first on each E (the answer to `Init`) being
+relative to `screen.NewGrid(cols, rows)` at `Init`'s size (`screen.md`
+§7.1, §7.3), so a SIZE op crosses the boundary only in an answer to
+`Resize`.
 
 **0x21 Replies** (emu → proto): type, then 1..`MaxReplies` bytes: the
 emulator's answers to this request's output, as tuios queued them, as
@@ -451,6 +461,13 @@ deadline (T4 passed with a request outstanding), 2 violation (§5.3).
 Length 6. A generation other than the current one is ignored (the
 request crossed a restart), not refused.
 
+**0x33 Attached** (proto → spawner): type only. Length 1. Proto sends
+it once, when a client first confirms a credential. The spawner keeps a
+backstop of `handshake.CredentialTTL` + 10 s from the `Ready`
+(`bootstrap.md` §4.5): if no `Attached` has come by then it ends the
+session itself, so a proto that hangs before its own `Exit{NoClient}`
+leaves no shell running for nobody. A second `Attached` is a violation.
+
 **0x40 ClientLine** (launcher → spawner): type, then the line as read
 from stdin including its `\n`, 1..`MaxClientLine` bytes.
 `MaxClientLine` = 4096 [`bootstrap.md` §6.2].
@@ -474,6 +491,7 @@ one place a compromised proto could reach further. It accepts exactly:
   stdout is canonical printable ASCII and nothing else).
 - `Exit`, at most once.
 - `KillEmu`, any number, at most one per emu generation acted on.
+- `Attached`, at most once.
 
 Anything else (another type, a second `Credential`, a malformed
 message, any fd) is a violation: the spawner logs it, SIGKILLs proto,
@@ -488,7 +506,8 @@ is the only one who asks.
 ```
 proto, per E:                            emu:
   Start ──send Init──► Waiting             Fresh ──Init──► Ready
-  Idle ──send Output|Resize──► Waiting     Ready ──Output|Resize──► Ready
+  Idle ──send Output|Resize|Flush──► Waiting
+                                         Ready ──Output|Resize|Flush──► Ready
   Waiting:                                   (each answered with
     Replies (only before the first           [Replies] Update…Update(last))
       Update fragment, at most once)
@@ -556,8 +575,9 @@ end-to-end tests run the whole server on netsim without forking.
   kill proto on the first emu restart. Generation 1's E is wrapped the
   same way, so one code path is tested by every restart test.
 - On a new `EmuLink`: close the old E, wrap the new one, reset the
-  mirror to version 0 (`screen.NewGrid(0, 0)`), send `Init` with the
-  current size and colours, and apply its `Update` from version 0
+  mirror to `screen.NewGrid(cols, rows)` at the current size, send
+  `Init` with that size and the colours, and apply its `Update` to that
+  fresh grid
   (`screen.md` §7.3). For every generation after the first, proto then:
   - increments its own `Rebuilt.Seq` (`screen.md` §7.2) and sets
     `Rebuilt.Reason` from the `EmuLink` reason, mapped to `screen.md`'s
@@ -1385,7 +1405,8 @@ it lands, with the duration and exec count in the commit message.
   `EchoOff`, `EchoAck` or `Rebuilt` gets `KillEmu{violation}`, and the
   mirror is unchanged.
 - Restart: a fake spawner sends a new `EmuLink`; the mirror is reset
-  to version 0 and the new emu's first diff applies from it; the next
+  to a blank grid at the current size and the new emu's first diff
+  applies from it; the next
   `Snapshot` is the new emu's screen with `Rebuilt.Seq` one higher and
   `Rebuilt.Reason` mapped as §3.6 says for each `EmuLink` reason and
   each `KillEmu` why; `Write` blocked across the gap resumes; and the
@@ -1486,6 +1507,15 @@ it lands, with the duration and exec count in the commit message.
   hook sends S4's forged replies; no file appears, and the forged
   messages are logged as refused.
 - `TestKillSoak` (§9), skipped unless `MOSEY_SOAK` is set.
+- Before the transport exists, three tests cover what they can without
+  it: `TestTheEmuRoleRunsTuiosUnderKill` runs the real emu role (tuios)
+  under its `Kill` policy in a copy of the test binary and drives it
+  through the IPC emulator; `TestEmuKillSoak` does the same for
+  `MOSEY_SOAK`, with the soak build's runtime churn; and
+  `TestTheSpawnerRunsASessionAndRebuildsEmu` runs the launcher, the real
+  spawner and emu, and a stand-in proto that holds no key, through the
+  bootstrap, a shell command, an emu kill and restart, and the
+  teardown.
 
 ---
 
