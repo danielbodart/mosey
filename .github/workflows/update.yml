@@ -1,0 +1,169 @@
+# The weekly update, in the window every danielbodart repo shares, Sunday
+# 21:23 UTC, as quoin's, frisket's and chase's: every dependency of every
+# kind moves at once. nix-config takes its own at 23:23 on the same
+# nixos-26.05, so the Nix build here is the derivation nix-config then
+# builds, already in the danielbodart cache.
+#
+# What moves, in order: every flake input (nix flake update); each
+# mise.toml tool to the latest patch of its pinned minor (a new minor moves
+# by hand, with the nixpkgs attribute flake.nix builds with); and every Go
+# dependency (go get -u) but the two D23 pins, with flake.nix's vendorHash
+# worked out again. mosey requires none of Dan's own modules (D17), so there
+# is no scripts/pin.sh step.
+#
+# Held: tuios.dev/vt, the shipped emulator, which D23 pins, and
+# go.mitchellh.com/libghostty, its oracle, whose binding names the commit
+# of the library the local oracle test builds. Each moves by hand, with the
+# corpus and the oracle run against it.
+#
+# The gate is everything CI runs that can fail on a dependency: check, the
+# race detector, the KILL soak and every Nix check, on this one runner,
+# slower than CI's legs, but nobody is waiting on it. Only if it passes is
+# anything committed, straight to trunk, never as a pull request.
+#
+# A push made with GITHUB_TOKEN starts no workflow, so the last step
+# dispatches CI on trunk with `release`, which checks the commit and
+# releases it -- but only if mise run release-due says something in
+# RELEASE_PATHS (mise.toml) changed since the last tag. A week in which only
+# flake.lock moved releases nothing: the binaries are built by mise's Go,
+# not the flake's, and a Nix consumer follows its own nixpkgs.
+name: Weekly update
+
+on:
+  schedule:
+    - cron: "23 21 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+# Shared with anything else that commits to trunk.
+concurrency:
+  group: update
+
+# A run shell is bash -eo pipefail: a failure inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      # The Go mise.toml pins, never one go.mod's toolchain line downloads.
+      GOTOOLCHAIN: local
+      # Empty where the repository has no such secret: the cache is then
+      # read anonymously and nothing is pushed.
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+    steps:
+      # The whole history and its tags, for mise run release-due.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            system-features = nixos-test benchmark big-parallel kvm
+
+      # Read-only: only mosey's own package is pushed, by the last step.
+      - uses: cachix/cachix-action@v17
+        with:
+          name: danielbodart
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: true
+
+      - uses: jdx/mise-action@v5
+
+      - name: Move everything
+        id: update
+        run: |
+          moved=()
+          gomods() { go mod edit -json | jq -r '.Require[] | "\(.Path) \(.Version)"' | sort; }
+
+          # 1. The flake's inputs.
+          nix flake update 2>&1 | tee update.log
+          mapfile -t inputs < <(grep -oE "Updated input '[^']+'" update.log | cut -d"'" -f2)
+          moved+=("${inputs[@]}")
+
+          # 2. mise's tools, each to the latest patch of its pinned
+          # major.minor (go 1.27.3 asks for 1.27).
+          while read -r tool was; do
+            now=$(mise latest "$tool@$(cut -d. -f1-2 <<<"$was")")
+            if [ -n "$now" ] && [ "$now" != "$was" ]; then
+              sed -i -E "s|^(\"?$tool\"? = )\"$was\"|\1\"$now\"|" mise.toml
+              moved+=("$tool $was -> $now")
+            fi
+          done < <(sed -n -E '/^\[tools\]/,/^\[/s/^"?([a-z0-9_:-]+)"? = "([0-9.]+)"$/\1 \2/p' mise.toml)
+          mise install
+
+          # 3. Every Go dependency but the held ones (see the header), and
+          # the vendorHash they make.
+          before=$(gomods)
+          held=()
+          for m in tuios.dev/vt go.mitchellh.com/libghostty; do
+            held+=("$m@$(go list -m -f '{{.Version}}' "$m")")
+          done
+          go get -u ./...
+          go get "${held[@]}"
+          go mod tidy
+          if ! git diff --quiet go.sum; then scripts/vendor-hash.sh; fi
+          mapfile -t mods < <(comm -13 <(echo "$before") <(gomods) | cut -d' ' -f1)
+          moved+=("${mods[@]}")
+
+          # 4.
+          if git diff --quiet; then
+            echo "Nothing moved."
+            exit 0
+          fi
+          list=$(printf '%s\n' "${moved[@]}" | { grep . || true; } | paste -sd, - | sed 's/,/, /g')
+          echo "moved=${list:-dependencies}" >> "$GITHUB_OUTPUT"
+
+      # 5. The gate: what CI runs that a dependency can break.
+      - name: mise run check
+        if: steps.update.outputs.moved
+        run: mise run check
+
+      - name: mise run race
+        if: steps.update.outputs.moved
+        run: mise run race
+
+      # amd64 only here; CI soaks arm64 too before the release it dispatches.
+      - name: KILL soak
+        if: steps.update.outputs.moved
+        run: mise exec -- scripts/soak.sh --scope 150s
+
+      - name: Build what CI builds
+        if: steps.update.outputs.moved
+        run: |
+          mapfile -t checks < <(nix eval --json .#checks.x86_64-linux --apply builtins.attrNames | jq -r '.[]')
+          nix build --no-link --print-build-logs "${checks[@]/#/.#checks.x86_64-linux.}" \
+            .#devShells.x86_64-linux.default .#formatter.x86_64-linux
+
+      # 6.
+      - name: Commit and push
+        if: steps.update.outputs.moved
+        env:
+          MOVED: ${{ steps.update.outputs.moved }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "Weekly update: $MOVED"
+          git pull -q --rebase origin trunk
+          git push -q origin HEAD:trunk
+
+      # 7.
+      - name: Push mosey's package to Cachix
+        if: steps.update.outputs.moved && env.CACHIX_AUTH_TOKEN != ''
+        run: nix build --no-link --print-out-paths .#mosey | cachix push danielbodart
+
+      # 8. A release, if a release path moved: CI checks the pushed commit
+      # and releases it. A week that moved only flake.lock releases nothing.
+      - name: Release, if a release path moved
+        if: steps.update.outputs.moved
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if mise run release-due; then gh workflow run ci.yml --ref trunk -f release=true; fi

@@ -1,5 +1,9 @@
 # The toolchain and the tasks CI and people call. Go is pinned to the patch,
-# as in gokit and quoin, so CI and a laptop compile with the same compiler.
+# as in gokit and quoin, so CI and a laptop compile with the same compiler;
+# its major.minor is the one nixpkgs' go_1_27 has on nixos-26.05, which
+# flake.nix builds with, so both channels compile with the same language
+# version. The weekly update moves each tool's patch; a new minor moves by
+# hand, with the nixpkgs attribute.
 [tools]
 go = "1.27.3"
 shellcheck = "0.11.0"
@@ -9,10 +13,13 @@ actionlint = "1.7.12"
 # Static binaries with no libc (D1): a copied-over mosey (D7) must
 # run on any Linux, whatever its libc.
 CGO_ENABLED = "0"
-# What a release carries: the Go source and the module's requirements. A
-# change to any of these since the last release tag is released (see
-# release-due); the docs, the spikes, the workflows and mise.toml are not.
-RELEASE_PATHS = "cmd internal go.mod go.sum VERSION"
+# What a release carries: the Go source and the module's requirements, which
+# its binaries are built from, and flake.nix, which a Nix consumer pinning
+# the tag builds them with. A change to any of these since the last release
+# tag is released (see release-due); flake.lock (a consumer follows its own
+# nixpkgs), the docs, the spikes, the VM tests, the workflows and mise.toml
+# are not.
+RELEASE_PATHS = "cmd internal go.mod go.sum flake.nix VERSION"
 
 [tasks.check]
 description = "Lint, unit tests, the runtimesecret build's checks, shellcheck and actionlint: the dev loop and CI's fast job"

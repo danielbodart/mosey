@@ -121,6 +121,64 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # What `nix flake check` checks, split across runners as in chase and
+  # quoin: the VM test of D7's install path and the package's own test run
+  # are each minutes, so each is a leg of its own, and `rest` builds every
+  # check the others do not name (so a check added to the flake is built
+  # without being added here), the package, the dev shell and the
+  # formatter.
+  nix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [vm-install, tests, rest]
+    env:
+      # Empty where the repository has no such secret (a fork, or before
+      # it is added): the cache is then read anonymously and nothing is
+      # pushed.
+      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # install-nix-action gives the runner's /dev/kvm to the build user, so
+      # the VM test runs under KVM rather than emulated.
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            system-features = nixos-test benchmark big-parallel kvm
+
+      # The danielbodart cache, read-only here: the free tier is 5 GB, so
+      # only mosey's own package is pushed, by the rest leg's last step,
+      # never a VM test's closure.
+      - uses: cachix/cachix-action@v17
+        with:
+          name: danielbodart
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          skipPush: true
+
+      - name: nix build .#checks.x86_64-linux.${{ matrix.check }}
+        if: matrix.check != 'rest'
+        env:
+          CHECK: ${{ matrix.check }}
+        run: nix build --print-build-logs --no-link ".#checks.x86_64-linux.$CHECK"
+
+      # Every check the other legs do not build, and the other outputs `nix
+      # flake check` would evaluate, built rather than only evaluated.
+      - name: the other checks and outputs
+        if: matrix.check == 'rest'
+        run: |
+          nix eval --json '.#checks.x86_64-linux' --apply 'cs: builtins.attrNames (removeAttrs cs [ "vm-install" "tests" ])' \
+            | jq -r '.[] | ".#checks.x86_64-linux." + .' \
+            | xargs nix build --print-build-logs --no-link \
+                .#packages.x86_64-linux.mosey .#devShells.x86_64-linux.default .#formatter.x86_64-linux
+
+      # The package a host installs, from the rest leg, which builds it.
+      - name: Push mosey's package to Cachix
+        if: matrix.check == 'rest' && env.CACHIX_AUTH_TOKEN != '' && github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
+        run: nix build --no-link --print-out-paths .#mosey | cachix push danielbodart
+
   # CONTINUOUS RELEASE (D10). Trunk-based: every push to trunk that passes
   # every job above and changed RELEASE_PATHS (mise.toml) since the last
   # release is published, with no manual step and no tag cut by hand, as in
@@ -148,7 +206,7 @@ jobs:
   # re-running one whose release was already made fails at gh release
   # create, which never overwrites a release.
   release:
-    needs: [check, slow, fuzz-smoke, race, kill-soak, build]
+    needs: [check, slow, fuzz-smoke, race, kill-soak, build, nix]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
     runs-on: ubuntu-latest
     permissions:
