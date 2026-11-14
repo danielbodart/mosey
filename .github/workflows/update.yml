@@ -23,10 +23,12 @@
 #
 # A push made with GITHUB_TOKEN starts no workflow, so the last step
 # dispatches CI on trunk with `release`, which checks the commit and
-# releases it -- but only if mise run release-due says something in
-# RELEASE_PATHS (mise.toml) changed since the last tag. A week in which only
-# flake.lock moved releases nothing: the binaries are built by mise's Go,
-# not the flake's, and a Nix consumer follows its own nixpkgs.
+# releases it -- but only if scripts/release-due.sh says something a
+# release is built from changed since the last tag. The binaries are built
+# by mise's Go, not the flake's, so a week that moved Go's patch (often a
+# crypto or net security fix) releases; one in which only flake.lock, or
+# only shellcheck or actionlint, moved releases nothing, since a Nix
+# consumer follows its own nixpkgs and the linters change no binary.
 name: Weekly update
 
 on:
@@ -159,9 +161,10 @@ jobs:
         if: steps.update.outputs.moved && env.CACHIX_AUTH_TOKEN != ''
         run: nix build --no-link --print-out-paths .#mosey | cachix push danielbodart
 
-      # 8. A release, if a release path moved: CI checks the pushed commit
-      # and releases it. A week that moved only flake.lock releases nothing.
-      - name: Release, if a release path moved
+      # 8. A release, if anything a release is built from moved (Go's pin
+      # among them): CI checks the pushed commit and releases it. A week
+      # that moved only flake.lock or the linters releases nothing.
+      - name: Release, if anything it is built from moved
         if: steps.update.outputs.moved
         env:
           GH_TOKEN: ${{ github.token }}

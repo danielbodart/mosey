@@ -62,7 +62,8 @@ are in [PLAN.md](PLAN.md#4-clean-room-rules-d3).
 
 ## Installing
 
-Every green commit on `trunk` that changes the code is a
+Every green commit on `trunk` that changes the code, the Go toolchain or
+the build is a
 [GitHub Release](https://github.com/danielbodart/mosey/releases), tagged
 `v<version>`, with one static binary per platform and their checksums:
 

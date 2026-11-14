@@ -13,17 +13,10 @@ actionlint = "1.7.12"
 # Static binaries with no libc (D1): a copied-over mosey (D7) must
 # run on any Linux, whatever its libc.
 CGO_ENABLED = "0"
-# What a release carries: the Go source and the module's requirements, which
-# its binaries are built from, and flake.nix, which a Nix consumer pinning
-# the tag builds them with. A change to any of these since the last release
-# tag is released (see release-due); flake.lock (a consumer follows its own
-# nixpkgs), the docs, the spikes, the VM tests, the workflows and mise.toml
-# are not.
-RELEASE_PATHS = "cmd internal go.mod go.sum flake.nix VERSION"
 
 [tasks.check]
-description = "Lint, unit tests, the runtimesecret build's checks, shellcheck and actionlint: the dev loop and CI's fast job"
-depends = ["lint", "test", "secret", "shellcheck", "actionlint"]
+description = "Lint, unit tests, the runtimesecret build's checks, shellcheck, actionlint and the scripts' tests: the dev loop and CI's fast job"
+depends = ["lint", "test", "secret", "shellcheck", "actionlint", "scripts-test"]
 
 # Vetted for both operating systems and both architectures every release
 # ships for (D10), so a Linux-only call outside a _linux.go file fails here
@@ -92,10 +85,12 @@ run = "actionlint"
 description = "The static mosey binary for linux and darwin on amd64 and arm64, in dist/"
 run = "scripts/build.sh"
 
+# What counts as a release's input (the source, the Go pin, the build and
+# version scripts, flake.nix) is listed, and argued, in the script.
 [tasks.release-due]
-description = "Exit 0, printing true, if anything in RELEASE_PATHS changed since the last release tag; else print false and exit 1"
-run = '''
-set -f
-last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null) || { echo true; exit 0; }
-if [ -n "$(git diff --name-only "$last" HEAD -- $RELEASE_PATHS)" ]; then echo true; else echo false; exit 1; fi
-'''
+description = "Exit 0, printing true, if anything a release is built from changed since the last release tag; else print false and exit 1"
+run = "scripts/release-due.sh"
+
+[tasks.scripts-test]
+description = "The release scripts' own tests, against a throwaway repository"
+run = "scripts/release-due-test.sh"

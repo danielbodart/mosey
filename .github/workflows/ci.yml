@@ -5,7 +5,8 @@ on:
     branches: [trunk]
   pull_request:
   # A dispatch is checked and built as a push is; `release` releases even if
-  # nothing in RELEASE_PATHS (mise.toml) changed since the last release.
+  # nothing a release is built from (scripts/release-due.sh) changed since
+  # the last release.
   workflow_dispatch:
     inputs:
       release:
@@ -180,9 +181,10 @@ jobs:
         run: nix build --no-link --print-out-paths .#mosey | cachix push danielbodart
 
   # CONTINUOUS RELEASE (D10). Trunk-based: every push to trunk that passes
-  # every job above and changed RELEASE_PATHS (mise.toml) since the last
-  # release is published, with no manual step and no tag cut by hand, as in
-  # quoin, frisket and chase. Gated on a push or a dispatch on trunk (never
+  # every job above and changed what a release is built from since the last
+  # one (scripts/release-due.sh: the source, Go's pin, the build) is
+  # published, with no manual step and no tag cut by hand, as in quoin,
+  # frisket and chase. Gated on a push or a dispatch on trunk (never
   # a pull request) and on every job having succeeded, so a red commit
   # never ships.
   #
@@ -222,7 +224,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      # For release-due, which reads RELEASE_PATHS from mise.toml.
+      # For mise run release-due.
       - uses: jdx/mise-action@v5
 
       # The build job's four binaries, one directory per artifact.
@@ -251,7 +253,7 @@ jobs:
           FORCE: ${{ inputs.release || false }}
         run: |
           if [ "$FORCE" != true ] && ! mise run release-due; then
-            echo "Nothing in RELEASE_PATHS changed since the last release: no release."
+            echo "Nothing a release is built from changed since the last release: no release."
             exit 0
           fi
           git fetch -q origin trunk
