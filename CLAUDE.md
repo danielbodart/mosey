@@ -17,7 +17,9 @@ mosey must contain nothing derived from Mosh (GPLv3).
   papers, and black-box behaviour of the `mosh` binaries.
 - **Spec first.** SSP, prediction and framing are written from
   `docs/spec/`, in our own words, and every constant cites the paper
-  section, an RFC, or our own measurement ([M]) or decision ([D]).
+  section, an RFC, or our own measurement ([M], which includes black-box
+  measurements of the `mosh` binaries), decision ([D]) or arithmetic from
+  other cited values ([derived]).
 - Don't write our own crypto primitives or terminal emulator (D19). The
   standard library and `golang.org/x/*` are preferred; anything else is
   justified in `DEPENDENCIES.md` in the commit that adds it.
