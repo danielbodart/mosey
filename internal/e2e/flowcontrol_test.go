@@ -5,7 +5,6 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -171,8 +170,9 @@ func TestAPasteWaitsInTheTerminalWhileTheProgramIsNotReading(t *testing.T) {
 // A client that ignores InputConsumed (D4) gains nothing: it can push its
 // stream on as fast as the server acknowledges, but the server keeps only
 // RetainBytes of it, and once the program reads and the server finds
-// input forgotten before it was written, it ends the connection with
-// ErrProtocol rather than skip it (ssp.md §10.1).
+// input forgotten before it was written, it drops that client's
+// connection rather than skip it (ssp.md §10.1). The session itself runs
+// on for a resume (bootstrap.md §9.3): a broken client is one that left.
 func TestAClientThatIgnoresFlowControlIsCutOff(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
 	synctest.Test(t, func(t *testing.T) {
@@ -180,13 +180,10 @@ func TestAClientThatIgnoresFlowControlIsCutOff(t *testing.T) {
 		prog := newStubborn()
 		ctx, cancel := context.WithCancel(context.Background())
 		served := n.serve(t, ctx, prog)
-		var end error
 		t.Cleanup(func() {
 			cancel()
 			prog.Close()
-			if end == nil {
-				end = <-served
-			}
+			<-served
 		})
 
 		conn, err := transport.Dial(ctx, n.cc, serverAddr, n.cred, n.key, n.log)
@@ -199,6 +196,17 @@ func TestAClientThatIgnoresFlowControlIsCutOff(t *testing.T) {
 			Role: ssp.Client, MaxPayload: transport.MaxPayload, FrameOverhead: transport.FrameOverhead, MaxRemoteBytes: screen.MaxDiff,
 		}, input.Clone(), screen.NewGrid(0, 0))
 		go ep.Run(ctx)
+		acked := func(within time.Duration) bool {
+			for deadline := time.Now().Add(within); ; {
+				if a, _ := ep.Acked(); a.Len() == input.Len() {
+					return true
+				}
+				if time.Now().After(deadline) {
+					return false
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 
 		// Keystrokes in diffs well under MaxDiffBytes, each sent once the
 		// last is acknowledged, so SSP itself has nothing to refuse; only
@@ -207,25 +215,23 @@ func TestAClientThatIgnoresFlowControlIsCutOff(t *testing.T) {
 		for sent := 0; sent < 4*userinput.RetainBytes; sent += len(chunk) {
 			input.Type(chunk)
 			ep.Set(input.Clone())
-			for deadline := time.Now().Add(time.Minute); ; {
-				if acked, _ := ep.Acked(); acked.Len() == input.Len() {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatalf("the server stopped acknowledging after %d bytes", sent)
-				}
-				time.Sleep(10 * time.Millisecond)
+			if !acked(time.Minute) {
+				t.Fatalf("the server stopped acknowledging after %d bytes", sent)
 			}
 		}
 
 		prog.read()
+		// Dropped: what it sends now is never acknowledged.
+		time.Sleep(time.Second)
+		input.Type([]byte("more"))
+		ep.Set(input.Clone())
+		if acked(time.Minute) {
+			t.Fatal("the server carried on with a client whose input it had forgotten")
+		}
 		select {
-		case end = <-served:
-			if !errors.Is(end, ssp.ErrProtocol) {
-				t.Fatalf("the server ended with %v, not ErrProtocol", end)
-			}
-		case <-time.After(time.Minute):
-			t.Fatal("the server carried on with input it had forgotten")
+		case end := <-served:
+			t.Fatalf("the session ended (%v): only the client should have gone", end)
+		default:
 		}
 		if got := len(prog.received()); got > userinput.RetainBytes {
 			t.Errorf("the program got %d bytes, more than the server could have kept", got)

@@ -55,7 +55,7 @@ func TestAnAbandonedSessionEndsByItself(t *testing.T) {
 	launcher.Stdin = bytes.NewReader(line)
 	var stdout, stderr bytes.Buffer
 	launcher.Stdout, launcher.Stderr = &stdout, &stderr
-	launcher.Env = append(os.Environ(), "SSH_CONNECTION=127.0.0.1 40000 127.0.0.1 22")
+	launcher.Env = append(os.Environ(), "SSH_CONNECTION=127.0.0.1 40000 127.0.0.1 22", "XDG_RUNTIME_DIR="+runtimeDir(t))
 	// The launcher must exit 0 with the line out, while the session lives
 	// on: that is what lets ssh exit (detach).
 	if err := launcher.Run(); err != nil {
@@ -114,7 +114,7 @@ func TestTheClientFindsTheServerAtANonLoopbackAddress(t *testing.T) {
 			cmd := exec.Command(mosey, "-ssh", ssh, "-remote", mosey, "far")
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 			cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-			cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state, "TERM=xterm-256color", "LANG=C.UTF-8")
+			cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state, "XDG_RUNTIME_DIR="+runtimeDir(t), "TERM=xterm-256color", "LANG=C.UTF-8")
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}

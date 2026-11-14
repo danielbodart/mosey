@@ -36,9 +36,11 @@ type Session struct {
 }
 
 // Run handshakes, then runs SSP and draws until the server ends the session
-// (its shell exited; Run returns nil), ctx is done, the session fails, or
-// another client takes it over (*TakenOverError). Unless the server ended
-// it, Run tells the server the session is over before it returns.
+// (its shell exited; Run returns nil), ctx is done or the terminal's input
+// ends (*DetachedError: the session runs on for a resume), the session
+// fails, or another client takes it over (*TakenOverError). Unless the
+// server ended it, Run tells the server this client is going before it
+// returns.
 //
 // The terminal goes raw only once the handshake is done, and is restored
 // on every way out.
@@ -89,11 +91,13 @@ func (s *Session) Run(ctx context.Context) error {
 	if errors.Is(err, errSessionEnded) {
 		return nil
 	}
-	// The user quit, or this client failed: tell the server, which ends
-	// the session, since in slice 1 nothing could reach it again
-	// (server.md §2.4). A revoked connection is already closed, and End
-	// does nothing.
-	conn.End(transport.EndClientQuit)
+	// This client is going away, or failed: tell the server, which keeps
+	// the session for a resume (bootstrap.md §9.3). A revoked connection
+	// is already closed, and End does nothing.
+	conn.End(transport.EndDetached)
+	if err == nil {
+		return &DetachedError{SessionID: s.Credential.SessionID}
+	}
 	return err
 }
 

@@ -51,7 +51,7 @@ func FuzzReceive(f *testing.F) {
 	}, {
 		// In this order as seeds, so all three are accepted: the END of
 		// the wrong length is ignored, and the genuine one closes it.
-		{KindEnd, []byte{byte(EndClientQuit), 0}},
+		{KindEnd, []byte{byte(EndDetached), 0}},
 		{KindTerminal, []byte("before the END")},
 		{KindEnd, []byte{byte(EndShellExited)}},
 	}} {

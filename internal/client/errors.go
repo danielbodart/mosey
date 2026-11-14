@@ -40,6 +40,23 @@ func (e *TakenOverError) Error() string {
 	return fmt.Sprintf("session taken over from %s at %s", e.By, e.At.Local().Format(takenOverTime))
 }
 
+// DetachedError is this client going away while the session runs on (D8,
+// bootstrap.md §9.3): by a signal or the end of its terminal's input. The
+// server keeps the session for a resume. It exits 0.
+type DetachedError struct {
+	SessionID [16]byte
+	// Destination is the host as the user named it, for the hint.
+	Destination string
+}
+
+func (e *DetachedError) Error() string {
+	msg := fmt.Sprintf("detached from session %x", e.SessionID)
+	if e.Destination != "" {
+		msg += fmt.Sprintf("; resume with: mosey -r=%x %s", e.SessionID, e.Destination)
+	}
+	return msg
+}
+
 // Exit statuses (bootstrap.md §10).
 const (
 	StatusOK        = 0
@@ -52,8 +69,9 @@ const (
 func ExitStatus(err error) int {
 	var usage *bootstrap.UsageError
 	var taken *TakenOverError
+	var detached *DetachedError
 	switch {
-	case err == nil:
+	case err == nil, errors.As(err, &detached):
 		return StatusOK
 	case errors.As(err, &usage):
 		return StatusUsage

@@ -72,6 +72,7 @@ const (
 	typeStart      = 0x01
 	typeEmuLink    = 0x02
 	typeShellExit  = 0x03
+	typeResume     = 0x05
 	typeEmuPaused  = 0x06
 	typeInit       = 0x10
 	typeOutput     = 0x11
@@ -83,6 +84,7 @@ const (
 	typeExit       = 0x31
 	typeKillEmu    = 0x32
 	typeAttached   = 0x33
+	typeDetached   = 0x34
 	typeClientLine = 0x40
 	typeReady      = 0x41
 	typeFailed     = 0x42
@@ -134,6 +136,13 @@ type EmuLink struct {
 // ShellExit tells proto the login shell has exited.
 type ShellExit struct{ Status int32 }
 
+// Resume asks proto for a credential for its own session, bound to a
+// resuming client's one-shot key (D8, server.md §2.6). The spawner has
+// checked the key; proto answers with exactly one Credential.
+type Resume struct {
+	ClientPublic []byte
+}
+
 // EmuPaused tells proto that emu's restart budget is spent and no emu
 // will start for Seconds (server.md §5.2).
 type EmuPaused struct{ Seconds uint16 }
@@ -181,9 +190,10 @@ type Credential struct{ Line []byte }
 type ExitCode uint8
 
 const (
-	ShellExited  ExitCode = 1
-	ClientClosed ExitCode = 2
-	NoClient     ExitCode = 3
+	ShellExited ExitCode = 1
+	// 2 was "the client closed" and is refused since the resume slice: a
+	// client leaving never ends a session (bootstrap.md §9.3).
+	NoClient ExitCode = 3
 	// 4 was "emu failed" and is refused: an emu failure never ends a
 	// session (server.md §5.2).
 	ExitError ExitCode = 5
@@ -210,9 +220,15 @@ type KillEmu struct {
 	Why        KillReason
 }
 
-// Attached tells the spawner a client has confirmed a credential, which
-// stops its backstop timer (bootstrap.md §4.5).
-type Attached struct{}
+// Attached tells the spawner a client has confirmed a credential: the
+// first stops its backstop timer (bootstrap.md §4.5), and each is what the
+// attach socket's greeting says (server.md §2.6). Peer is the client's
+// validated address, or the zero AddrPort while it has none.
+type Attached struct{ Peer netip.AddrPort }
+
+// Detached tells the spawner the attached client has gone, with no other
+// in its place: the session waits for a resume (server.md §2.4).
+type Detached struct{}
 
 // ClientLine is the bootstrap line, as the launcher read it from ssh's
 // stdin, with its newline.
@@ -228,6 +244,7 @@ type Failed struct{ Text string }
 func (Start) typ() byte      { return typeStart }
 func (EmuLink) typ() byte    { return typeEmuLink }
 func (ShellExit) typ() byte  { return typeShellExit }
+func (Resume) typ() byte     { return typeResume }
 func (EmuPaused) typ() byte  { return typeEmuPaused }
 func (Init) typ() byte       { return typeInit }
 func (Output) typ() byte     { return typeOutput }
@@ -239,6 +256,7 @@ func (Credential) typ() byte { return typeCredential }
 func (Exit) typ() byte       { return typeExit }
 func (KillEmu) typ() byte    { return typeKillEmu }
 func (Attached) typ() byte   { return typeAttached }
+func (Detached) typ() byte   { return typeDetached }
 func (ClientLine) typ() byte { return typeClientLine }
 func (Ready) typ() byte      { return typeReady }
 func (Failed) typ() byte     { return typeFailed }
@@ -253,6 +271,7 @@ var routes = map[byte]route{
 	typeStart:      {Spawner, Proto, 2},
 	typeEmuLink:    {Spawner, Proto, 1},
 	typeShellExit:  {Spawner, Proto, 0},
+	typeResume:     {Spawner, Proto, 0},
 	typeEmuPaused:  {Spawner, Proto, 0},
 	typeInit:       {Proto, Emu, 0},
 	typeOutput:     {Proto, Emu, 0},
@@ -264,6 +283,7 @@ var routes = map[byte]route{
 	typeExit:       {Proto, Spawner, 0},
 	typeKillEmu:    {Proto, Spawner, 0},
 	typeAttached:   {Proto, Spawner, 0},
+	typeDetached:   {Proto, Spawner, 0},
 	typeClientLine: {Launcher, Spawner, 0},
 	typeReady:      {Spawner, Launcher, 0},
 	typeFailed:     {Spawner, Launcher, 0},
@@ -312,16 +332,7 @@ func Marshal(m Message) ([]byte, error) {
 		b = binary.BigEndian.AppendUint16(b, m.Cols)
 		b = binary.BigEndian.AppendUint16(b, m.Rows)
 		b = binary.BigEndian.AppendUint16(b, m.Port)
-		switch {
-		case !m.Addr.IsValid():
-			b = append(b, 0)
-		case m.Addr.Is4():
-			a := m.Addr.As4()
-			b = append(append(b, 4), a[:]...)
-		default:
-			a := m.Addr.As16()
-			b = append(append(b, 6), a[:]...)
-		}
+		b = appendAddr(b, m.Addr)
 		b = append(b, m.ClientPublic...)
 	case EmuLink:
 		b = binary.BigEndian.AppendUint32(b, m.Generation)
@@ -329,6 +340,8 @@ func Marshal(m Message) ([]byte, error) {
 		b = binary.BigEndian.AppendUint32(b, uint32(m.Status))
 	case ShellExit:
 		b = binary.BigEndian.AppendUint32(b, uint32(m.Status))
+	case Resume:
+		b = append(b, m.ClientPublic...)
 	case EmuPaused:
 		b = binary.BigEndian.AppendUint16(b, m.Seconds)
 	case Init:
@@ -345,7 +358,12 @@ func Marshal(m Message) ([]byte, error) {
 	case Resize:
 		b = binary.BigEndian.AppendUint16(b, m.Cols)
 		b = binary.BigEndian.AppendUint16(b, m.Rows)
-	case Flush, Attached:
+	case Attached:
+		b = appendAddr(b, m.Peer.Addr())
+		if m.Peer.Addr().IsValid() {
+			b = binary.BigEndian.AppendUint16(b, m.Peer.Port())
+		}
+	case Flush, Detached:
 	case Update:
 		var flags byte
 		if m.More {
@@ -435,28 +453,12 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		if m.Port == 0 {
 			return nil, malformed("Start has port 0")
 		}
-		rest := body[8:]
-		switch body[7] {
-		case 0:
-		case 4:
-			if len(rest) < 4 {
-				return nil, malformed("Start is short")
-			}
-			m.Addr = netip.AddrFrom4([4]byte(rest[:4]))
-			rest = rest[4:]
-		case 6:
-			if len(rest) < 16 {
-				return nil, malformed("Start is short")
-			}
-			m.Addr = netip.AddrFrom16([16]byte(rest[:16]))
-			rest = rest[16:]
-			if m.Addr.Is4In6() {
-				return nil, malformed("Start's address is IPv4 mapped")
-			}
-		default:
-			return nil, malformed("Start has address family %d", body[7])
+		addr, rest, err := parseAddr(body[7:], "Start")
+		if err != nil {
+			return nil, err
 		}
-		if m.Addr.IsValid() && (m.Addr.IsUnspecified() || m.Addr.IsMulticast() || m.Addr == netip.AddrFrom4([4]byte{255, 255, 255, 255})) {
+		m.Addr = addr
+		if m.Addr.IsValid() && (m.Addr.IsMulticast() || m.Addr == netip.AddrFrom4([4]byte{255, 255, 255, 255})) {
 			return nil, malformed("Start advertises %s", m.Addr)
 		}
 		if len(rest) != PublicKeySize {
@@ -484,6 +486,11 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 			return nil, err
 		}
 		return ShellExit{Status: int32(u32(0))}, nil
+	case typeResume:
+		if len(body) != PublicKeySize {
+			return nil, malformed("Resume's public key is %d bytes, not %d", len(body), PublicKeySize)
+		}
+		return Resume{ClientPublic: append([]byte(nil), body...)}, nil
 	case typeEmuPaused:
 		if err := fixed(2); err != nil {
 			return nil, err
@@ -559,7 +566,7 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		}
 		m := Exit{Code: ExitCode(body[0])}
 		switch m.Code {
-		case ShellExited, ClientClosed, NoClient, ExitError:
+		case ShellExited, NoClient, ExitError:
 		default:
 			return nil, malformed("Exit code %d", m.Code)
 		}
@@ -578,7 +585,23 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		}
 		return m, nil
 	case typeAttached:
-		return Attached{}, fixed(0)
+		addr, rest, err := parseAddr(body, "Attached")
+		if err != nil {
+			return nil, err
+		}
+		if !addr.IsValid() {
+			return Attached{}, fixed(1)
+		}
+		if len(rest) != 2 {
+			return nil, malformed("Attached is %d bytes", len(b))
+		}
+		port := binary.BigEndian.Uint16(rest)
+		if port == 0 {
+			return nil, malformed("Attached has port 0")
+		}
+		return Attached{Peer: netip.AddrPortFrom(addr, port)}, nil
+	case typeDetached:
+		return Detached{}, fixed(0)
 	case typeClientLine:
 		if err := line(body, MaxClientLine); err != nil {
 			return nil, err
@@ -594,6 +617,54 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		return Failed{Text: string(body)}, nil
 	}
 	return nil, malformed("unknown type %#02x", t)
+}
+
+// appendAddr writes an address as its family (0 for none, 4 or 6) and its
+// bytes.
+func appendAddr(b []byte, a netip.Addr) []byte {
+	switch {
+	case !a.IsValid():
+		return append(b, 0)
+	case a.Is4():
+		v := a.As4()
+		return append(append(b, 4), v[:]...)
+	}
+	v := a.As16()
+	return append(append(b, 6), v[:]...)
+}
+
+// parseAddr reads appendAddr's layout from the front of b and returns the
+// rest. It refuses a mapped or unspecified address, which no peer or
+// advertised address may be, and a zone cannot be written.
+func parseAddr(b []byte, what string) (netip.Addr, []byte, error) {
+	if len(b) < 1 {
+		return netip.Addr{}, nil, malformed("%s is short", what)
+	}
+	var a netip.Addr
+	rest := b[1:]
+	switch b[0] {
+	case 0:
+		return a, rest, nil
+	case 4:
+		if len(rest) < 4 {
+			return a, nil, malformed("%s is short", what)
+		}
+		a, rest = netip.AddrFrom4([4]byte(rest[:4])), rest[4:]
+	case 6:
+		if len(rest) < 16 {
+			return a, nil, malformed("%s is short", what)
+		}
+		a, rest = netip.AddrFrom16([16]byte(rest[:16])), rest[16:]
+		if a.Is4In6() {
+			return netip.Addr{}, nil, malformed("%s's address is IPv4 mapped", what)
+		}
+	default:
+		return a, nil, malformed("%s has address family %d", what, b[0])
+	}
+	if a.IsUnspecified() {
+		return netip.Addr{}, nil, malformed("%s has address %s", what, a)
+	}
+	return a, rest, nil
 }
 
 func size(cols, rows uint16) error {

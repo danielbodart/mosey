@@ -8,6 +8,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -83,6 +86,9 @@ func (l *Launcher) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if cl, err := bootstrap.ParseClientLine(line); err == nil && cl.Resume {
+		return l.resume(line, cl)
+	}
 	if err := checkClientLine(line, l.Version); err != nil {
 		return err
 	}
@@ -144,6 +150,124 @@ func (l *Launcher) run(ctx context.Context) error {
 	return fmt.Errorf("the server did not start")
 }
 
+// resume is the launcher's part of a resume (bootstrap.md §9.2 steps 2
+// and 5): find the session's attach socket, compare versions with the
+// session's own, not this launcher's, hand the spawner the client's line,
+// and print the credential line it answers with.
+func (l *Launcher) resume(line []byte, cl bootstrap.ClientLine) error {
+	if cl.Agent {
+		return &LaunchError{Code: bootstrap.CodeUnsupported, Detail: "agent", Text: "agent forwarding is not supported yet"}
+	}
+	f, greeting, err := findSession(sessionsDir(l.getenv), cl.SessionID)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	theirs, err := bootstrap.SessionLineVersion(greeting)
+	if err != nil {
+		return fmt.Errorf("the session's greeting: %w", err)
+	}
+	if theirs != cl.SoftwareVersion {
+		// The client asked for a resume, so it will not upload: its own
+		// version would not match the session either (§6.4).
+		return &LaunchError{Code: bootstrap.CodeVersion, Detail: theirs,
+			Text: fmt.Sprintf("the session runs version %s, the client is %s", theirs, printableASCII(cl.SoftwareVersion, 64))}
+	}
+	conn, err := ipc.NewConn(f, ipc.Launcher, ipc.Spawner)
+	if err != nil {
+		return err
+	}
+	if err := conn.Send(ipc.ClientLine{Line: line}); err != nil {
+		return fmt.Errorf("the session did not answer: %w", err)
+	}
+	f.SetReadDeadline(time.Now().Add(T2))
+	m, err := conn.Recv()
+	if err != nil {
+		return fmt.Errorf("the session did not answer: %w", err)
+	}
+	switch m := m.(type) {
+	case ipc.Ready:
+		_, err := l.Stdout.Write(m.Line)
+		clear(m.Line)
+		if err != nil {
+			return &silentError{fmt.Errorf("writing the credential line: %w", err)}
+		}
+		return nil
+	case ipc.Failed:
+		return errors.New(m.Text)
+	}
+	return errors.New("the session did not answer")
+}
+
+func (l *Launcher) getenv(name string) string {
+	for i := len(l.Env) - 1; i >= 0; i-- {
+		if k, v, ok := strings.Cut(l.Env[i], "="); ok && k == name {
+			return v
+		}
+	}
+	return ""
+}
+
+// findSession connects to session sid's attach socket under base, or for
+// AnySession to the user's one session, and returns the connection and
+// its greeting. No session is CodeSession; several, for AnySession, are
+// CodeAmbiguous with their count (bootstrap.md §9.2 step 2).
+func findSession(base string, sid [16]byte) (*os.File, []byte, error) {
+	none := &LaunchError{Code: bootstrap.CodeSession, Text: "no such session"}
+	if sid != bootstrap.AnySession {
+		f, greeting, err := dialAttach(sessionDir(base, sid))
+		if err != nil {
+			none.Text = fmt.Sprintf("no session %x: %v", sid, err)
+			return nil, nil, none
+		}
+		return f, greeting, nil
+	}
+	live := liveSessions(base)
+	switch len(live) {
+	case 0:
+		none.Text = "no session to resume"
+		return nil, nil, none
+	case 1:
+		return live[0].f, live[0].greeting, nil
+	}
+	for _, s := range live {
+		s.f.Close()
+	}
+	n := strconv.Itoa(len(live))
+	return nil, nil, &LaunchError{Code: bootstrap.CodeAmbiguous, Detail: n, Text: n + " sessions: name one"}
+}
+
+// liveSession is a session whose spawner answered with a greeting.
+type liveSession struct {
+	f        *os.File
+	greeting []byte
+}
+
+// liveSessions connects to every session under base that answers. A
+// directory that is not a session's, or whose spawner has gone, is
+// skipped.
+func liveSessions(base string) []liveSession {
+	if checkPrivateDir(base) != nil {
+		return nil
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return nil
+	}
+	var live []liveSession
+	for _, e := range entries {
+		if !isSessionDirName(e.Name()) {
+			continue
+		}
+		f, greeting, err := dialAttach(filepath.Join(base, e.Name()))
+		if err != nil {
+			continue
+		}
+		live = append(live, liveSession{f, greeting})
+	}
+	return live
+}
+
 // silentError is a failure there is no one left to tell.
 type silentError struct{ error }
 
@@ -195,7 +319,9 @@ func checkClientLine(line []byte, version string) error {
 			Text: fmt.Sprintf("the client is version %s, this server %s", printableASCII(cl.SoftwareVersion, 64), version)}
 	}
 	if cl.Resume {
-		return &LaunchError{Code: bootstrap.CodeUnsupported, Detail: "attach", Text: "resuming a session is not supported yet"}
+		// The launcher sends a resume to resume, never here; a spawner
+		// started for a session never takes one.
+		return &LaunchError{Code: bootstrap.CodeLine, Text: "a resume where a new session was asked for"}
 	}
 	if cl.Agent {
 		return &LaunchError{Code: bootstrap.CodeUnsupported, Detail: "agent", Text: "agent forwarding is not supported yet"}

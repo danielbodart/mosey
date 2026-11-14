@@ -25,6 +25,9 @@ type sshd struct {
 	dir    string
 	config string // the client's ssh_config, for ssh -F
 	host   string // its Host alias
+	// runtime is the XDG_RUNTIME_DIR sshd gives its sessions, so the
+	// servers' attach sockets are the test's own.
+	runtime string
 }
 
 func startSSHD(t *testing.T) *sshd {
@@ -45,7 +48,7 @@ func startSSHD(t *testing.T) *sshd {
 	if err != nil {
 		t.Skip(err)
 	}
-	s := &sshd{dir: t.TempDir(), host: "mosey-e2e"}
+	s := &sshd{dir: t.TempDir(), host: "mosey-e2e", runtime: runtimeDir(t)}
 	for _, k := range []string{"host", "user"} {
 		if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "mosey-e2e", "-f", filepath.Join(s.dir, k)).CombinedOutput(); err != nil {
 			t.Fatalf("ssh-keygen: %v %s", err, out)
@@ -77,7 +80,8 @@ UsePAM no
 AllowAgentForwarding no
 AllowTcpForwarding no
 X11Forwarding no
-`, port, s.dir))
+SetEnv XDG_RUNTIME_DIR=%[3]s
+`, port, s.dir, s.runtime))
 	hostPub, err := os.ReadFile(filepath.Join(s.dir, "host.pub"))
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +244,7 @@ SSH_CONNECTION='127.0.0.1 40000 127.0.0.1 22' exec /bin/sh -c "$last"
 		cmd := exec.Command(mosey, "-ssh", ssh, "-remote", remote, "localhost")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+t.TempDir())
+		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+t.TempDir(), "XDG_RUNTIME_DIR="+runtimeDir(t))
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}

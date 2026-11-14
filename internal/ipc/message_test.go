@@ -26,6 +26,7 @@ func examples() []Message {
 		EmuLink{Generation: 2, Reason: EmuSignalled, Status: -31},
 		EmuLink{Generation: 0xffffffff, Reason: EmuKilled, Status: 0x7fffffff},
 		ShellExit{Status: 0}, ShellExit{Status: -9}, ShellExit{Status: 255},
+		Resume{ClientPublic: key()},
 		EmuPaused{Seconds: 1}, EmuPaused{Seconds: MaxEmuPause},
 		Init{Cols: 1, Rows: 1, ScrollbackCells: 1},
 		Init{Cols: MaxCols, Rows: MaxRows, ScrollbackCells: MaxScrollbackCells, Foreground: 2<<24 | 0xffffff, Background: 1<<24 | 255, Palette: pal},
@@ -36,9 +37,11 @@ func examples() []Message {
 		Replies{Data: []byte{0x1b}}, Replies{Data: bytes.Repeat([]byte{'a'}, MaxReplies)},
 		Credential{Line: line(1)}, Credential{Line: line(MaxCredentialLine)},
 		Exit{Code: ShellExited}, Exit{Code: ExitError, Reason: strings.Repeat("~", MaxExitReason)},
-		Exit{Code: ClientClosed, Reason: " "}, Exit{Code: NoClient},
+		Exit{Code: NoClient, Reason: " "}, Exit{Code: NoClient},
 		KillEmu{Generation: 1, Why: KillDeadline}, KillEmu{Generation: 0xffffffff, Why: KillViolation},
-		Attached{},
+		Attached{}, Attached{Peer: netip.MustParseAddrPort("192.0.2.7:1")},
+		Attached{Peer: netip.MustParseAddrPort("[2001:db8::7]:65535")},
+		Detached{},
 		ClientLine{Line: line(1)}, ClientLine{Line: line(MaxClientLine)},
 		Ready{Line: line(MaxCredentialLine)},
 		Failed{Text: "x"}, Failed{Text: strings.Repeat(" ", MaxFailed)},
@@ -166,7 +169,11 @@ func TestFieldsOutOfRangeAreRefused(t *testing.T) {
 		Replies{}, Replies{Data: make([]byte, MaxReplies+1)},
 		Credential{}, Credential{Line: []byte("no newline")},
 		Credential{Line: append(make([]byte, MaxCredentialLine), '\n')},
-		Exit{Code: 0}, Exit{Code: 4}, Exit{Code: 6}, Exit{Code: ShellExited, Reason: "a\nb"},
+		Resume{ClientPublic: key()[1:]}, Resume{ClientPublic: append(key(), 0)},
+		Attached{Peer: netip.MustParseAddrPort("192.0.2.7:0")},
+		Attached{Peer: netip.MustParseAddrPort("0.0.0.0:1")},
+		Attached{Peer: netip.MustParseAddrPort("[::ffff:192.0.2.1]:1")},
+		Exit{Code: 0}, Exit{Code: 2}, Exit{Code: 4}, Exit{Code: 6}, Exit{Code: ShellExited, Reason: "a\nb"},
 		Exit{Code: ShellExited, Reason: strings.Repeat("x", MaxExitReason+1)},
 		KillEmu{Generation: 0, Why: KillDeadline}, KillEmu{Generation: 1, Why: 0}, KillEmu{Generation: 1, Why: 3},
 		ClientLine{Line: append(make([]byte, MaxClientLine), '\n')},
@@ -212,7 +219,7 @@ func TestATypeFromTheWrongPeerIsRefused(t *testing.T) {
 }
 
 func TestUnknownTypesAndTheRetiredExitCodeAreRefused(t *testing.T) {
-	for _, typ := range []byte{0x00, 0x04, 0x05, 0x07, 0x14, 0x22, 0x34, 0x43, 0xff} {
+	for _, typ := range []byte{0x00, 0x04, 0x07, 0x14, 0x22, 0x35, 0x43, 0xff} {
 		for _, from := range []Peer{Launcher, Spawner, Proto, Emu} {
 			for _, to := range []Peer{Launcher, Spawner, Proto, Emu} {
 				if _, err := Parse(from, to, []byte{typ, 0, 0, 0, 0}); err == nil {

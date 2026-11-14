@@ -164,6 +164,11 @@ func (b *spawn) refused(e *bootstrap.RemoteError) error {
 	case bootstrap.CodeLine:
 		return fail(e, "the server could not read this client's request: a bug, please report it")
 	case bootstrap.CodeVersion:
+		if b.line.Resume {
+			// An upgrade ends resumability (bootstrap.md §9.2 step 5): no
+			// upload, which would install this version, not the session's.
+			return fail(e, "the session runs version %s; this is %s: resume it with mosey %s, or end it from a new session", e.Detail, b.line.SoftwareVersion, e.Detail)
+		}
 		theirs := e.Detail
 		if e.Proto != bootstrap.Version {
 			theirs = fmt.Sprintf("%s (bootstrap protocol %d; this is %d)", theirs, e.Proto, bootstrap.Version)
@@ -172,7 +177,9 @@ func (b *spawn) refused(e *bootstrap.RemoteError) error {
 	case bootstrap.CodeUnsupported:
 		return fail(e, "the remote mosey can't do %s yet", e.Detail)
 	case bootstrap.CodeSession:
-		return fail(e, "no session to resume")
+		return fail(e, "no session to resume on %s", b.ssh.Destination)
+	case bootstrap.CodeAmbiguous:
+		return fail(e, "%s sessions on %s: name one with -r=SESSION (mosey -list %s shows them)", e.Detail, b.ssh.Destination, b.ssh.Destination)
 	case bootstrap.CodeInternal:
 		return fail(e, "the server failed to start (see above)")
 	}

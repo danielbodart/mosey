@@ -38,7 +38,7 @@ const (
 	// Added at integration, after the reserved numbers.
 
 	// KindEnd says the session is over (transport.md §8.4): the server's
-	// shell exited, or the client's user quit. Its body is one EndReason
+	// shell exited, or the client detached. Its body is one EndReason
 	// byte. Without it neither side could tell a finished session from a
 	// silent network (server.md §11 item 7).
 	KindEnd Kind = 0x0A

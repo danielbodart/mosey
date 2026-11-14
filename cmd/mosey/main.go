@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -30,6 +31,18 @@ const usage = `mosey -- a remote terminal for bad networks
         the network comes and goes. -A and -a are ssh's own: forward the
         agent or don't (agent forwarding arrives in a later version).
 
+  mosey -r [OPTIONS] DESTINATION
+  mosey -r=SESSION [OPTIONS] DESTINATION
+        Resume your session on DESTINATION, from this device or another:
+        the only one there, or SESSION (as -list shows it). Whatever
+        client had it is cut off and told so.
+
+  mosey -list [OPTIONS] DESTINATION
+        List your sessions on DESTINATION.
+
+  A session lives until its shell exits. Closing the terminal, or
+  killing the client, detaches from it; mosey -r picks it up again.
+
   mosey -version
 `
 
@@ -47,6 +60,34 @@ func main() {
 type cli struct {
 	ssh         bootstrap.SSH
 	showVersion bool
+	// resume is -r or -r=SESSION (bootstrap.md §9.2), list is -list.
+	resume resumeFlag
+	list   bool
+}
+
+// resumeFlag is -r, which takes an optional value: alone it resumes the
+// user's one session (bootstrap.AnySession), and -r=SESSION names one by
+// its 32 hex digits. Go's flag package has no optional values, so it is a
+// boolean flag whose value may be given after =.
+type resumeFlag struct {
+	set bool
+	sid [16]byte
+}
+
+func (r *resumeFlag) String() string   { return "" }
+func (r *resumeFlag) IsBoolFlag() bool { return true }
+func (r *resumeFlag) Set(v string) error {
+	r.set = true
+	if v == "true" {
+		r.sid = bootstrap.AnySession
+		return nil
+	}
+	b, err := hex.DecodeString(v)
+	if err != nil || len(b) != len(r.sid) || [16]byte(b) == bootstrap.AnySession {
+		return errors.New("a session is 32 hex digits, as mosey -list shows it")
+	}
+	r.sid = [16]byte(b)
+	return nil
 }
 
 // parseArgs reads `mosey [-remote PATH] [-ssh PROGRAM] [-A | -a] [--
@@ -63,11 +104,16 @@ func parseArgs(args []string) (cli, error) {
 	flags.Var(agent.letter('A'), "A", "forward the agent, as ssh -A")
 	flags.Var(agent.letter('a'), "a", "do not forward the agent, as ssh -a")
 	flags.BoolVar(&c.showVersion, "version", false, "print the version")
+	flags.Var(&c.resume, "r", "resume the session, or `SESSION`")
+	flags.BoolVar(&c.list, "list", false, "list the sessions on DESTINATION")
 	if err := flags.Parse(args); err != nil {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: " + err.Error()}
 	}
 	if c.showVersion {
 		return c, nil
+	}
+	if c.resume.set && c.list {
+		return cli{}, &bootstrap.UsageError{Msg: "mosey: -r and -list exclude each other"}
 	}
 	rest := flags.Args()
 	if len(rest) == 0 {
@@ -140,7 +186,16 @@ func runClient(args []string) int {
 
 	log, closeLog := clientLog()
 	defer closeLog()
-	log.Info("starting", "version", version, "destination", c.ssh.Destination)
+	log.Info("starting", "version", version, "destination", c.ssh.Destination, "resume", c.resume.set, "list", c.list)
+
+	if c.list {
+		err := client.List(ctx, client.ListOptions{SSH: c.ssh, Stdout: os.Stdout, Stderr: os.Stderr, Log: log})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Fprintln(os.Stderr, "mosey:", err)
+			return client.ExitStatus(err)
+		}
+		return 0
+	}
 
 	tty, err := terminal.Open(os.Stdin, os.Stdout)
 	if err != nil {
@@ -149,15 +204,18 @@ func runClient(args []string) int {
 	}
 	defer tty.Close()
 	err = client.Run(ctx, client.Options{
-		SSH:      c.ssh,
-		Version:  version,
-		Terminal: tty,
-		Stderr:   os.Stderr,
-		Log:      log,
-		Getenv:   os.Getenv,
+		SSH:       c.ssh,
+		Version:   version,
+		Terminal:  tty,
+		Stderr:    os.Stderr,
+		Log:       log,
+		Getenv:    os.Getenv,
+		Resume:    c.resume.set,
+		SessionID: c.resume.sid,
 	})
 	tty.Close()
 	if err != nil && !errors.Is(err, context.Canceled) {
+		// A detach says how to come back, and exits 0 (bootstrap.md §9.3).
 		log.Info("ended", "err", err)
 		fmt.Fprintln(os.Stderr, "mosey:", err)
 		return client.ExitStatus(err)

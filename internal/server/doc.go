@@ -12,6 +12,13 @@
 //   - emu: sandboxed. The terminal emulator, and nothing else: no key, no
 //     pty, no socket but its IPC.
 //
+// The spawner also owns the session's attach socket (D8, server.md §2.6),
+// through which a later `mosey --serve` resumes the session: it checks the
+// client's line and forwards its key, proto mints a credential for the same
+// session, and the new connection takes over from the old (D26). A session
+// outlives its clients and ends only when its shell does. `mosey
+// --serve=list` reads every session's greeting and lists them.
+//
 // Proto's logic is also callable in process, with an in-process emulator
 // and any Terminal, which is how the end-to-end tests run the whole server
 // on netsim without forking.

@@ -161,16 +161,19 @@ type EndReason uint8
 const (
 	// EndShellExited: the server's login shell exited.
 	EndShellExited EndReason = 0x01
-	// EndClientQuit: the client's user quit, or its terminal went away.
-	EndClientQuit EndReason = 0x02
+	// EndDetached: the client is going away, by a signal or the end of
+	// its terminal, and the session stays for a resume (D8; bootstrap.md
+	// §9.3). Before the resume slice it meant "the client quit"; the wire
+	// is the same.
+	EndDetached EndReason = 0x02
 )
 
 func (r EndReason) String() string {
 	switch r {
 	case EndShellExited:
 		return "the shell exited"
-	case EndClientQuit:
-		return "the client quit"
+	case EndDetached:
+		return "the client detached"
 	}
 	return fmt.Sprintf("reason %#02x", uint8(r))
 }

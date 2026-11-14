@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"time"
 
@@ -93,29 +94,42 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 	}
 
 	creds := handshake.NewCredentials(log)
-	// crypto/rand never fails: the runtime crashes instead (Go 1.24).
+	// crypto/rand never fails: the runtime crashes instead (Go 1.24). The
+	// all-zero id means "the user's one session" to a resume, so no
+	// session may have it (bootstrap.md §9.2).
 	var session [16]byte
-	rand.Read(session[:])
-	cred, err := creds.Mint(session, start.ClientPublic)
-	if err != nil {
-		return fmt.Errorf("minting the credential: %w", err)
+	for session == bootstrap.AnySession {
+		rand.Read(session[:])
 	}
-	line := bootstrap.MarshalCredentialLine(bootstrap.CredentialLine{
-		SoftwareVersion: version,
-		Addr:            start.Addr,
-		Port:            start.Port,
-		CredentialID:    cred.ID,
-		SessionID:       cred.SessionID,
-		PSK:             cred.PSK,
-		Public:          cred.ServerPublic,
-	})
-	err = ctl.Send(ipc.Credential{Line: line})
-	// The store keeps what the handshake needs; these copies, the PSK in
-	// the clear among them, go now (threat-model.md §4.10).
-	clear(line)
-	clear(cred.PSK[:])
-	if err != nil {
-		return fmt.Errorf("sending the credential: %w", err)
+	// mint makes a credential for the session, bound to a client's
+	// one-shot key, and sends the spawner its line: at the bootstrap, and
+	// for each resume (transport.md §8.1).
+	mint := func(clientPublic []byte) error {
+		cred, err := creds.Mint(session, clientPublic)
+		if err != nil {
+			return fmt.Errorf("minting a credential: %w", err)
+		}
+		line := bootstrap.MarshalCredentialLine(bootstrap.CredentialLine{
+			SoftwareVersion: version,
+			Addr:            start.Addr,
+			Port:            start.Port,
+			CredentialID:    cred.ID,
+			SessionID:       cred.SessionID,
+			PSK:             cred.PSK,
+			Public:          cred.ServerPublic,
+		})
+		err = ctl.Send(ipc.Credential{Line: line})
+		// The store keeps what the handshake needs; these copies, the PSK
+		// in the clear among them, go now (threat-model.md §4.10).
+		clear(line)
+		clear(cred.PSK[:])
+		if err != nil {
+			return fmt.Errorf("sending the credential: %w", err)
+		}
+		return nil
+	}
+	if err := mint(start.ClientPublic); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -125,14 +139,32 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 		Terminal: ptyTerminal{master},
 		Emulator: em,
 		Log:      log,
-		Attached: func() {
-			if err := ctl.Send(ipc.Attached{}); err != nil {
+		Attached: func(peer netip.AddrPort) {
+			// The dual-stack socket reports an IPv4 client as mapped, and a
+			// zone means nothing to the spawner: the address as a person
+			// would write it.
+			if peer.IsValid() {
+				peer = netip.AddrPortFrom(peer.Addr().Unmap().WithZone(""), peer.Port())
+			}
+			if err := ctl.Send(ipc.Attached{Peer: peer}); err != nil {
 				log.Warn("telling the spawner a client attached", "err", err)
+			}
+		},
+		Detached: func() {
+			if err := ctl.Send(ipc.Detached{}); err != nil {
+				log.Warn("telling the spawner the client detached", "err", err)
 			}
 		},
 	}
 	em.repaint = sess.Repaint
-	go readControl(ctl, em, sess, cancel, log)
+	resume := func(clientPublic []byte) error {
+		if err := mint(clientPublic); err != nil {
+			return err
+		}
+		sess.Minted()
+		return nil
+	}
+	go readControl(ctl, em, sess, resume, cancel, log)
 
 	err = sess.Run(ctx)
 	sess.Listener.Close()
@@ -141,8 +173,6 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 	case err == nil:
 	case errors.Is(err, ErrNoClient):
 		exit = ipc.Exit{Code: ipc.NoClient}
-	case errors.Is(err, ErrClientClosed):
-		exit = ipc.Exit{Code: ipc.ClientClosed}
 	case errors.Is(context.Cause(ctx), errSpawnerGone):
 		return nil
 	default:
@@ -158,10 +188,10 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 // at once (server.md §7).
 var errSpawnerGone = errors.New("the spawner closed the control socket")
 
-// readControl is proto's C reader: EmuLink, EmuPaused and ShellExit from
-// the spawner. A malformed message is a bug in a more trusted process, so
+// readControl is proto's C reader: EmuLink, EmuPaused, ShellExit and
+// Resume from the spawner. A malformed message is a bug in a more trusted process, so
 // proto logs it and ends (server.md §5.3).
-func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, cancel context.CancelCauseFunc, log *slog.Logger) {
+func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, resume func([]byte) error, cancel context.CancelCauseFunc, log *slog.Logger) {
 	gen := uint32(1)
 	for {
 		m, err := ctl.Recv()
@@ -190,6 +220,15 @@ func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, cancel context.C
 			}()
 		case ipc.EmuPaused:
 			em.pause(m.Seconds)
+		case ipc.Resume:
+			// The spawner checked the key (server.md §2.6), so a mint that
+			// fails is a bug, and the session ends on it rather than leave
+			// the spawner waiting for a credential.
+			if err := resume(m.ClientPublic); err != nil {
+				log.Error("minting a credential for a resume", "err", err)
+				cancel(err)
+				return
+			}
 		case ipc.ShellExit:
 			// The pty reader normally sees EIO first; this ends the
 			// session even if a job the shell left holds the slave open.

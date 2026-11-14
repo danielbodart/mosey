@@ -161,3 +161,17 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// runtimeDir is a throwaway $XDG_RUNTIME_DIR for a server under test, so
+// its attach sockets (server.md §2.6) never land in the user's own. It is
+// short on purpose: a unix socket's path must fit in 108 bytes, and
+// t.TempDir's carries the test's name.
+func runtimeDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("", "mrt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	return d
+}

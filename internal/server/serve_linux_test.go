@@ -97,6 +97,7 @@ func serve(t *testing.T, bin string, env ...string) *served {
 		"PATH=" + os.Getenv("PATH") + ":/usr/bin:/bin:/run/current-system/sw/bin",
 		"HOME=" + home,
 		"XDG_STATE_HOME=" + state,
+		"XDG_RUNTIME_DIR=" + runtimeDir(t),
 		"SHELL=/bin/sh",
 		"USER=" + os.Getenv("USER"),
 		"SSH_CONNECTION=127.0.0.1 40000 127.0.0.1 22",

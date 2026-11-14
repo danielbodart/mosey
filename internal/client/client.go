@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,12 +31,18 @@ type Options struct {
 	Log *slog.Logger
 	// Getenv reads the environment: TERM, the locale, SSH_AUTH_SOCK.
 	Getenv func(string) string
+	// Resume asks to take over a running session rather than start one
+	// (D8, bootstrap.md §9.2): SessionID, or with bootstrap.AnySession
+	// the user's one session on the host.
+	Resume    bool
+	SessionID [16]byte
 }
 
-// Run is `mosey host`: the SSH bootstrap, then a Session over a real UDP
-// socket, until the session ends, ctx is done, or another client takes
-// the session over (*TakenOverError). Its errors are for the user:
-// *Failure, *bootstrap.UsageError, or ctx's.
+// Run is `mosey host` (or `mosey -r host`): the SSH bootstrap, then a
+// Session over a real UDP socket, until the session ends, this client
+// detaches (*DetachedError), or another client takes the session over
+// (*TakenOverError). Its errors are for the user: *Failure,
+// *bootstrap.UsageError, or ctx's.
 func Run(ctx context.Context, o Options) error {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
@@ -67,6 +74,8 @@ func Run(ctx context.Context, o Options) error {
 		ssh: o.SSH,
 		line: bootstrap.ClientLine{
 			SoftwareVersion: o.Version,
+			Resume:          o.Resume,
+			SessionID:       o.SessionID,
 			Cols:            uint16(size.Cols),
 			Rows:            uint16(size.Rows),
 			Env:             env,
@@ -111,7 +120,12 @@ func Run(ctx context.Context, o Options) error {
 	// The Session has its own copy, which dial wipes once msg1 is built
 	// (threat-model.md §4.10).
 	clear(line.PSK[:])
-	return s.Run(ctx)
+	err = s.Run(ctx)
+	var d *DetachedError
+	if errors.As(err, &d) {
+		d.Destination = o.SSH.Destination
+	}
+	return err
 }
 
 // credentialFrom is the handshake's view of a CredentialLine: bootstrap

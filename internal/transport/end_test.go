@@ -54,7 +54,7 @@ func TestEndGetsThroughWhenTheFirstCopyIsLost(t *testing.T) {
 			}
 			return []memPacket{p}
 		})
-		if err := client.End(EndClientQuit); err != nil {
+		if err := client.End(EndDetached); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()
@@ -80,7 +80,7 @@ func TestEndAfterCloseSendsNothing(t *testing.T) {
 			return []memPacket{p}
 		})
 		client.Close()
-		if err := client.End(EndClientQuit); err != nil {
+		if err := client.End(EndDetached); err != nil {
 			t.Fatal(err)
 		}
 		synctest.Wait()

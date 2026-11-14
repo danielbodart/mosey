@@ -5,8 +5,10 @@ package main
 // the spawner in a session of its own, prints the credential on stdout and
 // exits, so ssh can too. The spawner, `mosey --serve=spawner`, serves the
 // session, re-executing this same binary as its sandboxed roles,
-// `mosey --serve=proto` and `mosey --serve=emu` (D22, server.md §1). None of
-// it is for people to run.
+// `mosey --serve=proto` and `mosey --serve=emu` (D22, server.md §1). A
+// launcher given a resume hands it to the session's spawner over its
+// attach socket instead (D8), and `mosey --serve=list` prints the user's
+// sessions for `mosey -list`. None of it is for people to run.
 //
 // Server mode is a flag, not a word, so it can never collide with a host:
 // `mosey server` connects to a host called server. Every plain word on the
@@ -85,6 +87,13 @@ func runServer(role string) {
 		err = server.RunEmu(ctx, os.NewFile(ipcFD, "ipc"), log)
 	case "version":
 		fmt.Println(version)
+		return
+	case "list":
+		// The user's sessions on this host, for mosey -list
+		// (bootstrap.md §9.4).
+		if err := server.List(os.Stdout, os.Getenv); err != nil {
+			failServer(err)
+		}
 		return
 	default:
 		fmt.Fprintf(os.Stderr, "mosey --serve: unknown role %q\n", role)

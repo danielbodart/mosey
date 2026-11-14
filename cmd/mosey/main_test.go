@@ -61,3 +61,43 @@ func TestVersionNeedsNoDestination(t *testing.T) {
 		t.Errorf("%+v %v", c, err)
 	}
 }
+
+// -r resumes the user's one session, -r=SESSION a named one, -list lists
+// them (bootstrap.md §9.2, §9.4); a plain mosey DEST never resumes.
+func TestResumeAndListOnTheCommandLine(t *testing.T) {
+	sid := [16]byte{0x0f, 0x3a, 15: 0x01}
+	for _, c := range []struct {
+		args   []string
+		resume bool
+		sid    [16]byte
+		list   bool
+	}{
+		{[]string{"far"}, false, [16]byte{}, false},
+		{[]string{"-r", "far"}, true, bootstrap.AnySession, false},
+		{[]string{"-r=0f3a0000000000000000000000000001", "far"}, true, sid, false},
+		{[]string{"-r", "--", "-p", "2222", "far"}, true, bootstrap.AnySession, false},
+		{[]string{"-list", "far"}, false, [16]byte{}, true},
+	} {
+		got, err := parseArgs(c.args)
+		if err != nil {
+			t.Errorf("%q: %v", c.args, err)
+			continue
+		}
+		if got.resume.set != c.resume || got.resume.sid != c.sid || got.list != c.list || got.ssh.Destination != "far" {
+			t.Errorf("%q: %+v", c.args, got)
+		}
+	}
+	for _, args := range [][]string{
+		{"-r", "-list", "far"},
+		{"-r=0f3a", "far"},
+		{"-r=0F3A0000000000000000000000000001x", "far"},
+		{"-r=00000000000000000000000000000000", "far"},    // AnySession is never a session's name
+		{"-r", "0f3a0000000000000000000000000001", "far"}, // the value needs its =
+	} {
+		_, err := parseArgs(args)
+		var u *bootstrap.UsageError
+		if !errors.As(err, &u) {
+			t.Errorf("%q: %v", args, err)
+		}
+	}
+}

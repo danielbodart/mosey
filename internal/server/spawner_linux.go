@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -128,6 +129,31 @@ type spawner struct {
 	killAsked  map[uint32]bool
 	restarts   restarts
 	ready      bool
+
+	// The session's id, from proto's first credential, and its attach
+	// socket (server.md §2.6), or nil if it could not be made.
+	sid     [16]byte
+	started time.Time
+	attach  *attachListener
+	// resumes carries each resume the attach socket has checked to the
+	// supervision loop, which forwards it to proto; pending is those
+	// forwarded and not yet answered, in order (proto answers in order).
+	resumes chan resumeRequest
+	pending []resumeRequest
+	serving atomic.Int32
+
+	// What the greeting says of the session's client.
+	greetMu sync.Mutex
+	state   bootstrap.SessionState
+	since   time.Time
+	peer    netip.AddrPort
+}
+
+// resumeRequest is a checked resume on its way to proto: the client's key,
+// and where the credential line goes back to.
+type resumeRequest struct {
+	public []byte
+	reply  chan []byte
 }
 
 type ctlEvent struct {
@@ -293,6 +319,22 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 		return err
 	}
 	slave.Close()
+
+	// The credential names the session, so its attach socket can be made
+	// now (server.md §2.6). Without one the session goes on, but nobody
+	// can resume it.
+	cred, _ := bootstrap.ParseCredentialLine(line)
+	s.sid = cred.SessionID
+	clear(cred.PSK[:])
+	s.started = time.Now()
+	s.state, s.since = bootstrap.SessionNew, s.started
+	s.resumes = make(chan resumeRequest)
+	if s.attach, err = listenAttach(sessionsDir(s.getenv), s.sid); err != nil {
+		s.log.Warn("no attach socket: this session cannot be resumed", "err", err)
+		s.attach = nil
+	} else {
+		s.log.Info("attach socket", "path", s.attach.path)
+	}
 
 	if err := s.launcher.Send(ipc.Ready{Line: line}); err != nil {
 		s.log.Warn("telling the launcher", "err", err)
@@ -519,6 +561,9 @@ func (s *spawner) supervise(ctx context.Context) error {
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigs)
 
+	if s.attach != nil {
+		go s.serveAttach()
+	}
 	attached := false
 	backstopTimer := time.NewTimer(backstop)
 	defer backstopTimer.Stop()
@@ -593,6 +638,18 @@ func (s *spawner) supervise(ctx context.Context) error {
 				s.teardown("proto gone")
 				return nil
 			}
+		case r := <-s.resumes:
+			if err := s.ctl.Send(ipc.Resume{ClientPublic: r.public}); err != nil {
+				s.log.Warn("forwarding a resume to proto", "err", err)
+				close(r.reply)
+				continue
+			}
+			s.pending = append(s.pending, r)
+			if !attached {
+				// A credential minted before any client attached keeps the
+				// session waiting as long as it lives (bootstrap.md §4.5).
+				backstopTimer.Reset(backstop)
+			}
 		case ev := <-s.ctlMsgs:
 			if ev.err != nil {
 				if !ipc.IsEOF(ev.err) {
@@ -623,12 +680,31 @@ func (s *spawner) supervise(ctx context.Context) error {
 					s.emu.cmd.Process.Kill()
 				}
 			case ipc.Attached:
-				if attached {
-					s.violation(errors.New("a second Attached"))
+				if !attached {
+					attached = true
+					backstopTimer.Stop()
+				}
+				s.setState(bootstrap.SessionAttached, m.Peer)
+				s.log.Info("a client attached", "peer", m.Peer)
+			case ipc.Detached:
+				s.setState(bootstrap.SessionDetached, netip.AddrPort{})
+				s.log.Info("the client detached")
+			case ipc.Credential:
+				if len(s.pending) == 0 {
+					s.violation(errors.New("a Credential nobody asked for"))
 					continue
 				}
-				attached = true
-				backstopTimer.Stop()
+				r := s.pending[0]
+				s.pending = s.pending[1:]
+				if err := s.checkResumed(m.Line); err != nil {
+					clear(m.Line)
+					close(r.reply)
+					s.violation(err)
+					continue
+				}
+				// reply has room for one, so the loop never waits on a
+				// resume that gave up.
+				r.reply <- m.Line
 			default:
 				s.violation(fmt.Errorf("%T after the bootstrap", m))
 			}
@@ -677,6 +753,11 @@ func describe(st *os.ProcessState) string {
 // an ssh logout), then emu.
 func (s *spawner) teardown(why string) {
 	start := time.Now()
+	// First, so no resume reaches a session that is ending (server.md
+	// §2.6).
+	if s.attach != nil {
+		s.attach.Close()
+	}
 	if s.proto != nil {
 		if s.ctl != nil {
 			s.ctl.Close()

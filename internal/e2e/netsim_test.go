@@ -177,12 +177,19 @@ type simSession struct {
 // by a profile, and a credential for the client, minted as proto mints it:
 // the bootstrap, minus SSH.
 type simNet struct {
+	net    *netsim.Network
+	sh     *netsim.Host
 	cc, sc *netsim.Conn
 	creds  *handshake.Credentials
 	cred   handshake.Credential
 	key    *handshake.OneShotKey
 	log    *slog.Logger
+	// links are the first client's, up then down, for a test to cut.
+	links []*netsim.Link
 }
+
+// sessionID is the one session every sim test serves.
+var sessionID = [16]byte{1}
 
 func newSimNet(t *testing.T, p netsim.Profile) *simNet {
 	t.Helper()
@@ -205,11 +212,11 @@ func newSimNet(t *testing.T, p netsim.Profile) *simNet {
 		t.Fatal(err)
 	}
 	creds := handshake.NewCredentials(log)
-	cred, err := creds.Mint([16]byte{1}, key.PublicKey())
+	cred, err := creds.Mint(sessionID, key.PublicKey())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &simNet{cc: cc, sc: sc, creds: creds, cred: cred, key: key, log: log}
+	return &simNet{net: n, sh: sh, cc: cc, sc: sc, creds: creds, cred: cred, key: key, log: log}
 }
 
 // serve runs proto's Session over the server's socket, with prog as the
@@ -223,6 +230,46 @@ func (n *simNet) serve(t *testing.T, ctx context.Context, prog server.Terminal) 
 	done := make(chan error, 1)
 	srv := &server.Session{Listener: transport.Listen(n.sc, n.creds, n.log), Terminal: prog, Emulator: em, Log: n.log}
 	go func() { done <- srv.Run(ctx) }()
+	return done
+}
+
+// device is another client of the same session: a host of its own on a
+// LAN link to the server, a fresh one-shot key, and a credential minted
+// for the same session id, as proto mints one for a resume
+// (transport.md §8.1). Nothing of the first client's is reused.
+type device struct {
+	conn *netsim.Conn
+	addr netip.AddrPort
+	key  *handshake.OneShotKey
+	cred handshake.Credential
+}
+
+func (n *simNet) device(t *testing.T, name string, addr netip.AddrPort) *device {
+	t.Helper()
+	h := n.net.NewHost(name)
+	c, err := h.Listen(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	netsim.LAN().Setup(n.net, h, n.sh, c)
+	key, err := handshake.NewOneShotKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred, err := n.creds.Mint(sessionID, key.PublicKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &device{conn: c, addr: addr, key: key, cred: cred}
+}
+
+// resume runs a client Session from d, on user's terminal; its end
+// arrives on the channel.
+func (n *simNet) resume(ctx context.Context, d *device, user terminal.Terminal) <-chan error {
+	done := make(chan error, 1)
+	cli := &client.Session{Conn: d.conn, Server: serverAddr, Credential: d.cred, Key: d.key, Terminal: user, Log: n.log,
+		Capabilities: render.Capabilities{UTF8: true, Colors256: true}}
+	go func() { done <- cli.Run(ctx) }()
 	return done
 }
 
@@ -429,29 +476,6 @@ func TestASessionNobodyConnectsToEnds(t *testing.T) {
 			}
 		case <-time.After(handshake.CredentialTTL + time.Minute):
 			t.Fatal("a session nobody connected to is still running")
-		}
-	})
-}
-
-// The user quitting ends the session on the server too: the client says so
-// with an END frame (transport.md §8.4), since with no resume in slice 1
-// nothing could reach the shell again (server.md §2.4).
-func TestQuittingTheClientEndsTheSessionOnTheServer(t *testing.T) {
-	skipUntilBuilt(t, allPackages...)
-	synctest.Test(t, func(t *testing.T) {
-		s := startSimSession(t, netsim.LAN())
-		s.wait("prompt", func() bool { return strings.Contains(s.clientScreen(), "$") })
-		s.quit()
-		if err := <-s.client; err != nil {
-			t.Errorf("the client ended with %v", err)
-		}
-		select {
-		case err := <-s.server:
-			if !errors.Is(err, server.ErrClientClosed) {
-				t.Errorf("the server ended with %v, not ErrClientClosed", err)
-			}
-		case <-time.After(time.Minute):
-			t.Fatal("the server did not end when the client quit")
 		}
 	})
 }

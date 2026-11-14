@@ -194,6 +194,7 @@ func TestTheSpawnerRunsASessionAndRebuildsEmu(t *testing.T) {
 			"PATH=" + os.Getenv("PATH"),
 			"HOME=" + home,
 			"XDG_STATE_HOME=" + state,
+			"XDG_RUNTIME_DIR=" + runtimeDir(t),
 			"SHELL=/bin/sh",
 			"SSH_CONNECTION=127.0.0.1 40000 127.0.0.1 22",
 		},

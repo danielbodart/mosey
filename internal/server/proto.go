@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -38,16 +39,10 @@ const (
 	T6 = 3 * time.Second
 )
 
-// ErrNoClient is the end of a session nobody connected to: the credential
-// minted for it expired unconfirmed, so nothing can ever connect
-// (server.md §2.4).
+// ErrNoClient is the end of a session nobody connected to: every
+// credential minted for it expired unconfirmed before any client attached,
+// so nothing can ever connect (server.md §2.4).
 var ErrNoClient = errors.New("server: no client confirmed a credential")
-
-// ErrClientClosed is the end of a session the client ended: its user quit
-// and it said so with an END frame (transport.md §8.4). With no resume in
-// slice 1 nothing can reach the shell again, so the session ends
-// (server.md §2.4).
-var ErrClientClosed = errors.New("server: the client ended the session")
 
 // errShellExited is the normal end of a session; Run returns nil for it.
 var errShellExited = errors.New("server: the shell exited")
@@ -75,8 +70,13 @@ type rebuilder interface{ Changed() <-chan struct{} }
 //
 // Its threads of control are server.md §7's: a pty reader that feeds the
 // emulator and never writes the pty, one pty writer for keystrokes and
-// then replies, the SSP endpoint, and timers for synchronised output. The
-// zero value plus the exported fields is ready to Run.
+// then replies, the SSP endpoint of the attached client, and timers for
+// synchronised output. The pty and the emulator live as long as the
+// shell; clients come and go (D8): each connection the listener accepts
+// gets an SSP endpoint of its own, the newest replacing any other (the
+// listener has revoked it, D26), and a client that leaves leaves the
+// session running for the next. The zero value plus the exported fields is
+// ready to Run.
 type Session struct {
 	Listener *transport.Listener
 	Terminal Terminal
@@ -84,15 +84,21 @@ type Session struct {
 	// one in tests.
 	Emulator emu.Emulator
 	Log      *slog.Logger
-	// Attached, if set, is called once, when a client first confirms a
-	// credential, so the spawner can stop its backstop (bootstrap.md
-	// §4.5).
-	Attached func()
+	// Attached, if set, is called each time a client confirms a
+	// credential, with its validated address or the zero AddrPort while it
+	// has none: the first stops the spawner's backstop (bootstrap.md
+	// §4.5), and each is what the attach socket's greeting says.
+	Attached func(peer netip.AddrPort)
+	// Detached, if set, is called when the attached client goes and no
+	// other takes its place: the session waits for a resume.
+	Detached func()
 
 	once      sync.Once
 	em        emu.Emulator
-	ep        *ssp.Endpoint[*screen.Grid, *userinput.Stream]
 	repliesIn chan struct{}
+	// switched wakes the pty writer when the attached endpoint changes.
+	switched  chan struct{}
+	minted    chan struct{}
 	shellExit chan struct{}
 	exitOnce  sync.Once
 	closeOnce sync.Once
@@ -104,13 +110,20 @@ type Session struct {
 	// sizeMu serialises resizes: the client's and a repaint's.
 	sizeMu sync.Mutex
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// ep is the attached client's endpoint, or nil while none is.
+	ep *ssp.Endpoint[*screen.Grid, *userinput.Stream]
+	// consumed is how many of ep's input events the pty has taken: per
+	// connection, since each client's stream starts at 0 (ssp.md §1.3).
 	consumed uint64
 	replies  []byte
 	dropped  int
 	cols     int
 	rows     int
 	holding  bool
+	// broken is an endpoint whose client broke the input protocol, for
+	// the main loop to drop.
+	broken chan *ssp.Endpoint[*screen.Grid, *userinput.Stream]
 }
 
 func (s *Session) init() {
@@ -128,6 +141,9 @@ func (s *Session) init() {
 			s.em = &lockedEmulator{e: s.Emulator}
 		}
 		s.repliesIn = make(chan struct{}, 1)
+		s.switched = make(chan struct{}, 1)
+		s.minted = make(chan struct{}, 1)
+		s.broken = make(chan *ssp.Endpoint[*screen.Grid, *userinput.Stream], 1)
 		s.shellExit = make(chan struct{})
 		s.done = make(chan struct{})
 	})
@@ -141,49 +157,39 @@ func (s *Session) ShellExited() {
 	s.exitOnce.Do(func() { close(s.shellExit) })
 }
 
-// Run serves the session: it accepts the client's connection, then moves
-// keystrokes from SSP to the terminal, output from the terminal through the
-// emulator into the screen SSP sends, and well-formed replies back to the
-// terminal, until the shell exits or ctx is done. It returns nil when the
-// shell exited, ErrNoClient when nobody connected in time, ErrClientClosed
-// when the client ended the session, and otherwise
-// why it stopped. It closes the emulator, and the terminal if it is an
-// io.Closer.
-//
-// Resume and agent channels are later slices: Run takes one client and the
-// session ends with it, but nothing in the listener or SSP assumes that.
+// Minted tells the session a credential was minted for a resume. Until a
+// client has attached, the session ends only once every credential it
+// minted has expired, so this restarts that wait (server.md §2.4).
+func (s *Session) Minted() {
+	s.init()
+	select {
+	case s.minted <- struct{}{}:
+	default:
+	}
+}
+
+// attachment is one client's connection and the SSP endpoint on it.
+type attachment struct {
+	conn *transport.Conn
+	ep   *ssp.Endpoint[*screen.Grid, *userinput.Stream]
+	stop context.CancelFunc
+	// sspDone closes when the endpoint's Run has returned; gone carries
+	// why the client went, once.
+	sspDone chan struct{}
+	gone    chan error
+	quit    chan struct{}
+}
+
+// Run serves the session: it moves output from the terminal through the
+// emulator into the screen, and keystrokes from the attached client to the
+// terminal, and takes each client the listener accepts, until the shell
+// exits or ctx is done. It returns nil when the shell exited, ErrNoClient
+// when no client ever attached in time, and otherwise why it stopped. It
+// closes the emulator, and the terminal if it is an io.Closer.
 func (s *Session) Run(ctx context.Context) error {
 	s.init()
 	defer close(s.done)
 	defer s.closeAll()
-
-	// One credential is minted per session, so once it has expired
-	// unconfirmed nothing can ever connect (server.md §2.4).
-	actx, cancelAccept := context.WithTimeout(ctx, handshake.CredentialTTL)
-	conn, err := s.Listener.Accept(actx)
-	cancelAccept()
-	if err != nil {
-		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
-			return ErrNoClient
-		}
-		return fmt.Errorf("accepting the client: %w", err)
-	}
-	defer conn.Close()
-	if s.Attached != nil {
-		s.Attached()
-	}
-	s.Log.Info("client attached", "peer", conn.Peer())
-
-	// MaxRemoteBytes is the largest diff a client may send (ssp.md §10.1).
-	ep := ssp.NewEndpoint(conn, ssp.Config{
-		Role:           ssp.Server,
-		MaxPayload:     transport.MaxPayload,
-		FrameOverhead:  transport.FrameOverhead,
-		MaxRemoteBytes: userinput.MaxDiffBytes,
-	}, screen.NewGrid(0, 0), userinput.NewStream())
-	s.mu.Lock()
-	s.ep = ep
-	s.mu.Unlock()
 
 	parent := ctx
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -198,51 +204,182 @@ func (s *Session) Run(ctx context.Context) error {
 			}
 		}()
 	}
-	s.publish()
-	// SSP runs on a context of its own, which outlives ctx: when the shell
-	// exits, ctx ends the pty reader and writer, but SSP must still carry
-	// the final screen to the client and read its acks (server.md §2.4).
-	sctx, stopSSP := context.WithCancel(parent)
-	defer stopSSP()
-	sspDone := make(chan struct{})
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer close(sspDone)
-		if err := s.ep.Run(sctx); sctx.Err() == nil {
-			cancel(fmt.Errorf("ssp: %w", err))
-		}
-	}()
 	run(s.readPTY)
 	run(s.writePTY)
-	run(func(ctx context.Context) error { return s.watch(ctx, conn) })
+	run(s.watch)
+	conns := make(chan *transport.Conn)
+	run(func(ctx context.Context) error { return s.accept(ctx, conns) })
 
-	<-ctx.Done()
+	// Until a client attaches, the session lives as long as a credential
+	// minted for it could still be confirmed (server.md §2.4).
+	noClient := time.NewTimer(handshake.CredentialTTL)
+	defer noClient.Stop()
+	attachedOnce := false
+	var cur *attachment
+	var gone <-chan error
+	for ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+		case <-noClient.C:
+			if !attachedOnce {
+				cancel(ErrNoClient)
+			}
+		case <-s.minted:
+			if !attachedOnce {
+				noClient.Reset(handshake.CredentialTTL)
+			}
+		case c := <-conns:
+			// The listener revoked the old connection as it confirmed this
+			// one (D26): drop it without a Detached, since a client is in
+			// its place.
+			if cur != nil {
+				s.drop(cur)
+			}
+			cur = s.attach(parent, c)
+			gone = cur.gone
+			attachedOnce = true
+			noClient.Stop()
+			if s.Attached != nil {
+				s.Attached(c.Peer())
+			}
+		case ep := <-s.broken:
+			if cur == nil || cur.ep != ep {
+				continue
+			}
+			s.Log.Warn("the client broke the input protocol; dropping it")
+			s.drop(cur)
+			cur, gone = nil, nil
+			if s.Detached != nil {
+				s.Detached()
+			}
+		case err := <-gone:
+			revoked := errors.Is(err, transport.ErrRevoked)
+			s.Log.Info("the client went", "why", err)
+			s.drop(cur)
+			cur, gone = nil, nil
+			// A revoked connection has a confirmed one in its place, which
+			// Accept is about to hand over.
+			if !revoked && s.Detached != nil {
+				s.Detached()
+			}
+		}
+	}
 	cause := context.Cause(ctx)
-	if errors.Is(cause, errShellExited) {
-		s.deliverFinal(sspDone)
+	if errors.Is(cause, errShellExited) && cur != nil {
+		s.deliverFinal(cur)
 		// Then say so, so the client exits now rather than waiting on a
 		// silent network (server.md §2.4, §11 item 7).
-		conn.End(transport.EndShellExited)
+		cur.conn.End(transport.EndShellExited)
 	}
-	// Release whatever is parked: SSP, the transport (Recv), the emulator
-	// (a Write waiting for emu), and the pty reader and writer (closing the
-	// master wakes the poller).
-	stopSSP()
-	conn.Close()
+	if cur != nil {
+		s.drop(cur)
+	}
+	// Release whatever is parked: the emulator (a Write waiting for emu),
+	// and the pty reader and writer (closing the master wakes the poller).
 	s.closeAll()
 	wg.Wait()
 	switch {
 	case errors.Is(cause, errShellExited):
 		return nil
-	case errors.Is(cause, ErrClientClosed), errors.Is(cause, transport.ErrEnded):
-		// The END frame closes the connection as it reports the event, so
-		// SSP's Recv may see it first.
-		return ErrClientClosed
+	case errors.Is(cause, ErrNoClient):
+		return ErrNoClient
 	case parent.Err() != nil:
 		return parent.Err()
 	}
 	return cause
+}
+
+// accept hands over every connection the listener confirms.
+func (s *Session) accept(ctx context.Context, conns chan<- *transport.Conn) error {
+	for {
+		c, err := s.Listener.Accept(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("accepting a client: %w", err)
+		}
+		select {
+		case conns <- c:
+		case <-ctx.Done():
+			c.Close()
+			return nil
+		}
+	}
+}
+
+// attach starts an SSP endpoint on c and makes it the one the screen goes
+// to and keystrokes come from. SSP starts from scratch on every connection
+// (ssp.md §1.3), so its first diff to the new client is the whole screen.
+// The endpoint runs on parent, not the session's context: when the shell
+// exits, SSP must still carry the final screen (server.md §2.4).
+func (s *Session) attach(parent context.Context, c *transport.Conn) *attachment {
+	s.Log.Info("client attached", "peer", c.Peer())
+	// MaxRemoteBytes is the largest diff a client may send (ssp.md §10.1).
+	ep := ssp.NewEndpoint(c, ssp.Config{
+		Role:           ssp.Server,
+		MaxPayload:     transport.MaxPayload,
+		FrameOverhead:  transport.FrameOverhead,
+		MaxRemoteBytes: userinput.MaxDiffBytes,
+	}, screen.NewGrid(0, 0), userinput.NewStream())
+	sctx, stop := context.WithCancel(parent)
+	a := &attachment{conn: c, ep: ep, stop: stop, sspDone: make(chan struct{}), gone: make(chan error, 1), quit: make(chan struct{})}
+	s.mu.Lock()
+	s.ep, s.consumed = ep, 0
+	s.mu.Unlock()
+	s.wake(s.switched)
+	go func() {
+		defer close(a.sspDone)
+		err := ep.Run(sctx)
+		if sctx.Err() == nil {
+			a.leave(fmt.Errorf("ssp: %w", err))
+		}
+	}()
+	go func() {
+		for {
+			select {
+			case ev := <-c.Events():
+				s.Log.Info("transport", "event", fmt.Sprintf("%T", ev), "detail", fmt.Sprintf("%+v", ev))
+				if e, ok := ev.(transport.Ended); ok {
+					a.leave(fmt.Errorf("%w: %s", transport.ErrEnded, e.Reason))
+				}
+			case <-a.quit:
+				return
+			}
+		}
+	}()
+	s.publish()
+	return a
+}
+
+// leave reports why the client went, once.
+func (a *attachment) leave(err error) {
+	select {
+	case a.gone <- err:
+	default:
+	}
+}
+
+// drop stops a's endpoint and closes its connection, which erases its
+// keys, and detaches it from the screen and the pty writer.
+func (s *Session) drop(a *attachment) {
+	a.stop()
+	a.conn.Close()
+	<-a.sspDone
+	close(a.quit)
+	s.mu.Lock()
+	if s.ep == a.ep {
+		s.ep = nil
+	}
+	s.mu.Unlock()
+	s.wake(s.switched)
+}
+
+func (s *Session) wake(c chan struct{}) {
+	select {
+	case c <- struct{}{}:
+	default:
+	}
 }
 
 // closeAll closes the emulator, and the terminal if it can be closed, once.
@@ -255,10 +392,9 @@ func (s *Session) closeAll() {
 	})
 }
 
-// watch logs the transport's events, republishes when a rebuilt emulator
-// has a new screen, and ends the session T5 after the spawner says the
-// shell exited.
-func (s *Session) watch(ctx context.Context, conn *transport.Conn) error {
+// watch republishes when a rebuilt emulator has a new screen, and ends
+// the session T5 after the spawner says the shell exited.
+func (s *Session) watch(ctx context.Context) error {
 	var changed <-chan struct{}
 	if r, ok := s.em.(rebuilder); ok {
 		changed = r.Changed()
@@ -269,11 +405,6 @@ func (s *Session) watch(ctx context.Context, conn *transport.Conn) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case ev := <-conn.Events():
-			s.Log.Info("transport", "event", fmt.Sprintf("%T", ev), "detail", fmt.Sprintf("%+v", ev))
-			if _, ok := ev.(transport.Ended); ok {
-				return ErrClientClosed
-			}
 		case <-changed:
 			s.publish()
 		case <-shellExit:
@@ -285,13 +416,13 @@ func (s *Session) watch(ctx context.Context, conn *transport.Conn) error {
 	}
 }
 
-// deliverFinal lets SSP, still running, deliver the last screen: until the
-// client has acknowledged that very screen, SSP has stopped, or T6
+// deliverFinal lets a's SSP, still running, deliver the last screen: until
+// the client has acknowledged that very screen, SSP has stopped, or T6
 // (server.md §2.4). The pty reader has stopped, so the screen published
 // here is the last; if the client already had it, this returns at once.
-func (s *Session) deliverFinal(sspDone <-chan struct{}) {
+func (s *Session) deliverFinal(a *attachment) {
 	final := s.publish()
-	ep := s.endpoint()
+	ep, sspDone := a.ep, a.sspDone
 	deadline := time.After(T6)
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
@@ -418,48 +549,67 @@ func (s *Session) queueReplies(r []byte) {
 }
 
 // writePTY is the one writer of the pty (server.md §4.3). Keystrokes go
-// first and have no queue of their own: the client's stream is the queue,
-// one event at a time leaves it, and applied advances only once the pty has
-// taken the whole event. A program that never reads its input therefore
-// holds applied, InputConsumed with it, and the client stops reading its
-// terminal: a bounded stall, not a bug.
+// first and have no queue of their own: the attached client's stream is
+// the queue, one event at a time leaves it, and applied advances only once
+// the pty has taken the whole event. A program that never reads its input
+// therefore holds applied, InputConsumed with it, and the client stops
+// reading its terminal: a bounded stall, not a bug.
+//
+// Each client has a stream of its own, so when another attaches the writer
+// starts again from its event 0 (ssp.md §1.3); while none is attached it
+// writes only replies.
 func (s *Session) writePTY(ctx context.Context) error {
-	var applied uint64
-	var unpublished int
-	ep := s.endpoint()
+	var (
+		ep, dead    *ssp.Endpoint[*screen.Grid, *userinput.Stream]
+		applied     uint64
+		unpublished int
+	)
 	for {
-		stream, _ := ep.Remote()
-		events := stream.Since(applied)
-		if first := stream.Len() - uint64(len(events)); first > applied {
-			// The stream has forgotten events not yet written: the client
-			// ran past RetainBytes, ignoring InputConsumed. Nothing is
-			// skipped silently (ssp.md §10.1).
-			return fmt.Errorf("%w: input flow control ignored", ssp.ErrProtocol)
+		if cur := s.endpoint(); cur != ep {
+			ep, applied, unpublished = cur, 0, 0
 		}
-		if len(events) > 0 {
-			ev := events[0]
-			if len(ev.Keys) > 0 {
-				if _, err := s.Terminal.Write(ev.Keys); err != nil {
-					if ctx.Err() != nil {
-						return nil
-					}
-					return errShellExited
+		if ep != nil && ep != dead {
+			stream, _ := ep.Remote()
+			events := stream.Since(applied)
+			if first := stream.Len() - uint64(len(events)); first > applied {
+				// The stream has forgotten events not yet written: the
+				// client ran past RetainBytes, ignoring InputConsumed.
+				// Nothing is skipped silently (ssp.md §10.1): that client
+				// is dropped, and the session waits for another.
+				dead = ep
+				select {
+				case s.broken <- ep:
+				default:
 				}
-			} else if ev.Resize != (userinput.Size{}) {
-				s.resize(ev.Resize.Cols, ev.Resize.Rows)
+				continue
 			}
-			applied++
-			unpublished += encodedLen(ev)
-			// Published once it has moved ConsumedStep, so ordinary typing
-			// never costs a frame of its own (ssp.md §10.1).
-			if unpublished >= userinput.ConsumedStep {
-				unpublished = 0
-				s.mu.Lock()
-				s.consumed = applied
-				s.mu.Unlock()
-				s.publish()
+			if len(events) > 0 {
+				ev := events[0]
+				if len(ev.Keys) > 0 {
+					if _, err := s.Terminal.Write(ev.Keys); err != nil {
+						if ctx.Err() != nil {
+							return nil
+						}
+						return errShellExited
+					}
+				} else if ev.Resize != (userinput.Size{}) {
+					s.resize(ev.Resize.Cols, ev.Resize.Rows)
+				}
+				applied++
+				unpublished += encodedLen(ev)
+				// Published once it has moved ConsumedStep, so ordinary
+				// typing never costs a frame of its own (ssp.md §10.1).
+				if unpublished >= userinput.ConsumedStep {
+					unpublished = 0
+					s.mu.Lock()
+					if s.ep == ep {
+						s.consumed = applied
+					}
+					s.mu.Unlock()
+					s.publish()
+				}
+				continue
 			}
-			continue
 		}
 		s.mu.Lock()
 		r := s.replies
@@ -474,11 +624,16 @@ func (s *Session) writePTY(ctx context.Context) error {
 			}
 			continue
 		}
+		var changed <-chan struct{}
+		if ep != nil && ep != dead {
+			changed = ep.RemoteChanged()
+		}
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ep.RemoteChanged():
+		case <-changed:
 		case <-s.repliesIn:
+		case <-s.switched:
 		}
 	}
 }
