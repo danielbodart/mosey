@@ -615,7 +615,8 @@ The kind is the first byte of the plaintext. These match `transport.Kind`.
 | `0x07` | CHAFF | any bytes, ignored | 30–1232 | any live receive key | reserved: D11, O10 |
 | `0x08` | CHANNEL | channel id (u32 LE) ‖ datagram | ≤ 1232 | any live receive key | reserved: D15 agent and later channels; the agent slice fixes the body |
 | `0x09` | REVOKED | §8.3 | 45 or 57 | any live receive key | reserved for resume (D26) |
-| `0x0A`–`0xFF` | | | | | reserved |
+| `0x0A` | END | 1 B: why (`0x01` the shell exited, `0x02` the client quit; any other value still ends) | 31 | any live receive key | slice 1, added at integration (§8.4) |
+| `0x0B`–`0xFF` | | | | | reserved |
 
 Rules for every kind:
 
@@ -1164,6 +1165,34 @@ The revoked client reports `transport.Revoked{By, At}`, says "session taken
 over from <addr> at <time>" and exits (D26). Any other family value, or a
 wrong length, is ignored like any malformed body (§4.2).
 
+### 8.4 Ending a session
+
+Neither side can tell a session that is over from a network that has gone
+quiet, so the end is said out loud (`server.md` §2.4, §11 item 7):
+
+- **The server's shell exits.** Proto lets SSP deliver the final screen
+  (until the client acknowledges it, or T6), then calls
+  `Conn.End(EndShellExited)`. The client reports `transport.Ended`, closes
+  its connection with `ErrEnded`, restores the terminal and exits 0.
+- **The client's user quits** (a signal, or the end of its terminal), or
+  the client fails: it calls `Conn.End(EndClientQuit)`. Proto reports
+  `Ended`, and since slice 1 has no resume, the session ends
+  (`Exit{ClientClosed}`).
+
+`End` seals **3 END frames**, each when it is sent, **100 ms apart**
+[ours: one loss, or a burst shorter than 100 ms, still gets one through,
+and a quitting client waits 200 ms at most], then closes the connection
+as `Close` does. Nothing is answered and nothing waits for an answer:
+the sender may be gone a moment later. A receiver acts on the first
+authentic END and closes; the rest find no keys and are dropped.
+
+END is authenticated like every frame, so only a holder of the session's
+keys can end it, and it is replay-protected like every frame, so a
+recorded END cannot end a later epoch. If every copy is lost (an outage
+longer than T6 + 200 ms as the shell exits), the client is left waiting
+on a session that has gone, as it would be without END, until its user
+quits; the resume slice (D8) has to revisit this.
+
 ## 9. Erasing secrets
 
 Secrets are **erased**, not dereferenced (S1 §3.2): overwritten with
@@ -1378,6 +1407,7 @@ Beyond the general rules in `architecture.md` §6:
 | Candidate abandoned after | 10 s | §7.3 | [ours] |
 | REVOKED copies | 4 | §8.3 | [ours] |
 | Tombstone life | 60 s | §8.3 | [ours] |
+| END copies, spacing | 3, 100 ms | §8.4 | [ours] |
 
 ## 13. References
 

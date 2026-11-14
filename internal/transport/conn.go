@@ -204,6 +204,12 @@ func (c *Conn) act(ks *keyset, plain []byte, from netip.AddrPort) {
 		if !c.server {
 			c.onRevoked(body)
 		}
+	case KindEnd:
+		if len(body) == 1 {
+			c.e.log.Info("the peer ended the session", "reason", EndReason(body[0]))
+			c.emit(Ended{Reason: EndReason(body[0])})
+			c.shutdown(ErrEnded)
+		}
 	}
 }
 

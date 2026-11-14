@@ -34,6 +34,14 @@ const (
 	// KindRevoked tells a client another has taken the session over (D26),
 	// with the address and time, so it can say so and exit.
 	KindRevoked Kind = 0x09
+
+	// Added at integration, after the reserved numbers.
+
+	// KindEnd says the session is over (transport.md §8.4): the server's
+	// shell exited, or the client's user quit. Its body is one EndReason
+	// byte. Without it neither side could tell a finished session from a
+	// silent network (server.md §11 item 7).
+	KindEnd Kind = 0x0A
 )
 
 // Packet types: the first byte of every datagram, in the clear.

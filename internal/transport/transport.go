@@ -71,6 +71,14 @@ const (
 	tombstoneLife  = 60 * time.Second
 	tombstoneEvery = 250 * time.Millisecond
 
+	// endCopies and endSpacing are how End repeats its END frame: three
+	// copies 100 ms apart, so one loss, or a burst of loss shorter than
+	// 100 ms, still gets one through, and a quitting client is held up
+	// 200 ms at most (ours). The peer may be gone a moment later, so
+	// nothing waits for an answer.
+	endCopies  = 3
+	endSpacing = 100 * time.Millisecond
+
 	// recvQueue is how many terminal payloads wait for Recv before more are
 	// dropped. SSP treats a drop as loss and sends its state again.
 	recvQueue = 256
@@ -98,6 +106,10 @@ var (
 	// ErrRevoked is what a connection fails with once another client has
 	// taken the session over (D26). It is a net.ErrClosed.
 	ErrRevoked = fmt.Errorf("transport: session taken over: %w", net.ErrClosed)
+	// ErrEnded is what a connection fails with once the peer has said the
+	// session is over with an END frame (transport.md §8.4). It is a
+	// net.ErrClosed.
+	ErrEnded = fmt.Errorf("transport: the peer ended the session: %w", net.ErrClosed)
 
 	errOverdue   = fmt.Errorf("%w (the keys are past RejectAfterTime; waiting for the rekey)", ErrBlocked)
 	errWiped     = errors.New("transport: keys wiped")
@@ -128,10 +140,36 @@ type Revoked struct {
 	At time.Time
 }
 
+// Ended says the peer ended the session with an END frame (transport.md
+// §8.4), for Reason. The connection is closed with ErrEnded.
+type Ended struct{ Reason EndReason }
+
+// EndReason is why a session ended: the one byte of an END frame's body.
+// A reason this build does not know still ends the session.
+type EndReason uint8
+
+const (
+	// EndShellExited: the server's login shell exited.
+	EndShellExited EndReason = 0x01
+	// EndClientQuit: the client's user quit, or its terminal went away.
+	EndClientQuit EndReason = 0x02
+)
+
+func (r EndReason) String() string {
+	switch r {
+	case EndShellExited:
+		return "the shell exited"
+	case EndClientQuit:
+		return "the client quit"
+	}
+	return fmt.Sprintf("reason %#02x", uint8(r))
+}
+
 func (PeerChanged) event()  {}
 func (Rekeyed) event()      {}
 func (RekeyOverdue) event() {}
 func (Revoked) event()      {}
+func (Ended) event()        {}
 
 // Stats is what a connection or listener has counted.
 type Stats struct {
@@ -218,6 +256,26 @@ func (c *Conn) Close() error {
 	defer c.e.unlock()
 	c.shutdown(net.ErrClosed)
 	return nil
+}
+
+// End tells the peer the session is over, for reason, and then closes the
+// connection as Close does. It sends endCopies END frames endSpacing apart,
+// so it blocks for up to 200 ms; there is no answer to wait for
+// (transport.md §8.4). Once the connection is closed it does nothing more.
+func (c *Conn) End(reason EndReason) error {
+	for i := range endCopies {
+		if i > 0 {
+			time.Sleep(endSpacing)
+		}
+		c.e.lock()
+		if c.closed {
+			c.e.unlock()
+			return nil
+		}
+		c.sendFrame(KindEnd, []byte{byte(reason)})
+		c.e.unlock()
+	}
+	return c.Close()
 }
 
 // Send seals payload as a terminal frame and sends it to the peer. A payload
