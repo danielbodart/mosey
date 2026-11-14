@@ -67,11 +67,11 @@ func (s *Session) Run(ctx context.Context) error {
 	// One stream: the loop appends to it and hands it to Set, and the
 	// endpoint starts from the same empty version 0 (ssp.md §10.1).
 	input := userinput.NewStream()
+	// The owners' bounds, not copies (architecture.md §4): the largest
+	// payload the transport carries, and the largest screen diff the
+	// server can make at the D23 clamp (screen.md §5.12).
 	ep := ssp.NewEndpoint(conn, ssp.Config{
 		Role:           ssp.Client,
-		// The owners' bounds, not copies (architecture.md §4): the largest
-		// payload the transport carries, and the largest screen diff the
-		// server can make at the D23 clamp (screen.md §5.12).
 		MaxPayload:     transport.MaxPayload,
 		MaxRemoteBytes: screen.MaxDiff,
 	}, input.Clone(), screen.NewGrid(0, 0))

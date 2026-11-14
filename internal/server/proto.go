@@ -174,10 +174,10 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 	s.Log.Info("client attached", "peer", conn.Peer())
 
+	// MaxRemoteBytes is the largest diff a client may send (ssp.md §10.1).
 	ep := ssp.NewEndpoint(conn, ssp.Config{
 		Role:           ssp.Server,
 		MaxPayload:     transport.MaxPayload,
-		// The largest diff a client may send (ssp.md §10.1).
 		MaxRemoteBytes: userinput.MaxDiffBytes,
 	}, screen.NewGrid(0, 0), userinput.NewStream())
 	s.mu.Lock()
