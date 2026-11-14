@@ -950,6 +950,15 @@ mosey: session taken over from ADDR:PORT at 2026-11-14T09:30:12+00:00
 RFC 3339 to the second), then exits with status 3. It does not reconnect:
 this is the "cut off a stolen client" property of D26.
 
+**The limit of that message.** The kicked client learns why only from a
+REVOKED frame, and the server keeps those for the tombstone's 60 s
+(`transport.md` §8.3). A client that sends nothing in that minute, a
+laptop asleep while the session is resumed from a phone, wakes to
+silence: its keys are gone on the server, so it probes on a stale screen
+and never prints the message. Its keys are useless to anyone either way,
+so the cut-off itself holds; only the explanation is lost. A longer-lived
+signal is open question D (§14).
+
 ### 9.2 Resume (D8)
 
 Resume is a new SSH login and a new handshake whose credential is vouched
@@ -1469,6 +1478,13 @@ C. **Signed releases** (§4.6): `SHA256SUMS` is only as trustworthy as
    key CI holds, or Sigstore's keyless signing of the workflow) would let
    the client check that CI made it. For the auto-upload slice, which is
    the first to download anything.
+
+D. **Telling a client taken over long ago** (§9.1). [listed for Dan] The
+   REVOKED frames last 60 s, so a client asleep through a takeover never
+   learns of it. One answer: a tombstone that lasts as long as the
+   session, keyed by the old indices, its frames sealed under the old
+   receive keys before they are erased; the cost is a few hundred bytes
+   per takeover for the session's life, and a bound on how many are kept.
 
 ---
 

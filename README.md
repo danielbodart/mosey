@@ -100,7 +100,10 @@ mosey -list host           # your sessions on host, and whether anyone is attach
 A session lives until its shell exits. Closing the terminal, logging out or
 rebooting only detaches the client, and the session waits on the server for
 `mosey -r`. Resuming takes the session over: any client still attached is
-cut off, its keys are wiped, and it exits saying who took over and when.
+cut off and its keys are wiped. If it is awake within a minute of that, it
+exits saying who took over and when; one asleep longer (a closed laptop)
+is still cut off, but wakes to a session that never answers, with no word
+why.
 Nothing secret is ever saved to disk: each resume is a fresh SSH login and
 a fresh handshake ([docs/spec/bootstrap.md §9](docs/spec/bootstrap.md)).
 A client that just loses its network for a while needs none of this: it
