@@ -43,7 +43,8 @@ const TailSize = 1 << 10
 // ReadCredential reads ssh's stdout up to and including the first line of
 // ours (§6.5), skipping a shell's chatter before it within MaxPreamble. It
 // returns the CredentialLine, or a *RemoteError for an ErrorLine, a
-// *NoLineError at EOF or past MaxPreamble, and ErrBadLine for a line that
+// *NoServerError for the probe's ProbeLine (§4.7.2), a *NoLineError at
+// EOF or past MaxPreamble, and ErrBadLine for a line that
 // starts as ours but does not parse: a lookalike is never taken for ours,
 // nor a malformed line of ours stepped over to a later one.
 //
@@ -136,6 +137,12 @@ func parseProtocolLine(line []byte) (CredentialLine, error) {
 			return CredentialLine{}, err
 		}
 		return CredentialLine{}, &RemoteError{e}
+	case bytes.HasPrefix(line, []byte(probeMagic+" ")):
+		p, err := ParseProbeLine(line)
+		if err != nil {
+			return CredentialLine{}, err
+		}
+		return CredentialLine{}, &NoServerError{p}
 	}
 	return CredentialLine{}, badLine("unknown mosey line")
 }

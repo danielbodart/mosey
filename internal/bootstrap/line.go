@@ -131,9 +131,11 @@ var (
 	// ErrNoLine is stdout ending, or overflowing MaxPreamble, before a
 	// line of ours.
 	ErrNoLine = errors.New("bootstrap: no mosey line")
-	// ErrNoServer is ErrNoLine when ssh exited 126 or 127: the remote
-	// /bin/sh could not find or run the server (§4.2). client.Run wraps a
-	// *NoLineError in it; ReadCredential never returns it.
+	// ErrNoServer is no mosey of this version on the far host: either the
+	// probe said so (ReadCredential's *NoServerError, §4.7.2), or, with
+	// -remote, ssh exited 126 or 127 because the remote /bin/sh could not
+	// find or run the server (§4.2), and client.Run wraps the
+	// *NoLineError in it.
 	ErrNoServer = errors.New("bootstrap: no mosey on the far host")
 	// ErrBadAddr is no usable UDP address for the server (§7.2).
 	ErrBadAddr = errors.New("bootstrap: no usable UDP address")

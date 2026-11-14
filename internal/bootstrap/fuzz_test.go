@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"net/netip"
 	"slices"
@@ -102,26 +103,85 @@ func FuzzReadCredential(f *testing.F) {
 	f.Add(append([]byte("motd\r\nMOSE\nMOSEY\n"), line...))
 	f.Add([]byte("MOSEY-ERROR 1 version 1.0\n"))
 	f.Add(append(bytes.Repeat([]byte("x"), 70000), line...))
+	f.Add([]byte("rc noise\nMOSEY-PROBE 1 Linux x86_64\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		r := &countingReader{r: bytes.NewReader(data)}
 		c, err := ReadCredential(r)
 		if r.n > MaxPreamble+MaxCredentialLine {
 			t.Fatalf("read %d bytes", r.n)
 		}
+		// Whatever line was returned is in what was read, at a line start,
+		// and it is the end of what was read.
+		read := data[:r.n]
+		lastLine := func(got []byte) {
+			if !bytes.HasSuffix(read, got) || len(read) > len(got) && read[len(read)-len(got)-1] != '\n' {
+				t.Fatalf("returned a line that is not the last line read")
+			}
+		}
 		if err != nil {
 			var re *RemoteError
 			var nl *NoLineError
-			if !errors.Is(err, ErrBadLine) && !errors.As(err, &re) && !errors.As(err, &nl) {
+			var ns *NoServerError
+			switch {
+			case errors.As(err, &ns):
+				lastLine(MarshalProbeLine(ns.Probe))
+			case errors.As(err, &re):
+				lastLine(MarshalErrorLine(re.ErrorLine))
+			case errors.Is(err, ErrBadLine), errors.As(err, &nl):
+			default:
 				t.Fatalf("unexpected error %v", err)
 			}
 			return
 		}
-		got := MarshalCredentialLine(c)
-		// The line is in what was read, at a line start, and it is the end
-		// of what was read.
-		read := data[:r.n]
-		if !bytes.HasSuffix(read, got) || len(read) > len(got) && read[len(read)-len(got)-1] != '\n' {
-			t.Fatalf("returned a line that is not the last line read")
+		lastLine(MarshalCredentialLine(c))
+	})
+}
+
+func FuzzParseProbeLine(f *testing.F) {
+	f.Add([]byte("MOSEY-PROBE 1 Linux x86_64\n"))
+	f.Add([]byte("MOSEY-PROBE 1 unknown unknown\n"))
+	f.Add([]byte("MOSEY-PROBE 2 Linux aarch64\n"))
+	f.Fuzz(func(t *testing.T, line []byte) {
+		p, err := ParseProbeLine(line)
+		if err != nil {
+			if !errors.Is(err, ErrBadLine) {
+				t.Fatalf("an error that is not ErrBadLine: %v", err)
+			}
+			return
+		}
+		if !bytes.Equal(MarshalProbeLine(p), line) || len(line) > MaxProbeLine {
+			t.Fatalf("accepted %q", line)
+		}
+		if len(p.System) < 1 || len(p.System) > 64 || len(p.Machine) < 1 || len(p.Machine) > 64 {
+			t.Fatalf("accepted fields %q %q", p.System, p.Machine)
+		}
+	})
+}
+
+// ParseSums is fed a release's SHA256SUMS from the network (§4.7.4): it
+// never panics, and a hash it returns is that of a line of the input that
+// names exactly name, in a file every line of which is in the grammar.
+func FuzzParseSums(f *testing.F) {
+	sums := []byte(strings.Repeat("0", 64) + "  mosey-0.1.2-darwin-arm64\n" + strings.Repeat("a", 64) + "  mosey-0.1.2-linux-amd64\n")
+	f.Add(sums, "mosey-0.1.2-linux-amd64")
+	f.Add(sums, "SHA256SUMS")
+	f.Add([]byte(strings.Repeat("A", 64)+"  x\n"), "x")
+	f.Fuzz(func(t *testing.T, sums []byte, name string) {
+		h, err := ParseSums(sums, name)
+		if err != nil {
+			return
+		}
+		want := []byte(hex.EncodeToString(h[:]) + "  " + name + "\n")
+		if !bytes.HasPrefix(sums, want) && !bytes.Contains(sums, append([]byte("\n"), want...)) {
+			t.Fatalf("returned %x for %q, which no line says", h, name)
+		}
+		for _, line := range bytes.SplitAfter(sums, []byte("\n")) {
+			if len(line) == 0 {
+				continue
+			}
+			if len(line) < 68 || line[64] != ' ' || line[65] != ' ' || line[len(line)-1] != '\n' || !lowerHex(line[:64]) || !validAsset(line[66:len(line)-1]) {
+				t.Fatalf("accepted a file with the line %q", line)
+			}
 		}
 	})
 }
