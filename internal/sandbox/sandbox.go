@@ -89,9 +89,3 @@ func Enter(role Role, action Action, params Params, warn func(string)) error {
 	}
 	return enter(role, action, params, warn)
 }
-
-// NotDumpable is PR_SET_DUMPABLE 0 on its own, which a role does first of
-// all, before anything holds a key (server.md §6.1); Enter does it again.
-func NotDumpable() error {
-	return notDumpable()
-}

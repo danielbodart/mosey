@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/screen"
@@ -203,6 +205,108 @@ func killSpawner(t *testing.T, state string) {
 	}
 }
 
+// checkNoCores checks every process of a running session that holds a
+// secret is not dumpable, and proto and emu have no core rlimit either,
+// while the login shell keeps the user's (threat-model.md §4.10).
+func checkNoCores(t *testing.T, state string) {
+	t.Helper()
+	if os.Getuid() == 0 {
+		t.Log("as root every /proc entry is root's: not checking DUMPABLE")
+		return
+	}
+	m := spawnerPid.FindStringSubmatch(sessionLog(state))
+	if m == nil {
+		t.Fatalf("no spawner pid in the log:\n%s", sessionLog(state))
+	}
+	spawner, _ := strconv.Atoi(m[1])
+	if !notDumpable(t, spawner) {
+		t.Errorf("the spawner (pid %d) is dumpable", spawner)
+	}
+	roles := map[string]bool{}
+	for pid, role := range childrenOf(t, spawner) {
+		switch role {
+		case "--serve=proto", "--serve=emu":
+			roles[role] = true
+			if !notDumpable(t, pid) {
+				t.Errorf("%s (pid %d) is dumpable", role, pid)
+			}
+			if core := coreLimit(t, pid); core != "0 0" {
+				t.Errorf("%s (pid %d) may dump %s bytes of core", role, pid, core)
+			}
+		default: // the login shell: execve made it dumpable again
+			roles["shell"] = true
+			if notDumpable(t, pid) {
+				t.Errorf("the login shell (pid %d, %q) is not dumpable", pid, role)
+			}
+			var own unix.Rlimit
+			unix.Getrlimit(unix.RLIMIT_CORE, &own)
+			if core := coreLimit(t, pid); core == "0 0" && own.Max != 0 {
+				t.Errorf("the login shell (pid %d) lost the user's core rlimit", pid)
+			}
+		}
+	}
+	if len(roles) != 3 {
+		t.Errorf("the spawner's children were %v, not proto, emu and a shell", roles)
+	}
+}
+
+// notDumpable reports whether pid's /proc entries belong to root, which
+// the kernel does for a process that is not dumpable.
+func notDumpable(t *testing.T, pid int) bool {
+	t.Helper()
+	var st syscall.Stat_t
+	if err := syscall.Stat(fmt.Sprintf("/proc/%d/status", pid), &st); err != nil {
+		t.Fatalf("pid %d: %v", pid, err)
+	}
+	return st.Uid == 0
+}
+
+// coreLimit is pid's soft and hard RLIMIT_CORE, from /proc/PID/limits.
+func coreLimit(t *testing.T, pid int) string {
+	t.Helper()
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/limits", pid))
+	if err != nil {
+		t.Fatalf("pid %d: %v", pid, err)
+	}
+	for l := range strings.Lines(string(b)) {
+		if rest, ok := strings.CutPrefix(l, "Max core file size"); ok {
+			f := strings.Fields(rest)
+			if len(f) >= 2 {
+				return f[0] + " " + f[1]
+			}
+		}
+	}
+	t.Fatalf("pid %d: no core limit in\n%s", pid, b)
+	return ""
+}
+
+// childrenOf is the processes whose parent is pid, each with its first
+// argument after the program's.
+func childrenOf(t *testing.T, pid int) map[int]string {
+	t.Helper()
+	stats, _ := filepath.Glob("/proc/[0-9]*/stat")
+	kids := map[int]string{}
+	for _, st := range stats {
+		b, err := os.ReadFile(st)
+		if err != nil {
+			continue
+		}
+		// pid (comm) state ppid ...: comm may hold spaces, so after the last ')'.
+		f := strings.Fields(string(b[bytes.LastIndexByte(b, ')')+1:]))
+		if len(f) < 2 || f[1] != strconv.Itoa(pid) {
+			continue
+		}
+		child, _ := strconv.Atoi(filepath.Base(filepath.Dir(st)))
+		cmdline, _ := os.ReadFile(filepath.Join(filepath.Dir(st), "cmdline"))
+		args := strings.Split(string(cmdline), "\x00")
+		kids[child] = ""
+		if len(args) > 1 {
+			kids[child] = args[1]
+		}
+	}
+	return kids
+}
+
 func (s *served) waitForEnd() {
 	s.t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
@@ -228,6 +332,7 @@ func TestServeBootstrap(t *testing.T) {
 	// Worked out by the shell, so the answer cannot be the echo.
 	s.typeKeys("echo mosey-$((6*7))\r")
 	s.waitFor("the shell's answer", func(sc string) bool { return strings.Contains(sc, "mosey-42") })
+	checkNoCores(t, s.state)
 	s.resize(100, 30)
 	s.typeKeys("stty size\r")
 	s.waitFor("the new size", func(sc string) bool { return strings.Contains(sc, "30 100") })

@@ -279,6 +279,15 @@ a failure; the two lines in §6 do not change. Its hooks:
 
 ### 4.3 The client's process handling
 
+- **No core dumps.** Before the one-shot X-Wing key exists, and so before
+  anything else holds a secret, the client makes itself leave no core
+  and unreadable by the user's other processes (`internal/nocore`,
+  `threat-model.md` §4.10): on Linux `prctl(PR_SET_DUMPABLE, 0)` and
+  `RLIMIT_CORE` 0, on darwin `RLIMIT_CORE` 0. The client holds the PSK,
+  the transport keys and the roots for the whole session, and a core of
+  it would undo forward secrecy (D8). ssh inherits the rlimit, which costs
+  it nothing; `execve` resets `DUMPABLE` for it. If either call fails the
+  client stops before it starts ssh.
 - **ssh's stdin** is a pipe. The client writes the ClientLine in one write
   as soon as ssh has started (before authentication: the line is at most
   4 KiB and a pipe holds 64 KiB, so the write cannot block), then closes it.

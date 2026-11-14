@@ -22,5 +22,3 @@ func Native() (Arch, error) {
 // macOS will have Seatbelt (server.md §10); until then the server does not
 // run there, and Enter says so.
 func enter(Role, Action, Params, func(string)) error { return errors.ErrUnsupported }
-
-func notDumpable() error { return errors.ErrUnsupported }

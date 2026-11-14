@@ -33,6 +33,7 @@ decision wins.
 | `internal/emu` | The `Emulator` interface and the tuios.dev/vt implementation (D23) | emu (tests: in process) | **screen** | `emu.go`, `tuios.go` |
 | `internal/pty` | Open ptys, set their size, read the echo-off bit, start the login shell (D14) | spawner, proto | **server-proc** | `pty.go`, `pty_linux.go`, `pty_other.go` |
 | `internal/sandbox` | Landlock deny-all, seccomp cBPF compiler and per-role policies, `DUMPABLE=0` (D22) | proto, emu | **server-proc** | `doc.go`, `sandbox.go`, `bpf.go`, `sandbox_linux.go`, `sandbox_other.go` |
+| `internal/nocore` | `DUMPABLE=0` and `RLIMIT_CORE=0` for every process that holds a secret (threat-model.md §4.10) | client, launcher, spawner, proto, emu | **server-proc** | `doc.go`, `nocore.go` |
 | `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | launcher, spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
 | `internal/server` | The four roles (launcher, spawner, proto, emu); proto's `Session`, runnable in process for tests; the emu reply grammar | all server roles | **server-proc** | `doc.go`, `proto.go`, `launcher.go`, `spawner_linux.go`, `protorole.go`, `emurole.go`, `ipcemu.go`, `reply.go` |
 | `internal/bootstrap` | The SSH command line, the stdin and stdout lines (D6, D20, D25) | client, spawner | **bootstrap-client** | `doc.go`, `line.go`, `ssh.go` |
@@ -67,10 +68,11 @@ screen                          ()              -- satisfies ssp.State structura
 render                          (screen)
 emu                             (screen)
 bootstrap                       ()              -- raw bytes; never handshake
-pty, sandbox, ipc               ()
+pty, sandbox, ipc, nocore       ()
 terminal                        ()
 server                          (all of the above but client, terminal, render)
 client                          (all of the above but server, pty, sandbox, ipc, emu)
+cmd/mosey                       (client, server, bootstrap, terminal, nocore)
 e2e                             (everything; tests only)
 ```
 

@@ -20,6 +20,7 @@ import (
 
 	"github.com/danielbodart/mosey/internal/emu"
 	"github.com/danielbodart/mosey/internal/ipc"
+	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/pty"
 	"github.com/danielbodart/mosey/internal/sandbox"
 	"github.com/danielbodart/mosey/internal/screen"
@@ -75,7 +76,7 @@ func childLog() *slog.Logger { return slog.New(slog.NewTextHandler(os.Stderr, ni
 // childEmu is RunEmu with the action and the runtime churn chosen by the
 // test rather than by the build.
 func childEmu() error {
-	if err := sandbox.NotDumpable(); err != nil {
+	if err := nocore.Process(); err != nil {
 		return err
 	}
 	conn, err := wrapRoleSocket(os.NewFile(3, "ipc"), ipc.Emu, ipc.Proto)
@@ -99,7 +100,7 @@ func childEmu() error {
 // its pty master. It reports success with Exit, which is what the parent
 // waits for.
 func childProtoRestart() error {
-	if err := sandbox.NotDumpable(); err != nil {
+	if err := nocore.Process(); err != nil {
 		return err
 	}
 	ctl, err := wrapRoleSocket(os.NewFile(3, "ipc"), ipc.Proto, ipc.Spawner)

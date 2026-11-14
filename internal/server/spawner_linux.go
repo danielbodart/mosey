@@ -22,6 +22,7 @@ import (
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/ipc"
+	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/pty"
 	"github.com/danielbodart/mosey/internal/screen"
 )
@@ -72,6 +73,13 @@ type SpawnerConfig struct {
 // supervises them for the life of the session (server.md §2). ipcFD is
 // its end of the socketpair to the launcher.
 func RunSpawner(ctx context.Context, ipcFD *os.File, cfg SpawnerConfig) error {
+	// Before the credential line passes through: not dumpable, so the
+	// user's other processes cannot read it and a crash leaves no core of
+	// it. Not the core rlimit, which the login shell would inherit
+	// (threat-model.md §4.10).
+	if err := nocore.NotDumpable(); err != nil {
+		return err
+	}
 	if cfg.Environ == nil {
 		cfg.Environ = os.Environ()
 	}

@@ -185,6 +185,17 @@ func TestARealSessionOverLoopbackThroughSSH(t *testing.T) {
 		return strings.Contains(screenOf([]byte(screen.String()), 100, 30), "hello mosey-42 h\u00e9llo")
 	})
 	spawner := findSpawner(t, mosey)
+	// The client holds the session's keys for as long as it runs: neither
+	// the user's other processes nor a core dump may read them
+	// (threat-model.md §4.10).
+	if os.Getuid() != 0 {
+		if !notDumpable(cmd.Process.Pid) {
+			t.Error("the client is dumpable")
+		}
+		if core := coreLimit(cmd.Process.Pid); core != "0 0" {
+			t.Errorf("the client may dump %q bytes of core", core)
+		}
+	}
 
 	if _, err := master.Write([]byte("exit\r")); err != nil {
 		t.Fatal(err)

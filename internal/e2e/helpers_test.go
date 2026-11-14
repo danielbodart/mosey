@@ -81,7 +81,9 @@ func buildMosey(t *testing.T, version string) string {
 	return out
 }
 
-// killExe SIGKILLs every process of this user whose executable is path.
+// killExe SIGKILLs every process of this user running path. It goes by
+// argv[0], not /proc/PID/exe: every mosey process that holds a secret is
+// not dumpable, so its exe link is root's to read (threat-model.md §4.10).
 func killExe(path string) {
 	entries, _ := os.ReadDir("/proc")
 	for _, e := range entries {
@@ -89,8 +91,8 @@ func killExe(path string) {
 		if err != nil || pid == os.Getpid() {
 			continue
 		}
-		exe, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe"))
-		if err == nil && exe == path {
+		argv, _ := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		if arg0, _, _ := bytes.Cut(argv, []byte{0}); string(arg0) == path {
 			syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}

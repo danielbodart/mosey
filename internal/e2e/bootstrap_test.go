@@ -173,7 +173,9 @@ func nonLoopbackAddr() (netip.Addr, bool) {
 
 // findSpawner is the pid of the one process running path as
 // `--serve=spawner`: the spawner's argv is the marker quoin looks for
-// (bootstrap.md §8), so the test finds it the same way.
+// (bootstrap.md §8), so the test finds it the same way. Only by argv: a
+// spawner is not dumpable (threat-model.md §4.10), so its /proc/PID/exe
+// is root's to read, while its cmdline stays readable, as quoin needs.
 func findSpawner(t *testing.T, path string) int {
 	t.Helper()
 	var found []int
@@ -185,12 +187,8 @@ func findSpawner(t *testing.T, path string) int {
 			if err != nil {
 				continue
 			}
-			exe, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe"))
-			if err != nil || exe != path {
-				continue
-			}
 			argv, _ := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
-			if args := bytes.Split(argv, []byte{0}); len(args) > 1 && string(args[1]) == "--serve=spawner" {
+			if args := bytes.Split(argv, []byte{0}); len(args) > 1 && string(args[0]) == path && string(args[1]) == "--serve=spawner" {
 				found = append(found, pid)
 			}
 		}
@@ -237,6 +235,27 @@ func parentOf(pid int) (int, bool) {
 	}
 	ppid, err := strconv.Atoi(f[1])
 	return ppid, err == nil
+}
+
+// notDumpable says whether pid's /proc entries belong to root, which the
+// kernel does for a process that is not dumpable.
+func notDumpable(pid int) bool {
+	var st syscall.Stat_t
+	err := syscall.Stat(filepath.Join("/proc", strconv.Itoa(pid), "status"), &st)
+	return err == nil && st.Uid == 0
+}
+
+// coreLimit is pid's soft and hard RLIMIT_CORE, as /proc/PID/limits says.
+func coreLimit(pid int) string {
+	b, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "limits"))
+	for l := range strings.Lines(string(b)) {
+		if rest, ok := strings.CutPrefix(l, "Max core file size"); ok {
+			if f := strings.Fields(rest); len(f) >= 2 {
+				return f[0] + " " + f[1]
+			}
+		}
+	}
+	return ""
 }
 
 // running says whether pid is a live process, not a zombie.

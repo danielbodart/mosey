@@ -13,6 +13,7 @@ import (
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/ipc"
+	"github.com/danielbodart/mosey/internal/nocore"
 )
 
 // Launcher timeouts (server.md §8).
@@ -71,6 +72,13 @@ func (l *Launcher) Run(ctx context.Context) error {
 }
 
 func (l *Launcher) run(ctx context.Context) error {
+	// Before the credential line passes through, as in the spawner
+	// (threat-model.md §4.10). The server runs on Linux only for now.
+	if err := nocore.NotDumpable(); errors.Is(err, errors.ErrUnsupported) {
+		return &LaunchError{Code: bootstrap.CodeUnsupported, Text: "the server runs on Linux only for now"}
+	} else if err != nil {
+		return err
+	}
 	line, err := readClientLine(ctx, l.Stdin)
 	if err != nil {
 		return err

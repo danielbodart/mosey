@@ -17,6 +17,7 @@ import (
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/client"
+	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/terminal"
 )
 
@@ -125,6 +126,14 @@ func runClient(args []string) int {
 	if c.showVersion {
 		fmt.Println(version)
 		return 0
+	}
+	// Before the one-shot key exists, and for the whole session after it:
+	// no core dump and no reading by the user's other processes, since the
+	// client holds the PSK, the transport keys and the roots
+	// (threat-model.md §4.10, bootstrap.md §4.3).
+	if err := nocore.Process(); err != nil {
+		fmt.Fprintln(os.Stderr, "mosey: keeping the session's keys out of core dumps:", err)
+		return client.StatusFailed
 	}
 
 	// SIGTERM and SIGHUP end the session cleanly, restoring the terminal.

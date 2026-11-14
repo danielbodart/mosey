@@ -12,6 +12,7 @@ import (
 
 	"github.com/danielbodart/mosey/internal/emu"
 	"github.com/danielbodart/mosey/internal/ipc"
+	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/sandbox"
 	"github.com/danielbodart/mosey/internal/screen"
 )
@@ -22,7 +23,9 @@ import (
 // socket. Its memory limit was set by the spawner before proto got the
 // other end.
 func RunEmu(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
-	if err := sandbox.NotDumpable(); err != nil {
+	// emu holds no key, but the screen it holds is the user's, and a
+	// seccomp kill must leave no core of it (threat-model.md §4.10).
+	if err := nocore.Process(); err != nil {
 		return err
 	}
 	conn, err := wrapRoleSocket(ipcFD, ipc.Emu, ipc.Proto)

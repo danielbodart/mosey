@@ -22,13 +22,6 @@ func Native() (Arch, error) {
 	return 0, fmt.Errorf("sandbox: no seccomp policy for %s", runtime.GOARCH)
 }
 
-func notDumpable() error {
-	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
-		return fmt.Errorf("prctl(PR_SET_DUMPABLE, 0): %w", err)
-	}
-	return nil
-}
-
 func enter(role Role, action Action, params Params, warn func(string)) error {
 	return enterWith(PolicyFor(role), action, params, warn, true)
 }

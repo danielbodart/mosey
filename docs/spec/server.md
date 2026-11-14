@@ -104,6 +104,14 @@ ssh ──stdin──► launcher                       spawner                p
  ssh ◄─stdout───│ print the line; exit 0        │ close B
 ```
 
+0. **Launcher and spawner are not dumpable.** Each calls
+   `prctl(PR_SET_DUMPABLE, 0)` (`nocore.NotDumpable`) first, before the
+   credential line passes through it, so the user's other processes
+   cannot read it from them and a crash leaves no core of it
+   (`threat-model.md` §4.10). Neither sets `RLIMIT_CORE`: an rlimit is
+   inherited across `exec`, and the login shell keeps the user's own
+   core-dump settings; `DUMPABLE` is reset by `execve`, so the shell is
+   untouched by it. proto and emu do both (§6.1).
 1. **Launcher reads the line.** Stdin to EOF, at most `MaxClientLine`
    + 1 bytes, within T1; it must be exactly one line (`bootstrap.md`
    §4.4). `bootstrap.ParseClientLine` decides validity, then the
@@ -846,7 +854,9 @@ plus §2.1 above]:
    key: with it left at 1, a seccomp kill writes a core dump holding the
    keys (S4 §3.5: two cores in systemd-coredump; none with it at 0).
    This also stops the user's other processes from ptracing proto or
-   reading its memory.
+   reading its memory. `RLIMIT_CORE` goes to 0 at the same time
+   (`nocore.Process`, `threat-model.md` §4.10): proto starts no child to
+   inherit it.
 2. Check fd 3 is a `SOCK_SEQPACKET` socket (`getsockopt(SO_TYPE)`), wrap
    it as C.
 3. Receive `Start` (T3), then `EmuLink`. Wrap the UDP socket
@@ -865,7 +875,7 @@ plus §2.1 above]:
 
 **emu** (`server.RunEmu`):
 
-1. `prctl(PR_SET_DUMPABLE, 0)`.
+1. `prctl(PR_SET_DUMPABLE, 0)` and `RLIMIT_CORE` 0 (`nocore.Process`).
 2. Check fd 3 is a `SOCK_SEQPACKET` socket, wrap it as E. (Its memory
    limit was set by the spawner before proto got E, §6.3.)
 3. Build nothing that needs a syscall outside its policy later: the

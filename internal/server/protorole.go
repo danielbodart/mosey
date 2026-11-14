@@ -14,6 +14,7 @@ import (
 	"github.com/danielbodart/mosey/internal/emu"
 	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/ipc"
+	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/pty"
 	"github.com/danielbodart/mosey/internal/sandbox"
 	"github.com/danielbodart/mosey/internal/screen"
@@ -31,8 +32,9 @@ const T3 = 10 * time.Second
 // carries.
 func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Logger) error {
 	// First of all, before anything holds a key: with dumpable left at 1 a
-	// seccomp kill writes a core holding the keys (S4 §3.5).
-	if err := sandbox.NotDumpable(); err != nil {
+	// seccomp kill writes a core holding the keys (S4 §3.5), and the core
+	// rlimit goes to 0 as well (threat-model.md §4.10).
+	if err := nocore.Process(); err != nil {
 		return err
 	}
 	ctl, err := wrapRoleSocket(ipcFD, ipc.Proto, ipc.Spawner)
