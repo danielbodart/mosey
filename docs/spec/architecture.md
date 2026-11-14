@@ -25,7 +25,7 @@ decision wins.
 | `internal/wire` | The size limits every layer is built to (D5) | everywhere | **crypto-transport** | `wire.go` |
 | `internal/replay` | RFC 6479 anti-replay window, check and commit separate | proto, client | **crypto-transport** | `replay.go` |
 | `internal/handshake` | B3 handshake, one-shot X-Wing keys, credential store, hello, hybrid rekey (D20) | proto, client | **crypto-transport** | `doc.go`, `key.go`, `credential.go`, `hello.go`, `handshake.go`, `rekey.go` |
-| `internal/transport` | Sealed frames over UDP: handshake driving, AEAD, replay, rekey with split INIT, path validation and anti-amplification (D21), exclusive attach (D26) | proto, client | **crypto-transport** | `doc.go`, `frame.go`, `transport.go` |
+| `internal/transport` | Sealed frames over UDP: handshake driving, AEAD, replay, rekey with split INIT, path validation and anti-amplification (D21), exclusive attach (D26) | proto, client | **crypto-transport** | `doc.go`, `frame.go`, `transport.go` (`End` and the END frame added at integration) |
 | `internal/ssp` | Generic State Synchronization Protocol: `State[S]`, `Endpoint`, D11 timing, fragmentation, compression (D24) | proto, client | **ssp** | `doc.go`, `ssp.go`, `endpoint.go` |
 | `internal/userinput` | The client's SSP object: keystrokes and resizes | proto, client | **ssp** | `userinput.go` |
 | `internal/screen` | The server's SSP object: `Grid`, the diff format (O11), the D9/D27 allow-list, the D23 bounds | proto, emu, client | **screen** | `doc.go`, `grid.go`, `diff.go`, `allow.go` |
@@ -33,8 +33,8 @@ decision wins.
 | `internal/emu` | The `Emulator` interface and the tuios.dev/vt implementation (D23) | emu (tests: in process) | **screen** | `emu.go`, `tuios.go` |
 | `internal/pty` | Open ptys, set their size, read the echo-off bit, start the login shell (D14) | spawner, proto | **server-proc** | `pty.go`, `pty_linux.go`, `pty_other.go` |
 | `internal/sandbox` | Landlock deny-all, seccomp cBPF compiler and per-role policies, `DUMPABLE=0` (D22) | proto, emu | **server-proc** | `doc.go`, `sandbox.go`, `bpf.go`, `sandbox_linux.go`, `sandbox_other.go` |
-| `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
-| `internal/server` | The three roles; proto's `Session`, runnable in process for tests; the emu reply grammar | all server roles | **server-proc** | `doc.go`, `proto.go`, `roles.go` |
+| `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | launcher, spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
+| `internal/server` | The four roles (launcher, spawner, proto, emu); proto's `Session`, runnable in process for tests; the emu reply grammar | all server roles | **server-proc** | `doc.go`, `proto.go`, `launcher.go`, `spawner_linux.go`, `protorole.go`, `emurole.go`, `ipcemu.go`, `reply.go` |
 | `internal/bootstrap` | The SSH command line, the stdin and stdout lines (D6, D20, D25) | client, spawner | **bootstrap-client** | `doc.go`, `line.go`, `ssh.go` |
 | `internal/terminal` | The client's own tty: raw mode, size, SIGWINCH | client | **bootstrap-client** | `terminal.go` |
 | `internal/client` | `mosey host`: bootstrap, then `Session` (SSP + render + input) | client | **bootstrap-client** | `client.go` |
@@ -82,10 +82,14 @@ accident) and never imports `netsim`.
 ## 2. Processes
 
 Layout C of S4 (D22). One `mosey --serve` per session. mosey is a single binary: the client and every server role are the same file (D7).
+`mosey --serve` itself is a short-lived **launcher** (`server.md` §1.1):
+the process sshd starts cannot detach, so it reads the `ClientLine`,
+starts `mosey --serve=spawner` in a new session, relays the credential
+line to ssh's stdout and exits, which lets ssh exit.
 
 ```
             ssh (system, user's config)
- mosey ─────────────────────────────────► mosey --serve (spawner: unsandboxed)
+ mosey ─────────────────────────────────► mosey --serve (launcher) → mosey --serve=spawner (unsandboxed)
    │       stdin: ClientLine                   │   binds UDP, opens pty, forks login shell
    │      stdout: CredentialLine               │   re-execs itself as proto and emu
    │                                           │   SCM_RIGHTS: UDP socket + pty master → proto
@@ -99,11 +103,11 @@ Layout C of S4 (D22). One `mosey --serve` per session. mosey is a single binary:
                                              tuios.dev/vt, nothing else
 ```
 
-- **spawner** (`server.Spawner`) parses the `ClientLine`, binds a UDP port
-  in 60000–61000, opens the pty at the client's size, starts the login
-  shell, starts proto and emu, sends proto `ipc.Start` with the socket and
-  the pty master, prints proto's `ipc.Credential` line on stdout, then
-  detaches (closes stdio, `setsid`) so ssh exits. It never reads the
+- **spawner** (`server.RunSpawner`) parses the `ClientLine` again, binds a
+  UDP port in 60000–61000, opens the pty at the client's size, starts
+  proto and emu, sends proto `ipc.Start` with the socket and the pty
+  master, starts the login shell once proto's `ipc.Credential` line is
+  in, and hands that line to the launcher (`ipc.Ready`). It never reads the
   network and never holds a key; it only parses the `ClientLine` (from the
   user, via sshd) and proto's fixed IPC grammar. It supervises: if emu dies
   it is restarted and proto sends a full redraw.
@@ -111,8 +115,9 @@ Layout C of S4 (D22). One `mosey --serve` per session. mosey is a single binary:
   (only proto holds keys), runs the transport listener and SSP, reads and
   writes the pty master, sets its size with `TIOCSWINSZ`, reads the
   echo-off bit, and talks to emu.
-- **emu** (`server.RunEmu`) answers `Output` and `Resize` with `Update` (a
-  screen diff from its last update) and `Replies`.
+- **emu** (`server.RunEmu`) answers `Init`, `Output`, `Resize` and
+  `Flush` with `Update` (a screen diff from its last update, with a HELD
+  bit under synchronised output) and `Replies`.
 
 Sandbox setup order in proto and emu (S4 §5.4): wrap the inherited fds,
 `PR_SET_DUMPABLE=0`, Landlock deny-all, seccomp with TSYNC, then read
@@ -223,9 +228,13 @@ so under `synctest.Test` it is virtual time.
 
 **transport.** `Dial(ctx, pc, addr, cred, key, log) (*Conn, error)` for the
 client; `Listen(pc, creds, log)` and `Listener.Accept(ctx)` for the
-server. `*Conn` has `Send(payload)`, `Recv(ctx)`, `Events()`
-(`PeerChanged`, `Rekeyed`, `Revoked`), `HandshakeHash()` (D28),
-`LocalAddressChanged()`, `Close()`. `pc` is any `net.PacketConn`, so a
+server, with `Listener.Addr` and `Listener.Stats`. `*Conn` has
+`Send(payload)`, `Recv(ctx)`, `Events()` (`PeerChanged`, `Rekeyed`,
+`RekeyOverdue`, `Revoked`, `Ended`), `HandshakeHash()` (D28), `Peer()`,
+`Stats()`, `LocalAddressChanged()`, `End(reason)` (tell the peer the
+session is over, then close: `transport.md` §8.4) and `Close()`. Errors
+are `ErrBlocked` (a send held back), `ErrRevoked` and `ErrEnded` (both
+`net.ErrClosed`). `pc` is any `net.PacketConn`, so a
 `*net.UDPConn` and a `*netsim.Conn` are interchangeable. Frame kinds are in
 `frame.go`, with chaff (O10), typed channels (D15) and revocation (D26)
 reserved.
@@ -245,22 +254,30 @@ throttles on (`ssp.md` §10.1).
 
 **screen.** `*Grid` is an `ssp.State[*Grid]`: cells (`Cell`: cluster,
 width, `Style`), `Cursor`, `Title`, `Modes`, and the reserved `EchoOff`
-(D12), `EchoAck` (prediction), `Clipboard` (OSC 52 write, D27) and `Bell`.
-`allow.go` is the allow-list and the bounds. `render.Renderer` (`Render`,
-`Invalidate`, `Enter`, `Leave`) draws a Grid.
+(D12), `EchoAck` (prediction), `Clipboard` (OSC 52 write, D27) and `Bell`,
+plus `InputConsumed` (the client's input flow control, `ssp.md` §10.1)
+and `Rebuilt` (D23's rebuild notice). `allow.go` is the allow-list and the
+bounds. `render.Renderer` (`Render`, `Invalidate`, `Enter`, `Leave`,
+`Resize` for the local size it clips to) draws a Grid, with the
+`Capabilities` from `render.FromEnv`, the locale's UTF-8 among them.
 
 **emu.** `Emulator` (`Write`, `Resize`, `Snapshot(*screen.Grid)`,
-`TakeReplies`, `Close`); `emu.New(cols, rows, Options)` is tuios. The
+`TakeReplies`, `Close`), and `Holder` (`Held`) for one that holds its
+screen under synchronised output; `emu.New(cols, rows, Options)` is tuios. The
 server's IPC-backed Emulator implements the same interface, which is what
 lets `server.Session` run in process for tests.
 
-**server.** `Session{Listener, Terminal, Emulator, Log}.Run(ctx)`, where
-`Terminal` is the pty (`Read`, `Write`, `Resize`, `EchoOff`). `Spawner`,
-`RunProto`, `RunEmu` are the roles' mains.
+**server.** `Session{Listener, Terminal, Emulator, Log, Attached}.Run(ctx)`,
+where `Terminal` is the pty (`Read`, `Write`, `Resize`, `EchoOff`); it
+returns nil when the shell exited, `ErrNoClient` or `ErrClientClosed`.
+`Launcher`, `RunSpawner`, `RunProto` and `RunEmu` are the roles' mains.
 
-**ipc.** `Pair()`, `Conn.Send(Message)`, `Conn.Recv()`; messages `Start`,
-`Credential`, `Resize`, `Output`, `Update`, `Replies`, `Exit`, with fixed
-layouts and fuzzed `Parse`.
+**ipc.** `Pair()`, `Conn.Send(Message)`, `Conn.Recv()`; messages, with
+fixed layouts and a fuzzed `Parse` (`server.md` §3): launcher↔spawner
+`ClientLine`, `Ready`, `Failed`; spawner→proto `Start`, `EmuLink`,
+`ShellExit`, `EmuPaused`; proto→spawner `Credential`, `Attached`,
+`KillEmu`, `Exit`; proto→emu `Init`, `Output`, `Resize`, `Flush`;
+emu→proto `Update`, `Replies`.
 
 **bootstrap.** As `bootstrap.md` §10.1: `ClientLine`, `CredentialLine`,
 `ErrorLine`, their `Marshal`/`Parse`, `ReadCredential(r)`, `Sanitize`,
@@ -274,8 +291,10 @@ stays cooked for ssh's prompts until the handshake is done.
 
 **client.** `Run(ctx, Options{SSH, Version, Terminal, Stderr, Log,
 Getenv})` for the binary; `Session{Conn, Server, Credential, Key,
-Terminal, Log, Capabilities, UTF8}.Run(ctx)` for after the bootstrap,
-which the netsim end-to-end test drives. Errors are `*Failure`,
+Terminal, Log, Capabilities}.Run(ctx)` for after the bootstrap, which the
+netsim end-to-end test drives; it returns nil when the server ends the
+session, and otherwise tells the server with `End` before it returns.
+Errors are `*Failure`,
 `*TakenOverError` and `*bootstrap.UsageError`; `ExitStatus` maps them.
 
 ## 6. Tests
