@@ -29,14 +29,25 @@ interface so it can be replaced or forked.
   stalls, fork it (D23). Upstream contributions are listed in
   `docs/spikes/s2-terminal/FINDINGS.md`.
 - **Its own dependencies** (indirect in `go.mod`): charmbracelet's
-  ultraviolet, ansi, colorprofile, term and termios; clipperhouse's
-  displaywidth and uax29; rivo/uniseg; mattn/go-runewidth;
-  lucasb-eyer/go-colorful; muesli/cancelreader; xo/terminfo;
-  tuios.dev/progstatus. `go.mitchellh.com/libghostty` is in the module
-  graph for tuios' optional libghostty backend, which needs cgo; with
-  `CGO_ENABLED=0` it is not compiled into either binary (`go list -deps
-  ./cmd/...` does not list it). libghostty is the CI oracle, read
-  directly in tests, never shipped (D23).
+  colorprofile, term and termios; clipperhouse's displaywidth and uax29;
+  rivo/uniseg; mattn/go-runewidth; lucasb-eyer/go-colorful;
+  muesli/cancelreader; xo/terminfo; tuios.dev/progstatus.
+- **Named directly, at the versions tuios pins:**
+  `github.com/charmbracelet/ultraviolet` and
+  `github.com/charmbracelet/x/ansi`. tuios' API hands back their types
+  (`uv.Cell`, `ansi.Mode`, `ansi.BasicColor`), so `internal/emu`, which
+  translates tuios' cells into `screen.Grid`, has to name them. They add
+  no code that tuios does not already bring, and only the emu role uses
+  them: the client's drawing path must not (D9), which
+  `internal/render`'s import test checks.
+- **`go.mitchellh.com/libghostty`** is the oracle (D23): libghostty-vt
+  read directly, with no tuios code in the path, compared with tuios on
+  the committed recordings by `internal/emu/oracle_test.go`. It is Zig
+  called through cgo, so that test is behind the `ghostty` build tag and
+  runs locally only (its header says how); CI builds with
+  `CGO_ENABLED=0` (D1), and neither binary compiles it in (`go list -deps
+  ./cmd/...` does not list it). It is a direct requirement in `go.mod`
+  only because that test imports it.
 
 ### `golang.org/x/crypto` v0.59.0
 

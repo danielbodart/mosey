@@ -950,6 +950,32 @@ It also logs each stream's per-frame flate size, with SSP's 32-byte
 threshold [measured S5], and records the table in this section when it
 first passes.
 
+**Result, when it first passed** [measured here, `go test -run
+TestDiffNotBiggerThanRaw -v ./internal/emu`]. S5 captures at 120 × 40 on
+the 8 ms / 50 ms schedule; S2 recordings at 80 × 24, a frame per
+checkpoint and per KiB. "flate" is each frame compressed on its own with
+`compress/flate` at the default level, frames under 32 bytes left as
+they are.
+
+| stream | pty bytes | frames | diff bytes | diff / pty | flate bytes | flate / pty |
+|---|---|---|---|---|---|---|
+| S5 flood | 198,973 | 20 | 613 | 0.003 | 283 | 0.001 |
+| S5 less | 71,391 | 51 | 53,497 | 0.75 | 27,337 | 0.38 |
+| S5 shell | 4,787 | 355 | 4,212 | 0.88 | 2,287 | 0.48 |
+| S5 vim | 48,826 | 133 | 27,032 | 0.55 | 15,111 | 0.31 |
+| S2 fish | 2,646 | 7 | 630 | 0.24 | 476 | 0.18 |
+| S2 less | 8,908 | 15 | 3,646 | 0.41 | 2,568 | 0.29 |
+| S2 unicode (not gated alone) | 1,073 | 3 | 1,107 | 1.03 | 826 | 0.77 |
+| S2 vim | 14,865 | 19 | 8,729 | 0.59 | 5,901 | 0.40 |
+| S2 zsh | 23,259 | 29 | 6,874 | 0.30 | 4,406 | 0.19 |
+| S2 together | 50,751 | | 20,986 | 0.41 | | |
+
+Against S5's encoder on the same captures (2.93, 3.40 and 1.28 for less,
+shell and vim, §5.1), the format is 0.75, 0.88 and 0.55: every S5 stream
+is under its raw size before compression. `unicode`, the torture file, is
+3% over, which is the cost of a cluster prefix per cell on a file made
+of nothing else.
+
 **If the gate fails, the implementer stops and reports the numbers to the
 screen owner. The format is then amended here before the code lands.** The
 gate is set on *uncompressed* bytes on purpose: the format must beat raw
@@ -1055,7 +1081,8 @@ creates it at the clamped size and sets it up as follows. Each item is
     held, proto arms `SyncHold` (unless it is already armed). When it
     fires with no request outstanding, proto sends `Flush`, a request with
     no payload whose answer is an ordinary `Update` (§11 item 12). The
-    in-process emulator does the same through `Snapshot`'s held result.
+    in-process emulator does the same through `emu.Holder.Held`, asked
+    after each `Snapshot`.
     The timer is proto's clock, so tests drive it under `testing/synctest`
     [D18].
   - **A hostile emu** that reports HELD on every response gains nothing:
@@ -1429,6 +1456,13 @@ commit message, and for 10 s each in CI (`mise run fuzz-smoke`)
   bounded. This is S2's `FuzzRoundTrip` and `FuzzTuiosClamp`, rebuilt on
   the production types.
 - **`TestDiffNotBiggerThanRaw`**: the gate in §5.12.
+- **The libghostty oracle** [D23], `TestOracleAgreesWithLibghostty`: the
+  corpus recordings fed to tuios and to libghostty-vt read directly, the
+  screens compared cell by cell (text and width), with at most 2% allowed
+  to differ (S2 measured 98.1% agreement on recorded programs). libghostty
+  needs cgo and mosey builds with `CGO_ENABLED=0` [D1], so the test is
+  behind the `ghostty` build tag and runs locally, not in CI. When it
+  first ran, 0 of 171,480 cells differed.
 - **The S2 hostile battery's cases** at 80 × 24 and at the clamp, as
   regression tests. Each must finish, stay bounded, and give a valid
   snapshot.
@@ -1525,9 +1559,13 @@ agreed first).
       answers it like `Output`, with a run of `Update` fragments (and no
       `Replies`, since no program bytes were parsed). It counts as a
       request for T4 and for "one outstanding at a time".
-    - In `internal/emu`, `Snapshot` reports whether it held, for example
-      `Snapshot(g *screen.Grid) (held bool)`, so the in-process emulator
-      and proto's IPC client give `server.Session` the same signal.
+    - In `internal/emu`, an emulator that holds reports it through a
+      separate interface, `emu.Holder` (`Held() bool`, whether the last
+      `Snapshot` held), so the in-process emulator and proto's IPC
+      client give `server.Session` the same signal. *Settled in the code:*
+      a second interface rather than a result of `Snapshot`, so the
+      `Emulator` signature the server-proc owner already builds against is
+      unchanged, and a fake that never holds is still an `Emulator`.
 13. **proto's violation list** in `server.md` §3.5 gains the cases of
     §7.3: a mirror at a size other than the last `Init` or `Resize`, a
     SIZE op in an answer other than one to `Resize`, and `Bell` or

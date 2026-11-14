@@ -1,0 +1,146 @@
+[?1049h[22;0;0t[24;1H[?1h=      [1m1(B[m package emu[m
+      [1m2(B[m [m
+      [1m3(B[m import ([m
+      [1m4(B[m         "sync"[m
+      [1m5(B[m [m
+      [1m6(B[m         xterm "github.com/gitpod-io/xterm-go"[m
+      [1m7(B[m )[m
+      [1m8(B[m [m
+      [1m9(B[m type xtermEmu struct {[m
+     [1m10(B[m         t     *xterm.Terminal[m
+     [1m11(B[m         mu    sync.Mutex[m
+     [1m12(B[m         resp  []byte[m
+     [1m13(B[m         title string[m
+     [1m14(B[m         cell  xterm.CellData[m
+     [1m15(B[m }[m
+     [1m16(B[m [m
+     [1m17(B[m func init() {[m
+     [1m18(B[m         register(Factory{Name: "xtermgo", New: func(w, h int) Emulator {[m      [1m18(B[m  return newXterm(w, h) }})[m
+     [1m19(B[m }[m
+     [1m20(B[m [m
+     [1m21(B[m func newXterm(w, h int) *xtermEmu {[m
+     [1m22(B[m         x := &xtermEmu{t: xterm.New(xterm.WithCols(w), xterm.WithRows(h)[m [7mey/.claude/worktrees/wf_81ba60d9-5e8-2/spikes/s2-terminal/fixtures/sample_go.txt[27m[K[K     [1m22(B[m , xterm.WithScrollback(1000))}[m
+     [1m23(B[m         x.t.OnData(func(s string) { x.mu.Lock(); x.resp = append(x.resp,[m      [1m23(B[m  s...); x.mu.Unlock() })[m
+     [1m24(B[m         x.t.OnTitleChange(func(s string) { x.mu.Lock(); x.title = s; x.m[m      [1m24(B[m u.Unlock() })[m
+     [1m25(B[m         return x[m
+     [1m26(B[m }[m
+     [1m27(B[m [m
+     [1m28(B[m func (x *xtermEmu) Name() string     { return "xtermgo" }[m
+     [1m29(B[m func (x *xtermEmu) Write(p []byte)   { _, _ = x.t.Write(p) }[m
+     [1m30(B[m func (x *xtermEmu) Resize(w, h int)  { x.t.Resize(w, h) }[m
+     [1m31(B[m func (x *xtermEmu) Size() (int, int) { return x.t.Cols(), x.t.Rows() }[m
+     [1m32(B[m [m
+     [1m33(B[m func xtColor(mode uint32, v int) Color {[m
+     [1m34(B[m         switch mode {[m
+     [1m35(B[m         case xterm.AttrCMP16, xterm.AttrCMP256:[m
+     [1m36(B[m                 return Indexed(uint8(v))[m
+     [1m37(B[m         case xterm.AttrCMRGB:[m
+     [1m38(B[m                 return colorRGB | Color(uint32(v)&0xFFFFFF)[m
+     [1m39(B[m         }[m
+     [1m40(B[m         return ColorDefault[m
+     [1m41(B[m }[m
+     [1m42(B[m [m
+:[K[K/[Kff[Kuu[Knn[Kcc[K[1;1H[K     [1m22(B[m , xterm.WithScrollback(1000))}[m
+[2;1H[K     [1m23(B[m         x.t.OnData(func(s string) { x.mu.Lock(); x.resp = append(x.resp,[m [3;1H[K     [1m23(B[m  s...); x.mu.Unlock() })[m
+[4;1H[K     [1m24(B[m         x.t.OnTitleChange(func(s string) { x.mu.Lock(); x.title = s; x.m[m [5;1H[K     [1m24(B[m u.Unlock() })[m
+[6;1H[K     [1m25(B[m         return x[m
+[7;1H[K     [1m26(B[m }[m
+[8;1H[K     [1m27(B[m [m
+[9;1H[K     [1m28(B[m func (x *xtermEmu) Name() string     { return "xtermgo" }[m
+[10;1H[K     [1m29(B[m func (x *xtermEmu) Write(p []byte)   { _, _ = x.t.Write(p) }[m
+[11;1H[K     [1m30(B[m func (x *xtermEmu) Resize(w, h int)  { x.t.Resize(w, h) }[m
+[12;1H[K     [1m31(B[m func (x *xtermEmu) Size() (int, int) { return x.t.Cols(), x.t.Rows() }[m
+[13;1H[K     [1m32(B[m [m
+[14;1H[K     [1m33(B[m func xtColor(mode uint32, v int) Color {[m
+[15;1H[K     [1m34(B[m         switch mode {[m
+[16;1H[K     [1m35(B[m         case xterm.AttrCMP16, xterm.AttrCMP256:[m
+[17;1H[K     [1m36(B[m                 return Indexed(uint8(v))[m
+[18;1H[K     [1m37(B[m         case xterm.AttrCMRGB:[m
+[19;1H[K     [1m38(B[m                 return colorRGB | Color(uint32(v)&0xFFFFFF)[m
+[20;1H[K     [1m39(B[m         }[m
+[21;1H[K     [1m40(B[m         return ColorDefault[m
+[22;1H[K     [1m41(B[m }[m
+[23;1H[K     [1m42(B[m [m
+[24;1H[1;1H[K     [1m22(B[m , xterm.WithScrollback(1000))}[m
+[2;1H[K     [1m23(B[m         x.t.OnData([7mfunc[27m(s string) { x.mu.Lock(); x.resp = append(x.resp,[m [3;1H[K     [1m23(B[m  s...); x.mu.Unlock() })[m
+[4;1H[K     [1m24(B[m         x.t.OnTitleChange([7mfunc[27m(s string) { x.mu.Lock(); x.title = s; x.m[m [5;1H[K     [1m24(B[m u.Unlock() })[m
+[6;1H[K     [1m25(B[m         return x[m
+[7;1H[K     [1m26(B[m }[m
+[8;1H[K     [1m27(B[m [m
+[9;1H[K     [1m28(B[m [7mfunc[27m (x *xtermEmu) Name() string     { return "xtermgo" }[m
+[10;1H[K     [1m29(B[m [7mfunc[27m (x *xtermEmu) Write(p []byte)   { _, _ = x.t.Write(p) }[m
+[11;1H[K     [1m30(B[m [7mfunc[27m (x *xtermEmu) Resize(w, h int)  { x.t.Resize(w, h) }[m
+[12;1H[K     [1m31(B[m [7mfunc[27m (x *xtermEmu) Size() (int, int) { return x.t.Cols(), x.t.Rows() }[m
+[13;1H[K     [1m32(B[m [m
+[14;1H[K     [1m33(B[m [7mfunc[27m xtColor(mode uint32, v int) Color {[m
+[15;1H[K     [1m34(B[m         switch mode {[m
+[16;1H[K     [1m35(B[m         case xterm.AttrCMP16, xterm.AttrCMP256:[m
+[17;1H[K     [1m36(B[m                 return Indexed(uint8(v))[m
+[18;1H[K     [1m37(B[m         case xterm.AttrCMRGB:[m
+[19;1H[K     [1m38(B[m                 return colorRGB | Color(uint32(v)&0xFFFFFF)[m
+[20;1H[K     [1m39(B[m         }[m
+[21;1H[K     [1m40(B[m         return ColorDefault[m
+[22;1H[K     [1m41(B[m }[m
+[23;1H[K     [1m42(B[m [m
+[24;1H     [1m43(B[m [7mfunc[27m (x *xtermEmu) CellAt(cx, cy int) Cell {[m
+:[K[K[HM     [1m22(B[m , xterm.WithScrollback(1000))}[m
+[HM     [1m22(B[m         x := &xtermEmu{t: xterm.New(xterm.WithCols(w), xterm.WithRows(h)[m[HM     [1m21(B[m [7mfunc[27m newXterm(w, h int) *xtermEmu {[m
+[HM     [1m20(B[m [m
+[HM     [1m19(B[m }[m
+[HM     [1m18(B[m  return newXterm(w, h) }})[m
+[HM     [1m18(B[m         register(Factory{Name: "xtermgo", New: [7mfunc[27m(w, h int) Emulator {[m[HM     [1m17(B[m [7mfunc[27m init() {[m
+[HM     [1m16(B[m [m
+[HM     [1m15(B[m }[m
+[HM     [1m14(B[m         cell  xterm.CellData[m
+[HM     [1m13(B[m         title string[m
+[HM     [1m12(B[m         resp  []byte[m
+[HM     [1m11(B[m         mu    sync.Mutex[m
+[HM     [1m10(B[m         t     *xterm.Terminal[m
+[HM      [1m9(B[m type xtermEmu struct {[m
+[HM      [1m8(B[m [m
+[HM      [1m7(B[m )[m
+[HM      [1m6(B[m         xterm "github.com/gitpod-io/xterm-go"[m
+[HM      [1m5(B[m [m
+[HM      [1m4(B[m         "sync"[m
+[HM      [1m3(B[m import ([m
+[HM      [1m2(B[m [m
+[24;1H[K:[K[H[2J[H      [1m2(B[m [m
+      [1m3(B[m import ([m
+      [1m4(B[m         "sync"[m
+      [1m5(B[m [m
+      [1m6(B[m         xterm "github.com/gitpod-io/xterm-go"[m
+      [1m7(B[m )[m
+      [1m8(B[m [m
+      [1m9(B[m type xtermEmu struct {[m
+     [1m10(B[m         t     *xterm.Terminal[m
+     [1m11(B[m         mu    sync.Mutex[m
+     [1m12(B[m         resp  []byte[m
+     [1m13(B[m         title string[m
+     [1m14(B[m         cell  xterm.CellData[m
+     [1m15(B[m }[m
+     [1m16(B[m [m
+     [1m17(B[m [7mfunc[27m init() {[m
+     [1m18(B[m         register(Factory{Name: "xtermgo", New: [7mfunc[27m(w, h int) Emulator { return newXterm(w, h) }})[m
+     [1m19(B[m }[m
+     [1m20(B[m [m
+     [1m21(B[m [7mfunc[27m newXterm(w, h int) *xtermEmu {[m
+     [1m22(B[m         x := &xtermEmu{t: xterm.New(xterm.WithCols(w), xterm.WithRows(h), xterm.WithScrollback(1000))}[m
+     [1m23(B[m         x.t.OnData([7mfunc[27m(s string) { x.mu.Lock(); x.resp = append(x.resp, s...); x.mu.Unlock() })[m
+     [1m24(B[m         x.t.OnTitleChange([7mfunc[27m(s string) { x.mu.Lock(); x.title = s; x.mu.Unlock() })[m
+     [1m25(B[m         return x[m
+     [1m26(B[m }[m
+     [1m27(B[m [m
+     [1m28(B[m [7mfunc[27m (x *xtermEmu) Name() string     { return "xtermgo" }[m
+     [1m29(B[m [7mfunc[27m (x *xtermEmu) Write(p []byte)   { _, _ = x.t.Write(p) }[m
+     [1m30(B[m [7mfunc[27m (x *xtermEmu) Resize(w, h int)  { x.t.Resize(w, h) }[m
+     [1m31(B[m [7mfunc[27m (x *xtermEmu) Size() (int, int) { return x.t.Cols(), x.t.Rows() }[m
+     [1m32(B[m [m
+     [1m33(B[m [7mfunc[27m xtColor(mode uint32, v int) Color {[m
+     [1m34(B[m         switch mode {[m
+     [1m35(B[m         case xterm.AttrCMP16, xterm.AttrCMP256:[m
+     [1m36(B[m                 return Indexed(uint8(v))[m
+     [1m37(B[m         case xterm.AttrCMRGB:[m
+     [1m38(B[m                 return colorRGB | Color(uint32(v)&0xFFFFFF)[m
+     [1m39(B[m         }[m
+     [1m40(B[m         return ColorDefault[m
+:[K[K[?1l>[?1049l[23;0;0t

@@ -1,0 +1,121 @@
+[?1049h[22;0;0t[>4;2m[?1h=[?2004h[?1004h[1;24r[?12h[?12l[22;2t[22;1t[27m[23m[29m[m[H[2J[?25l[24;1H<-5e8-2/spikes/s2-terminal/fixtures/sample_go.txt"<es/s2-terminal/fixtures/sample_go.txt" 166L, 3998B[2;1H▽[6n[2;1H  [3;1HPzz\[0%m[6n[3;1H           [1;1H[>c[?12$p]10;?]11;?[14t[16t[1;1H[4m[38;5;130m  1 [m[4m[38;5;130mpackage[m[4m emu                                                                 [m[2;1H[38;5;130m  2 [m[2;5H[K[3;1H[38;5;130m  3 import[m ([3;13H[K[4;1H[38;5;130m  4 [m[8C[31m"sync"[m
+[38;5;130m  5 
+  6 [m[8Cxterm [31m"github.com/gitpod-io/xterm-go"[m
+[38;5;130m  7 [m)
+[38;5;130m  8 
+  9 type[m xtermEmu [38;5;130mstruct[m {
+[38;5;130m 10 [m[8Ct     *xterm.Terminal
+[38;5;130m 11 [m[8Cmu    sync.Mutex
+[38;5;130m 12 [m[8Cresp  [][32mbyte[m
+[38;5;130m 13 [m[8Ctitle [32mstring[m
+[38;5;130m 14 [m[8Ccell  xterm.CellData
+[38;5;130m 15 [m}
+[38;5;130m 16 
+ 17 func[m init() {
+[38;5;130m 18 [m[8Cregister(Factory{Name: [31m"xtermgo"[m, New: [38;5;130mfunc[m(w, h [32mint[m) Emulator { [38;5;130mrett[19;1H    urn[m newXterm(w, h) }})
+[38;5;130m 19 [m}
+[38;5;130m 20 
+ 21 func[m newXterm(w, h [32mint[m) *xtermEmu {
+[1m[7mfixtures/sample_go.txt                                        1,1            Top[?25h[1;5H[?25l[27m[23m[29m[m[H[2J[1;1H[4m[93m  1 [m[4m[93mpackage[m[4m emu                                                                 [m[2;1H[93m  2 
+  3 [m[93mimport[m (
+[93m  4 [m[8C[95m"sync"[m
+[93m  5 
+  6 [m[8Cxterm [95m"github.com/gitpod-io/xterm-go"[m
+[93m  7 [m)
+[93m  8 
+  9 [m[93mtype[m xtermEmu [93mstruct[m {
+[93m 10 [m[8Ct     *xterm.Terminal
+[93m 11 [m[8Cmu    sync.Mutex
+[93m 12 [m[8Cresp  [][38;5;121mbyte[m
+[93m 13 [m[8Ctitle [38;5;121mstring[m
+[93m 14 [m[8Ccell  xterm.CellData
+[93m 15 [m}
+[93m 16 
+ 17 [m[93mfunc[m init() {
+[93m 18 [m[8Cregister(Factory{Name: [95m"xtermgo"[m, New: [93mfunc[m(w, h [38;5;121mint[m) Emulator { [93mrett[m[19;1H[93m    [m[93murn[m newXterm(w, h) }})
+[93m 19 [m}
+[93m 20 
+ 21 [m[93mfunc[m newXterm(w, h [38;5;121mint[m) *xtermEmu {
+[1m[7mfixtures/sample_go.txt                                        1,1            Top[?25h[m[24;1H<es/s2-terminal/fixtures/sample_go.txt" 166L, 3998B[1;5H[?25l[24;1H[K[24;1H:vsplit[1;41H[7m|[2;41H|[3;41H|[4;41H|[5;41H|[6;41H|[m[7;3H[93m [m[1C[95mxterm-go"[m[27C[7m|[m[8;3H[93m7[m[1C)[35C[7m|[m[9;3H[93m8[m[1C                      [14C[7m|[m[10;2H[93m 9[m[1C[93mtype[m xtermEmu [93mstruct[m {       [7C[7m|[m[11;3H[93m0[m[9Ct     *xterm.Terminal[7C[7m|[m[12;3H[93m1[m[9Cmu    sync.Mutex[12C[7m|[m[13;3H[93m2[m[9Cresp  [][38;5;121mbyte[m[16C[7m|[m[14;3H[93m3[m[9Ctitle [38;5;121mstring[m        [8C[7m|[m[15;3H[93m4[m[1C [7Ccell  xterm.CellData[8C[7m|[m[16;3H[93m5[m[1C}[35C[7m|[m[17;3H[93m6[m[1C             [23C[7m|[m[18;3H[93m7[m[1C[93mfunc[m init() {                       [7m|[m[19;2H[93m18[m[1C        register(Factory{Name: [95m"xter[m[7m|[m[20;2H[93m  [m[1C[95mmgo"[m, New: [93mfunc[m(w, h [38;5;121mint[m) Emulator {[7m|[m[21;2H[93m  [m[2C[93mreturn[m newXterm(w, h) }})[10C[7m|[m[22;2H[93m19[m[1C}                                   [7m|[m
+[1m[7m<xtures/sample_go.txtt 1,1[12CTop[m[1;42H[4m[93m  1 [m[4m[93mpackage[m[1C[4memu[m[2;42H[93m  2 [3;42H  3 [m[93mimport[m ([4;42H[93m  4 [m[8C[95m"sync"[m[5;42H[93m  5 [6;42H  6 [m        xterm [95m"github.com/gitpod-io[m[7;42H[93m    [m[95m/xterm-go"[m[8;42H[93m  7 [m)[9;42H[93m  8 [10;42H  9 [m[93mtype[m xtermEmu [93mstruct[m {[11;42H[93m 10 [m[8Ct     *xterm.Terminal[12;42H[93m 11 [m[8Cmu    sync.Mutex[13;42H[93m 12 [m[8Cresp  [][38;5;121mbyte[m[14;42H[93m 13 [m[8Ctitle [38;5;121mstring[m[15;42H[93m 14 [m[8Ccell  xterm.CellData[16;42H[93m 15 [m}[17;42H[93m 16 [18;42H 17 [m[93mfunc[m init() {[18;60H[K[19;42H[93m 18 [m[8Cregister(Factory{Name: [95m"xte[m[20;42H[93m    [m[95mrmgo"[m, New: [93mfunc[m(w, h [38;5;121mint[m) Emulator[21;42H[93m    [m { [93mreturn[m newXterm(w, h) }})[22;42H[93m 19 [m}[23;42H[7m<tures/sample_go.txt 1,1            Top[?25h[1;5H[?4m[?25l[m[24;70HG[1;5H[24;70H [20;5H[1;1H[93m150 [m        p := c.e.CursorPosition()   
+[93m151[m[9C[93mreturn[m p.X, p.Y, !c.e.Cursor[3;3H[93m [m[1CHidden()
+[93m152[m[1C}[7C       
+[93m153[m[1C[93mfunc[m (c *charmEmu) Responses() [][38;5;121mbyt[m[6;3H[93m [m[1C[38;5;121me[m {                                 
+[93m154[m[1C        c.mu.Lock()
+[93m155[m[1C [7C[93mdefer[m c.mu.Unlock()
+[93m156[m[9Cr := c.resp
+[93m157[m[1C        c.resp = [95mnil[m  
+[93m158[m[9C[93mreturn[m r             
+[93m159[m[1C}[7C                
+[93m160[m[1C[93mfunc[m (c *charmEmu) Title() [38;5;121mstring[m {
+[93m161[m[9Cc.mu.Lock()  
+[93m162[m[9C[93mdefer[m c.mu.Unlock() 
+[93m163[m[1C [7C[93mreturn[m c.title
+[93m164[m[1C}
+[93m165[m[6C(c *charmEmu) AltScreen() [38;5;121mbool[m[19;2H[93m  [m[1C{ [93mreturn[m c.e.IsAltScreen() }        
+[4m[93m166 [m[4m[93mfunc[m[4m (c *charmEmu) Close()          [m
+[4m[93m    [m[4m{ _ = c.e.Close() }                 [m
+[94m~                                       [?25h[?25l[m[23;24H[1m[7m66,1[10CBot [20;5H[?25h[?25l[m[1;1H[4m[93m  1 [m[4m[93mpackage[m[4m emu                         [m
+[93m  2[m[9C                            [3;3H[93m3[m[1C[93mimport[m (
+[93m  4[m[1C [7C[95m"sync"[m
+[93m  5[m[1C                                    [6;3H[93m6[m[1C        xterm [95m"github.com/gitpod-io/[m
+[93m   [m[1C[95mxterm-go"[m          
+[93m  7[m[1C)[7C                   
+[93m  8[m[9C           
+[93m  9[m[1C[93mtype[m xtermEmu [93mstruct[m {
+[93m 10[m[9Ct     *xterm.Terminal
+[93m 11[m[1C [7Cmu    sync.Mutex
+[93m 12[m[1C        resp  [][38;5;121mbyte[m               
+[93m 13[m[9Ctitle [38;5;121mstring[m
+[93m 14[m[9Ccell  xterm.CellData
+[93m 15[m[1C}[7C              
+[93m 16[m[1C 
+[93m 17[m[6Cinit() {                       [19;2H[93m18[m[1C        register(Factory{Name: [95m"xter[m
+[93m    [m[95mmgo"[m, New: [93mfunc[m(w, h [38;5;121mint[m) Emulator {
+[93m    [m [93mreturn[m newXterm(w, h) }})          
+[93m 19 [m}                                   [?25h[?25l[23;24H[1m[7m,1   [9CTop [1;5H[?25h[?25l[m[24;1H[1m-- INSERT --[m[24;1H[K[1;25H[1;5H[4mhello 漢字 👍[1;18H🏽[1;21Hé 🇬[1;25H🇧[m[2;5H[93mpackage[m emu[3;5H        [4;5H[93mimport[m (       [5;13H[95m"sync"[m[6;13H                            [7;3H[93m7[m[1C        xterm [95m"github.com/gitpod-io/[m[8;3H[93m [m[1C[95mxterm-go"[m[9;5H)[10;5H                      [11;5H[93mtype[m xtermEmu [93mstruct[m {       [12;13Ht     *xterm.Terminal[13;13Hmu    sync.Mutex[14;13Hresp  [][38;5;121mbyte[m[15;13Htitle [38;5;121mstring[m        [16;5H [7Ccell  xterm.CellData[17;5H}[18;5H             [19;5H[93mfunc[m init() {                       [20;2H[93m19[m[1C        register(Factory{Name: [95m"xter[21;5Hmgo"[m, New: [93mfunc[m(w, h [38;5;121mint[m) Emulator {[22;2H[93m  [m[1C [93mreturn[m newXterm(w, h) }})[23;2H[1m[7mes/sample_go.txt [+] 1,35-23[m[1;42H[93m  1 [mhello 漢字 👍[1;59H🏽[1;61H é 🇬[1;66H🇧[1;68H[K[2;42H[4m[93m  2 [m[4m[93mpackage[m[4m emu                        [m[3;46H[K[4;46H[93mimport[m ([4;54H[K[5;54H[95m"sync"[m[6;54H[K[7;44H[93m7[m[1C        xterm [95m"github.com/gitpod-io[m[8;44H[93m [m[1C[95m/xterm-go"[m[9;46H)[10;46H[K[11;46H[93mtype[m xtermEmu [93mstruct[m {[11;68H[K[12;54Ht     *xterm.Terminal[13;54Hmu    sync.Mutex[14;54Hresp  [][38;5;121mbyte[m[15;54Htitle [38;5;121mstring[m[15;66H[K[16;46H [7Ccell  xterm.CellData[17;46H}[18;46H[K[19;46H[93mfunc[m init() {[19;59H[K[20;43H[93m19[m[1C        register(Factory{Name: [95m"xte[21;46Hrmgo"[m, New: [93mfunc[m(w, h [38;5;121mint[m) Emulator[22;43H[93m  [m[1C { [93mreturn[m newXterm(w, h) }})[23;43H[7ms/sample_go.txt [+] 2[m
+[1m-- INSERT --[?25h[1;27H[?25l[m[24;70H^[[1;25H[?25h[14t[16t[27m[23m[29m[m[H[2J[?25l[1;1H[4m[93m  1 [m[4mhello 漢字 👍[1;18H🏽[1;20H é 🇬[1;25H🇧[1;27H              [m[7m|[m
+[93m  2 [m[93mpackage[m emu[25C[7m|[m
+[93m  3 [m[36C[7m|[m
+[93m  4 [m[93mimport[m ([28C[7m|[m
+[93m  5 [m[8C[95m"sync"[m[22C[7m|[m
+[93m  6 [m[36C[7m|[m
+[93m  7 [m[8Cxterm [95m"github.com/gitpod-io/[m[7m|[m
+[93m    [m[95mxterm-go"[m[27C[7m|[m
+[93m  8 [m)[35C[7m|[m
+[93m  9 [m[36C[7m|[m
+[93m 10 [m[93mtype[m xtermEmu [93mstruct[m {[14C[7m|[m
+[93m 11 [m[8Ct     *xterm.Terminal[7C[7m|[m
+[93m 12 [m[8Cmu    sync.Mutex[12C[7m|[m
+[93m 13 [m[8Cresp  [][38;5;121mbyte[m[16C[7m|[m
+[93m 14 [m[8Ctitle [38;5;121mstring[m[16C[7m|[m
+[93m 15 [m[8Ccell  xterm.CellData[8C[7m|[m
+[93m 16 [m}[35C[7m|[m
+[93m 17 [m[36C[7m|[m
+[93m 18 [m[93mfunc[m init() {[23C[7m|[m
+[93m 19 [m[8Cregister(Factory{Name: [95m"xter[m[7m|[m
+[93m    [m[95mmgo"[m, New: [93mfunc[m(w, h [38;5;121mint[m) Emulator {[7m|[m
+[93m    [m [93mreturn[m newXterm(w, h) }})[10C[7m|[m
+[93m 20 [m}[35C[7m|[m
+[93m 21 [m[36C[7m|[m
+[93m 22 [m[93mfunc[m newXterm(w, h [38;5;121mint[m) *xtermEmu { [7m|[m
+[93m 23 [m[8Cx := &xtermEmu{t: xterm.New([7m|[m
+[93m    [mxterm.WithCols(w), xterm.WithRows(h)[7m|[m
+[93m    [m, xterm.WithScrollback([95m1000[m))}      [7m|[m[29;41H[1m[7m <es/sample_go.txt [+] 1,35-23        Top[m[1;42H[4m[93m  2 [m[4m[93mpackage[m[4m emu                                            [m[2;42H[93m  3 [3;42H  4 [m[93mimport[m ([4;42H[93m  5 [m[8C[95m"sync"[m[5;42H[93m  6 [6;42H  7 [m[8Cxterm [95m"github.com/gitpod-io/xterm-go"[m[7;42H[93m  8 [m)[8;42H[93m  9 [9;42H 10 [m[93mtype[m xtermEmu [93mstruct[m {[10;42H[93m 11 [m[8Ct     *xterm.Terminal[11;42H[93m 12 [m[8Cmu    sync.Mutex[12;42H[93m 13 [m[8Cresp  [][38;5;121mbyte[m[13;42H[93m 14 [m[8Ctitle [38;5;121mstring[m[14;42H[93m 15 [m[8Ccell  xterm.CellData[15;42H[93m 16 [m}[16;42H[93m 17 [17;42H 18 [m[93mfunc[m init() {[18;42H[93m 19 [m[8Cregister(Factory{Name: [95m"xtermgo"[m, New: [93mfunc[m(w,[19;42H[93m    [mh [38;5;121mint[m) Emulator { [93mreturn[m newXterm(w, h) }})[20;42H[93m 20 [m}[21;42H[93m 21 [22;42H 22 [m[93mfunc[m newXterm(w, h [38;5;121mint[m) *xtermEmu {[23;42H[93m 23 [m[8Cx := &xtermEmu{t: xterm.New(xterm.WithCols(w),[24;42H[93m    [mxterm.WithRows(h), xterm.WithScrollback([95m1000[m))}[25;42H[93m 24 [m[8Cx.t.OnData([93mfunc[m(s [38;5;121mstring[m) { x.mu.Lock(); x.resp[26;42H[93m    [m = [1m[96mappend[m(x.resp, s...); x.mu.Unlock() })[27;42H[93m 25 [m[8Cx.t.OnTitleChange([93mfunc[m(s [38;5;121mstring[m) { x.mu.Lock();[28;42H[93m    [m x.title = s; x.mu.Unlock() })[29;42H[7mfixtures/sample_go.txt [+]               2,1             0%[m[30;1H[1m-- INSERT --[?25h[1;27H[?25l[m[30;1H[K[29;26H[1m[7m1-21 [1;25H[?25h[?25l[30;1H[m:set nowrap[8;3H[93m8[m[1C)         [9;3H[93m9[m[1C [10;2H[93m10[m[1C[93mtype[m xtermEmu [93mstruct[m {[11;3H[93m1[m[1C        t     *xterm.Terminal[12;3H[93m2[m[9Cmu    sync.Mutex     [13;3H[93m3[m[9Cresp  [][38;5;121mbyte[m    [14;3H[93m4[m[9Ctitle [38;5;121mstring[m[15;3H[93m5[m[9Ccell  xterm.CellData[16;3H[93m6[m[1C}[7C                    [17;3H[93m7[m[1C [18;3H[93m8[m[1C[93mfunc[m init() {[19;3H[93m9[m[1C        register(Factory{Name: [95m"xter[m[20;2H[93m20[m[1C}[7C                            [21;2H[93m21[m[1C                                    [22;2H[93m22[m[1C[93mfunc[m newXterm(w, h [38;5;121mint[m) *xtermEmu {[23;3H[93m3[m[1C [7Cx := &xtermEmu{t: xterm.New([24;3H[93m4[m[9Cx.t.OnData([93mfunc[m(s [38;5;121mstring[m) {[25;3H[93m5[m[1C        x.t.OnTitleChange([93mfunc[m(s [38;5;121mstr[m[26;3H[93m6[m[9C[93mreturn[m x                    [27;2H[93m27[m[1C}                                   [28;2H[93m28[m[1C                              [?25h[1;25H[?25l[30;90H50zl[1;25H[30;90H    [1;5H[4m🇧[1;7H                    [m[2;5H           [4;5H        [5;13H       [7;5H[95mb.com/gitpod-io/xterm-go"[m           [8;5H [10;5H {                    [11;5H.Terminal                    [12;5Hutex                    [13;13H             [14;13H             [15;5HCellData                    [16;5H [18;5H             [19;5Htory{Name: [95m"xtermgo"[m, New: [93mfunc[m(w, h[20;5H [22;5H[38;5;121mnt[m) *xtermEmu {                    [23;5Hmu{t: xterm.New(xterm.WithCols(w), x[24;5H[93munc[m(s [38;5;121mstring[m) { x.mu.Lock(); x.resp[25;5Hhange([93mfunc[m(s [38;5;121mstring[m) { x.mu.Lock(); [26;13H        [27;5H [?25h[1;5H[14t[16t[27m[23m[29m[m[H[2J[?25l[1;1H[4m[93m  1 [m[4m🇧[1;7H                                  [m[7m|[m
+[93m  2 [m[36C[7m|[m
+[93m  3 [m[36C[7m|[m
+[93m  4 [m[36C[7m|[m
+[93m  5 [m[36C[7m|[m
+[93m  6 [m[36C[7m|[m
+[93m  7 [m[95mb.com/gitpod-io/xterm-go"[m[11C[7m|[m
+[93m  8 [m[36C[7m|[m
+[93m  9 [m[36C[7m|[m
+[93m 10 [m {[34C[7m|[m
+[93m 11 [m.Terminal[27C[7m|[m
+[93m 12 [mutex[32C[7m|[m
+[93m 13 [m[36C[7m|[m
+[93m 14 [m[36C[7m|[m
+[93m 15 [mCellData[28C[7m|[m
+[93m 16 [m[36C[7m|[m
+[93m 17 [m[36C[7m|[m
+[93m 18 [m[36C[7m|[m[19;41H[1m[7m <es/sample_go.txt [+] 1,31-21        Top[m[1;42H[4m[93m  2 [m[4m[93mpackage[m[4m emu    [m[2;42H[93m  3 [3;42H  4 [m[93mimport[m ([4;42H[93m  5 [m[8C[95m"sync"[m[5;42H[93m  6 [6;42H  7 [m[8Cxterm [95m"[m[7;42H[93m    [m[95mgithub.com/gitp[m[8;42H[93m    [m[95mod-io/xterm-go"[m[9;42H[93m  8 [m)[10;42H[93m  9 [11;42H 10 [m[93mtype[m xtermEmu [93ms[m[12;42H[93m    [m[93mtruct[m {[13;42H[93m 11 [m[8Ct     *[14;42H[93m    [mxterm.Terminal[15;42H[93m 12 [m[8Cmu    s[16;42H[93m    [mync.Mutex[17;42H[93m 13 [m[8Cresp  [[18;42H[93m    [m][38;5;121mbyte[m[19;42H[7m<.txt [+] 2,1    0%[?25h[1;5H[?25l[20;1H[m:qa![?2004l[>4;m[23;2t[23;1t[20;1H[K[20;1H[?1004l[?2004l[?1l>[?1049l[23;0;0t[?25h[>4;m

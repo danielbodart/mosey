@@ -1,0 +1,29 @@
+[
+ {
+  "off": 1073,
+  "kind": "snap",
+  "name": "cat"
+ },
+ {
+  "off": 1073,
+  "kind": "resize",
+  "w": 40,
+  "h": 24
+ },
+ {
+  "off": 1073,
+  "kind": "snap",
+  "name": "narrow"
+ },
+ {
+  "off": 1073,
+  "kind": "resize",
+  "w": 80,
+  "h": 24
+ },
+ {
+  "off": 1073,
+  "kind": "snap",
+  "name": "back"
+ }
+]

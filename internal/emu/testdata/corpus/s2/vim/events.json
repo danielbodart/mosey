@@ -1,0 +1,54 @@
+[
+ {
+  "off": 2409,
+  "kind": "snap",
+  "name": "open"
+ },
+ {
+  "off": 4434,
+  "kind": "snap",
+  "name": "vsplit"
+ },
+ {
+  "off": 5600,
+  "kind": "snap",
+  "name": "end"
+ },
+ {
+  "off": 8541,
+  "kind": "snap",
+  "name": "insert"
+ },
+ {
+  "off": 8541,
+  "kind": "resize",
+  "w": 100,
+  "h": 30
+ },
+ {
+  "off": 11607,
+  "kind": "snap",
+  "name": "resized"
+ },
+ {
+  "off": 13420,
+  "kind": "snap",
+  "name": "hscroll"
+ },
+ {
+  "off": 13420,
+  "kind": "resize",
+  "w": 60,
+  "h": 20
+ },
+ {
+  "off": 14747,
+  "kind": "snap",
+  "name": "small"
+ },
+ {
+  "off": 14865,
+  "kind": "snap",
+  "name": "quit"
+ }
+]
