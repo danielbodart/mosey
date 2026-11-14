@@ -7,8 +7,8 @@ It's a successor to [Mosh](https://mosh.org), written from scratch in Go.
 This plan was written on dan-blade on 2026-11-13, from a long research
 conversation. It should be carried out on dan-desktop as a series of
 workflows. **§2 lists what is decided. Don't reopen any of it without asking
-Dan.** §3 lists what is open: each item there is a recommendation, and the
-spikes in §5 exist to settle them.
+Dan.** §3 lists what is still open. The spikes (§5) ran on 2026-11-13, and
+their results were settled with Dan on 2026-11-14.
 
 ---
 
@@ -41,7 +41,7 @@ mosey's reasons to exist, in order:
 5. **Faster where it counts.** Mosh's proven SSP timing and prediction, plus
    the fixes upstream never merged.
 
-## 2. Decisions (locked)
+## 2. Decisions (locked; last amended 2026-11-14 after the spikes)
 
 | # | Decision | Why |
 |---|---|---|
@@ -49,14 +49,14 @@ mosey's reasons to exist, in order:
 | D2 | **License: Apache-2.0** (Dan: Apache or MIT; Apache matches gokit and zigkit) | Permissive. |
 | D3 | **Clean-room implementation.** Mosh is GPLv3. | See §4 for the rules. |
 | D4 | **Security bar: the public internet, used by other people.** Dan deploys it only inside WireGuard, but WireGuard is **never** the security boundary or an excuse for a shortcut. | It's a daemon reachable from the network. |
-| D5 | **UDP only.** Datagrams must fit inside WireGuard (start at 1280-byte payloads, as Mosh does). | |
+| D5 | **UDP only.** Datagrams must fit inside WireGuard. *Amended 2026-11-14:* data payloads are at most **1232 bytes** (the IPv6 minimum MTU of 1280, less the IPv6 and UDP headers). Every handshake and rekey message is at most **1200 bytes** (QUIC's floor), so DPLPMTUD can be added later with a 1200-byte base and no wire change. | A 1280-byte payload is silently dropped on minimum-MTU IPv6 paths and inside WireGuard tunnels with an MTU of 1280 (S1). |
 | D6 | **Started over SSH, as Mosh is.** The client SSHes in using the system `ssh` and the user's own config, starts the server on demand, and receives the session's secret over that SSH channel. **SSH vouches for the server.** | Familiar to Mosh users, and it works with any existing SSH setup. |
-| D7 | **Copy the server over automatically.** If the server binary is missing or the wrong version, the client copies over its own matching static build (hash-checked, installed to `~/.cache/mosey/<version>/`, asks the first time, never replaces a file someone else owns). Prior art: VS Code Remote-SSH, kitty's `kitten ssh`. | Nothing to install on the server first, and no version skew, which fits D10. |
+| D7 | **Copy the server over automatically.** If the server binary is missing or the wrong version, the client copies over its own matching static build (hash-checked, installed to `~/.cache/mosey/<version>/`, asks the first time, never replaces a file someone else owns). Prior art: VS Code Remote-SSH, kitty's `kitten ssh`. The process that is the parent of the shells has comm **`mosey-server`**; quoin relies on that name (S3). A NixOS VM test in CI covers the install path. | Nothing to install on the server first, and no version skew, which fits D10. Under D10 this is the path used every day, not an edge case (reaffirmed 2026-11-14). |
 | D8 | **Resume** is a headline feature. When resuming, **rekey** through an authenticated local channel. Never save transport or crypto state to disk (saving it risks nonce reuse; Winstein, mosh-devel, July 2012). | |
 | D9 | **Server-side emulation, structured diffs to the client.** The client has no VT parser. Anything deliberately passed through (title, OSC 52, OSC 8) goes through a strict allow-list. | Terminal isolation (§1.4). |
 | D10 | **Trunk-based, every green commit is a release** (static binaries for linux/darwin × amd64/arm64). | §1.1 |
-| D11 | **Mosh's SSP timing**, from the paper and public documentation (see §4): frame interval = SRTT/2 clamped to 20–250 ms, the server waits 8 ms to collect output, acks are delayed 100 ms, a 3 s heartbeat, RFC 6298 RTO with a 50 ms floor, and the client sends every keystroke while the server sends only the latest state. | Proven in the 2012 paper's evaluation. |
-| D12 | **Mosh's prediction design** (epochs, server echo-ack, underlining unconfirmed predictions), reimplemented from the paper and then improved: wide characters, limits on hostile input. Not game-style prediction. | 70% of keystrokes shown instantly, 0.9% wrong (paper). |
+| D11 | **Mosh's SSP timing**, from the paper and public documentation (see §4): frame interval = SRTT/2 clamped to 20–250 ms, the server waits 8 ms to collect output, acks are delayed 100 ms, a 3 s heartbeat, RFC 6298 RTO with a 50 ms floor, and the client sends every keystroke while the server sends only the latest state. *Amended 2026-11-14 (S5):* the RTO adds the peer's maximum ack delay (RFC 9002 §6.2.1), so the effective floor is about 150 ms. The RTO doubles, capped at 1 s. During an outage, probes go out every `clamp(silence/8, frame interval, 1 s)`. While the user types, SSP sends **chaff** on a fixed tick (as OpenSSH 9.5's ObscureKeystrokeTiming does), with the tick to be measured in netsim. There are no echo-ack-only frames while the pty has echo off. | Proven in the 2012 paper's evaluation. The amendments were measured over 280 simulated hours (S5). |
+| D12 | **Mosh's prediction design** (epochs, server echo-ack, underlining unconfirmed predictions), reimplemented from the paper and then improved: wide characters, limits on hostile input. *Amended 2026-11-14 (S6):*<br>• **Confirmation:** confirm on the glyph only; only an informative keystroke confirms, and backspace never does.<br>• **Inserting text:** the shifted text run stops at a change of rendition, which handles autosuggestions.<br>• **Ack horizon** for frames that arrive after an unpredictable key.<br>• **Recovery by rebase:** keys not yet acknowledged are re-applied on each frame, falling back to the gate when the log has holes, after a paste, or with echo off.<br>• **Echo-off bit:** server frames carry a bit (`!ECHO && ICANON`); while it is set the client neither predicts nor logs keys.<br>• **Drawn-cursor heuristic:** off by default. | Paper: 70% instant, 0.9% wrong. S6, on modern shells: 79.8% instant and 0.1% wrong at 5 ms; 62.4% instant at 450 ms, against 41.2% without rebase. 0 of 555 password keys shown. |
 | D13 | **No multipath** (no simultaneous wifi + cellular). | A feature too far. |
 | D14 | **Sessions are login shells, as with SSH.** Anything you run inside (`claude`, chase's containers) just works. There's no "session command" hook. | |
 | D15 | **Typed channels from the start**, modelled on RFC 4254: the handshake negotiates which channel types each side supports. v1 has the terminal and ssh-agent forwarding. Port forwarding comes later and **must not be ruled out by the design**. A UDP datagram channel is the most useful form; for TCP you can still use `ssh -L`. | |
@@ -64,20 +64,28 @@ mosey's reasons to exist, in order:
 | D17 | **Depend on standards, not the family tools**: ssh-agent for keys (quoin plugs in), OpenSSH `known_hosts` / `authorized_keys`, zenity-compatible prompts (galley plugs in). There's no hard dependency on quoin, galley, flong or chase. | Anyone can use it, and the family's security still arrives through those interfaces. |
 | D18 | **Deterministic network tests**: a simulated `net.PacketConn` running under `testing/synctest` (virtual time), with seeded Gilbert-Elliott burst loss, delay, jitter, reordering, MTU limits, outages, and **replayed Mahimahi cellular traces**. Profiles such as `train`, `lte-driving` and `hotel-wifi` are test fixtures. Kernel netem checks are local-only, and nothing in CI asserts real elapsed time. | No manual testing on trains. |
 | D19 | Minimal dependencies: the Go standard library plus `golang.org/x/*`. **Never write our own crypto or terminal emulator.** Every third-party dependency has to earn its place, and the reason goes in `DEPENDENCIES.md`. | |
+| D20 | **Handshake = B3** (S1): `Mosey_B3_KEMx2psk0_XWing_ChaChaPoly_HKDFSHA256`.<br>• **Bootstrap:** each side makes a single-use X-Wing key during the SSH bootstrap; the client's goes over SSH stdin, the server's over stdout along with a PSK and a credential id.<br>• **Credentials:** a credential is consumed only when the client confirms. Each lives 30 s, at most 2 may be unused per session, and evictions are logged.<br>• **Packets:** ChaCha20-Poly1305 with an RFC 6479 replay window. Receive state changes only after a packet authenticates.<br>• **Rekey:** every 120 s or N packets, using the hybrid key exchange. REKEY_INIT is split across 2 datagrams, each sealed under the current keys. There is no rekey triggered by idleness.<br>• **Libraries:** the KEM is `crypto/hpke` X-Wing. Its audit gap is recorded in `DEPENDENCIES.md` and is part of the external review.<br>• **Erasing secrets:** linux release builds use `GOEXPERIMENT=runtimesecret`, with handshake and rekey inside `secret.Do`. Elsewhere the claim is the weaker "erased after GC reuse". | SSH only has to be authentic, not confidential: a leaked stdout line doesn't give a shell (ProVerif, plus an attack test). Post-quantum, forward secret, no long-term keys on disk. |
+| D21 | **Roaming uses path validation** (RFC 9000 §8). An address that isn't validated gets at most 3x the bytes received from it, and an encrypted PATH_CHALLENGE that is re-sent on a timer. The client sends at once when its local address changes (netlink on Linux). | The paper's "newest authentic source" rule lets an on-path sniff-and-inject attacker redirect the screen stream (29x amplification, session cut off; S5). |
+| D22 | **Process layout C** (S4):<br>• **spawner:** tiny and unsandboxed. Binds UDP, opens ptys, forks shells, hands pty fds over with SCM_RIGHTS.<br>• **proto:** keys, UDP, every protocol parser.<br>• **emu:** the VT parser.<br>proto and emu both run under Landlock deny-all (through `x/sys`), seccomp TSYNC (KILL on amd64; ERRNO on arm64 until a CI arm64 soak passes) and `DUMPABLE=0`. proto enforces a strict grammar on emu's replies. CI runs a KILL soak of at least 120 s for every Go upgrade and every architecture. Linux-only mechanisms sit behind a platform layer, and macOS is parked but expected (nothing may rule it out). | The emulator is the sandbox that really contains an attacker. Splitting adds no measurable latency. |
+| D23 | **Terminal emulator: `tuios.dev/vt`** (pure Go, pinned) behind a mosey-owned `Emulator` interface. libghostty, read directly, is the CI oracle. Bounds:<br>• window size clamped to 1000x500 (configurable);<br>• scrollback budgeted in cells, `min(10000, 1e6/cols)` lines;<br>• emu cgroup `MemoryMax` of 512 MiB; when it is hit, tell the client and rebuild.<br>A panic also means rebuild. The reply queue is bounded. The D9 allow-list is enforced at both ends, and the client's diff decoder is fuzzed. | It is the only candidate with no fuzz finding, it has the richest API, and it scored 36/36 on vttest (S2). Fork it if upstream stalls. |
+| D24 | **Compression is always on** (stdlib flate per frame, with a bounded decoder). Padding and dictionary use are settled in the spec. | Mosh 1.4.0 compresses every update with no padding (measured black-box, S5). |
+| D25 | **Agent forwarding replays the bind captured from the system ssh** (S3, option a′).<br>• **Bootstrap:** the client starts a fresh `ssh -o ForwardAgent=<capture socket> -o ControlMaster=no -o ControlPath=none`.<br>• **Capture:** a strict capture state machine checks the pid and uid, then pins the bind to known_hosts.<br>• **Replay:** the bind is replayed at the start of every agent channel.<br>• **No trustworthy bind:** the agent is off.<br>Whether to forward follows ssh's own config (`ForwardAgent` from `ssh -G`, including a socket path or env var), and `-A`/`-a` override it. | quoin-signer works unchanged. Destination-constrained agents work exactly as they do with `ssh -A`. |
+| D26 | **Attach is exclusive** (v1). A new attach revokes every other transport and wipes its keys; the kicked client exits with "session taken over from <addr> at <time>". The design keeps transports separate (SSP state per transport, size policy in one place, an attach-mode field reserved) so a shared mode can come later. | Simple, and it cuts off a stolen client. |
+| D27 | **Terminal pass-through:**<br>• **OSC 52:** clipboard write always allowed (size-capped); read never.<br>• **OSC 8:** http, https and mailto only, at most 2048 B.<br>• **Titles:** bidi controls are stripped. | |
+| D28 | **Provenance for remote approvals is a quoin feature** (`provenance-v00@bodar.com`, quoin-attest). mosey's part:<br>• it passes agent extension messages through;<br>• it hands each agent connection to quoin-attest through a keyless, fail-closed forwarder that doesn't import quoin;<br>• it exposes the handshake hash `h`, so quoin-attest can sign it.<br>Hand-off: quoin branch `mosey/s7-provenance-envelope`, `docs/mosey-integration.md`. | Works over mosey and over stock `ssh -A` (S7). |
 
-## 3. Open (recommendations, to be settled by the spikes)
+## 3. Open
 
-| # | Question | Recommendation so far |
+Everything from the first version of this section (O1–O9) was settled on
+2026-11-14 after the spikes; see D5, D11, D12 and D20–D28. Still open:
+
+| # | Question | Current position |
 |---|---|---|
-| O1 | **The handshake.** A custom SIGMA-style handshake on audited standard-library building blocks, or QUIC (quic-go with RFC 9221 datagrams), or Noise? | Custom SIGMA-I-style: ephemeral X25519 + ML-KEM-768 hybrid (`crypto/ecdh`, `crypto/mlkem`, `crypto/hkdf`, all covered by the 2025 Trail of Bits audit), with both long-term public keys, the role labels and both key shares in a transcript that both sides sign, and the session keys derived from that transcript. Each packet carries an explicit counter, with a replay window (RFC 6479 / WireGuard). Receive state is only updated after a packet authenticates (the lesson of flynn/noise's pre-1.0 advisory). QUIC loses because its congestion controller would override SSP's pacing and fast retransmit. **But D6 changes the problem:** when SSH vouches for the server, the handshake may just need a PSK delivered over SSH, combined with ephemeral key exchange for forward secrecy. Spike S1 decides. |
-| O2 | **Agent forwarding with quoin's session-bind.** quoin's remote sudo needs OpenSSH's `session-bind@openssh.com` (host key, session id, the host key's signature). A rootless server started on demand can't sign with `/etc/ssh` host keys. **Ordinary agent forwarding works either way. Only quoin's bind-checked features are at risk.** | Options: (a) the client does the SSH bootstrap itself with `x/crypto/ssh`, holds the real (host key, exchange hash, signature) triple, and replays it as the bind for the mosey connection, which **costs `~/.ssh/config` support (ProxyJump and so on)**; (b) a per-user mosey identity vouched for by SSH, which quoin would treat as an unknown host and ask about every time, and remote sudo fails; (c) a small quoin extension that understands a mosey-specific bind. Spike S3 decides. |
-| O3 | **Terminal emulator on the server.** | `tuios.dev/vt`: pure Go by default, with an optional libghostty-vt backend via cgo behind the same API, and it limits attacker-controlled sizes before allocating. It's young and only self-documented. Run the emulator in a sandboxed helper process either way. Spike S2 decides. |
-| O4 | **Layout without root and privilege separation.** | A per-user server (no root), split into a **network process** (packets, crypto, handshake) and a **session process** (ptys, shells, emulator), connected by a socketpair. Landlock in both. Landlock doesn't cover UDP, so the network process needs **seccomp**, and seccomp has to apply to all of Go's runtime threads (TSYNC, or install it before the runtime starts by re-executing). Spike S4. |
-| O5 | **Client UX for resuming.** | `mosey host` reattaches to the default session automatically, `mosey host:name` attaches to a named one, and `mosey ls host` lists them. No tmux-style picker. With several clients attached, the most recently active one sets the size (tmux's `latest` rule). Native scrollback comes from the server's history, fetched lazily. |
-| O6 | **NAT and firewall traversal** using the SSH bootstrap as the signalling channel: both sides send UDP at the same time, so no inbound port needs opening (ICE RFC 8445, STUN RFC 8489, Tailscale's "How NAT traversal works"). | Design the handshake so this can be added. Ship it after v1. Limits: roaming needs another round of punching, and symmetric or carrier-grade NAT needs a relay. |
-| O7 | **Burst-loss recovery beyond SSP.** | After an RTO, resend the *current* state straight away rather than backing off (POLYCORN, NSDI 2023, on high-speed-rail LTE). Experiment: XOR or sliding-window parity over recent keystroke frames (Tetrys / RFC 9407 ideas, Fiedler-style redundancy). No Reed-Solomon or RaptorQ dependency. Decide by benchmark (S5). |
-| O8 | **Compression.** | Raw frames vs stdlib `compress/flate` vs zstd with a dictionary (`klauspost/compress`, a dependency). Decide by benchmark on real diff frames. |
-| O9 | **Sending only a few datagrams.** | Recompute timing from SRTT, use DPLPMTUD (RFC 8899) later, ECN maybe. Low priority. |
+| O6 | NAT and firewall traversal (ICE/STUN over the SSH bootstrap) | After v1. B3 doesn't rule it out. |
+| O9 | DPLPMTUD (RFC 8899) and ECN | After v1. Base 1200, as QUIC uses (D5). |
+| O10 | Chaff tick and cost (D11) | Measure in netsim before fixing the value. Reserve the frame type now. |
+| O11 | Cell-diff wire format (D9) | S2's prototype was bigger than raw output at its cadence. Redesign it in the spec, and measure it with SSP timing and compression on. |
+| O12 | Compression padding and dictionary (D24) | 64-byte padding costs about 20% of the saving. The acknowledged screen as a dictionary leaks the most. Decide in the spec. |
 
 ## 4. Clean-room rules (D3)
 
@@ -96,53 +104,35 @@ mosey's reasons to exist, in order:
 - Each agent working on this repo is told these rules. Review checks for
   any sign of Mosh-derived code structure.
 
-## 5. Spikes (first workflow: run them in parallel, each in its own worktree)
+## 5. Spikes (done 2026-11-13)
 
-Each spike ends with `docs/spikes/<id>/FINDINGS.md` (what was tried, what was
-measured, and a recommendation) and code under `spikes/<id>/` that is a
-record, not production code.
+All seven ran in parallel, each was adversarially reviewed and revised, and
+each left `docs/spikes/<id>/FINDINGS.md` plus record code under
+`spikes/<id>/`. They were S1 handshake, S2 terminal emulator, S3 agent
+forwarding and session-bind, S4 privilege separation, S5 network simulator
+and SSP, S6 prediction, and S7 remote-approval provenance (new, at Dan's
+request). The decisions are in §2. Gaps they left:
 
-- **S1 Handshake.** Build the SIGMA-I + X25519/ML-KEM hybrid variant and the
-  "PSK over SSH + ephemeral key exchange" variant. Model each in
-  ProVerif or Tamarin, or at minimum write out its properties (key secrecy,
-  forward secrecy, mutual authentication, identity misbinding, replay, key
-  compromise impersonation). Compare against quic-go with RFC 9221 datagrams
-  on dependencies, pacing control and complexity. Fuzz the handshake parser.
-- **S2 Terminal emulator.** Compare `tuios.dev/vt`, `charmbracelet/x/vt`
-  and libghostty-vt (through tuios' ghostty backend in a cgo helper) on:
-  vttest coverage, fuzzing (`go test -fuzz` for N hours, crashes and hangs),
-  resource limits under hostile input (huge CSI parameters, sixel, deep
-  OSC), maintenance (commits, contributors, issues), dependency tree, and
-  the cost of the helper process boundary.
-- **S3 Agent forwarding and session-bind.** Prototype options (a)/(b)/(c)
-  from O2 against a real quoin signer: does quoin's remote sudo work
-  unchanged, and what does each option cost?
-- **S4 Privilege separation.** Network process + session process; Landlock
-  in both; seccomp with TSYNC vs installing it before the runtime starts by
-  re-executing; does it run as an unprivileged systemd user service?
-  Measure what still works when the network process is compromised.
-- **S5 Network simulator + SSP baseline.** Build the D18 simulator first,
-  since everything else depends on it. Implement SSP timing (D11) from the
-  spec, then benchmark under the train profiles: keystroke-to-screen
-  latency, stalls after outages, bytes sent. Try the O7 and O8 variants.
-- **S6 Prediction harness.** Record your own keystroke/echo traces
-  (bash, zsh with autosuggestions, fish, vim, claude). Replay them through a
-  from-spec implementation of the D12 prediction under S5's profiles,
-  reporting the paper's metrics: share of keystrokes shown instantly,
-  wrong-prediction rate. Note what modern shell features break.
+- nothing ran on a real WAN, NAT or cellular path;
+- fuzzing ran for minutes, not hours;
+- no end-to-end quoin-sudo run (that needs root or a VM);
+- the pieces have never run together.
 
-## 6. After the spikes
+## 6. Build
 
-1. Settle O1–O8 with Dan, and update §2 and §3.
-2. `docs/threat-model.md` and `docs/spec/` (wire format, handshake, SSP,
-   prediction, channels, resume).
-3. Implement in thin vertical slices (handshake → SSP → terminal → resume →
-   agent channel → auto-upload), each fuzzed and tested against the
-   simulator.
-4. Release pipeline (D10) from the first commit. Then use it daily, on
+1. Implement in thin vertical slices on trunk, each starting with its own
+   `docs/spec/` section (clean room, §4), then fuzzed, and tested against
+   the S5 simulator. The first slice joins the spikes into a working whole:
+   SSH bootstrap (B3 plus bind capture), the handshake, SSP over netsim and
+   real UDP, layout C, tuios with cell diffs, and the client's renderer. Then
+   resume, the agent channel, prediction, auto-upload, and chaff.
+2. `docs/threat-model.md` grows with the slices.
+3. Release pipeline (D10) from the first commit. Then use it daily, on
    trains.
-5. Before 1.0: a formal model of the handshake that checks out, fuzzing
-   running continuously, and an external security review.
+4. The quoin work happens in its own session (D28).
+5. Before 1.0: a formal model of the whole handshake and rekey that checks
+   out, fuzzing running continuously, and an external security review
+   (including `crypto/hpke`).
 
 ## 7. Sources (from the research passes)
 
