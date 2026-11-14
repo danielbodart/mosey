@@ -846,7 +846,7 @@ reflects the flags with ssh's own precedence:
 | `forwardagent` | Socket to forward |
 |---|---|
 | `no` | none: agent off |
-| `yes` | `identityagent` if set and not `none` or `SSH_AUTH_SOCK`; else `$SSH_AUTH_SOCK`; empty means agent off (to be verified against OpenSSH in the agent slice's harness, [S3] exercised `IdentityAgent`) |
+| `yes` | `identityagent` if it names a socket (or `$VAR`); `$SSH_AUTH_SOCK` if it is unset or `SSH_AUTH_SOCK`; agent off if it is `none`, or the socket is empty [ssh: checked black-box against OpenSSH 10.6p1 by `TestForwardAgentYesForwardsTheIdentityAgent`: `IdentityAgent none` with `ForwardAgent yes` forwards nothing] |
 | starts with `$` | the environment variable it names ([ssh]: printed verbatim, e.g. `$FOO`); unset or empty means agent off |
 | anything else | that path ([ssh]: `ssh -G` has already expanded `~`) |
 

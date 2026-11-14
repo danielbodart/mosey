@@ -81,7 +81,11 @@ func AgentSocket(c Config, getenv func(string) string) (path string, ok bool) {
 	case fa == "yes":
 		ia := c.Get("identityagent")
 		switch {
-		case ia == "" || ia == "none" || ia == "SSH_AUTH_SOCK":
+		case ia == "none":
+			// OpenSSH 10.6 forwards no agent at all then (checked
+			// black-box: TestForwardAgentYesForwardsTheIdentityAgent).
+			return "", false
+		case ia == "" || ia == "SSH_AUTH_SOCK":
 			path = getenv("SSH_AUTH_SOCK")
 		case strings.HasPrefix(ia, "$"):
 			// ssh_config(5) lets IdentityAgent name an environment

@@ -32,9 +32,33 @@ type sshd struct {
 	// runtime is the XDG_RUNTIME_DIR sshd gives its sessions, so the
 	// servers' attach sockets are the test's own.
 	runtime string
+	// port is where it listens, and alias the HostKeyAlias its client
+	// config uses, if any.
+	port  int
+	alias string
 }
 
-func startSSHD(t *testing.T) *sshd {
+// sshdOptions vary the throwaway sshd for the agent tests.
+type sshdOptions struct {
+	// allowAgent sets AllowAgentForwarding yes.
+	allowAgent bool
+	// alias is the client config's HostKeyAlias, and its known_hosts
+	// names the host key by it too.
+	alias string
+	// authorized, if set, is the only key sshd takes, in place of the
+	// throwaway user key: an agent's key, for a hop that must be signed
+	// through the forwarded agent.
+	authorized string
+	// clientExtra is more lines for the client config's Host block.
+	clientExtra string
+	// identityAgent is the client config's IdentityAgent: none, unless a
+	// test forwards an agent, which ssh does only from an agent it uses.
+	identityAgent string
+}
+
+func startSSHD(t *testing.T) *sshd { return startSSHDWith(t, sshdOptions{}) }
+
+func startSSHDWith(t *testing.T, o sshdOptions) *sshd {
 	t.Helper()
 	bin, err := exec.LookPath("sshd")
 	if err != nil {
@@ -64,6 +88,18 @@ func startSSHD(t *testing.T) *sshd {
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
+	s.port, s.alias = port, o.alias
+	authorized := filepath.Join(s.dir, "user.pub")
+	if o.authorized != "" {
+		authorized = o.authorized
+	}
+	allowAgent := "no"
+	if o.allowAgent {
+		allowAgent = "yes"
+	}
+	if o.identityAgent == "" {
+		o.identityAgent = "none"
+	}
 
 	write := func(name, text string) string {
 		path := filepath.Join(s.dir, name)
@@ -76,33 +112,38 @@ func startSSHD(t *testing.T) *sshd {
 ListenAddress 127.0.0.1
 HostKey %[2]s/host
 PidFile %[2]s/sshd.pid
-AuthorizedKeysFile %[2]s/user.pub
+AuthorizedKeysFile %[5]s
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 StrictModes no
 UsePAM no
-AllowAgentForwarding no
+AllowAgentForwarding %[6]s
 AllowTcpForwarding no
 X11Forwarding no
 SetEnv HOME=%[3]s XDG_RUNTIME_DIR=%[4]s
-`, port, s.dir, s.home, s.runtime))
+`, port, s.dir, s.home, s.runtime, authorized, allowAgent))
 	hostPub, err := os.ReadFile(filepath.Join(s.dir, "host.pub"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	write("known_hosts", fmt.Sprintf("[127.0.0.1]:%d %s", port, hostPub))
+	known := fmt.Sprintf("[127.0.0.1]:%d %s", port, hostPub)
+	if o.alias != "" {
+		known += fmt.Sprintf("%s %s", o.alias, hostPub)
+		o.clientExtra += "\n  HostKeyAlias " + o.alias
+	}
+	write("known_hosts", known)
 	s.config = write("ssh_config", fmt.Sprintf(`Host %s
   HostName 127.0.0.1
   Port %d
   User %s
   IdentityFile %[4]s/user
   IdentitiesOnly yes
-  IdentityAgent none
+  IdentityAgent %[6]s
   UserKnownHostsFile %[4]s/known_hosts
   GlobalKnownHostsFile /dev/null
   StrictHostKeyChecking yes
-  BatchMode yes
-`, s.host, port, me.Username, s.dir))
+  BatchMode yes%[5]s
+`, s.host, port, me.Username, s.dir, o.clientExtra, o.identityAgent))
 
 	if out, err := exec.Command(bin, "-t", "-f", sshdConfig).CombinedOutput(); err != nil {
 		t.Skipf("this sshd will not take a throwaway config: %v %s", err, out)

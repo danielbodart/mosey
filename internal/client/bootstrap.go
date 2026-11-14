@@ -174,14 +174,15 @@ func (b *spawn) finishCapture(ctx context.Context, capt *agent.Capture, cfg boot
 		b.agentOff(err.Error())
 		return
 	}
-	host := cfg.Get("hostkeyalias")
+	host, port := cfg.Get("hostkeyalias"), 22
 	if host == "" || host == "none" {
 		host = cfg.Get("hostname")
+		if p, err := strconv.Atoi(cfg.Get("port")); err == nil {
+			port = p
+		}
 	}
-	port, err := strconv.Atoi(cfg.Get("port"))
-	if err != nil {
-		port = 22
-	}
+	// An alias is looked up bare, whatever the port, as ssh itself looks
+	// it up [ssh: a HostKeyAlias entry with no port is accepted on any].
 	files := append(strings.Fields(cfg.Get("userknownhostsfile")), strings.Fields(cfg.Get("globalknownhostsfile"))...)
 	if err := agent.Pin(bind.HostKey, host, port, files); err != nil {
 		b.agentOff(err.Error())

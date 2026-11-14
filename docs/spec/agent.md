@@ -142,9 +142,11 @@ pin ties the key to the destination: the bind's host key must be a key the
 user's own `known_hosts` lists for the host ssh just checked, using
 `ssh -G`'s values:
 
-- host: `hostkeyalias` if `ssh -G` printed one, else `hostname`;
-- port: `port`; a host on port 22 is looked up bare, any other as
-  `[host]:port` (`known_hosts` format, `knownhosts.Normalize`);
+- host: `hostkeyalias` if `ssh -G` printed one, looked up bare whatever
+  the port, as ssh looks an alias up [ssh: checked by the e2e harness,
+  whose known_hosts names the host by its alias with no port];
+- otherwise `hostname` at `port`: on port 22 looked up bare, on any other
+  as `[host]:port` (`known_hosts` format, `knownhosts.Normalize`);
 - files: every path in `userknownhostsfile` then `globalknownhostsfile`
   (`ssh -G` prints them expanded [ssh]); a file that does not exist is
   skipped, one that cannot be read or parsed is an error (NoBind);
