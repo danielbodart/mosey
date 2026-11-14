@@ -420,6 +420,52 @@ variables are `server.md`'s concern.
 ends, as Mosh's server is. [S4] §3.10 ran it under `systemd-run --user`,
 which survives; adopting that is a later decision (open question 8).
 
+### 4.6 Release assets: the files D7's upload sends
+
+D7 sends the client's own file when the remote runs the client's OS and
+architecture. When it does not (a Mac client, a Linux server), the client
+fetches the release of **its own version** for the remote's platform. That
+needs the file's name to be computable from three things the client
+already knows, so it is fixed here, and `ci.yml`'s release job produces
+exactly this [choice]:
+
+- **Where.** Every release is a GitHub Release on
+  `github.com/danielbodart/mosey`, made by CI from a green trunk commit
+  (D10), tagged `v<V>`, where `V` is `scripts/version.sh`'s
+  `MAJOR.COMMITS.RUN` and is byte-for-byte what `mosey -version` prints for
+  every binary in it (the release job checks this before publishing).
+- **The binaries.** One asset per platform, named
+  `mosey-<V>-<os>-<arch>`, with `os` ∈ {`linux`, `darwin`} and `arch` ∈
+  {`amd64`, `arm64`}: Go's `GOOS` and `GOARCH` names, so the client's own
+  is `runtime.GOOS` and `runtime.GOARCH`. Each is the bare static
+  executable `scripts/build.sh` made (CGO off, `-trimpath`, linux with
+  `GOEXPERIMENT=runtimesecret`, D1, D20), not an archive.
+- **The checksums.** One asset named `SHA256SUMS`, in `sha256sum(1)`'s
+  text format: per binary, 64 lower-case hex digits, two spaces, the
+  asset's name, a newline, sorted by name.
+- **So** the binary for `os/arch` at version `V` is
+  `https://github.com/danielbodart/mosey/releases/download/v<V>/mosey-<V>-<os>-<arch>`
+  and its hash is the line of
+  `https://github.com/danielbodart/mosey/releases/download/v<V>/SHA256SUMS`
+  whose second field is that name.
+
+Why bare files: the hash in `SHA256SUMS` is then the hash of the very
+bytes the client sends and the remote installs at
+`~/.cache/mosey/<V>/mosey`, so one hash is checked on download, after the
+copy, and against a file already there; and the client needs no archive
+parser for a file from the network [derived]. Why the version in the name:
+a downloaded file says what it is, and two versions can sit in one
+directory without one overwriting the other.
+
+Mapping the remote's `uname -s` and `uname -m` to `os` and `arch`
+(`Linux` → `linux`, `Darwin` → `darwin`, `x86_64` → `amd64`, `aarch64`
+and `arm64` → `arm64`; anything else has no asset) is the auto-upload
+slice's, as is the download itself. `SHA256SUMS` comes over HTTPS from
+the same release, so it catches corruption and a wrong file, not a
+compromised GitHub account or CI; whether releases are also signed is
+§14 question C. A client of a development build (`dev`, or a local
+build's timestamp patch) has no release, so it can upload only itself.
+
 ---
 
 ## 5. Agent forwarding: the decision (D25)
@@ -1267,6 +1313,12 @@ A. **An upgraded client and an old session** (§9.2 step 6): keep old
 B. **The spawner's confirmation backstop** (§4.5): the `Attached`
    message and the CredentialTTL + 10 s rule are a requirement this
    document places on `server.md`, which has yet to take it up.
+
+C. **Signed releases** (§4.6): `SHA256SUMS` is only as trustworthy as
+   the GitHub release it comes from. Signing it (an SSH signature from a
+   key CI holds, or Sigstore's keyless signing of the workflow) would let
+   the client check that CI made it. For the auto-upload slice, which is
+   the first to download anything.
 
 ---
 
