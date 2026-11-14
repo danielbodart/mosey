@@ -85,7 +85,7 @@ Everything from the first version of this section (O1–O9) was settled on
 | O9 | DPLPMTUD (RFC 8899) and ECN | After v1. Base 1200, as QUIC uses (D5). |
 | O10 | Chaff tick and cost (D11) | Measure in netsim before fixing the value. Reserve the frame type now. |
 | O11 | Cell-diff wire format (D9) | S2's prototype was bigger than raw output at its cadence. Redesign it in the spec, and measure it with SSP timing and compression on. |
-| O12 | Compression padding and dictionary (D24) | 64-byte padding costs about 20% of the saving. The acknowledged screen as a dictionary leaks the most. Decide in the spec. |
+| O12 | Compression padding and dictionary (D24) | Closed for v1 in `docs/spec/ssp.md` §9.2: no dictionary ever, no padding in v1 (it costs about 20% of the saving and only blunts the leak), the residual leak accepted as threat-model R1. Revisit padding with chaff (O10). |
 
 ## 4. Clean-room rules (D3)
 

@@ -26,7 +26,7 @@ decision wins.
 | `internal/replay` | RFC 6479 anti-replay window, check and commit separate | proto, client | **crypto-transport** | `replay.go` |
 | `internal/handshake` | B3 handshake, one-shot X-Wing keys, credential store, hello, hybrid rekey (D20) | proto, client | **crypto-transport** | `doc.go`, `key.go`, `credential.go`, `hello.go`, `handshake.go`, `rekey.go` |
 | `internal/transport` | Sealed frames over UDP: handshake driving, AEAD, replay, rekey with split INIT, path validation and anti-amplification (D21), exclusive attach (D26) | proto, client | **crypto-transport** | `doc.go`, `frame.go`, `transport.go` |
-| `internal/ssp` | Generic State Synchronization Protocol: `State[S]`, `Endpoint`, D11 timing, fragmentation, compression (D24) | proto, client | **ssp** | `doc.go`, `ssp.go`, `compress.go` |
+| `internal/ssp` | Generic State Synchronization Protocol: `State[S]`, `Endpoint`, D11 timing, fragmentation, compression (D24) | proto, client | **ssp** | `doc.go`, `ssp.go`, `endpoint.go` |
 | `internal/userinput` | The client's SSP object: keystrokes and resizes | proto, client | **ssp** | `userinput.go` |
 | `internal/screen` | The server's SSP object: `Grid`, the diff format (O11), the D9/D27 allow-list, the D23 bounds | proto, emu, client | **screen** | `doc.go`, `grid.go`, `diff.go`, `allow.go` |
 | `internal/render` | Draws a `Grid` on the local terminal with escape sequences it writes itself | client | **screen** | `render.go` |
@@ -233,8 +233,15 @@ reserved.
 **ssp.** `State[S]` (`Clone`, `Equal`, `Diff(from)`, `Apply(diff)` that
 validates before mutating). `Datagrams` (`Send`, `Recv`), which
 `*transport.Conn` satisfies and which SSP's own tests satisfy with a plain
-netsim socket. `NewEndpoint[L, R](d, Config, local, remote)`, then `Run`,
-`Set(local)`, `Remote()`, `RemoteChanged()`, `Stats()`.
+netsim socket. `NewEndpoint[L, R](d, Config, local, remote)`, then `Run`
+(which ends with an error wrapping `ErrProtocol` when the peer breaks the
+protocol), `Set(local)`, `Remote()`, `Acked()` (the acknowledged local
+version, for the client's input flow control, `ssp.md` §10.1),
+`RemoteChanged()`, `Stats()`.
+
+**userinput.** `*Stream` is an `ssp.State[*Stream]`: `Type`, `Resize`,
+`Len`, `Since(n)`, and `EncodedSince(n)`, the pending input the client
+throttles on (`ssp.md` §10.1).
 
 **screen.** `*Grid` is an `ssp.State[*Grid]`: cells (`Cell`: cluster,
 width, `Style`), `Cursor`, `Title`, `Modes`, and the reserved `EchoOff`

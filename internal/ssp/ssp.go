@@ -2,7 +2,8 @@ package ssp
 
 import (
 	"context"
-	"time"
+	"errors"
+	"fmt"
 )
 
 // State is an object SSP can synchronise. S is the concrete type, so an
@@ -31,7 +32,8 @@ type Datagrams interface {
 	// Send sends one payload of at most the Config's MaxPayload bytes. An
 	// error is not fatal: SSP treats the payload as lost.
 	Send(payload []byte) error
-	// Recv blocks for the next payload.
+	// Recv blocks for the next payload, and returns when ctx is done. SSP
+	// keeps the payload, so it must not be reused.
 	Recv(ctx context.Context) ([]byte, error)
 }
 
@@ -50,59 +52,23 @@ const (
 // something other than mosey.
 type Config struct {
 	Role Role
-	// MaxPayload is the largest payload Datagrams accepts.
+	// MaxPayload is the largest payload Datagrams accepts: in production
+	// transport.MaxPayload. Both ends must use the same value, since the
+	// size of a fragment follows from it.
 	MaxPayload int
-	// MaxRemoteBytes bounds the decompressed size of one instruction from
-	// the peer (D24): the decoder stops there and drops the instruction,
-	// never truncates it.
+	// MaxRemoteBytes bounds the size of one diff from the peer, after
+	// decompression (D24): the peer object's largest diff. A bigger one
+	// ends Run with ErrProtocol; it is never truncated or applied.
 	MaxRemoteBytes int
 }
 
-// Endpoint is one side's SSP: the sender of its local object L and the
-// receiver of the peer's object R, which share datagrams because acks and
-// timestamps ride on whatever goes next.
-type Endpoint[L State[L], R State[R]] struct{}
+// ErrProtocol is what Run's error wraps when the peer broke a rule of the
+// protocol. Every payload SSP sees is authentic, so the peer holds the
+// session's keys and is broken or hostile; rather than drop the payload and
+// stall waiting for a retransmission that would fail the same way, the
+// endpoint stops (docs/spec/ssp.md §8).
+var ErrProtocol = errors.New("ssp: protocol error")
 
-// NewEndpoint starts with local and remote as version 0, the empty object
-// both sides know.
-func NewEndpoint[L State[L], R State[R]](d Datagrams, cfg Config, local L, remote R) *Endpoint[L, R] {
-	panic("TODO slice 1")
-}
-
-// Run sends and receives until ctx is done or Datagrams fails.
-func (e *Endpoint[L, R]) Run(ctx context.Context) error {
-	panic("TODO slice 1")
-}
-
-// Set makes local the newest version of the local object. The endpoint
-// keeps its own clone.
-func (e *Endpoint[L, R]) Set(local L) {
-	panic("TODO slice 1")
-}
-
-// Remote is a clone of the newest version of the peer's object, and its
-// version number.
-func (e *Endpoint[L, R]) Remote() (R, uint64) {
-	panic("TODO slice 1")
-}
-
-// RemoteChanged is signalled, without blocking, whenever a newer remote
-// version arrives. One signal may stand for several versions.
-func (e *Endpoint[L, R]) RemoteChanged() <-chan struct{} {
-	panic("TODO slice 1")
-}
-
-// Stats is what the endpoint knows about the path, for the client's
-// "last contact" warning and for tests.
-func (e *Endpoint[L, R]) Stats() Stats {
-	panic("TODO slice 1")
-}
-
-// Stats is a snapshot of an endpoint's view of the path.
-type Stats struct {
-	SRTT, RTTVar, RTO time.Duration
-	// LastHeard is when the last authentic payload arrived.
-	LastHeard time.Time
-	// LocalAcked is the newest local version the peer has acknowledged.
-	LocalAcked uint64
+func protocolError(format string, args ...any) error {
+	return fmt.Errorf("%w: "+format, append([]any{ErrProtocol}, args...)...)
 }

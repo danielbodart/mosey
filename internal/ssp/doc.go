@@ -14,4 +14,17 @@
 // through a Datagrams, which the transport provides in production and a
 // plain netsim socket can provide in SSP's own tests. Its timers are the
 // time package's, so testing/synctest drives them.
+//
+// Every payload SSP sees has been authenticated, so a malformed one comes
+// from a peer that holds the keys and is broken or hostile. SSP does not
+// drop it and wait for a retransmission that would fail the same way: Run
+// ends with an error wrapping ErrProtocol. What a hostile peer can make an
+// endpoint hold is bounded throughout: at most Window+1 versions each way,
+// MaxPartials instructions under reassembly, and a decompressed diff of at
+// most Config.MaxRemoteBytes.
+//
+// The files follow the spec: wire.go is the datagram and instruction
+// formats (§3, §4), compress.go compression (§4.1), reassembly.go
+// fragments (§5), timing.go the D11 timers and the RTT estimator (§6.2,
+// §7.1), and endpoint.go the sender and receiver (§6, §7).
 package ssp

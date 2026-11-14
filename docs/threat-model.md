@@ -353,8 +353,10 @@ from a hostile server (T5) exactly as proto is from a hostile client.
 - **Fragments and reassembly** (`ssp.md` §5): at most `MaxFragments` =
   `ceil(MaxInstruction / Chunk)` fragments per instruction (about 44,000
   at 48 MiB, under the 65,535 the field allows), at most 4 instructions
-  under reassembly and `2 × MaxInstruction` bytes held in total, oldest
-  evicted first. A fragment whose index or count is out of range, or
+  under reassembly and `MaxPartialBytes = 2 × MaxFragments × Chunk`
+  bytes held in total (at least `2 × MaxInstruction`), charged chunk by
+  chunk as each is stored and never set aside from a claimed count, the
+  oldest other partial evicted first. A fragment whose index or count is out of range, or
   inconsistent with earlier fragments of the same instruction, is a
   protocol error. S5's 512 fragments and 1 MiB were for a fixed-size toy
   screen [S5 ssp-spec §2.3] and are not ours. The cost is that a hostile
@@ -364,8 +366,10 @@ from a hostile server (T5) exactly as proto is from a hostile client.
 - **Decompression is bounded and fails closed** (D24). An unbounded flate
   decoder turned one 1280-byte datagram into ~1.3 MB [M S5 §8]. `ssp`'s
   `decompress` takes a limit and returns an error, **never a truncated
-  result**, when the output would exceed it; the instruction is dropped.
-  The limit is `MaxRemoteBytes` (above).
+  result**, when the output would exceed it, and the connection ends with
+  `ErrProtocol` (`ssp.md` §8): an authenticated peer that sends one is
+  broken or hostile, and dropping it would only stall on the same
+  retransmission. The limit is `MaxRemoteBytes` (above).
 - **Apply validates before it mutates.** Every `State.Apply` (`Grid`,
   `userinput.Stream`) parses and checks the whole diff before changing
   anything, so a rejected diff leaves the state exactly as it was.
@@ -660,7 +664,7 @@ with Dan.
 
 | # | Risk | Who | Why it is accepted | Mitigation in place / planned |
 |---|---|---|---|---|
-| **R1** | **Compression length side channel** (CRIME/BREACH class). AEAD hides content, not length. Output the attacker influences (a log line, chat, a web page in a terminal browser) compressed in the same frame as a secret on screen lets an on-path observer test guesses by datagram size | T2 + T4 together | D24: compression is always on. Mosh 1.4.0 compresses every update with no padding [M S5 mosh-compression]. Flate cuts screen bytes to 0.35x [M S5 §8] | Per frame, never across frames. **The acknowledged screen is never a preset dictionary**: it puts the whole screen in the compressor's window, so the secret need not even be in the changed cells, and it is the leakiest variant [S5 §8]. Padding (O12) is settled in `ssp.md`: 64-byte buckets cost ~20% of the saving and only blunt the leak, since the attacker can add filler to sit on a boundary [M S5 §8]. A frame under 32 B never compressed smaller, so small frames go raw [M S5 §8] |
+| **R1** | **Compression length side channel** (CRIME/BREACH class). AEAD hides content, not length. Output the attacker influences (a log line, chat, a web page in a terminal browser) compressed in the same frame as a secret on screen lets an on-path observer test guesses by datagram size | T2 + T4 together | D24: compression is always on. Mosh 1.4.0 compresses every update with no padding [M S5 mosh-compression]. Flate cuts screen bytes to 0.35x [M S5 §8] | Per frame, never across frames. **The acknowledged screen is never a preset dictionary**: it puts the whole screen in the compressor's window, so the secret need not even be in the changed cells, and it is the leakiest variant [S5 §8]. Padding and dictionary (O12) are decided in `ssp.md` §9.2: no dictionary ever, and no padding in v1, since 64-byte buckets cost ~20% of the saving and only blunt the leak (the attacker can add filler to sit on a boundary) [M S5 §8]; the residual leak is accepted, owned by **ssp**, and revisited with chaff (O10), whose padding the wire already carries. A frame under 32 B never compressed smaller, so small frames go raw [M S5 §8] |
 | **R2** | **Keystroke timing.** D11 sends every keystroke as its own datagram, so an on-path observer sees when the user types, including at password prompts (Song et al. 2001) | T2 | Until chaff (O10, [later]) as with SSH before OpenSSH 9.5's `ObscureKeystrokeTiming` | `KindChaff` is reserved. No echo-ack-only server frames while the pty has echo off (D11, [later] with prediction: S6 measured 129 such frames at no-echo prompts falling to 9 [M S6 §6]). Slice 1 has no prediction and so no echo-ack frames at all; a password typed at a no-echo prompt changes no screen state and draws only SSP's delayed acks |
 | **R3** | **No rekey on idleness** (D20). The keys in memory after a burst of typing protected that burst until the next 120 s rekey | T8 | Decided in D20 | Exposure is bounded by `RekeyAfter` + `KeepPrevFor` (≤ 130 s) **provided the 120 s timer runs on epoch age and fires on any send, SSP heartbeats included** (`transport.md` §6.2 does this); and, whatever an on-path attacker does to rekey frames, by `RejectAfterTime` + `KeepPrevFor` (≤ 190 s), because no data is sealed under keys older than 180 s (§4.3) |
 | **R4** | **A compromised proto is the user.** It holds the pty master and the keys | T7 | Inherent: whatever reads the network and writes the pty can type into the shell (S4 red team: every layout with a key holder) | proto's pre-auth surface is a fixed header, a map lookup and the standard library's AEAD; everything else needs the keys. Every parser is fuzzed. Landlock + seccomp stop the likely Go bug class (confused deputy) from reaching files, sockets or other processes directly. It can still `sendto` anywhere from its socket: seccomp cannot filter `sockaddr` |
@@ -724,8 +728,8 @@ Y = can, . = cannot, given the mechanisms above.
 | Path challenge re-send | ≤ once per RTO | [S5 ssp-spec §2.1, D21] |
 | Largest screen diff (`MaxDiff`, the client's `MaxRemoteBytes` and decompression limit) | 48 MiB | [`screen.md` §5.12, derived from the clamp] |
 | Largest input diff (the server's `MaxRemoteBytes`) | 128 KiB | [`ssp.md` §10.1] |
-| Fragments per instruction / instructions in reassembly / bytes held | `ceil(MaxInstruction / Chunk)` (≤ 65535) / 4 / `2 × MaxInstruction` | [`ssp.md` §5, derived] |
-| Compression threshold | < 32 B sent raw | [M S5 §8] |
+| Fragments per instruction / instructions in reassembly / bytes held | `ceil(MaxInstruction / Chunk)` (≤ 65535) / 4 / `MaxPartialBytes = 2 × MaxFragments × Chunk` | [`ssp.md` §5, derived] |
+| Compression | always attempted; sent stored when DEFLATE is not shorter (in practice every frame under 32 B) | [`ssp.md` §4.1, M S5 §8] |
 | Window clamp | 1000 × 500 | [D23, S2] |
 | Scrollback | min(10000, 1e6 / cols) lines | [D23, M S2 memworst] |
 | emu memory | 512 MiB `MemoryMax`, `MemorySwapMax` 0 (cgroup, where available); 1 GiB `RLIMIT_DATA` (always) | [D23, S2; `server.md` §6.3] |
@@ -754,7 +758,7 @@ target (architecture §6).
 | No data under keys past `RejectAfterTime` | `transport` | netsim adversary tap drops only REKEY_INIT/RESP frames: no data frame is sealed under keys older than 180 s, the session stalls, and resumes once the tap stops |
 | A lost REKEY_RESP is recovered with one encapsulation; crossing rekeys settle on the client's | `transport` | netsim: drop the first RESP; the resent INIT gets the cached RESP and the epoch advances; both timers fire together and exactly one rekey completes |
 | Decompression fails closed at its limit | `ssp` | a flate bomb is refused, not truncated |
-| Reassembly bounds hold | `ssp` | fuzz fragments; out-of-range and inconsistent fragments are dropped |
+| Reassembly bounds hold | `ssp` | `FuzzReassembly`; out-of-range and inconsistent fragments end `Run` with `ErrProtocol` (`ssp.md` §8) |
 | `Apply` refuses a diff that breaks a bound or the allow-list, unchanged | `screen`, `userinput` | `FuzzApply`, the S2 title probes, a C1 in a cell |
 | Server diffs always apply and agree | `screen` | Diff/Apply round trip fuzz through tuios |
 | The renderer writes no query sequence and no remote byte | `render` | render hostile grids; the output contains only the renderer's own sequences |
