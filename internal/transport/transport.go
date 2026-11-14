@@ -298,6 +298,29 @@ func (c *Conn) Send(payload []byte) error {
 	if len(payload) > MaxPayload {
 		return fmt.Errorf("transport: a payload of %d bytes, over %d", len(payload), MaxPayload)
 	}
+	return c.sendData(KindTerminal, payload)
+}
+
+// SendChaff sends one CHAFF frame whose sealed plaintext, frame kind
+// included, is size bytes, so that SSP can make it exactly as long as its
+// own padded datagrams (ssp.md §9.1, §9.2). The body is zeros: the AEAD
+// hides it and nothing reads it. It goes under the same rules as Send.
+func (c *Conn) SendChaff(size int) error {
+	if size < FrameOverhead || size > FrameOverhead+MaxPayload {
+		return fmt.Errorf("transport: a chaff frame of %d bytes, outside %d to %d", size, FrameOverhead, FrameOverhead+MaxPayload)
+	}
+	return c.sendData(KindChaff, make([]byte, size-FrameOverhead))
+}
+
+// ChaffArrived is signalled, without blocking, whenever a CHAFF frame from
+// the peer authenticates. One signal may stand for several. The frame
+// itself is dropped; this is all it does (ssp.md §9.1.4).
+func (c *Conn) ChaffArrived() <-chan struct{} { return c.chaffed }
+
+// sendData seals one frame of what SSP sends, terminal data or chaff,
+// which the rekey schedule and the key-age limit hold back alike, so chaff
+// never goes when data could not.
+func (c *Conn) sendData(kind Kind, payload []byte) error {
 	c.e.lock()
 	defer c.e.unlock()
 	if c.closed {
@@ -314,7 +337,7 @@ func (c *Conn) Send(payload []byte) error {
 		}
 		return errOverdue
 	}
-	pkt, err := c.cur.seal(KindTerminal, payload)
+	pkt, err := c.cur.seal(kind, payload)
 	if err != nil {
 		c.shutdown(err)
 		return err

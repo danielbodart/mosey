@@ -54,13 +54,15 @@ type Conn struct {
 
 	listener *Listener
 
-	recvq  chan []byte
-	events chan Event
-	wake   chan struct{}
-	done   chan struct{}
-	closed bool
-	err    error
-	stats  Stats
+	recvq chan []byte
+	// chaffed is ChaffArrived's (ssp.md §9.1.4).
+	chaffed chan struct{}
+	events  chan Event
+	wake    chan struct{}
+	done    chan struct{}
+	closed  bool
+	err     error
+	stats   Stats
 }
 
 type rekeyAnswer struct {
@@ -97,10 +99,11 @@ var (
 func newConn(e *engine, server bool, cur *keyset, root, hash *[32]byte) *Conn {
 	c := &Conn{
 		e: e, server: server, cur: cur, root: *root, hash: *hash,
-		recvq:  make(chan []byte, recvQueue),
-		events: make(chan Event, eventQueue),
-		wake:   make(chan struct{}, 1),
-		done:   make(chan struct{}),
+		recvq:   make(chan []byte, recvQueue),
+		chaffed: make(chan struct{}, 1),
+		events:  make(chan Event, eventQueue),
+		wake:    make(chan struct{}, 1),
+		done:    make(chan struct{}),
 	}
 	clear(root[:])
 	return c
@@ -173,6 +176,13 @@ func (c *Conn) act(ks *keyset, plain []byte, from netip.AddrPort) {
 		case c.recvq <- body:
 		default:
 			c.stats.QueueFull++
+		}
+	case KindChaff:
+		// Its body means nothing; that it came is what tells the server's
+		// SSP that the client is chaffing (ssp.md §9.1.4).
+		select {
+		case c.chaffed <- struct{}{}:
+		default:
 		}
 	case KindRekeyInit1, KindRekeyInit2:
 		// Rekey frames count only under the current epoch: a delayed INIT
