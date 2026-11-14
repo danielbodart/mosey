@@ -42,16 +42,16 @@ type Session struct {
 	Key      *handshake.OneShotKey
 	Terminal terminal.Terminal
 	Log      *slog.Logger
-	// Capabilities is what the local terminal can draw (Capabilities()).
+	// Capabilities is what the local terminal can draw (render.FromEnv),
+	// the locale's UTF-8 among it: without it the renderer writes no byte
+	// at or above 0x80 (screen.md §8.3).
 	Capabilities render.Capabilities
-	// UTF8 says whether the local locale is UTF-8 (LocaleIsUTF8). The
-	// renderer must write no byte at or above 0x80 when it is not
-	// (screen.md §8.3, §11 item 14).
-	UTF8 bool
 }
 
-// Run handshakes, then runs SSP and draws until ctx is done, the session
-// fails, or another client takes it over (*TakenOverError).
+// Run handshakes, then runs SSP and draws until the server ends the session
+// (its shell exited; Run returns nil), ctx is done, the session fails, or
+// another client takes it over (*TakenOverError). Unless the server ended
+// it, Run tells the server the session is over before it returns.
 //
 // The terminal goes raw only once the handshake is done, and is restored
 // on every way out.
@@ -71,9 +71,12 @@ func (s *Session) Run(ctx context.Context) error {
 	}
 	defer s.Terminal.Restore()
 
-	// TODO(screen.md §11 item 14): pass s.UTF8 to the renderer once
-	// render.Capabilities has its UTF8 field.
 	paint := render.New(s.Terminal, s.Capabilities)
+	if cols, rows, err := s.Terminal.Size(); err == nil {
+		// The renderer clips to the local size (screen.md §8.3); after
+		// this, the loop tells it of every change.
+		paint.Resize(cols, rows)
+	}
 	// One stream: the loop appends to it and hands it to Set, and the
 	// endpoint starts from the same empty version 0 (ssp.md §10.1).
 	input := userinput.NewStream()
@@ -89,14 +92,18 @@ func (s *Session) Run(ctx context.Context) error {
 		term:   s.Terminal,
 		events: conn.Events(),
 		log:    log,
-		// TODO(ssp.md §10.1): pause while the input not yet consumed by
-		// the server (from Grid.InputConsumed and Endpoint.Acked, which
-		// screen and ssp have yet to add) is MaxPendingInput or more.
-		// Until then a paste larger than the server's MaxDiffBytes ends
-		// the session with a protocol error rather than crossing slowly.
-		paused: func() bool { return false },
+		paused: func() bool { return pendingInput(ep, input) >= userinput.MaxPendingInput },
 	}
-	return l.run(ctx)
+	err = l.run(ctx)
+	if errors.Is(err, errSessionEnded) {
+		return nil
+	}
+	// The user quit, or this client failed: tell the server, which ends
+	// the session, since in slice 1 nothing could reach it again
+	// (server.md §2.4). A revoked connection is already closed, and End
+	// does nothing.
+	conn.End(transport.EndClientQuit)
+	return err
 }
 
 // dial runs the handshake (bootstrap.md §7.3) within the credential's
@@ -121,4 +128,14 @@ func (s *Session) dial(ctx context.Context, log *slog.Logger) (*transport.Conn, 
 		return nil, fail(err, "no reply from %s over UDP: is UDP port %d open?", s.Server, s.Server.Port())
 	}
 	return nil, fail(err, "connecting to %s over UDP: %v", s.Server, err)
+}
+
+// pendingInput is the encoded size of the input the server has not yet
+// consumed (ssp.md §10.1): from the lesser of the screen's InputConsumed
+// and the length of the stream the server has acknowledged, so a server
+// that overstates what it consumed cannot make the next diff any bigger.
+func pendingInput(ep *ssp.Endpoint[*userinput.Stream, *screen.Grid], input *userinput.Stream) int {
+	g, _ := ep.Remote()
+	acked, _ := ep.Acked()
+	return input.EncodedSince(min(g.InputConsumed, acked.Len()))
 }

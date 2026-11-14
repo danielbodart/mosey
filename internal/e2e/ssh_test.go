@@ -139,7 +139,10 @@ func TestTheThrowawaySSHDTakesTheBootstrapsSSH(t *testing.T) {
 }
 
 // The real mosey, client and server, over loopback UDP, bootstrapped
-// through a real sshd: an interactive login shell end to end.
+// through a real sshd: an interactive login shell end to end. What is typed
+// reaches the far shell, what it prints is drawn on the user's terminal,
+// UTF-8 included, and when the shell exits the client exits 0 by itself,
+// the terminal put back and no process of the session left behind.
 func TestARealSessionOverLoopbackThroughSSH(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
 	s := startSSHD(t)
@@ -161,26 +164,47 @@ func TestARealSessionOverLoopbackThroughSSH(t *testing.T) {
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 	defer func() {
-		cmd.Process.Signal(syscall.SIGTERM)
-		<-exited
+		select {
+		case <-exited:
+		default:
+			cmd.Process.Signal(syscall.SIGTERM)
+			<-exited
+		}
 	}()
 
 	// A session that shows a screen has done the bootstrap, the handshake
-	// and the first SSP round; 6*7 is worked out by the far shell, so the
+	// and the first SSP round. 6*7 is worked out by the far shell, so the
 	// answer cannot be the echo of what was typed.
 	waitFor(t, "the session's screen", func() bool { return strings.Contains(screen.String(), "\x1b[?1049h") })
-	if _, err := master.Write([]byte("echo mosey-$((6*7))\r")); err != nil {
+	if _, err := master.Write([]byte("echo hello mosey-$((6*7)) h\u00e9llo\r")); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the shell's answer", func() bool { return strings.Contains(screen.String(), "mosey-42") })
+	waitFor(t, "the shell's answer", func() bool {
+		// The renderer places runs of cells itself (D9), so the answer is
+		// read off the screen its bytes draw, not out of the bytes.
+		return strings.Contains(screenOf([]byte(screen.String()), 100, 30), "hello mosey-42 h\u00e9llo")
+	})
+	spawner := findSpawner(t, mosey)
 
-	cmd.Process.Signal(syscall.SIGTERM)
-	if err := <-exited; bootstrap.ExitStatus(err) != 0 {
+	if _, err := master.Write([]byte("exit\r")); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	waitFor(t, "mosey to exit after the shell did", func() bool {
+		select {
+		case err = <-exited:
+			exited <- err
+			return true
+		default:
+			return false
+		}
+	})
+	if bootstrap.ExitStatus(err) != 0 {
 		t.Errorf("mosey exited %v; log:\n%s", err, readFile(filepath.Join(state, "mosey", "client.log")))
 	}
-	exited <- nil
 	// The terminal is back as it was: the alternate screen left.
 	waitFor(t, "the terminal to be restored", func() bool { return strings.Contains(screen.String(), "\x1b[?1049l") })
+	waitFor(t, "the session's processes to end", func() bool { return !running(spawner) })
 }
 
 // The client against the real server through a fake ssh (bootstrap.md

@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -321,6 +322,30 @@ func TestASessionFailureIsReported(t *testing.T) {
 		var f *Failure
 		if !errors.As(err, &f) || !errors.Is(err, boom) || ExitStatus(err) != StatusFailed {
 			t.Errorf("%v", err)
+		}
+	})
+}
+
+// The server's END (its shell exited) is the normal way out, whichever of
+// the event and SSP's closed Recv the loop sees first.
+func TestTheServerEndingTheSessionIsANormalExit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := start(t)
+		h.events <- transport.Ended{Reason: transport.EndShellExited}
+		synctest.Wait()
+		if err := <-h.done; !errors.Is(err, errSessionEnded) {
+			t.Errorf("after Ended: %v", err)
+		}
+		if !h.paint.left {
+			t.Error("the terminal was not put back before exiting")
+		}
+	})
+	synctest.Test(t, func(t *testing.T) {
+		h := start(t)
+		h.sync.fail <- fmt.Errorf("ssp: receiving: %w", transport.ErrEnded)
+		synctest.Wait()
+		if err := <-h.done; !errors.Is(err, errSessionEnded) {
+			t.Errorf("after ErrEnded: %v", err)
 		}
 	})
 }

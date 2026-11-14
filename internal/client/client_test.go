@@ -86,42 +86,6 @@ func TestALogThatCannotRotateKeepsLogging(t *testing.T) {
 	}
 }
 
-func TestCapabilitiesComeFromTheEnvironment(t *testing.T) {
-	c := Capabilities(env(map[string]string{"COLORTERM": "truecolor", "TERM": "xterm"}))
-	if !c.TrueColor || !c.Colors256 || !c.Clipboard || c.Hyperlinks || c.SyncUpdates {
-		t.Errorf("%+v", c)
-	}
-	c = Capabilities(env(map[string]string{"TERM": "screen-256color"}))
-	if c.TrueColor || !c.Colors256 {
-		t.Errorf("%+v", c)
-	}
-	c = Capabilities(env(map[string]string{"TERM": "vt100"}))
-	if c.TrueColor || c.Colors256 {
-		t.Errorf("%+v", c)
-	}
-}
-
-func TestTheLocaleDecidesUTF8(t *testing.T) {
-	for _, c := range []struct {
-		vars map[string]string
-		want bool
-	}{
-		{map[string]string{"LANG": "en_GB.UTF-8"}, true},
-		{map[string]string{"LANG": "en_GB.utf8"}, true},
-		{map[string]string{"LANG": "de_DE.UTF-8@euro"}, true},
-		{map[string]string{"LC_ALL": "C", "LANG": "en_GB.UTF-8"}, false}, // LC_ALL wins
-		{map[string]string{"LC_CTYPE": "en_US.UTF-8", "LANG": "C"}, true},
-		{map[string]string{"LANG": "C"}, false},
-		{map[string]string{"LANG": "POSIX"}, false},
-		{map[string]string{"LANG": "en_GB.ISO-8859-1"}, false},
-		{map[string]string{}, false},
-	} {
-		if got := LocaleIsUTF8(env(c.vars)); got != c.want {
-			t.Errorf("%v: %v", c.vars, got)
-		}
-	}
-}
-
 func TestExitStatusesFollowTheSpec(t *testing.T) {
 	for err, want := range map[error]int{
 		nil:                                 StatusOK,

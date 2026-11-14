@@ -42,6 +42,8 @@ type painter[R any] interface {
 	Invalidate()
 	Enter() error
 	Leave() error
+	// Resize tells it the local terminal's size, which it clips to.
+	Resize(cols, rows int)
 }
 
 // loop is the client's session once the transport is up: keystrokes
@@ -59,6 +61,10 @@ type loop[L inputLog, R any] struct {
 	// is asked before each read and again whenever a screen arrives.
 	paused func() bool
 }
+
+// errSessionEnded is run's report that the server ended the session (its
+// shell exited): the normal way out, which Session.Run turns into nil.
+var errSessionEnded = errors.New("the server ended the session")
 
 func (l *loop[L, R]) run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
@@ -107,6 +113,11 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return nil
 			}
+			if errors.Is(err, transport.ErrEnded) {
+				// The END frame closes the transport as it reports the
+				// event, so SSP may see it first.
+				return errSessionEnded
+			}
 			return fail(err, "the session failed: %v", err)
 		case err := <-readErr:
 			if errors.Is(err, io.EOF) {
@@ -129,9 +140,7 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 			// Redraw in full either way: a SIGCONT means the screen may
 			// have been drawn over while stopped.
 			l.paint.Invalidate()
-			if r, ok := any(l.paint).(interface{ Resize(cols, rows int) }); ok {
-				r.Resize(next.Cols, next.Rows)
-			}
+			l.paint.Resize(next.Cols, next.Rows)
 			if changed {
 				size = next
 				if l.paused() {
@@ -162,6 +171,9 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 			switch ev := ev.(type) {
 			case transport.Revoked:
 				return &TakenOverError{By: ev.By, At: ev.At}
+			case transport.Ended:
+				l.log.Info("the server ended the session", "reason", ev.Reason)
+				return errSessionEnded
 			case transport.PeerChanged:
 				l.log.Info("server path changed", "from", ev.From, "to", ev.To)
 			case transport.Rekeyed:

@@ -21,6 +21,7 @@ import (
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/handshake"
+	"github.com/danielbodart/mosey/internal/render"
 	"github.com/danielbodart/mosey/internal/terminal"
 )
 
@@ -115,8 +116,7 @@ func Run(ctx context.Context, o Options) error {
 		Key:          key,
 		Terminal:     o.Terminal,
 		Log:          o.Log,
-		Capabilities: Capabilities(o.Getenv),
-		UTF8:         LocaleIsUTF8(o.Getenv),
+		Capabilities: render.FromEnv(o.Getenv),
 	}
 	return s.Run(ctx)
 }
