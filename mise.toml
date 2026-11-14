@@ -14,8 +14,8 @@ CGO_ENABLED = "0"
 RELEASE_PATHS = "cmd internal go.mod go.sum VERSION"
 
 [tasks.check]
-description = "Lint, unit tests and shellcheck: the dev loop and CI's fast job"
-depends = ["lint", "test", "shellcheck"]
+description = "Lint, unit tests, the runtimesecret build's checks and shellcheck: the dev loop and CI's fast job"
+depends = ["lint", "test", "secret", "shellcheck"]
 
 # Vetted for both operating systems and both architectures every release
 # ships for (D10), so a Linux-only call outside a _linux.go file fails here
@@ -29,6 +29,20 @@ run = [
   'test -z "$(gofmt -l cmd internal)" || { gofmt -l cmd internal >&2; echo "not gofmt-ed" >&2; exit 1; }',
   'for os in linux darwin; do for arch in amd64 arm64; do GOOS=$os GOARCH=$arch go vet ./... || exit 1; done; done',
 ]
+
+# Linux releases are built with GOEXPERIMENT=runtimesecret (D20,
+# scripts/build.sh), which compiles internal/handshake's secret_on.go in
+# place of secret_off.go: so that configuration is vetted and the packages
+# that hold keys are tested in it too. The experiment is linux-only; on any
+# other host there is nothing to check.
+[tasks.secret]
+description = "vet and the key-holding packages' tests as linux releases build them, with GOEXPERIMENT=runtimesecret"
+run = '''
+[ "$(uname -s)" = Linux ] || { echo "runtimesecret is linux-only: nothing to check here"; exit 0; }
+export GOEXPERIMENT=runtimesecret
+for arch in amd64 arm64; do GOOS=linux GOARCH=$arch go vet ./... || exit 1; done
+go test ./internal/handshake ./internal/transport ./internal/client ./internal/server
+'''
 
 [tasks.test]
 description = "go test, every package"

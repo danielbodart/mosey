@@ -23,8 +23,10 @@ defaults:
     shell: bash
 
 jobs:
-  # gofmt, vet for every platform a release ships for, the tests, and
-  # shellcheck, through mise, the dev loop's toolchain. The tests that need
+  # gofmt, vet for every platform a release ships for, the tests, vet and
+  # the key-holding packages' tests again as linux releases are built (with
+  # GOEXPERIMENT=runtimesecret), and shellcheck, through mise, the dev
+  # loop's toolchain. The tests that need
   # an sshd (the end-to-end bootstrap) start a throwaway one on loopback,
   # and skip if the runner has none.
   check:
@@ -98,8 +100,9 @@ jobs:
   # (major.commit-count.run-number, scripts/version.sh).
   #
   # TODO: disabled until Dan confirms where releases go (GitHub Releases on
-  # this repository, as here, or elsewhere) and whether the linux binaries
-  # must first be built with GOEXPERIMENT=runtimesecret (D20). Remove the
+  # this repository, as here, or elsewhere). The linux binaries are already
+  # built with GOEXPERIMENT=runtimesecret (D20, scripts/build.sh), and check
+  # vets and tests that configuration (mise run secret). Remove the
   # `false &&` to turn it on.
   release:
     needs: [check, slow, fuzz-smoke, build]
