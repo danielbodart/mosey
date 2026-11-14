@@ -192,6 +192,9 @@ PROGRAM -T
         -- DESTINATION "exec /bin/sh -c 'exec SERVER --serve'"
 ```
 
+(`--serve=list` in place of `--serve` for `mosey -list`, §9.4; with no
+`-remote`, the script is §4.7.2's probe, which runs the same flag.)
+
 - **Ours come first, so ours win.** For `-o` the first value obtained is
   used, and command-line options are read before any config file [ssh;
   `ssh_config(5)`; checked: `-o ControlMaster=no -o ControlMaster=auto`
@@ -508,6 +511,24 @@ anywhere. A version that cannot (none that `scripts/version.sh` or the
 flake makes) runs slice 1's `mosey --serve`, with no probe and no upload,
 and the log says why.
 
+**The probe and the roles.** Every command that runs a server role probes:
+`mosey DEST` (the launcher, `--serve`), `mosey -r DEST` (the launcher
+again, with a resume ClientLine) and `mosey -list DEST` (`--serve=list`,
+§9.4). The probe runs the matching binary with that command's flag, so a
+host whose only mosey is the one D7 put in `~/.cache/mosey/V/` is found by
+all three. **Only `mosey DEST` uploads.** When the probe answers
+`MOSEY-PROBE`:
+
+| Command | What the client does |
+|---|---|
+| `mosey DEST` | §4.7.3–§4.7.8: ask, copy, start again |
+| `mosey -r DEST`, `mosey -r=SID DEST` | nothing is copied: `mosey: no mosey V on DEST, so no session of it to resume: a session started by another version is resumed with that version's mosey`, exit 1. A session runs the version that started it (§9.2 step 5), so a copy of `V` could never serve a session that `V` did not start, and a host with no `V` has no session of `V`. |
+| `mosey -list DEST` | nothing is copied: `mosey: no mosey V on DEST, so no sessions of it: mosey DEST starts one, copying mosey there`, exit 1. Listing is not a reason to install anything. |
+
+Sessions of an older version on a host that has none of `V` are listed and
+resumed by that version's client, as §9.2 step 5 already says for a host
+that has both.
+
 `~/.cache` is literal: the remote's `XDG_CACHE_HOME` is not consulted. The
 probe, the upload and the installer must agree on one path without a round
 trip to ask, and D7 names this one.
@@ -517,7 +538,7 @@ trip to ask, and D7 names this one.
 The remote command (one argument, as §4.1, `V` substituted):
 
 ```
-exec /bin/sh -c 'v=V; for m in "$HOME/.cache/mosey/$v/mosey" mosey; do if [ "$("$m" --serve=version </dev/null 2>/dev/null)" = "$v" ]; then exec "$m" --serve; fi; done; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
+exec /bin/sh -c 'v=V; for m in "$HOME/.cache/mosey/$v/mosey" mosey; do if [ "$("$m" --serve=version </dev/null 2>/dev/null)" = "$v" ]; then exec "$m" FLAG; fi; done; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
 ```
 
 - **The cache first**, then `mosey` on the remote `PATH`. Each candidate is
@@ -525,7 +546,8 @@ exec /bin/sh -c 'v=V; for m in "$HOME/.cache/mosey/$v/mosey" mosey; do if [ "$("
   on `/dev/null` (the ClientLine waiting on stdin is for the launcher, and
   a program that is not mosey must not eat it) and stderr dropped (`sh:
   mosey: not found` is the normal case). The first that prints exactly `V`
-  is exec'd as the launcher, which reads the ClientLine as in §4.4. A file
+  is exec'd with `FLAG`, the command's own (§4.7.1: `--serve` for the
+  launcher, which reads the ClientLine as in §4.4, or `--serve=list`). A file
   in the cache is asked too rather than trusted for its path: it may be a
   half-written copy from a crashed upload, or another build of the same
   version string (two `dev` builds).
@@ -1412,7 +1434,10 @@ SSH login that started it.
 
 `mosey -list DEST` runs `mosey --serve=list` over the bootstrap's own ssh
 command (§4.1, its last argument `exec /bin/sh -c 'exec SERVER
---serve=list'`), with stdin closed. The
+--serve=list'`, or with no `-remote` §4.7.2's probe running
+`--serve=list`, which finds the copy in `~/.cache/mosey/V/`), with stdin
+closed. A probe that answers `MOSEY-PROBE` is reported as §4.7.1 says,
+not shown as a list, and nothing is copied. The
 server connects to every attach socket as the launcher does for
 `AnySession`, reads each greeting, and prints one line per session that
 answered, oldest first, then exits 0:
@@ -1441,7 +1466,7 @@ its greeting and does nothing.
 | ssh cannot start | `mosey: running PROGRAM: ERR` | 1 |
 | `ErrNoLine`, ssh exit 255 | (ssh has already said why on stderr) `mosey: ssh to DEST failed` | 1 |
 | `ErrNoLine`, ssh exit 126/127 (`ErrNoServer`, with `-remote`) | `mosey: no mosey at SERVER on DEST: install it there or pass -remote` | 1 |
-| ProbeLine (`ErrNoServer`, no `-remote`) | the upload of §4.7, and its messages | 1 |
+| ProbeLine (`ErrNoServer`, no `-remote`) | the upload of §4.7, and its messages; for `-r` and `-list`, §4.7.1's messages and no upload | 1 |
 | `ErrNoLine`, other exit | `mosey: the remote mosey exited with status N` | 1 |
 | `ErrBadLine` | `mosey: DEST sent a malformed mosey line` | 1 |
 | `ErrBadAddr` | §7.2 | 1 |

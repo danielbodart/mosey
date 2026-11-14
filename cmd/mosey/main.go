@@ -49,6 +49,9 @@ const usage = `mosey -- a remote terminal for bad networks
   mosey -list [OPTIONS] DESTINATION
         List your sessions on DESTINATION.
 
+  Neither -r nor -list copies mosey over: a session is resumed and
+  listed by the version that started it.
+
   A session lives until its shell exits. Closing the terminal, or
   killing the client, detaches from it; mosey -r picks it up again.
 
@@ -207,7 +210,7 @@ func runClient(args []string) int {
 	log.Info("starting", "version", version, "destination", c.ssh.Destination, "resume", c.resume.set, "list", c.list)
 
 	if c.list {
-		err := client.List(ctx, client.ListOptions{SSH: c.ssh, Stdout: os.Stdout, Stderr: os.Stderr, Log: log})
+		err := client.List(ctx, client.ListOptions{SSH: c.ssh, Version: version, Stdout: os.Stdout, Stderr: os.Stderr, Log: log})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "mosey:", err)
 			return client.ExitStatus(err)

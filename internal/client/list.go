@@ -18,6 +18,10 @@ const maxList = 256 << 10
 // ListOptions is what List needs from cmd/mosey.
 type ListOptions struct {
 	SSH bootstrap.SSH
+	// Version is this build's: with no -remote, the probe looks for a
+	// mosey of this version, in ~/.cache/mosey/ first (bootstrap.md
+	// §4.7.2), so -list finds the copy D7 put there.
+	Version string
 	// Stdout gets the server's list and Stderr ssh's own words, both
 	// through the stderr filter (bootstrap.md §6.5).
 	Stdout, Stderr io.Writer
@@ -28,12 +32,15 @@ type ListOptions struct {
 // --serve=list` there over the user's ssh and copies what it prints. The
 // text is for people and the client never parses it; like everything else
 // from the far side it passes the filter, so no remote escape sequence
-// reaches the terminal (D9).
+// reaches the terminal (D9). A host with no mosey of this version is
+// told so, and nothing is copied there (§9.4): listing is not a reason to
+// install anything.
 func List(ctx context.Context, o ListOptions) error {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
 	o.SSH.Role = bootstrap.RoleList
+	o.SSH.Version = o.Version
 	if err := o.SSH.Check(); err != nil {
 		return err
 	}
@@ -56,19 +63,31 @@ func List(ctx context.Context, o ListOptions) error {
 	cmd.Stderr = errs
 	err = cmd.Run()
 	errs.Close()
-	listed := bootstrap.Sanitize(o.Stdout)
-	listed.Write(out.Bytes())
-	listed.Close()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	if o.SSH.Probes() && bootstrap.ExitStatus(err) == 0 {
+		// The probe's answer is its last line, after anything a login
+		// shell's rc file said.
+		if p, perr := bootstrap.ParseProbeLine(lastLine(out.Bytes())); perr == nil {
+			ns := &bootstrap.NoServerError{Probe: p}
+			return fail(ns, "no mosey %s on %s, so no sessions of it: mosey %s starts one, copying mosey there", o.Version, o.SSH.Destination, o.SSH.Destination)
+		}
+	}
+	listed := bootstrap.Sanitize(o.Stdout)
+	listed.Write(out.Bytes())
+	listed.Close()
 	switch status := bootstrap.ExitStatus(err); {
 	case status == 0:
 	case status == 255:
 		return fail(err, "ssh to %s failed", o.SSH.Destination)
 	case status == 126 || status == 127:
+		server := o.SSH.Server
+		if server == "" {
+			server = "mosey"
+		}
 		return fail(fmt.Errorf("%w: %w", bootstrap.ErrNoServer, err),
-			"no mosey at %s on %s: install it there or pass -remote", o.SSH.Server, o.SSH.Destination)
+			"no mosey at %s on %s: install it there or pass -remote", server, o.SSH.Destination)
 	default:
 		return fail(err, "the remote mosey exited with status %d", status)
 	}
@@ -76,6 +95,14 @@ func List(ctx context.Context, o ListOptions) error {
 		fmt.Fprintf(o.Stderr, "resume one with: mosey -r=SESSION %s\n", o.SSH.Destination)
 	}
 	return nil
+}
+
+// lastLine is b's last line, LF included, or all of b if it has one line.
+func lastLine(b []byte) []byte {
+	if i := bytes.LastIndexByte(bytes.TrimSuffix(b, []byte("\n")), '\n'); i >= 0 {
+		return b[i+1:]
+	}
+	return b
 }
 
 // limitWriter keeps the first n bytes written to it and drops the rest,

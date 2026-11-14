@@ -107,6 +107,12 @@ func Run(ctx context.Context, o Options) error {
 	}
 	line, cfg, err := b.run(ctx)
 	var ns *bootstrap.NoServerError
+	if errors.As(err, &ns) && o.Resume {
+		// A resume never copies (bootstrap.md §9.2 step 5): a session
+		// runs the version that started it, and a copy of this one could
+		// not serve a session of another.
+		return fail(err, "no mosey %s on %s, so no session of it to resume: a session started by another version is resumed with that version's mosey", o.Version, o.SSH.Destination)
+	}
 	if errors.As(err, &ns) && o.SSH.Probes() {
 		// D7: no mosey of this version there. Copy it over, with the
 		// user's consent, and start once more with the same line, whose

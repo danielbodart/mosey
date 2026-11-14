@@ -161,6 +161,26 @@ func TestWithoutRemoteTheBootstrapProbes(t *testing.T) {
 	}
 }
 
+// -list's role goes through the probe too, so a lister in the cache is
+// found (§4.7.2, §9.4), and through slice 1's and -remote's commands.
+func TestTheProbeRunsTheRolesFlag(t *testing.T) {
+	for _, c := range []struct {
+		s    SSH
+		want string
+	}{
+		{SSH{Destination: "far", Version: "0.1.2", Role: RoleList}, `then exec "$m" --serve=list; fi`},
+		{SSH{Destination: "far", Version: "..", Role: RoleList}, "exec /bin/sh -c 'exec mosey --serve=list'"},
+		{SSH{Destination: "far", Server: "/opt/mosey", Role: RoleList}, "exec /bin/sh -c 'exec /opt/mosey --serve=list'"},
+	} {
+		if err := c.s.Check(); err != nil {
+			t.Fatal(err)
+		}
+		if got := c.s.RemoteCommand(); !strings.Contains(got, c.want) {
+			t.Errorf("%+v: %q", c.s, got)
+		}
+	}
+}
+
 // The probe and upload scripts carry nothing a login shell would read
 // inside single quotes (§4.7.2): no ', no \, no !, no newline.
 func TestTheScriptsNeedNoQuotingInAnyLoginShell(t *testing.T) {

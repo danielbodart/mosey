@@ -147,6 +147,38 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 		}
 	})
 
+	t.Run("-list finds the copy in the cache", func(t *testing.T) {
+		// Nothing on the remote PATH is this version: only the probe's
+		// look in ~/.cache/mosey finds a lister (bootstrap.md §9.4). The
+		// last session may still be on its way out, so it may be listed.
+		cmd := exec.Command(b, "-list", "--", "-F", s.config, s.host)
+		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state)
+		out, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(out), "no sessions") && !strings.HasPrefix(string(out), "SESSION ") {
+			t.Errorf("mosey -list: %v\n%q", err, out)
+		}
+	})
+
+	cBuild := buildMosey(t, "0-e2e-upload-c")
+	t.Run("-list and -r copy nothing to a host without this version", func(t *testing.T) {
+		cmd := exec.Command(cBuild, "-list", "--", "-F", s.config, s.host)
+		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state)
+		out, err := cmd.CombinedOutput()
+		if bootstrap.ExitStatus(err) == 0 || !strings.Contains(string(out), "no mosey 0-e2e-upload-c on mosey-e2e") {
+			t.Errorf("mosey -list: %v\n%q", err, out)
+		}
+		c := startUploadClient(t, s, cBuild, state, "-r", "-upload=yes")
+		if status := c.wait(t); status != 1 {
+			t.Errorf("mosey -r exited %d", status)
+		}
+		if !strings.Contains(c.screen.String(), "no session of it to resume") {
+			t.Errorf("mosey -r said %q", c.screen.String())
+		}
+		if _, err := os.Lstat(filepath.Dir(s.cached("0-e2e-upload-c"))); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("something was copied: %v", err)
+		}
+	})
+
 	t.Run("a cached file of the wrong version is replaced", func(t *testing.T) {
 		// Version b's place holds a's file: the probe asks it, hears
 		// the wrong version, and b is copied over it.
@@ -168,7 +200,6 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 	})
 
 	t.Run("a symlinked cache is refused", func(t *testing.T) {
-		cBuild := buildMosey(t, "0-e2e-upload-c")
 		cache := filepath.Join(s.home, ".cache", "mosey")
 		elsewhere := filepath.Join(t.TempDir(), "mosey")
 		if err := os.Rename(cache, elsewhere); err != nil {

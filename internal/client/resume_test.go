@@ -83,3 +83,99 @@ func TestTheListIsCopiedThroughTheFilter(t *testing.T) {
 		t.Errorf("ssh ran %q", argv)
 	}
 }
+
+// listHost is a far host for -list and -r with no -remote: ssh runs the
+// probe under /bin/sh with HOME the test's, and PATH holds no mosey.
+func listHost(t *testing.T) (ssh, home, ran string) {
+	t.Helper()
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	dir, home := t.TempDir(), t.TempDir()
+	ssh = filepath.Join(dir, "ssh")
+	ran = filepath.Join(dir, "ran")
+	script := `#!/bin/sh
+if [ "$1" = -G ]; then printf 'hostname far.example\nuser me\nport 22\n'; exit 0; fi
+echo ran >> '` + ran + `'
+for last in "$@"; do :; done
+HOME='` + home + `' PATH=/usr/bin:/bin exec /bin/sh -c "$last"
+`
+	if err := os.WriteFile(ssh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return ssh, home, ran
+}
+
+// -list with no -remote finds the copy D7 installed in ~/.cache/mosey,
+// which is the only mosey on most hosts (bootstrap.md §9.4).
+func TestTheListFindsTheCachedCopy(t *testing.T) {
+	ssh, home, _ := listHost(t)
+	cached := filepath.Join(home, ".cache", "mosey", "0.4.2", "mosey")
+	if err := os.MkdirAll(filepath.Dir(cached), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\ncase \"$1\" in\n--serve=version) echo 0.4.2;;\n--serve=list) echo 'SESSION  STATE'; echo 'abcd  detached';;\n*) exit 9;;\nesac\n"
+	if err := os.WriteFile(cached, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	err := List(context.Background(), ListOptions{
+		SSH:     bootstrap.SSH{Program: ssh, Destination: "far"},
+		Version: "0.4.2",
+		Stdout:  &out, Stderr: &errs,
+	})
+	if err != nil || !strings.Contains(out.String(), "abcd  detached") {
+		t.Errorf("%v: listed %q; stderr %q", err, out.String(), errs.String())
+	}
+}
+
+// A host with no mosey of this version is told so by -list, and nothing
+// is copied: the probe's line is not shown as a list (§9.4).
+func TestTheListCopiesNothingToAHostWithoutMosey(t *testing.T) {
+	ssh, home, ran := listHost(t)
+	var out, errs bytes.Buffer
+	err := List(context.Background(), ListOptions{
+		SSH:     bootstrap.SSH{Program: ssh, Destination: "far"},
+		Version: "0.4.2",
+		Stdout:  &out, Stderr: &errs,
+	})
+	var f *Failure
+	if !errors.As(err, &f) || !errors.Is(err, bootstrap.ErrNoServer) || !strings.HasPrefix(f.Msg, "no mosey 0.4.2 on far") {
+		t.Errorf("%v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("listed %q", out.String())
+	}
+	if n, _ := os.ReadFile(ran); strings.Count(string(n), "ran") != 1 {
+		t.Errorf("ssh ran %d times, want 1", strings.Count(string(n), "ran"))
+	}
+	if _, err := os.Stat(filepath.Join(home, ".cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("something was written to the cache: %v", err)
+	}
+}
+
+// A resume never copies mosey over, even with -upload=yes (§9.2 step 5):
+// a copy of this version could not serve a session of another.
+func TestAResumeCopiesNothing(t *testing.T) {
+	ssh, home, ran := listHost(t)
+	err := Run(context.Background(), Options{
+		SSH:      bootstrap.SSH{Program: ssh, Destination: "far"},
+		Version:  "0.4.2",
+		Resume:   true,
+		Terminal: newFakeTerm(80, 24),
+		Stderr:   &bytes.Buffer{},
+		Upload:   UploadYes,
+		Getenv:   func(string) string { return "" },
+		Self:     func() ([]byte, error) { return []byte("#!/bin/sh\nexit 9\n"), nil },
+	})
+	var f *Failure
+	if !errors.As(err, &f) || !errors.Is(err, bootstrap.ErrNoServer) || !strings.HasPrefix(f.Msg, "no mosey 0.4.2 on far, so no session of it to resume") {
+		t.Errorf("%v", err)
+	}
+	if n, _ := os.ReadFile(ran); strings.Count(string(n), "ran") != 1 {
+		t.Errorf("ssh ran %d times, want 1 (the probe only)", strings.Count(string(n), "ran"))
+	}
+	if _, err := os.Stat(filepath.Join(home, ".cache")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("something was written to the cache: %v", err)
+	}
+}

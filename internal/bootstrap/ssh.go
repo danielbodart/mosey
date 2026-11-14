@@ -188,7 +188,8 @@ func (s SSH) flag() string {
 }
 
 // Probes reports whether RemoteCommand is §4.7.2's probe, which may answer
-// with a ProbeLine and is answered with an upload.
+// with a ProbeLine. Only a new session's is answered with an upload: -r
+// and -list copy nothing (§4.7.1).
 func (s SSH) Probes() bool { return s.Server == "" && CanUpload(s.Version) }
 
 // wrap is §4.1's wrapper: script, run by /bin/sh whatever the login shell.
