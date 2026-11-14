@@ -20,7 +20,11 @@ func TestSSHGOutputIsReadKeywordByKeyword(t *testing.T) {
 	if c.Get("localforward") != "8080 [x]:80" || !c.Has("kbdinteractivedevices") || c.Has("sessiontype") {
 		t.Errorf("%v", c)
 	}
-	for _, bad := range []string{"Hostname x\n", " x\n", "host-name x\n", strings.Repeat("a b\n", MaxConfig/4+1)} {
+	// OpenSSH 9.6 prints this one keyword in mixed case; ssh folds case.
+	if c, err := ParseConfig([]byte("canonicalizePermittedcnames none\n")); err != nil || c.Get("canonicalizepermittedcnames") != "none" {
+		t.Errorf("mixed-case keyword: %v %v", c, err)
+	}
+	for _, bad := range []string{" x\n", "host-name x\n", strings.Repeat("a b\n", MaxConfig/4+1)} {
 		if _, err := ParseConfig([]byte(bad)); err == nil {
 			t.Errorf("%.20q was accepted", bad)
 		}

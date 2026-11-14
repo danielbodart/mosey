@@ -31,7 +31,11 @@ func ParseConfig(out []byte) (Config, error) {
 		if !validKeyword(k) {
 			return nil, fmt.Errorf("ssh -G line %d: %q is not a keyword", n+1, k)
 		}
-		c[string(k)] = append(c[string(k)], string(v))
+		// ssh keywords are case-insensitive, and some OpenSSH releases
+		// (9.6 on Ubuntu 24.04, for one) print a keyword in mixed case:
+		// "canonicalizePermittedcnames". Fold it, as ssh itself does.
+		key := strings.ToLower(string(k))
+		c[key] = append(c[key], string(v))
 	}
 	return c, nil
 }
@@ -41,7 +45,7 @@ func validKeyword(k []byte) bool {
 		return false
 	}
 	for _, c := range k {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
 			return false
 		}
 	}
