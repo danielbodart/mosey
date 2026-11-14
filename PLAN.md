@@ -128,7 +128,9 @@ request). The decisions are in §2. Gaps they left:
    resume, the agent channel, prediction, auto-upload, and chaff.
 2. `docs/threat-model.md` grows with the slices.
 3. Release pipeline (D10) from the first commit. Then use it daily, on
-   trains.
+   trains. (Done: CI releases every green trunk commit to GitHub Releases,
+   with a flake and a NixOS VM test of the install path; the race detector
+   runs in CI.)
 4. The quoin work happens in its own session (D28).
 5. Before 1.0: a formal model of the whole handshake and rekey that checks
    out, fuzzing running continuously, and an external security review

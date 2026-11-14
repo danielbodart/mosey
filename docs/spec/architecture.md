@@ -309,7 +309,8 @@ Errors are `*Failure`,
 - **Every parser of attacker-reachable input has a `go test -fuzz` target**,
   run locally for at least a few minutes before it lands, with the
   duration and exec count recorded in the commit message. CI runs each for
-  10 s (`mise run fuzz-smoke`). The targets slice 1 needs at least:
+  10 s (`mise run fuzz-smoke`), and runs every test under `-race`
+  (`mise run race`). The targets slice 1 needs at least:
   `handshake` (msg1, msg2, hello, rekey parts), `transport` (data packet
   open: a rejected packet changes neither the window nor the peer),
   `replay` (against a map-based reference), `ssp` (datagram and fragment

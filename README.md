@@ -7,11 +7,14 @@ on lossy links and picks up where it left off.
 
 > To *mosey* is to wander along at an easy pace.
 
-**Status: pre-alpha. It doesn't work yet.** The design is settled
-([PLAN.md](PLAN.md)), the research spikes are done
-([docs/spikes/](docs/spikes)), the specs are written
-([docs/spec/](docs/spec)), and the first slice, an interactive shell end to
-end, is being built. Don't use it for anything yet.
+**Status: pre-alpha. Don't rely on it yet.** The design is settled
+([PLAN.md](PLAN.md)) and the specs are written ([docs/spec/](docs/spec)).
+The first slice works: `mosey HOST` bootstraps over your `ssh` and gives
+you an interactive shell over encrypted UDP, with the emulator sandboxed on
+the server. For now `mosey` must already be on the host (`-remote PATH`
+names it otherwise). Resume, agent forwarding, predictive echo and copying
+the binary across are the next slices. Every green commit is already
+released (see [Installing](#installing)).
 
 ## What it is
 
