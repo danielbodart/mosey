@@ -200,8 +200,9 @@ jobs:
   #
   # i.e. https://github.com/danielbodart/mosey/releases/download/v<V>/mosey-<V>-<os>-<arch>.
   # scripts/release-assets.sh lays them out and refuses to go on unless the
-  # linux/amd64 binary says it is V: the build job stamped it from the same
-  # commit and run number, so they agree, and the check keeps it so.
+  # linux/amd64 binary says it is V and each other binary contains V: the
+  # build job stamped every one from the same commit and run number, so
+  # they agree, and the check keeps it so.
   #
   # The derived version makes every run a unique, monotonic release, so two
   # pushes cannot collide on a tag. A re-run of a run keeps its run number:

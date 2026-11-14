@@ -433,7 +433,10 @@ exactly this [choice]:
   `github.com/danielbodart/mosey`, made by CI from a green trunk commit
   (D10), tagged `v<V>`, where `V` is `scripts/version.sh`'s
   `MAJOR.COMMITS.RUN` and is byte-for-byte what `mosey -version` prints for
-  every binary in it (the release job checks this before publishing).
+  every binary in it: each is stamped from `scripts/version.sh` run on the
+  same commit in the same CI run. Before publishing, the release job runs
+  the linux/amd64 binary and checks it prints `V`, and checks that each
+  of the others, which it cannot run, contains `V`'s bytes.
 - **The binaries.** One asset per platform, named
   `mosey-<V>-<os>-<arch>`, with `os` ∈ {`linux`, `darwin`} and `arch` ∈
   {`amd64`, `arm64`}: Go's `GOOS` and `GOARCH` names, so the client's own

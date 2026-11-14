@@ -11,7 +11,11 @@
 # (one directory per artifact, each holding its dist/). Every platform must
 # be found exactly once, and the one this machine can run must say it is
 # VERSION, so a release can never carry a binary stamped with another
-# version than its tag.
+# version than its tag. The others cannot be run here, so each must at
+# least contain VERSION's bytes, which -X main.version put there: a binary
+# stamped by another run or commit has another minor or patch. (-trimpath
+# leaves the ldflags out of the build info `go version -m` reads, so that
+# cannot be asked instead.)
 set -euo pipefail
 
 if [ $# -lt 2 ]; then
@@ -65,6 +69,9 @@ for platform in "${platforms[@]}"; do
             exit 1
         fi
         checked=true
+    elif ! grep -qaF -- "$version" "$asset"; then
+        echo "release-assets: $platform's binary does not contain $version, so it was not stamped with it" >&2
+        exit 1
     fi
 done
 if ! $checked; then
