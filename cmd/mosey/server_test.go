@@ -13,6 +13,7 @@ func TestServeRole(t *testing.T) {
 		{"--serve", "", true},
 		{"--serve=proto", "proto", true},
 		{"--serve=emu", "emu", true},
+		{"--serve=install", "install", true},
 		{"server", "", false},
 		{"serve", "", false},
 		{"--server", "", false},
