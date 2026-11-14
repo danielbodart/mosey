@@ -308,6 +308,11 @@ func (s *Session) accept(ctx context.Context, conns chan<- *transport.Conn) erro
 	}
 }
 
+// transport.Conn must be an ssp.Chaffer: NewEndpoint only chaffs over
+// Datagrams that are, and would otherwise quietly send no cover traffic,
+// switching D11's hiding of keystroke timing off (ssp.md §9.1.4).
+var _ ssp.Chaffer = (*transport.Conn)(nil)
+
 // attach starts an SSP endpoint on c and makes it the one the screen goes
 // to and keystrokes come from. SSP starts from scratch on every connection
 // (ssp.md §1.3), so its first diff to the new client is the whole screen.

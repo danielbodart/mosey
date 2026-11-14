@@ -35,6 +35,11 @@ type Session struct {
 	Capabilities render.Capabilities
 }
 
+// transport.Conn must be an ssp.Chaffer: NewEndpoint only chaffs over
+// Datagrams that are, and would otherwise quietly send no cover traffic,
+// switching D11's hiding of keystroke timing off (ssp.md §9.1.4).
+var _ ssp.Chaffer = (*transport.Conn)(nil)
+
 // Run handshakes, then runs SSP and draws until the server ends the session
 // (its shell exited; Run returns nil), ctx is done or the terminal's input
 // ends (*DetachedError: the session runs on for a resume), the session

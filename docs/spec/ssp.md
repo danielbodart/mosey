@@ -769,7 +769,11 @@ type Chaffer interface {
 An `Endpoint` whose `Datagrams` is a `Chaffer` chaffs; one whose
 `Datagrams` is not (SSP's own small path in tests) behaves as §6 alone
 says. `transport.Conn` implements it (`transport.md` §4.2), so production
-always chaffs: it is D11, not an option.
+always chaffs: it is D11, not an option. Since nothing would fail if that
+link broke (the endpoint would quietly not chaff), both `internal/client`
+and `internal/server` assert `var _ ssp.Chaffer = (*transport.Conn)(nil)`
+at compile time, and `TestARealSessionChaffsOnTheTickGridWhileTheUserTypes`
+in `internal/e2e` checks the wire of a real session for the tick grid.
 
 #### 9.1.5 The tick (O10)
 
