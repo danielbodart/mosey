@@ -275,11 +275,14 @@ func (s *simSession) converge() {
 	s.wait("screen matching the server's", func() bool { return s.clientScreen() == s.serverScreen() })
 }
 
-// exit types exit, and the session must end: the server says so with an
-// END frame and the client returns nil (transport.md §8.4).
-func (s *simSession) exit() {
+// exit types exit, and the session must end: the server delivers the
+// screen the shell left, then says so with an END frame, and the client
+// returns nil (server.md §2.4, transport.md §8.4). It returns how long the
+// client took to end after exit was typed, in virtual time.
+func (s *simSession) exit() time.Duration {
 	s.t.Helper()
 	s.typeLine("exit")
+	typed := time.Now()
 	select {
 	case err := <-s.client:
 		if err != nil {
@@ -288,9 +291,20 @@ func (s *simSession) exit() {
 	case <-time.After(10 * time.Minute):
 		s.t.Fatalf("%s: the client did not end after the shell exited", s.profile)
 	}
+	took := time.Since(typed)
 	if err := <-s.server; err != nil {
 		s.t.Errorf("%s: the server ended with %v", s.profile, err)
 	}
+	// The last screen the user saw, before the client put the terminal
+	// back, is the one the shell left: "exit" echoed included.
+	drawn := s.user.bytes()
+	if i := bytes.LastIndex(drawn, []byte("\x1b[?1049l")); i >= 0 {
+		drawn = drawn[:i]
+	}
+	if got, want := screenOf(drawn, 80, 24), s.serverScreen(); got != want {
+		s.t.Errorf("%s: the final screen was not delivered; the user saw:\n%s\nthe server had:\n%s", s.profile, got, want)
+	}
+	return took
 }
 
 // screenOf plays b into a terminal of cols by rows and returns its text, a
@@ -340,6 +354,25 @@ func TestAShellSessionOverEveryNetworkProfile(t *testing.T) {
 			})
 		})
 	}
+}
+
+// On a good network a shell's exit ends the client within a round trip or
+// two, the final screen delivered and acknowledged, not after T6 spent
+// waiting for an acknowledgement that could never come (server.md §2.4).
+func TestTheShellsLastWordsReachTheClientPromptly(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	synctest.Test(t, func(t *testing.T) {
+		s := startSimSession(t, netsim.LAN())
+		s.wait("prompt", func() bool { return strings.Contains(s.clientScreen(), "$") })
+		s.typeLine("echo before")
+		s.wait("answer", func() bool { return strings.Contains(s.clientScreen(), "BEFORE") })
+		s.converge()
+		// LAN's round trip is a few ms; the client's delayed ack is 100 ms
+		// and the server's collection interval 8 ms (D11).
+		if took := s.exit(); took >= server.T6/2 {
+			t.Errorf("the client ended %v after exit was typed; T6 is %v", took, server.T6)
+		}
+	})
 }
 
 // The user quitting ends the session on the server too: the client says so

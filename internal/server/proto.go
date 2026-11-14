@@ -208,13 +208,20 @@ func (s *Session) Run(ctx context.Context) error {
 		}()
 	}
 	s.publish()
-	run(func(ctx context.Context) error {
-		err := s.ep.Run(ctx)
-		if ctx.Err() != nil {
-			return nil
+	// SSP runs on a context of its own, which outlives ctx: when the shell
+	// exits, ctx ends the pty reader and writer, but SSP must still carry
+	// the final screen to the client and read its acks (server.md §2.4).
+	sctx, stopSSP := context.WithCancel(parent)
+	defer stopSSP()
+	sspDone := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(sspDone)
+		if err := s.ep.Run(sctx); sctx.Err() == nil {
+			cancel(fmt.Errorf("ssp: %w", err))
 		}
-		return fmt.Errorf("ssp: %w", err)
-	})
+	}()
 	run(s.readPTY)
 	run(s.writePTY)
 	run(func(ctx context.Context) error { return s.watch(ctx, conn) })
@@ -222,14 +229,15 @@ func (s *Session) Run(ctx context.Context) error {
 	<-ctx.Done()
 	cause := context.Cause(ctx)
 	if errors.Is(cause, errShellExited) {
-		s.deliverFinal()
+		s.deliverFinal(sspDone)
 		// Then say so, so the client exits now rather than waiting on a
 		// silent network (server.md §2.4, §11 item 7).
 		conn.End(transport.EndShellExited)
 	}
-	// Release whatever is parked: the transport (Recv), the emulator (a
-	// Write waiting for emu), and the pty reader and writer (closing the
+	// Release whatever is parked: SSP, the transport (Recv), the emulator
+	// (a Write waiting for emu), and the pty reader and writer (closing the
 	// master wakes the poller).
+	stopSSP()
 	conn.Close()
 	s.closeAll()
 	wg.Wait()
@@ -286,19 +294,28 @@ func (s *Session) watch(ctx context.Context, conn *transport.Conn) error {
 	}
 }
 
-// deliverFinal lets SSP deliver the last screen: until the client
-// acknowledges a version newer than the one it had when the shell exited,
-// or T6.
-func (s *Session) deliverFinal() {
-	s.publish()
+// deliverFinal lets SSP, still running, deliver the last screen: until the
+// client has acknowledged that very screen, SSP has stopped, or T6
+// (server.md §2.4). The pty reader has stopped, so the screen published
+// here is the last; if the client already had it, this returns at once.
+func (s *Session) deliverFinal(sspDone <-chan struct{}) {
+	final := s.publish()
 	ep := s.endpoint()
-	before := ep.Stats().LocalAcked
-	deadline := time.Now().Add(T6)
-	for time.Now().Before(deadline) {
-		if ep.Stats().LocalAcked > before {
+	deadline := time.After(T6)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if acked, _ := ep.Acked(); final != nil && acked.Equal(final) {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case <-sspDone:
+			return
+		case <-deadline:
+			s.Log.Info("the client did not acknowledge the final screen", "within", T6)
+			return
+		case <-tick.C:
+		}
 	}
 }
 
@@ -306,13 +323,14 @@ func (s *Session) deliverFinal() {
 // the echo-off bit (D12) and the input consumed (ssp.md §10.1). If the
 // emulator held the screen under synchronised output, it asks again once
 // SyncHold has passed (screen.md §6.3), so a program that opens mode 2026
-// and never closes it freezes its screen only briefly.
-func (s *Session) publish() {
+// and never closes it freezes its screen only briefly. It returns the
+// screen it set, or nil before a client has attached.
+func (s *Session) publish() *screen.Grid {
 	ep := s.endpoint()
 	if ep == nil {
 		// No client yet: the first publish, once one attaches, carries
 		// whatever happened meanwhile.
-		return
+		return nil
 	}
 	s.publishMu.Lock()
 	defer s.publishMu.Unlock()
@@ -333,6 +351,7 @@ func (s *Session) publish() {
 	if arm {
 		time.AfterFunc(emu.SyncHold, s.release)
 	}
+	return g
 }
 
 func (s *Session) endpoint() *ssp.Endpoint[*screen.Grid, *userinput.Stream] {
