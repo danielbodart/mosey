@@ -538,7 +538,7 @@ trip to ask, and D7 names this one.
 The remote command (one argument, as §4.1, `V` substituted):
 
 ```
-exec /bin/sh -c 'v=V; for m in "$HOME/.cache/mosey/$v/mosey" mosey; do if [ "$("$m" --serve=version </dev/null 2>/dev/null)" = "$v" ]; then exec "$m" FLAG; fi; done; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
+exec /bin/sh -c 'v=V; c="$HOME/.cache/mosey"; d="$c/$v"; set -- mosey; if test -h "$c" || test -h "$d" || test -h "$d/mosey"; then :; elif test -O "$HOME/.cache" && test -O "$c" && test -O "$d" && test -O "$d/mosey"; then set -- "$d/mosey" mosey; fi; for m in "$@"; do if [ "$("$m" --serve=version </dev/null 2>/dev/null)" = "$v" ]; then exec "$m" FLAG; fi; done; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
 ```
 
 - **The cache first**, then `mosey` on the remote `PATH`. Each candidate is
@@ -549,8 +549,24 @@ exec /bin/sh -c 'v=V; for m in "$HOME/.cache/mosey/$v/mosey" mosey; do if [ "$("
   is exec'd with `FLAG`, the command's own (§4.7.1: `--serve` for the
   launcher, which reads the ClientLine as in §4.4, or `--serve=list`). A file
   in the cache is asked too rather than trusted for its path: it may be a
-  half-written copy from a crashed upload, or another build of the same
-  version string (two `dev` builds).
+  half-written copy from a crashed upload, or one put there by hand. Asking
+  cannot tell apart two builds that carry the same version string: a
+  stale plain `go build` in `~/.cache/mosey/dev/` says `dev` and is run by
+  a newer `dev` client, protocol differences and all. Release and CI
+  builds have one version per commit; a developer moving between plain
+  builds passes `-remote` or clears the cache.
+- **The cached copy is a candidate only under the installer's rules**
+  (§4.7.7): `~/.cache/mosey`, `~/.cache/mosey/V` and the file are not
+  symlinks (`test -h`), and they and `~/.cache` (which may be one) are the
+  user's (`test -O`, which follows a link). Otherwise only `mosey` on
+  `PATH` is asked, so the probe never runs a file from a place the
+  installer would refuse to write. The probe does not check modes: a
+  directory others may write would have been refused by the installer,
+  which creates each one 0700, and a user who loosens one afterwards has
+  opened their files to whoever can write there, as with any file they
+  run. `test -O` is not in POSIX `test`, but dash, bash, BusyBox ash and
+  the BSD and macOS `/bin/sh` all have it; a `/bin/sh` without it makes the
+  test false, so the cache is skipped and the probe still works.
 - **Neither:** one `MOSEY-PROBE` line on stdout, then exit 0. The probe
   never exits 126 or 127, so `ErrNoServer` from an exit status means only
   what it meant in slice 1.
@@ -709,7 +725,11 @@ exec /bin/sh -c 'umask 077; d="$HOME/.cache/mosey"; mkdir -p "$d" || exit 1; t=$
   (macOS has no `sha256sum`). A copy cut short in transit does not start
   (its ELF segments run past the end of the file) and so installs nothing;
   one that starts hashes its own file through the descriptor it checks,
-  and refuses any byte that differs.
+  and refuses any byte that differs. That catches a copy damaged in transit or
+  left half-written by a crash. It does not catch one replaced on the far
+  host by something running as the user, which could make the installer
+  say anything: the check runs on the far side, by the file it checks, and
+  the client never checks what is installed (T12, threat-model §4.13).
 - **`rm -f "$t"`** after the installer, whatever it said: after a success
   the name is gone already (renamed), after anything else the partial
   file goes. `exit $s` passes the installer's status to ssh.

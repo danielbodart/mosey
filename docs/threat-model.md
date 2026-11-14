@@ -705,6 +705,13 @@ that has none, and the copy then runs as the user there.
   or replace anything there. **T12** (same uid) can, as it can with any
   file the user runs: that is why the copy is never a trust anchor, for
   provenance or anything else [S7 §10].
+- **The probe** runs a cached copy only where the installer would have
+  written it: no symlink at `~/.cache/mosey`, its version directory or
+  the file, and all of them the user's (`bootstrap.md` §4.7.2). It asks
+  the copy its version and nothing more, so it cannot tell two builds
+  with the same version string apart, nor a copy that T12 replaced with
+  one that answers correctly; the install-time hash check is done on the
+  far side, by the copy itself, and catches damage, not substitution.
 - **The probe line** comes from the far host (T5). It is parsed strictly
   and fuzzed, and it chooses only which public build is sent. Nothing the
   far host says appears unfiltered in the consent question, which is made

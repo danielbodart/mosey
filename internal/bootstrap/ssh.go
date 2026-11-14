@@ -201,15 +201,23 @@ func wrap(script string) string {
 }
 
 // probeCommand is §4.7.2's probe for version v, which CanUpload accepts,
-// so v is pathchars and needs no quoting. Each candidate is asked its
-// version with stdin on /dev/null (the ClientLine waiting there is the
-// launcher's) and stderr dropped (not finding mosey on PATH is the usual
-// case); the first that says v is run as flag, the launcher's --serve or
-// -list's --serve=list (§9.4), so both find the copy D7 put in the cache.
-// Neither: one MOSEY-PROBE line, and exit 0, so 126 and 127 keep their
-// slice-1 meaning.
+// so v is pathchars and needs no quoting. The cached copy is a candidate
+// only if neither ~/.cache/mosey, its version directory nor the file is a
+// symlink and all of them, and ~/.cache, are the user's: the installer's
+// own rules (§4.7.7), so the probe never runs from a place it would
+// refuse to write. (The script may hold no !, so "not a symlink" is the
+// empty then-branch.) Each candidate is asked its version with stdin on
+// /dev/null (the ClientLine waiting there is the launcher's) and stderr
+// dropped (not finding mosey on PATH is the usual case); the first that
+// says v is run as flag, the launcher's --serve or -list's --serve=list
+// (§9.4), so both find the copy D7 put in the cache. Neither: one
+// MOSEY-PROBE line, and exit 0, so 126 and 127 keep their slice-1
+// meaning.
 func probeCommand(v, flag string) string {
-	return wrap("v=" + v + `; for m in "$HOME/.cache/mosey/$v/mosey" mosey; do ` +
+	return wrap("v=" + v + `; c="$HOME/.cache/mosey"; d="$c/$v"; set -- mosey; ` +
+		`if test -h "$c" || test -h "$d" || test -h "$d/mosey"; then :; ` +
+		`elif test -O "$HOME/.cache" && test -O "$c" && test -O "$d" && test -O "$d/mosey"; then set -- "$d/mosey" mosey; fi; ` +
+		`for m in "$@"; do ` +
 		`if [ "$("$m" --serve=version </dev/null 2>/dev/null)" = "$v" ]; then exec "$m" ` + flag + `; fi; done; ` +
 		`s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); ` +
 		`echo "` + probeMagic + ` ` + strconv.Itoa(Version) + ` ${s:-unknown} ${a:-unknown}"`)

@@ -238,17 +238,42 @@ func TestTheProbeFindsThisVersionOrSaysWhatTheHostIs(t *testing.T) {
 			cache  string // version of a mosey in ~/.cache/mosey/v, "" for none
 			path   string // version of a mosey on PATH
 			served string
+			link   string // "dir": ~/.cache/mosey is a symlink; "file": the file is
 		}{
-			{"cache", v, "", "cache"},
-			{"path", "", v, "path"},
-			{"cache first", v, v, "cache"},
-			{"wrong cache, right path", "0.9.0", v, "path"},
-			{"wrong everywhere", "0.9.0", "0.8.0", ""},
-			{"nothing", "", "", ""},
+			{"cache", v, "", "cache", ""},
+			// The installer's rules hold for the probe too: a cache it
+			// would refuse to write is not run from (§4.7.2).
+			{"symlinked cache directory", v, "", "", "dir"},
+			{"symlinked cache directory, right path", v, v, "path", "dir"},
+			{"symlinked cached file", v, "", "", "file"},
+			{"path", "", v, "path", ""},
+			{"cache first", v, v, "cache", ""},
+			{"wrong cache, right path", "0.9.0", v, "path", ""},
+			{"wrong everywhere", "0.9.0", "0.8.0", "", ""},
+			{"nothing", "", "", "", ""},
 		} {
 			home, bin := t.TempDir(), t.TempDir()
 			if c.cache != "" {
-				writeMosey(t, filepath.Join(home, ".cache", "mosey", v, "mosey"), c.cache, "cache")
+				switch c.link {
+				case "dir":
+					// A copy that would pass, in a directory elsewhere
+					// that ~/.cache/mosey points at.
+					elsewhere := t.TempDir()
+					writeMosey(t, filepath.Join(elsewhere, v, "mosey"), c.cache, "cache")
+					os.MkdirAll(filepath.Join(home, ".cache"), 0o700)
+					if err := os.Symlink(elsewhere, filepath.Join(home, ".cache", "mosey")); err != nil {
+						t.Fatal(err)
+					}
+				case "file":
+					real := filepath.Join(t.TempDir(), "mosey")
+					writeMosey(t, real, c.cache, "cache")
+					os.MkdirAll(filepath.Join(home, ".cache", "mosey", v), 0o700)
+					if err := os.Symlink(real, filepath.Join(home, ".cache", "mosey", v, "mosey")); err != nil {
+						t.Fatal(err)
+					}
+				default:
+					writeMosey(t, filepath.Join(home, ".cache", "mosey", v, "mosey"), c.cache, "cache")
+				}
 			}
 			if c.path != "" {
 				writeMosey(t, filepath.Join(bin, "mosey"), c.path, "path")
