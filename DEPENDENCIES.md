@@ -29,17 +29,19 @@ interface so it can be replaced or forked.
   stalls, fork it (D23). Upstream contributions are listed in
   `docs/spikes/s2-terminal/FINDINGS.md`.
 - **Its own dependencies** (indirect in `go.mod`): charmbracelet's
-  colorprofile, term and termios; clipperhouse's displaywidth and uax29;
-  rivo/uniseg; mattn/go-runewidth; lucasb-eyer/go-colorful;
-  muesli/cancelreader; xo/terminfo; tuios.dev/progstatus.
+  colorprofile, term, termios and x/windows (ultraviolet's, compiled in
+  only on Windows, which mosey never builds for); clipperhouse's
+  displaywidth and uax29; rivo/uniseg; mattn/go-runewidth;
+  lucasb-eyer/go-colorful; muesli/cancelreader; xo/terminfo;
+  tuios.dev/progstatus; and golang.org/x/sync (ultraviolet's errgroup).
 - **Named directly, at the versions tuios pins:**
   `github.com/charmbracelet/ultraviolet` and
   `github.com/charmbracelet/x/ansi`. tuios' API hands back their types
   (`uv.Cell`, `ansi.Mode`, `ansi.BasicColor`), so `internal/emu`, which
   translates tuios' cells into `screen.Grid`, has to name them. They add
   no code that tuios does not already bring, and only the emu role uses
-  them: the client's drawing path must not (D9), which
-  `internal/render`'s import test checks.
+  them: the client's path must not (D9), which `internal/client`'s and
+  `internal/render`'s import tests check.
 - **`go.mitchellh.com/libghostty`** is the oracle (D23): libghostty-vt
   read directly, with no tuios code in the path, compared with tuios on
   the committed recordings by `internal/emu/oracle_test.go`. It is Zig
