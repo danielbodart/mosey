@@ -1,4 +1,4 @@
-// Package server is `mosey server`'s three roles, layout C of S4 (D22):
+// Package server is the three roles of `mosey --serve`, layout C of S4 (D22):
 //
 //   - spawner: tiny and unsandboxed. It reads the client's bootstrap line
 //     from SSH stdin, binds the UDP socket, opens the pty and starts the

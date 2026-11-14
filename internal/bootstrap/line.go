@@ -18,7 +18,7 @@ type ClientLine struct {
 	Env map[string]string
 }
 
-// CredentialLine is what `mosey server` prints on stdout.
+// CredentialLine is what `mosey --serve` prints on stdout.
 type CredentialLine struct {
 	// Addr is the server's address as SSH reached it (from SSH_CONNECTION),
 	// so the client sends UDP where its SSH config resolved, through any

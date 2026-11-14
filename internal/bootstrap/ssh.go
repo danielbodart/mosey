@@ -15,8 +15,8 @@ type SSH struct {
 	// Args are extra ssh options from the command line, passed before the
 	// destination.
 	Args []string
-	// Server is the remote mosey binary, run as `Server server`: mosey on
-	// PATH, or --server's path. D7's copy-over replaces this in a later
+	// Server is the remote mosey binary, run as `Server --serve`: mosey on
+	// PATH, or -remote's path. D7's copy-over replaces this in a later
 	// slice.
 	Server string
 	// AgentCapture is the capture socket for D25's bind capture, a later

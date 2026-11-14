@@ -1,10 +1,14 @@
 package main
 
-// mosey server is the server, started over SSH by the client: `mosey
-// server` with no role is the spawner. It reads the client's line from
-// stdin, prints a credential on stdout, detaches, and serves the session.
-// It re-executes this same binary as its sandboxed roles, `mosey server
-// proto` and `mosey server emu` (D22), which are not for people to run.
+// `mosey --serve` is the server, started over SSH by the client: with no
+// role it is the spawner. It reads the client's line from stdin, prints a
+// credential on stdout, detaches, and serves the session. It re-executes
+// this same binary as its sandboxed roles, `mosey --serve=proto` and
+// `mosey --serve=emu` (D22). None of it is for people to run.
+//
+// Server mode is a flag, not a word, so it can never collide with a host:
+// `mosey server` connects to a host called server. Every plain word on the
+// command line belongs to the client.
 //
 // One binary is both client and server, so the copy D7 sends over is the
 // very file the client runs, and a host can carry on to the next hop with
@@ -15,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/danielbodart/mosey/internal/server"
@@ -23,13 +28,28 @@ import (
 // ipcFD is the fd a role's IPC socket arrives on: the first of exec.Cmd.ExtraFiles.
 const ipcFD = 3
 
-// runServer runs `mosey server [role]`; args are what follows "server".
-func runServer(args []string) {
+// serveFlag selects server mode; serveFlag+"=ROLE" one of its roles.
+const serveFlag = "--serve"
+
+// serveRole reports whether arg selects server mode, and which role: ""
+// for the spawner.
+func serveRole(arg string) (role string, ok bool) {
+	if arg == serveFlag {
+		return "", true
+	}
+	if r, found := strings.CutPrefix(arg, serveFlag+"="); found {
+		return r, true
+	}
+	return "", false
+}
+
+// runServer runs `mosey --serve[=role]`.
+func runServer(role string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
 
 	var err error
-	switch role := roleOf(args); role {
+	switch role {
 	case "":
 		self, serr := os.Executable()
 		if serr != nil {
@@ -50,7 +70,7 @@ func runServer(args []string) {
 	case "emu":
 		err = server.RunEmu(ctx, os.NewFile(ipcFD, "ipc"))
 	default:
-		fmt.Fprintf(os.Stderr, "mosey server: unknown role %q\n", role)
+		fmt.Fprintf(os.Stderr, "mosey --serve: unknown role %q\n", role)
 		os.Exit(2)
 	}
 	if err != nil {
@@ -58,14 +78,7 @@ func runServer(args []string) {
 	}
 }
 
-func roleOf(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	return args[0]
-}
-
 func failServer(err error) {
-	fmt.Fprintln(os.Stderr, "mosey server:", err)
+	fmt.Fprintln(os.Stderr, "mosey --serve:", err)
 	os.Exit(1)
 }
