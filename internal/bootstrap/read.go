@@ -62,9 +62,10 @@ func ReadCredential(r io.Reader) (CredentialLine, error) {
 		other            // the line is someone else's: skip it
 	)
 	var (
-		state   = undecided
-		line    = make([]byte, 0, MaxCredentialLine+1) // the line so far, while undecided or ours
-		skipped int    // bytes of other lines
+		state = undecided
+		// line is the line so far, while undecided or ours.
+		line    = make([]byte, 0, MaxCredentialLine+1)
+		skipped int // bytes of other lines
 		tail    = newTail(TailSize)
 	)
 	for {
