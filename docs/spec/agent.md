@@ -463,9 +463,12 @@ answered.
   after the answer, the deadline) and the honest sequence; the pin against
   plain, hashed, `[host]:port`, alias, `@revoked` and `@cert-authority`
   entries; `FuzzCapture` (any byte sequence on the one connection: Bound
-  only for an honest prefix, and then only that bind) and `FuzzParseBind`.
-- `internal/channel`: `FuzzParseFrame` (round trip; padding must be zero);
-  streams over netsim under synctest with loss, reordering and duplication
+  only for exactly the honest sequence, and then only that bind), which
+  reaches `ParseBind` through frame 1.
+- `internal/channel`: `FuzzParseFrame` (round trip; padding must be zero)
+  and `FuzzMux` (any frames from the peer keep every bound); streams over
+  a seeded simulated path under synctest (D18; channel needs no addresses,
+  so a small link rather than netsim) with loss, reordering and duplication
   deliver exactly the bytes written, in order, both ways, with many
   streams at once; windows hold a slow reader's buffer to `RecvBuffer`;
   RESETs and limits; a done stream lingers and then forgets.

@@ -954,7 +954,7 @@ target (architecture §6).
 | The bind is pinned to known_hosts | `agent` | plain, hashed, `[host]:port`, alias, `@revoked` and CA-only entries |
 | No agent channel without a negotiated agent | `transport`, `e2e` | CHANNEL frames on a terminal-only connection never reach `RecvChannel`; `-a` and `ForwardAgent no` give the shell no `SSH_AUTH_SOCK` |
 | The agent sees what `ssh -A` shows it | `e2e` | through a throwaway sshd: remote `ssh-add -l`; an onward ssh signed through the forwarded agent; `ssh-add -h A -h 'A>B'` allows the hop and a key for another hop does not; an extension message passes byte for byte |
-| Agent streams stay within their bounds | `channel` | `FuzzParseFrame`; netsim streams under loss and reordering; windows and limits |
+| Agent streams stay within their bounds | `channel` | `FuzzParseFrame`, `FuzzMux`; streams under seeded loss, duplication and reordering in virtual time; windows and limits |
 
 ## 9. Later slices
 
