@@ -408,6 +408,31 @@ func TestTheShellsLastWordsReachTheClientPromptly(t *testing.T) {
 	})
 }
 
+// A session nobody connects to ends by itself once its one credential has
+// expired unconfirmed, since nothing can ever connect to it after that
+// (bootstrap.md §4.5, server.md §2.4): proto's Session returns ErrNoClient,
+// on which the spawner tears everything down.
+func TestASessionNobodyConnectsToEnds(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	synctest.Test(t, func(t *testing.T) {
+		n := newSimNet(t, netsim.LAN())
+		prog := newShell()
+		start := time.Now()
+		served := n.serve(t, context.Background(), prog)
+		select {
+		case err := <-served:
+			if !errors.Is(err, server.ErrNoClient) {
+				t.Fatalf("the server ended with %v, not ErrNoClient", err)
+			}
+			if took := time.Since(start); took < handshake.CredentialTTL {
+				t.Errorf("it ended %v in, before the credential expired", took)
+			}
+		case <-time.After(handshake.CredentialTTL + time.Minute):
+			t.Fatal("a session nobody connected to is still running")
+		}
+	})
+}
+
 // The user quitting ends the session on the server too: the client says so
 // with an END frame (transport.md §8.4), since with no resume in slice 1
 // nothing could reach the shell again (server.md §2.4).

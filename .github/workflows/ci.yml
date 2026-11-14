@@ -34,6 +34,17 @@ jobs:
       - uses: jdx/mise-action@v5
       - run: mise run check
 
+  # The tests that wait in real time, kept out of check so the dev loop
+  # stays quick: an abandoned session's real processes ending once its
+  # credential expires (30 s of wall clock; the same path runs in virtual
+  # time in check).
+  slow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: mise run test-slow
+
   # Every fuzz target for a few seconds: enough to catch a parser that
   # panics on its own seed corpus or on the first mutations. Real campaigns
   # run locally for minutes per target before a parser lands (CLAUDE.md),
@@ -91,7 +102,7 @@ jobs:
   # must first be built with GOEXPERIMENT=runtimesecret (D20). Remove the
   # `false &&` to turn it on.
   release:
-    needs: [check, fuzz-smoke, build]
+    needs: [check, slow, fuzz-smoke, build]
     if: false && github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
     runs-on: ubuntu-latest
     permissions:

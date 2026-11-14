@@ -34,6 +34,10 @@ run = [
 description = "go test, every package"
 run = "go test ./..."
 
+[tasks.test-slow]
+description = "The tests that wait in real time (an abandoned session's 30 s credential), skipped by test"
+run = "MOSEY_SLOW_TESTS=1 go test -count=1 -run TestAnAbandonedSessionEndsByItself ./internal/e2e"
+
 [tasks.fuzz-smoke]
 description = "Every fuzz target for FUZZTIME each (default 10s): a smoke test, not a campaign"
 run = "scripts/fuzz.sh"

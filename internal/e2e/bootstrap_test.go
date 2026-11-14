@@ -28,8 +28,14 @@ import (
 //
 // The server runs on real time in its own processes, so the wait is
 // asserted as "gone" within the test's own bound, never as a duration
-// (D18).
+// (D18). That wait is CredentialTTL of wall clock, 30 s, so it runs only
+// with MOSEY_SLOW_TESTS=1 (mise run test-slow, and CI's slow job); proto's
+// part, ending with ErrNoClient, is TestASessionNobodyConnectsToEnds in
+// virtual time.
 func TestAnAbandonedSessionEndsByItself(t *testing.T) {
+	if os.Getenv("MOSEY_SLOW_TESTS") != "1" {
+		t.Skip("waits CredentialTTL of real time; set MOSEY_SLOW_TESTS=1")
+	}
 	skipUntilBuilt(t, allPackages...)
 	mosey := buildMosey(t, "e2e")
 	key, err := handshake.NewOneShotKey()
