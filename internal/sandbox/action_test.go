@@ -8,8 +8,10 @@ import (
 // check fails on any build whose amd64 action is anything else (server.md
 // §6.1).
 func TestReleaseAction(t *testing.T) {
-	if builtAction[AMD64] != Kill {
-		t.Fatalf("amd64 is built with %s; a release needs kill (D22)", builtAction[AMD64])
+	for _, arch := range []Arch{AMD64, ARM64} {
+		if builtAction[arch] != Kill {
+			t.Errorf("%s is built with %s; a release needs kill (D22)", arch, builtAction[arch])
+		}
 	}
 }
 

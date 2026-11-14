@@ -919,7 +919,7 @@ never by the environment in a release build:
 | arch | releases | development builds only |
 |---|---|---|
 | amd64 | `Kill`, always [D22] | `Kill` (since the soak job, §9, is in `ci.yml`) |
-| arm64 | `Errno` until a CI arm64 soak passes, then `Kill` [D22] | as releases |
+| arm64 | `Kill`, since CI run 43626969195 soaked it (`Errno` before) [D22] | as releases |
 
 D22 locks `Kill` on amd64; it gives no amd64 `Errno` allowance, and
 this spec proposes none. Because every green commit is a release (D10),
@@ -1275,9 +1275,9 @@ as well [derived], because runner kernels change underneath us.
 **Turning `Kill` on.** amd64 switches to `Kill` in the commit that adds
 the job, once it is green; before that commit no build is releasable,
 because `TestReleaseAction` fails in the `release` job (§6.1), so D22's
-"KILL on amd64" holds for every release. arm64 switches in a later
-commit that cites a green arm64 run under `MOSEY_SOAK_ACTION=kill`
-(D22).
+"KILL on amd64" holds for every release. arm64 switched in a later
+commit, citing CI run 43626969195: 150 s under `MOSEY_SOAK_ACTION=kill`
+on ubuntu-24.04-arm with a CPU quota, no role killed (D22).
 
 ---
 

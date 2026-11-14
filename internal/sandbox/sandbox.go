@@ -28,12 +28,12 @@ func (r Role) String() string {
 type Action uint8
 
 const (
-	// Kill ends the whole process (SECCOMP_RET_KILL_PROCESS). D22's target
-	// on amd64; on arm64 only once a CI soak on real hardware passes.
+	// Kill ends the whole process (SECCOMP_RET_KILL_PROCESS). What
+	// releases use on amd64 and arm64 (D22).
 	Kill Action = iota
 	// Errno fails the call with EPERM and lets the process carry on.
-	// Development builds run it until the KILL soak is a CI gate
-	// (server.md §6.1, §9).
+	// No release uses it now; a soak build can choose it (server.md §6.1,
+	// §9).
 	Errno
 	// Log allows the call and has the kernel log it (SECCOMP_RET_LOG). It
 	// exists for the discovery procedure of server.md §6.3, which re-derives
