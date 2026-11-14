@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+  # A dispatch is checked and built as a push is; `release` releases even if
+  # nothing in RELEASE_PATHS (mise.toml) changed since the last release.
+  workflow_dispatch:
+    inputs:
+      release:
+        type: boolean
+        default: false
+
+# Least privilege for the built-in token: read-only by default, and widened
+# only on the job that publishes a release.
+permissions:
+  contents: read
+
+# A run shell is bash -eo pipefail: a failure inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # gofmt, vet for every platform a release ships for, the tests, and
+  # shellcheck, through mise, the dev loop's toolchain. The tests that need
+  # an sshd (the end-to-end bootstrap) start a throwaway one on loopback,
+  # and skip if the runner has none.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: mise run check
+
+  # Every fuzz target for a few seconds: enough to catch a parser that
+  # panics on its own seed corpus or on the first mutations. Real campaigns
+  # run locally for minutes per target before a parser lands (CLAUDE.md),
+  # and continuously before 1.0 (PLAN §6.5).
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: mise run fuzz-smoke
+        env:
+          FUZZTIME: 10s
+
+  # TODO(D22): a KILL soak of the real server, at least 120 s under a
+  # systemd CPUQuota (so the runtime's pread64 of cpu.max runs), on every Go
+  # upgrade and every architecture, once server-proc has the roles to soak.
+  # arm64 stays on ERRNO until it passes on arm64 hardware.
+
+  # Static binaries for every platform a release ships for (D1, D10), kept
+  # as the run's artifacts whether or not the commit is released.
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux/amd64, linux/arm64, darwin/amd64, darwin/arm64]
+    steps:
+      # The whole history, because the version's minor is the commit count;
+      # scripts/version.sh refuses a shallow clone rather than stamp a wrong
+      # version.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v5
+      - name: Build ${{ matrix.target }}
+        run: scripts/build.sh "${{ matrix.target }}"
+      - name: Name the artifact
+        id: name
+        env:
+          TARGET: ${{ matrix.target }}
+        run: echo "value=mosey-${TARGET/\//-}" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.name.outputs.value }}
+          path: dist/
+          if-no-files-found: error
+
+  # CONTINUOUS RELEASE (D10): every push to trunk that passes the checks
+  # above, and changed RELEASE_PATHS since the last release, is published,
+  # with the binaries attached, under the derived version
+  # (major.commit-count.run-number, scripts/version.sh).
+  #
+  # TODO: disabled until Dan confirms where releases go (GitHub Releases on
+  # this repository, as here, or elsewhere) and whether the linux binaries
+  # must first be built with GOEXPERIMENT=runtimesecret (D20). Remove the
+  # `false &&` to turn it on.
+  release:
+    needs: [check, fuzz-smoke, build]
+    if: false && github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      # For release-due, which reads RELEASE_PATHS from mise.toml.
+      - uses: jdx/mise-action@v5
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.release || false }}
+        run: |
+          if [ "$FORCE" != true ] && ! mise run release-due; then
+            echo "Nothing in RELEASE_PATHS changed since the last release: no release."
+            exit 0
+          fi
+          V="$(scripts/version.sh)"
+          # One archive per platform, each holding both binaries.
+          mkdir -p release
+          for dir in artifacts/*/*/; do
+            platform=$(basename "$dir")
+            tar -C "$dir" -czf "release/mosey-$V-$platform.tar.gz" mosey mosey-server
+          done
+          (cd release && sha256sum ./*.tar.gz > SHA256SUMS)
+          # Notes from the commits since the last release: trunk-based means
+          # no pull requests for GitHub's --generate-notes to read.
+          PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then
+            git log "$PREV..HEAD" --pretty='- %s (%h)' > notes.md
+          else
+            { echo 'First automated release.'; echo; git log -1 --pretty='- %s (%h)'; } > notes.md
+          fi
+          gh release create "v$V" --title "v$V" --notes-file notes.md --target "$GITHUB_SHA" release/*

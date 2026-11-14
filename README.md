@@ -12,9 +12,23 @@ emulator on the server so your real terminal never parses remote escape
 sequences, and resumes sessions after a dead spot, a reboot or a change of
 device. Every commit to trunk is a release.
 
-**Status: planning.** See [PLAN.md](PLAN.md). There is no code yet.
+**Status: pre-alpha.** It doesn't work yet. The design is settled
+([PLAN.md](PLAN.md)), the spikes are done (`docs/spikes/`), and the first
+slice, an interactive shell end to end, is being built
+([docs/spec/architecture.md](docs/spec/architecture.md)). Don't use it for
+anything.
+
+## Building
+
+With [mise](https://mise.jdx.dev):
+
+```sh
+mise run check    # lint and test
+mise run build    # static mosey and mosey-server for linux and darwin, amd64 and arm64
+```
 
 ## License
 
 Apache-2.0. mosey contains no code from Mosh (GPLv3); see the clean-room rules
-in [PLAN.md](PLAN.md#4-clean-room-rules-d3).
+in [PLAN.md](PLAN.md#4-clean-room-rules-d3). Dependencies and why each is
+there: [DEPENDENCIES.md](DEPENDENCIES.md).
