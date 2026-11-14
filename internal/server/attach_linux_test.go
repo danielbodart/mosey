@@ -353,3 +353,22 @@ func TestASessionWhoseBacklogIsFullIsSkippedNotWaitedOn(t *testing.T) {
 		t.Fatal("dialAttach waited on a session that is not accepting")
 	}
 }
+
+// A launcher checks R/mosey is private before it connects to a session
+// named by its id, not only SID-HEX (server.md §2.6).
+func TestANamedSessionInASessionsDirectoryOthersCanUseIsNotReached(t *testing.T) {
+	base := filepath.Join(runtimeDir(t), "mosey")
+	sid := [16]byte{0xf1}
+	fakeSession(t, base, sid, greet("v1", sid))
+	if err := os.Chmod(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(base, 0o700)
+	var le *LaunchError
+	if f, _, err := findSession(base, sid); !errors.As(err, &le) || le.Code != bootstrap.CodeSession {
+		if f != nil {
+			f.Close()
+		}
+		t.Errorf("a named session under an open sessions directory: %v", err)
+	}
+}

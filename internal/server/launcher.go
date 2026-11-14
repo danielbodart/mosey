@@ -214,6 +214,17 @@ func (l *Launcher) getenv(name string) string {
 // CodeAmbiguous with their count (bootstrap.md §9.2 step 2).
 func findSession(base string, sid [16]byte) (*os.File, []byte, error) {
 	none := &LaunchError{Code: bootstrap.CodeSession, Text: "no such session"}
+	// R/mosey is checked before either branch, as server.md §2.6 asks, so
+	// a named session is never reached through a sessions directory
+	// someone else could have put it in.
+	if err := checkPrivateDir(base); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			none.Text = "no session to resume"
+		} else {
+			none.Text = fmt.Sprintf("the sessions directory: %v", err)
+		}
+		return nil, nil, none
+	}
 	if sid != bootstrap.AnySession {
 		f, greeting, err := dialAttach(sessionDir(base, sid))
 		if err != nil {
