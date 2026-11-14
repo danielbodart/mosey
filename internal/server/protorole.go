@@ -134,6 +134,8 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 	case err == nil:
 	case errors.Is(err, ErrNoClient):
 		exit = ipc.Exit{Code: ipc.NoClient}
+	case errors.Is(err, ErrClientClosed):
+		exit = ipc.Exit{Code: ipc.ClientClosed}
 	case errors.Is(context.Cause(ctx), errSpawnerGone):
 		return nil
 	default:

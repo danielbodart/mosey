@@ -54,6 +54,12 @@ const (
 // (server.md §2.4).
 var ErrNoClient = errors.New("server: no client confirmed a credential")
 
+// ErrClientClosed is the end of a session the client ended: its user quit
+// and it said so with an END frame (transport.md §8.4). With no resume in
+// slice 1 nothing can reach the shell again, so the session ends
+// (server.md §2.4).
+var ErrClientClosed = errors.New("server: the client ended the session")
+
 // errShellExited is the normal end of a session; Run returns nil for it.
 var errShellExited = errors.New("server: the shell exited")
 
@@ -150,7 +156,8 @@ func (s *Session) ShellExited() {
 // keystrokes from SSP to the terminal, output from the terminal through the
 // emulator into the screen SSP sends, and well-formed replies back to the
 // terminal, until the shell exits or ctx is done. It returns nil when the
-// shell exited, ErrNoClient when nobody connected in time, and otherwise
+// shell exited, ErrNoClient when nobody connected in time, ErrClientClosed
+// when the client ended the session, and otherwise
 // why it stopped. It closes the emulator, and the terminal if it is an
 // io.Closer.
 //
@@ -216,6 +223,9 @@ func (s *Session) Run(ctx context.Context) error {
 	cause := context.Cause(ctx)
 	if errors.Is(cause, errShellExited) {
 		s.deliverFinal()
+		// Then say so, so the client exits now rather than waiting on a
+		// silent network (server.md §2.4, §11 item 7).
+		conn.End(transport.EndShellExited)
 	}
 	// Release whatever is parked: the transport (Recv), the emulator (a
 	// Write waiting for emu), and the pty reader and writer (closing the
@@ -226,6 +236,10 @@ func (s *Session) Run(ctx context.Context) error {
 	switch {
 	case errors.Is(cause, errShellExited):
 		return nil
+	case errors.Is(cause, ErrClientClosed), errors.Is(cause, transport.ErrEnded):
+		// The END frame closes the connection as it reports the event, so
+		// SSP's Recv may see it first.
+		return ErrClientClosed
 	case parent.Err() != nil:
 		return parent.Err()
 	}
@@ -258,6 +272,9 @@ func (s *Session) watch(ctx context.Context, conn *transport.Conn) error {
 			return nil
 		case ev := <-conn.Events():
 			s.Log.Info("transport", "event", fmt.Sprintf("%T", ev), "detail", fmt.Sprintf("%+v", ev))
+			if _, ok := ev.(transport.Ended); ok {
+				return ErrClientClosed
+			}
 		case <-changed:
 			s.publish()
 		case <-shellExit:

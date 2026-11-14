@@ -219,9 +219,9 @@ generation.
 
 | trigger | who sees it | what happens |
 |---|---|---|
-| the shell exits | spawner (`wait4`) | `ShellExit{status}` to proto, which drains the pty until EIO or T5, lets SSP deliver the final screen (until the client acks it, or T6), tells the client the session is over (§11, item 7) and sends `Exit{ShellExited}` |
+| the shell exits | spawner (`wait4`) | `ShellExit{status}` to proto, which drains the pty until EIO or T5, lets SSP deliver the final screen (until the client acks it, or T6), tells the client the session is over with `Conn.End(EndShellExited)` (`transport.md` §8.4) and sends `Exit{ShellExited}` |
 | no client confirms a credential | proto | once every credential it minted has expired unconfirmed (`handshake.CredentialTTL`, 30 s [D20]) nothing can ever connect, so `Exit{NoClient}` |
-| the client quits | proto | `Exit{ClientClosed}` (needs §11, item 7) |
+| the client quits | proto (`transport.Ended`) | `Exit{ClientClosed}`: the client said so with END (`transport.md` §8.4) |
 | emu's restart budget is spent | spawner (§5.2) | **the session does not end.** The spawner pauses restarts for `EmuCooldown`, tells proto (`EmuPaused`), and tries again; the shell and proto live on. An emu failure never ends a session (§5.2) |
 | proto exits or dies | spawner (`wait4`) | the session ends. **Slice 1 has no resume**: with proto gone nothing holds the keys, so nothing can reach the shell again (S4 §3.8). D8's resume will keep the shell and start a new proto instead; the spawner's own reference to the pty master is kept from slice 1 for that |
 | SIGTERM or SIGINT to the spawner | spawner | as for proto exiting |
@@ -1336,7 +1336,11 @@ and record in `architecture.md`:
    client terminal's foreground, background and 16-colour palette, so
    emu answers colour queries with what the user sees (S2); until then
    `Init` sends `DefaultColor`.
-7. **Session end and notices** (ssp or crypto-transport): nothing in the
+7. **Session end and notices** (ssp or crypto-transport). *The session
+   end is done at integration:* the END frame, `0x0A` with a reason byte,
+   `Conn.End` and the `Ended` event (`transport.md` §8.4); proto sends it
+   when the shell exits and ends the session on the client's. The
+   `EmuPaused` notice is still open. As first written: nothing in the
    interfaces lets proto tell the client "the shell exited" (so it exits
    at once, not on a timeout), or lets the client tell proto "I quit"
    (`Exit{ClientClosed}`), or tells the client "the screen is
