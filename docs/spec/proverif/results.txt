@@ -1,0 +1,22 @@
+### b3 (0.3s)
+RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is false.
+RESULT (but event(ServerAcceptInit(sid,h)) ==> event(ClientSentInit(sid,h)) is true.)
+RESULT inj-event(ServerConfirmed(sid,h,k1,k2)) ==> inj-event(ClientDone(sid,h,k1,k2)) is true.
+RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is true.
+RESULT not attacker_p1(secretC[]) is true.
+RESULT not attacker_p1(secretS[]) is true.
+### b3_stdout_leak (0.2s)
+RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is false.
+RESULT (even event(ServerAcceptInit(sid,h)) ==> event(ClientSentInit(sid,h)) is false.)
+RESULT inj-event(ServerConfirmed(sid,h,k1,k2)) ==> inj-event(ClientDone(sid,h,k1,k2)) is true.
+RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is true.
+RESULT not attacker(secretC[]) is true.
+RESULT not attacker(secretS[]) is true.
+### b3_noss2_sanity (0.2s)
+RESULT inj-event(ServerAcceptInit(sid,h)) ==> inj-event(ClientSentInit(sid,h)) is false.
+RESULT (even event(ServerAcceptInit(sid,h)) ==> event(ClientSentInit(sid,h)) is false.)
+RESULT inj-event(ServerConfirmed(sid,h,k1,k2)) ==> inj-event(ClientDone(sid,h,k1,k2)) is false.
+RESULT (even event(ServerConfirmed(sid,h,k1,k2)) ==> event(ClientDone(sid,h,k1,k2)) is false.)
+RESULT inj-event(ClientDone(sid,h,k1,k2)) ==> inj-event(ServerDone(sid,h,k1,k2)) is true.
+RESULT not attacker(secretC[]) is true.
+RESULT not attacker(secretS[]) is false.

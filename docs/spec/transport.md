@@ -151,8 +151,8 @@ KEM key", Angel et al., CCS 2022):
   "static" keys are single-use and erased after the handshake (§9), which
   gives the forward secrecy ephemerals would. They are called `s` only
   because they are delivered in advance. Existing PQNoise tooling does not
-  cover it; the ProVerif models in `spikes/s1-handshake/proverif/b3*.pv`
-  are its model (§3.10).
+  cover it; the ProVerif models in `docs/spec/proverif/b3*.pv` are its
+  model (§3.10).
 - **No long-term keys exist anywhere** (D8, D20).
 
 ### 3.2 Primitives
@@ -542,8 +542,10 @@ there.
 
 ### 3.10 What the handshake guarantees
 
-From the ProVerif models (`spikes/s1-handshake/proverif/`, ProVerif 2.05,
-symbolic, unbounded sessions; `results.txt`). SSH is modelled as
+From the ProVerif models (`docs/spec/proverif/`, carried over from
+`spikes/s1-handshake/proverif/` with each message's clear header added to
+the transcript; ProVerif 2.05, symbolic, unbounded sessions;
+`results.txt`). SSH is modelled as
 authentic only: both public keys are given to the attacker.
 
 | Property | `b3` (PSK leaks after) | `b3_stdout_leak` (whole stdout line, PSK included, leaks before) |
@@ -1382,7 +1384,8 @@ Beyond the general rules in `architecture.md` §6:
 - PLAN.md §2: D5, D8, D11, D15, D20, D21, D22, D26, D28.
 - S1: `docs/spikes/s1-handshake/FINDINGS.md`; `spikes/s1-handshake/hs/`;
   `spikes/s1-handshake/proverif/` (`b3.pv`, `b3_stdout_leak.pv`,
-  `b3_noss2_sanity.pv`, `common.pvl`, `results.txt`).
+  `b3_noss2_sanity.pv`, `common.pvl`, `results.txt`), carried over as
+  `docs/spec/proverif/`.
 - S5: `docs/spikes/s5-netsim-ssp/FINDINGS.md` §6; `ssp-spec.md` §2.1;
   `spikes/s5-netsim-ssp/ssp/path.go`.
 - T. Perrin, *The Noise Protocol Framework*, revision 34 (2018).

@@ -1,0 +1,128 @@
+(* A sanity check, made from b3_stdout_leak.pv by leaving ss2, msg2's KEM
+   secret, out of the keys. Expected: client authentication at
+   confirmation and the secrecy of server-to-client data FAIL. That shows
+   the models can see the attack the second KEM is there to prevent. *)
+
+(* Made from b3.pv by changing only the process at the end: the attacker
+   holds the WHOLE SSH stdout line, PSK included, from the start (a session
+   recorder or script(1) log; threat-model.md T9). Expected: msg1
+   authenticity FAILS, since anyone with the PSK can make a msg1 the server
+   answers; client authentication at confirmation, server authentication
+   and the secrecy of both directions HOLD, since only the holders of sk_C
+   and sk_S can decapsulate. *)
+
+(* B3, mosey's handshake (transport.md §3, D20):
+
+     -> s_C                         pre-message, over SSH stdin
+     <- s_S                         pre-message, over SSH stdout
+     -> psk, skem, {hello_c}        msg1
+     <- skem, {hello_s}             msg2
+     -> first data packet           key confirmation
+
+   SSH is modelled as authentic only: s_C and s_S reach the right peer
+   unaltered, and both are also given to the attacker, with the session id
+   and the credential id. In this file the PSK stays secret until phase 1,
+   which checks forward secrecy; b3_stdout_leak.pv gives the attacker the
+   whole stdout line, PSK included, from the start.
+
+   The transcript follows transport.md §3.4-§3.7: the protocol name, the
+   prologue with the session id, both one-shot keys, the PSK mixed into
+   the chaining key only (MixKey, not MixKeyAndHash), then each message's
+   clear header (type, version, credential id or indices), its
+   encapsulation (with the transcript so far as HPKE info) and its sealed
+   hello. mac1 is left out: it is outside the transcript, and anyone with
+   the PSK can compute it, so it adds nothing an attacker in these models
+   lacks.
+
+   The server is replicated per credential: it answers any number of msg1s
+   (the code keeps up to 4 pending, transport.md §3.8), and only a
+   confirmation means anything. *)
+
+free secretC, secretS: bitstring [private].
+
+event ClientSentInit(bitstring, bitstring).
+event ServerAcceptInit(bitstring, bitstring).
+event ClientDone(bitstring, bitstring, bitstring, bitstring).
+event ServerDone(bitstring, bitstring, bitstring, bitstring).
+event ServerConfirmed(bitstring, bitstring, bitstring, bitstring).
+
+(* msg1 is authentic: expected to hold only while the PSK is secret, and
+   non-injectively, since the server answers replays by design. *)
+query sid: bitstring, h: bitstring;
+  inj-event(ServerAcceptInit(sid, h)) ==> inj-event(ClientSentInit(sid, h)).
+(* The client is authenticated to the server at key confirmation. *)
+query sid: bitstring, h: bitstring, k1: bitstring, k2: bitstring;
+  inj-event(ServerConfirmed(sid, h, k1, k2)) ==> inj-event(ClientDone(sid, h, k1, k2)).
+(* The server is authenticated to the client, they agree on the keys and
+   the handshake hash, and there is no misbinding. *)
+query sid: bitstring, h: bitstring, k1: bitstring, k2: bitstring;
+  inj-event(ClientDone(sid, h, k1, k2)) ==> inj-event(ServerDone(sid, h, k1, k2)).
+(* Client-to-server data, and server-to-client data including 0.5-RTT. *)
+query attacker(secretC).
+query attacker(secretS).
+
+let Client(sid: bitstring, credid: bitstring, psk: bitstring, pkS: bitstring, skC: bitstring) =
+  new cidx: bitstring; new r1: bitstring;
+  let pkC = kempk(skC) in
+  let h0 = hash(hash(hash(proto_B3, (prologue, sid)), pkC), pkS) in
+  let ck1 = kdf_ck(proto_B3, psk) in
+  let hdr1 = (type1, version, credid, cidx) in
+  let h1 = hash(h0, hdr1) in
+  let enc1 = kemct(pkS, r1, h1) in
+  let ss1 = kemss(pkS, r1, h1) in
+  let h2 = hash(h1, enc1) in
+  let ck2 = kdf_ck(ck1, ss1) in let k2 = kdf_k(ck1, ss1) in
+  let c1 = aenc(k2, n0, h2, helloC) in
+  let h3 = hash(h2, c1) in
+  event ClientSentInit(sid, h3);
+  out(c, (hdr1, enc1, c1));
+  in(c, ((=type2, =version, sidx: bitstring, =cidx), enc2: bitstring, c2: bitstring));
+  let h4 = hash(h3, (type2, version, sidx, cidx)) in
+  let ss2 = kemdec(skC, enc2, h4) in
+  let h5 = hash(h4, enc2) in
+  let ck3 = ck2 in let k3 = k2 in
+  let p_helloS = adec(k3, n0, h5, c2) in if p_helloS = helloS then
+  let h6 = hash(h5, c2) in
+  let kc2s = split_i2r(ck3) in let ks2c = split_r2i(ck3) in
+  event ClientDone(sid, h6, kc2s, ks2c);
+  (* The confirming data packet: its clear header, with the server's
+     receiver index, is the associated data. *)
+  out(c, aenc(kc2s, n0, sidx, secretC));
+  in(c, d: bitstring);
+  let x = adec(ks2c, n0, cidx, d) in 0.
+
+let Server(sid: bitstring, credid: bitstring, psk: bitstring, skS: bitstring, pkC: bitstring) =
+  in(c, ((=type1, =version, =credid, cidx: bitstring), enc1: bitstring, c1: bitstring));
+  let pkS = kempk(skS) in
+  let h0 = hash(hash(hash(proto_B3, (prologue, sid)), pkC), pkS) in
+  let ck1 = kdf_ck(proto_B3, psk) in
+  let h1 = hash(h0, (type1, version, credid, cidx)) in
+  let ss1 = kemdec(skS, enc1, h1) in
+  let h2 = hash(h1, enc1) in
+  let ck2 = kdf_ck(ck1, ss1) in let k2 = kdf_k(ck1, ss1) in
+  let p_helloC = adec(k2, n0, h2, c1) in if p_helloC = helloC then
+  let h3 = hash(h2, c1) in
+  event ServerAcceptInit(sid, h3);
+  new sidx: bitstring; new r2: bitstring;
+  let hdr2 = (type2, version, sidx, cidx) in
+  let h4 = hash(h3, hdr2) in
+  let enc2 = kemct(pkC, r2, h4) in
+  let ss2 = kemss(pkC, r2, h4) in
+  let h5 = hash(h4, enc2) in
+  let ck3 = ck2 in let k3 = k2 in
+  let c2 = aenc(k3, n0, h5, helloS) in
+  let h6 = hash(h5, c2) in
+  let kc2s = split_i2r(ck3) in let ks2c = split_r2i(ck3) in
+  event ServerDone(sid, h6, kc2s, ks2c);
+  out(c, (hdr2, enc2, c2));
+  (* 0.5-RTT data: allowed by transport.md §3.8, unused in slice 1. *)
+  out(c, aenc(ks2c, n0, cidx, secretS));
+  in(c, d: bitstring);
+  let x = adec(kc2s, n0, sidx, d) in
+  event ServerConfirmed(sid, h6, kc2s, ks2c).
+
+process
+  !( new sid: bitstring; new credid: bitstring; new psk: bitstring;
+     new skS: bitstring; new skC: bitstring;
+     out(c, (sid, credid, kempk(skS), kempk(skC), psk));   (* the stdout line leaked before the handshake *)
+     ( Client(sid, credid, psk, kempk(skS), skC) | !Server(sid, credid, psk, skS, kempk(skC)) ) )

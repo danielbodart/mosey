@@ -20,9 +20,15 @@ for target in "${targets[@]}"; do
     arch=${target#*/}
     out="dist/$os-$arch"
     mkdir -p "$out"
+    # Linux releases run the handshake and rekeys under runtime/secret, so
+    # the private keys crypto/hpke holds are erased once dropped (D20;
+    # internal/handshake's secret_on.go). The experiment is linux-only, and
+    # elsewhere the weaker "erased once the GC reuses the memory" applies.
+    experiment=
+    [ "$os" = linux ] && experiment=runtimesecret
     # -trimpath so the binary names no path on the machine that built it;
     # CGO_ENABLED=0 (mise.toml) so it links no libc.
-    CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+    CGO_ENABLED=0 GOEXPERIMENT=$experiment GOOS=$os GOARCH=$arch go build -trimpath \
         -ldflags "-s -w -X main.version=$version" \
         -o "$out/mosey" ./cmd/mosey
     echo "$out: $version"

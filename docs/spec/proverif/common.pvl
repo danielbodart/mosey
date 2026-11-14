@@ -1,0 +1,38 @@
+(* Primitives for mosey's B3 handshake models (transport.md §3.10).
+
+   Symbolic (Dolev-Yao): every primitive is perfect. The X-Wing hybrid KEM
+   is modelled as one ideal IND-CCA KEM; that the hybrid is secure if either
+   ML-KEM-768 or X25519 is comes from X-Wing's own proof, not from here. *)
+
+free c: channel.
+
+(* SHA-256 and the HKDF uses of transport.md §3.3: free constructors, so
+   one-way and collision-free. kdf_ck and kdf_k are MixKey's two outputs,
+   split_* are Split's three. *)
+fun hash(bitstring, bitstring): bitstring.
+fun kdf_ck(bitstring, bitstring): bitstring.
+fun kdf_k(bitstring, bitstring): bitstring.
+fun split_i2r(bitstring): bitstring.
+fun split_r2i(bitstring): bitstring.
+fun split_root(bitstring): bitstring.
+
+(* ChaCha20-Poly1305 with an explicit nonce and associated data. *)
+fun aenc(bitstring, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: bitstring, n: bitstring, ad: bitstring, m: bitstring;
+  adec(k, n, ad, aenc(k, n, ad, m)) = m.
+
+(* A KEM whose encapsulation is bound to HPKE's info, as crypto/hpke's
+   SetupBaseS(pk, info) and Export bind it (transport.md §3.2). *)
+fun kempk(bitstring): bitstring.
+fun kemct(bitstring, bitstring, bitstring): bitstring.
+fun kemss(bitstring, bitstring, bitstring): bitstring.
+reduc forall sk: bitstring, r: bitstring, info: bitstring;
+  kemdec(sk, kemct(kempk(sk), r, info), info) = kemss(kempk(sk), r, info).
+
+(* Nonces of the handshake's AEAD and the first transport packets. *)
+const n0: bitstring.
+
+(* The protocol name, the prologue label, the clear header bytes of msg1
+   and msg2 (type and wire version), and the two hellos. *)
+const proto_B3, prologue, type1, type2, version: bitstring.
+const helloC, helloS: bitstring.
