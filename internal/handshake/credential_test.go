@@ -152,6 +152,27 @@ func TestMintRefusesAClientKeyThatIsNotOne(t *testing.T) {
 	}
 }
 
+// CheckPublicKey is Mint's own test of the key, so what the spawner lets
+// through is exactly what proto can mint for.
+func TestCheckPublicKeyAgreesWithMint(t *testing.T) {
+	k, err := NewOneShotKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Wipe()
+	bad := bytes.Repeat([]byte{0xff}, PublicKeySize) // not a reduced ML-KEM key
+	creds := NewCredentials(nil)
+	for _, key := range [][]byte{nil, make([]byte, PublicKeySize-1), bad, k.PublicKey()} {
+		_, merr := creds.Mint([16]byte{1}, key)
+		if cerr := CheckPublicKey(key); (cerr == nil) != (merr == nil) {
+			t.Errorf("a %d-byte key: CheckPublicKey %v, Mint %v", len(key), cerr, merr)
+		}
+	}
+	if CheckPublicKey(k.PublicKey()) != nil {
+		t.Error("a real one-shot key refused")
+	}
+}
+
 func TestEachCredentialHasItsOwnIDPSKAndServerKey(t *testing.T) {
 	creds := NewCredentials(nil)
 	sid := must(NewSessionID())

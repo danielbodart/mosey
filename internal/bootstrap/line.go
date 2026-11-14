@@ -74,7 +74,7 @@ type ClientLine struct {
 	// SoftwareVersion is the client's build, for D7's equality check.
 	SoftwareVersion string
 	// Resume asks to attach to session SessionID rather than start one
-	// (D8). It is reserved: a v1 server refuses it as unsupported.
+	// (D8, §9.2); AnySession asks for the user's one session.
 	Resume    bool
 	SessionID [SessionIDSize]byte
 	// Agent says whether the client will forward an agent (D25). Reserved
@@ -120,6 +120,9 @@ const (
 	CodeUnsupported = "unsupported"
 	CodeSession     = "session"
 	CodeInternal    = "internal"
+	// CodeAmbiguous answers a resume of AnySession that finds more than
+	// one session; its detail is their count (§9.2).
+	CodeAmbiguous = "ambiguous"
 )
 
 var (

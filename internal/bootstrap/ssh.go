@@ -31,7 +31,14 @@ type SSH struct {
 	// ForwardAgent=AgentCapture. Empty is ForwardAgent=no, slice 1's only
 	// setting.
 	AgentCapture string
+	// Role is the server role to run: "" for the bootstrap's own
+	// `--serve`, or RoleList for `--serve=list` (§9.4), which reads no
+	// line and prints the user's sessions.
+	Role string
 }
+
+// RoleList is SSH.Role for `mosey -list` (§9.4).
+const RoleList = "list"
 
 // Bounds on what the user may name (§2, §4.1).
 const (
@@ -55,6 +62,9 @@ func (s SSH) Check() error {
 		if d[i] < 0x21 || d[i] == 0x7f {
 			return &UsageError{fmt.Sprintf("mosey: %q is not a destination", d)}
 		}
+	}
+	if s.Role != "" && s.Role != RoleList {
+		return &UsageError{fmt.Sprintf("mosey: no server role %q", s.Role)}
 	}
 	if !ValidServer(s.Server) {
 		return &UsageError{fmt.Sprintf("mosey: -remote %q: a remote path may hold only letters, digits and ._/+- (and start with ~/)", s.Server)}
@@ -151,7 +161,11 @@ func (s SSH) program() string {
 // the login shell out of the process tree and the inner one makes the
 // launcher the process sshd waits for.
 func (s SSH) RemoteCommand() string {
-	return "exec /bin/sh -c 'exec " + s.Server + " --serve'"
+	flag := "--serve"
+	if s.Role != "" {
+		flag += "=" + s.Role
+	}
+	return "exec /bin/sh -c 'exec " + s.Server + " " + flag + "'"
 }
 
 // Command is the bootstrap ssh (§4.1). c is what Resolve found, which says

@@ -113,15 +113,26 @@ func NewCredentials(log *slog.Logger) *Credentials {
 	}
 }
 
+// CheckPublicKey says whether b is a one-shot X-Wing public key Mint would
+// take. The spawner checks a resuming client's key with it before it
+// forwards the key to proto, so a bad key is refused where it arrives and
+// never reaches the process that holds the session (server.md §2.6).
+func CheckPublicKey(b []byte) error {
+	if len(b) != PublicKeySize {
+		return fmt.Errorf("%w: a client key of %d bytes", ErrMalformed, len(b))
+	}
+	if _, err := xwing.NewPublicKey(b); err != nil {
+		return fmt.Errorf("%w: the client's key: %v", ErrMalformed, err)
+	}
+	return nil
+}
+
 // Mint makes a credential for the client whose one-shot public key arrived
 // over SSH stdin, bound to session. The caller writes it to SSH stdout and
 // then wipes both the Credential and the buffer it wrote.
 func (c *Credentials) Mint(session [16]byte, clientPublic []byte) (Credential, error) {
-	if len(clientPublic) != PublicKeySize {
-		return Credential{}, fmt.Errorf("%w: a client key of %d bytes", ErrMalformed, len(clientPublic))
-	}
-	if _, err := xwing.NewPublicKey(clientPublic); err != nil {
-		return Credential{}, fmt.Errorf("%w: the client's key: %v", ErrMalformed, err)
+	if err := CheckPublicKey(clientPublic); err != nil {
+		return Credential{}, err
 	}
 	cred := &credential{sid: session, sidHex: hex.EncodeToString(session[:]), clientPublic: append([]byte(nil), clientPublic...)}
 	var out Credential

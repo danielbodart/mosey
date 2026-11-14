@@ -1088,9 +1088,9 @@ SSH login that started it.
 
 ### 9.4 Listing sessions
 
-`mosey -list DEST` runs `mosey --serve=list` over the user's ssh (the same
-`exec /bin/sh -c 'exec SERVER --serve=list'` form as §4.1, with stdin
-closed and a normal, not fresh, connection: nothing is captured). The
+`mosey -list DEST` runs `mosey --serve=list` over the bootstrap's own ssh
+command (§4.1, its last argument `exec /bin/sh -c 'exec SERVER
+--serve=list'`), with stdin closed. The
 server connects to every attach socket as the launcher does for
 `AnySession`, reads each greeting, and prints one line per session that
 answered, oldest first, then exits 0:
