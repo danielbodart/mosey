@@ -80,7 +80,8 @@ fuzzed decoder protects both boundaries.
 | `EchoAck` | newest keystroke the program has had for 50 ms [paper §3.2]; used by prediction, a later slice | ECHO |
 | `Clipboard` | latest OSC 52 write, `{Seq, Data}` [D27] | CLIP |
 | `Bell` | count of bells | BELL |
-| `Rebuilt` (proposed, §11 item 1) | `{Seq, Reason}`: the emulator was rebuilt [D23] | REBUILT |
+| `Rebuilt` (§11 item 1) | `{Seq, Reason}`: the emulator was rebuilt [D23] | REBUILT |
+| `InputConsumed` (§11 item 15) | the index in the client's input stream up to which the server has written events to the pty: input flow control [`ssp.md` §10.1] | CONSUMED |
 
 `Style` is `{Fg, Bg, Underline Color; Attrs; Link string}`. `Color` is
 `DefaultColor` (0), `Palette(i)` (`1<<24 | i`) or `RGB(r,g,b)`
@@ -150,7 +151,7 @@ the change.
   - the size and every cell's `Text`, `Width` and `Style`;
   - `Cursor`, `Title`, `Modes`, `EchoOff` and `EchoAck`;
   - `Clipboard.Seq` together with `Clipboard.Data` (byte-equal);
-  - `Bell` and `Rebuilt`.
+  - `Bell`, `Rebuilt` and `InputConsumed`.
 
   Equal grids draw the same and drive input the same. `Diff(g, g)` is
   always empty, and an empty diff is valid and changes nothing.
@@ -449,6 +450,7 @@ State during a diff:
 | `0x56` | BELL | `varint count` | 2, once |
 | `0x57` | CLIP | `varint seq`, string (0..`MaxClipboard`) | 2, once |
 | `0x58` | REBUILT | `varint seq`, `byte reason` | 2, once |
+| `0x59` | CONSUMED | `varint index` | 2, once |
 | `0x80`–`0xBF` | TEXT+HERE (short) | stream of `opcode − 0x7F` bytes (1–64), then as HERE | 2, once* |
 | anything else | | | error |
 
@@ -469,7 +471,7 @@ writes the rows as they stand after it.
 
 Reserved for later slices, and errors until a spec section defines them:
 
-- `0x59`–`0x5F`: more state;
+- `0x5A`–`0x5F`: more state;
 - `0x60`–`0x6F`: scrollback, for the later lazy-scrollback work;
 - `0x4E`–`0x4F`, `0x70`–`0x7F` and `0xC0`–`0xFF`.
 
@@ -673,6 +675,10 @@ under SSP's resends. The client rings when the count goes up (§8.4).
 **REBUILT `seq reason`.** Requires `reason ≤ 3` (0 none, 1 emu memory
 limit, 2 emu panic or exit, 3 other). Sets `Rebuilt` (§11 item 1).
 
+**CONSUMED `index`.** Sets `InputConsumed = index`. Any `uint64` is
+accepted: the client clamps a value above its own stream's length to that
+length [`ssp.md` §10.1], so the decoder needs no bound (§11 item 15).
+
 ### 5.7 Ordering, summed up
 
 The grammar, in EBNF:
@@ -683,7 +689,7 @@ size     = 0x41 varint varint ;
 rowmove  = 0x42 varint varint varint | 0x43 varint ;
 op2      = text | pos | col | next | skip | erase | erased | repeat | copy
          | pen | link | cursor | here | textHere | curstyle | title
-         | modes | echo | bell | clip | rebuilt ;
+         | modes | echo | bell | clip | rebuilt | consumed ;
 ```
 
 Along with the once-only rule in §5.4, the destination order of `rowmove`,
@@ -793,8 +799,8 @@ E1–E6, not the exact bytes.
      position, use TEXT+HERE.
    - Otherwise, if it is where the write position stands, use HERE.
    - Otherwise use CURSOR.
-5. **State.** Emit CURSTYLE, TITLE, MODES, ECHO, BELL, CLIP and REBUILT
-   for each field that differs from `from`.
+5. **State.** Emit CURSTYLE, TITLE, MODES, ECHO, BELL, CLIP, REBUILT and
+   CONSUMED for each field that differs from `from`.
 
 Snapshotting and diffing read every cell. tuios has no damage tracking
 [measured S2: about 50 ns per cell]. That is about 0.1 ms at 80 × 24, and
@@ -1021,8 +1027,8 @@ creates it at the clamped size and sets it up as follows. Each item is
     representation and give `MouseX10` (§11 item 10).
 - **Clipboard and bell.** `Clipboard` and `Bell` are emu's own counters
   (§4.4). proto renumbers them (§7.3).
-- **Left zero.** `EchoOff`, `EchoAck` and `Rebuilt` are always zero in
-  emu's grid. They are proto's.
+- **Left zero.** `EchoOff`, `EchoAck`, `Rebuilt` and `InputConsumed` are
+  always zero in emu's grid. They are proto's.
 
 ### 6.3 Behaviour
 
@@ -1114,8 +1120,8 @@ proto treats emu as hostile.
 - **When emu's grid oversteps.** proto kills emu and asks the spawner to
   rebuild it (`KillEmu{violation}`) if an `Update`:
   - fails `Apply`;
-  - leaves the mirror with a non-zero `EchoOff`, `EchoAck` or `Rebuilt`.
-    Those three fields are proto's alone;
+  - leaves the mirror with a non-zero `EchoOff`, `EchoAck`, `Rebuilt` or
+    `InputConsumed`. Those four fields are proto's alone;
   - leaves the mirror at a size other than the last one proto sent, in
     `Init` or `Resize`. emu's sizes are proto's to choose: a program
     can't resize (DECCOLM and XTWINOPS are ignored, §4.5), so a
@@ -1530,6 +1536,11 @@ agreed first).
     change). Owner: server-proc.
 14. **`render.Capabilities.UTF8`** (§8.3), set by the client from the
     locale. Owners: screen and bootstrap-client.
+15. **`Grid.InputConsumed`** (`uint64`) and opcode `0x59` CONSUMED, which
+    `ssp.md` §10.1 and §10.2 require for input flow control. Taken from
+    the "more state" range, so `0x5A`–`0x5F` stay reserved. emu leaves it
+    zero and proto sets it, like `EchoAck` (§6.2, §7.3). Owners: screen,
+    ssp and server-proc.
 
 ## Review notes
 
