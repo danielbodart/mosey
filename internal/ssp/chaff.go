@@ -45,6 +45,9 @@ type chaffing struct {
 	c Chaffer
 	// tick is chaffTick; tests that measure other ticks set it (§9.1.5).
 	tick time.Duration
+	// size is the sealed size of a chaff frame, and the least any datagram
+	// is padded to while chaffing: this side's padding floor (§9.1.1).
+	size int
 	// until is when the mode ends: the endpoint chaffs while now is
 	// before it.
 	until time.Time

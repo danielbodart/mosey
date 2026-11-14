@@ -138,7 +138,7 @@ func NewEndpoint[L State[L], R State[R]](d Datagrams, cfg Config, local L, remot
 	e.sent[0] = e.pending
 	e.re.limits = e.lim
 	if c, ok := d.(Chaffer); ok {
-		e.ch = chaffing{c: c, tick: chaffTick}
+		e.ch = chaffing{c: c, tick: chaffTick, size: e.padFloor()}
 	}
 	if cfg.Role == Server {
 		e.collection = serverCollection
@@ -254,7 +254,7 @@ func (e *Endpoint[L, R]) tick(now time.Time) error {
 		e.emit(now, nil)
 	}
 	if len(e.queue) == before {
-		e.queue = append(e.queue, outgoing{chaff: e.padFloor()})
+		e.queue = append(e.queue, outgoing{chaff: e.ch.size})
 	}
 	e.ch.advance(now)
 	return nil
@@ -557,7 +557,7 @@ func (e *Endpoint[L, R]) emit(now time.Time, frag *fragment) {
 		d.echo, d.hasEcho = e.echo+uint32(now.Sub(e.echoAt).Microseconds()), true
 		e.echoDue = false
 	}
-	e.pad(&d)
+	e.pad(&d, now)
 	e.queue = append(e.queue, outgoing{payload: appendDatagram(make([]byte, 0, e.cfg.MaxPayload), d)})
 	e.ackDue = time.Time{}
 	e.lastAny = now
@@ -567,10 +567,15 @@ func (e *Endpoint[L, R]) emit(now time.Time, frag *fragment) {
 // below SSP plus the whole datagram, is as long as §9.2 says: this side's
 // floor, Padmé above it, capped at the most the layer below carries. Acks
 // and heartbeats are padded like data, so size does not tell them apart.
-func (e *Endpoint[L, R]) pad(d *datagram) {
+func (e *Endpoint[L, R]) pad(d *datagram, now time.Time) {
+	floor := e.padFloor()
+	if e.ch.active(now) {
+		// While chaffing, every datagram is at least the chaff's size.
+		floor = max(floor, e.ch.size)
+	}
 	d.padded, d.pad = true, 0
 	u := e.cfg.FrameOverhead + datagramLen(*d)
-	d.pad = paddedLen(u, e.padFloor(), e.cfg.FrameOverhead+e.cfg.MaxPayload) - u
+	d.pad = paddedLen(u, floor, e.cfg.FrameOverhead+e.cfg.MaxPayload) - u
 }
 
 // padFloor is this side's F (§9.2), which is also the size of its chaff

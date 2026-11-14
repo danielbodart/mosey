@@ -78,7 +78,7 @@ func TestPaddingNeverPassesTheLimit(t *testing.T) {
 		e := NewEndpoint(newScript(), Config{Role: role, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: boardLimit},
 			newBoard(""), newBoard(""))
 		d := datagram{echo: 1, hasEcho: true, ack: 1<<64 - 1, frag: &fragment{count: 2, chunk: make([]byte, e.lim.chunk)}}
-		e.pad(&d)
+		e.pad(&d, time.Now())
 		if b := appendDatagram(nil, d); len(b) != maxPayload || d.pad != 0 {
 			t.Errorf("role %d: the longest datagram is %d bytes with %d of padding, want %d and 0", role, len(b), d.pad, maxPayload)
 		}
