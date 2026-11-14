@@ -196,7 +196,7 @@ func TestAClientThatIgnoresFlowControlIsCutOff(t *testing.T) {
 		defer conn.Close()
 		input := userinput.NewStream()
 		ep := ssp.NewEndpoint(conn, ssp.Config{
-			Role: ssp.Client, MaxPayload: transport.MaxPayload, MaxRemoteBytes: screen.MaxDiff,
+			Role: ssp.Client, MaxPayload: transport.MaxPayload, FrameOverhead: transport.FrameOverhead, MaxRemoteBytes: screen.MaxDiff,
 		}, input.Clone(), screen.NewGrid(0, 0))
 		go ep.Run(ctx)
 

@@ -13,7 +13,8 @@ import (
 // only when that does not make it shorter (docs/spec/ssp.md §4.1). The
 // decoder is bounded, because a peer that holds the keys is still not
 // trusted with the receiver's memory. There is no preset dictionary and no
-// history shared between instructions, ever, and no padding in v1 (§9.2).
+// history shared between instructions, ever (§9.2). The length this leaks
+// is blunted by padding every datagram, which is the endpoint's (pad).
 
 // writers keeps DEFLATE compressors for reuse: making one allocates
 // hundreds of kilobytes, and a keystroke is an instruction. Reset gives a

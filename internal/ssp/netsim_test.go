@@ -109,9 +109,9 @@ func overProfile(t *testing.T, seed uint64, profile netsim.Profile, serverLimit 
 	defer close(cd.done)
 	defer close(sd.done)
 	p := &pair{
-		client: NewEndpoint(cd, Config{Role: Client, MaxPayload: maxPayload, MaxRemoteBytes: serverLimit},
+		client: NewEndpoint(cd, Config{Role: Client, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: serverLimit},
 			userinput.NewStream(), newBoard("")),
-		server: NewEndpoint(sd, Config{Role: Server, MaxPayload: maxPayload, MaxRemoteBytes: userinput.MaxDiffBytes},
+		server: NewEndpoint(sd, Config{Role: Server, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: userinput.MaxDiffBytes},
 			newBoard(""), userinput.NewStream()),
 		input: userinput.NewStream(),
 		errs:  make(chan error, 2),

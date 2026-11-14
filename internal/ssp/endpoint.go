@@ -101,8 +101,12 @@ type transmission struct {
 // NewEndpoint starts with local and remote as version 0, the empty object
 // both sides know. It keeps clones of both.
 func NewEndpoint[L State[L], R State[R]](d Datagrams, cfg Config, local L, remote R) *Endpoint[L, R] {
-	if cfg.MaxPayload <= HeaderMax {
-		panic(fmt.Sprintf("ssp: MaxPayload %d leaves no room after a %d-byte header", cfg.MaxPayload, HeaderMax))
+	if cfg.MaxPayload <= HeaderMax+padTrailer || cfg.MaxPayload > 1<<16-1 {
+		// The top bound keeps every k a u16 (§3).
+		panic(fmt.Sprintf("ssp: MaxPayload %d is not between %d and %d", cfg.MaxPayload, HeaderMax+padTrailer+1, 1<<16-1))
+	}
+	if cfg.FrameOverhead < 0 {
+		panic(fmt.Sprintf("ssp: FrameOverhead %d is negative", cfg.FrameOverhead))
 	}
 	if cfg.MaxRemoteBytes <= 0 {
 		panic(fmt.Sprintf("ssp: MaxRemoteBytes %d is not positive", cfg.MaxRemoteBytes))
@@ -496,9 +500,24 @@ func (e *Endpoint[L, R]) emit(now time.Time, frag *fragment) {
 		d.echo, d.hasEcho = e.echo+uint32(now.Sub(e.echoAt).Microseconds()), true
 		e.echoDue = false
 	}
+	e.pad(&d)
 	e.queue = append(e.queue, appendDatagram(make([]byte, 0, e.cfg.MaxPayload), d))
 	e.ackDue = time.Time{}
 	e.lastAny = now
+}
+
+// pad sets d's padding so that the sealed plaintext, the frame overhead
+// below SSP plus the whole datagram, is as long as §9.2 says: this side's
+// floor, Padmé above it, capped at the most the layer below carries. Acks
+// and heartbeats are padded like data, so size does not tell them apart.
+func (e *Endpoint[L, R]) pad(d *datagram) {
+	floor := clientPadFloor
+	if e.cfg.Role == Server {
+		floor = serverPadFloor
+	}
+	d.padded, d.pad = true, 0
+	u := e.cfg.FrameOverhead + datagramLen(*d)
+	d.pad = paddedLen(u, floor, e.cfg.FrameOverhead+e.cfg.MaxPayload) - u
 }
 
 // nextWake is when send next has something to do, short of a payload

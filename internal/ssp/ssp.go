@@ -56,6 +56,11 @@ type Config struct {
 	// transport.MaxPayload. Both ends must use the same value, since the
 	// size of a fragment follows from it.
 	MaxPayload int
+	// FrameOverhead is how many bytes the layer below seals in front of
+	// each payload: in production transport.FrameOverhead, the frame kind.
+	// Padding sizes the whole sealed plaintext, since that is the length an
+	// observer sees (docs/spec/ssp.md §9.2); 0 pads the payload alone.
+	FrameOverhead int
 	// MaxRemoteBytes bounds the size of one diff from the peer, after
 	// decompression (D24): the peer object's largest diff. A bigger one
 	// ends Run with ErrProtocol; it is never truncated or applied.

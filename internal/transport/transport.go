@@ -93,10 +93,15 @@ const (
 	maxDatagram = wire.MaxDatagram
 )
 
+// FrameOverhead is what the transport seals in front of a payload: the
+// 1-byte frame kind. SSP pads the whole sealed plaintext, the length an
+// observer sees, so it needs to know this byte is there (ssp.md §9.2).
+const FrameOverhead = 1
+
 // Overhead is what the transport adds to a payload: a 13-byte clear header
-// (type, receiver index, counter), the 1-byte frame kind and the 16-byte
-// Poly1305 tag.
-const Overhead = headerSize + 1 + 16
+// (type, receiver index, counter), the frame kind and the 16-byte Poly1305
+// tag.
+const Overhead = headerSize + FrameOverhead + 16
 
 // MaxPayload is the largest payload Send accepts: what is left of a
 // datagram (D5) once the transport has framed and sealed it.

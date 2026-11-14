@@ -178,6 +178,7 @@ func (s *Session) Run(ctx context.Context) error {
 	ep := ssp.NewEndpoint(conn, ssp.Config{
 		Role:           ssp.Server,
 		MaxPayload:     transport.MaxPayload,
+		FrameOverhead:  transport.FrameOverhead,
 		MaxRemoteBytes: userinput.MaxDiffBytes,
 	}, screen.NewGrid(0, 0), userinput.NewStream())
 	s.mu.Lock()

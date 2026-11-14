@@ -572,7 +572,7 @@ func TestAFragmentedInstructionCompletesFromTwoTransmissions(t *testing.T) {
 			if !watch {
 				return false
 			}
-			d, err := parseDatagram(p, maxPayload-HeaderMax, 1<<16-1)
+			d, err := parseDatagram(p, prodLimits.chunk, 1<<16-1)
 			if err != nil || d.frag == nil {
 				return false
 			}
@@ -583,7 +583,7 @@ func TestAFragmentedInstructionCompletesFromTwoTransmissions(t *testing.T) {
 		p := start(t, c, s)
 		settle(p)
 		watch = true
-		big := randomText(7, 5*1175)
+		big := randomText(7, 5*prodLimits.chunk)
 		p.server.Set(newBoard(big))
 		sleepUntil(t, 5*time.Second, "the big screen", func() bool { return p.screen() == big })
 		s.mu.Lock()

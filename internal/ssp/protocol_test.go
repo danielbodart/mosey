@@ -60,7 +60,7 @@ func instr(id uint32, from, to uint64, encoding byte, body []byte) []byte {
 }
 
 func newClient(d Datagrams) *clientEnd {
-	return NewEndpoint(d, Config{Role: Client, MaxPayload: maxPayload, MaxRemoteBytes: boardLimit}, userinput.NewStream(), newBoard(""))
+	return NewEndpoint(d, Config{Role: Client, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: boardLimit}, userinput.NewStream(), newBoard(""))
 }
 
 func TestABrokenPeerEndsRunWithAProtocolError(t *testing.T) {
@@ -209,6 +209,10 @@ func FuzzDatagram(f *testing.F) {
 	f.Add(instr(1, 3, 4, encodingStored, []byte("four")))
 	f.Add(instr(1, 2, 5, encodingDeflate, compress([]byte("five five five five"))))
 	f.Add(appendDatagram(nil, datagram{frag: &fragment{count: 2, chunk: make([]byte, prodLimits.chunk)}}))
+	// As senders make them (§9.2): an echo padded to the server's floor, and
+	// a full fragment at MaxPayload.
+	f.Add(appendDatagram(nil, datagram{ts: 1, echo: 2, hasEcho: true, ack: 3, frag: &fragment{id: 1, count: 1, chunk: []byte{3, 4, 0, 'x'}}, padded: true, pad: 38}))
+	f.Add(appendDatagram(nil, datagram{ack: 1 << 63, frag: &fragment{count: 2, chunk: make([]byte, prodLimits.chunk)}, padded: true, pad: 6}))
 	f.Fuzz(func(t *testing.T, p []byte) {
 		d, err := parseDatagram(p, prodLimits.chunk, prodLimits.maxFragments)
 		if err == nil {

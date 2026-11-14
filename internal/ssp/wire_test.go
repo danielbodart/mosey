@@ -15,8 +15,8 @@ func TestTheChunkIsWhatTheLargestHeaderLeaves(t *testing.T) {
 	if HeaderMax != 27 || InstructionHeaderMax != 21 {
 		t.Fatalf("headers %d and %d", HeaderMax, InstructionHeaderMax)
 	}
-	if prodLimits.chunk != 1175 {
-		t.Errorf("chunk %d, want 1175 (ssp.md §3)", prodLimits.chunk)
+	if prodLimits.chunk != 1173 {
+		t.Errorf("chunk %d, want 1173 (ssp.md §3)", prodLimits.chunk)
 	}
 	if prodLimits.maxPartialBytes < 2*prodLimits.maxInstruction {
 		t.Error("partials cannot hold two whole instructions")

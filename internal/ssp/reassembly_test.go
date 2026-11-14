@@ -9,7 +9,7 @@ import (
 // smallLimits make reassembly's bounds bite with a few bytes: 8-byte
 // chunks and instructions of at most 61 bytes, so 8 fragments, and 128
 // bytes held.
-var smallLimits = newLimits(Config{MaxPayload: HeaderMax + 8, MaxRemoteBytes: 40})
+var smallLimits = newLimits(Config{MaxPayload: HeaderMax + padTrailer + 8, MaxRemoteBytes: 40})
 
 // fragmentsOf splits an instruction as a sender does.
 func fragmentsOf(id uint32, instr []byte, chunk int) []*fragment {

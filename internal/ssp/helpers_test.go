@@ -17,6 +17,10 @@ import (
 // §4): the D5 datagram less the transport's 30 bytes.
 const maxPayload = wire.MaxDatagram - 30
 
+// frameOverhead is the transport's frame kind byte, sealed with every
+// payload: what SSP's padding counts beside the datagram (§9.2).
+const frameOverhead = 1
+
 // board is a toy screen: an object whose diff is simply its newest
 // content, so only the latest state matters, as with the real screen.
 // Apply refuses a diff holding 0xff, so tests can make a peer's diff fail.
@@ -159,7 +163,7 @@ func decode(t testing.TB, log []sent) []decoded {
 	t.Helper()
 	out := make([]decoded, len(log))
 	for i, s := range log {
-		d, err := parseDatagram(s.payload, maxPayload-HeaderMax, 1<<16-1)
+		d, err := parseDatagram(s.payload, prodLimits.chunk, 1<<16-1)
 		if err != nil {
 			t.Fatalf("sent a datagram that does not parse: %v", err)
 		}
@@ -223,9 +227,9 @@ type pair struct {
 func start(t *testing.T, c, s *end) *pair {
 	t.Helper()
 	p := &pair{
-		client: NewEndpoint(c, Config{Role: Client, MaxPayload: maxPayload, MaxRemoteBytes: boardLimit},
+		client: NewEndpoint(c, Config{Role: Client, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: boardLimit},
 			userinput.NewStream(), newBoard("")),
-		server: NewEndpoint(s, Config{Role: Server, MaxPayload: maxPayload, MaxRemoteBytes: userinput.MaxDiffBytes},
+		server: NewEndpoint(s, Config{Role: Server, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: userinput.MaxDiffBytes},
 			newBoard(""), userinput.NewStream()),
 		cEnd: c, sEnd: s,
 		input: userinput.NewStream(),

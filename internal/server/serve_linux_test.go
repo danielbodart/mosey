@@ -37,7 +37,7 @@ func needsEverything(t *testing.T) {
 	needs(t, "screen", func() { screen.NewGrid(1, 1) })
 	needs(t, "userinput", func() { userinput.NewStream() })
 	needs(t, "ssp", func() {
-		ssp.NewEndpoint(nil, ssp.Config{MaxPayload: transport.MaxPayload, MaxRemoteBytes: 1}, userinput.NewStream(), screen.NewGrid(0, 0))
+		ssp.NewEndpoint(nil, ssp.Config{MaxPayload: transport.MaxPayload, FrameOverhead: transport.FrameOverhead, MaxRemoteBytes: 1}, userinput.NewStream(), screen.NewGrid(0, 0))
 	})
 }
 
@@ -132,7 +132,7 @@ func serve(t *testing.T, bin string, env ...string) *served {
 	t.Cleanup(func() { conn.Close() })
 	s := &served{t: t, state: state, conn: conn, input: userinput.NewStream(), cancel: cancel}
 	s.ep = ssp.NewEndpoint(conn, ssp.Config{
-		Role: ssp.Client, MaxPayload: transport.MaxPayload, MaxRemoteBytes: screen.MaxDiff,
+		Role: ssp.Client, MaxPayload: transport.MaxPayload, FrameOverhead: transport.FrameOverhead, MaxRemoteBytes: screen.MaxDiff,
 	}, userinput.NewStream(), screen.NewGrid(0, 0))
 	go s.ep.Run(ctx)
 	return s

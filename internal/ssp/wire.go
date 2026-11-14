@@ -3,6 +3,7 @@ package ssp
 import (
 	"encoding/binary"
 	"fmt"
+	"math/bits"
 )
 
 // The datagram and instruction formats of docs/spec/ssp.md §3 and §4.
@@ -20,7 +21,66 @@ const (
 	// InstructionHeaderMax is the largest instruction header: from and to
 	// as the longest uvarints, and the encoding byte (§4).
 	InstructionHeaderMax = 2*binary.MaxVarintLen64 + 1
+
+	// padTrailer is the u16 k that ends a padded datagram (§3). Every
+	// datagram a sender makes is padded (§9.2), so the chunk leaves room
+	// for it after the largest header.
+	padTrailer = 2
 )
+
+// The padding floors of §9.2: the smallest sealed plaintext each side
+// sends. Dan's decision on O12 [D], from what spike S5 measured
+// (docs/spikes/s5-netsim-ssp/padding.md): a 64-byte floor gives every
+// keystroke echo one size and keeps 88% of flate's saving; 16 bytes on the
+// client's input frames. Padmé rounds everything above the floor.
+const (
+	serverPadFloor = 64
+	clientPadFloor = 16
+)
+
+// padme is Padmé (Nikitin, Barman, Lueks, Underwood, Hubaux and Ford,
+// "Reducing Metadata Leakage from Encrypted Files and Communication with
+// PURBs", PoPETs 2019(4), §4.4, Algorithm 1): l rounded up so that its
+// mantissa has no more bits than its exponent, which leaks O(log log M)
+// bits about lengths up to M for at most 12% overhead. Lengths under 8
+// are unchanged, which covers 1, where the paper's log2 of the exponent
+// is undefined.
+func padme(l int) int {
+	if l < 2 {
+		return l
+	}
+	e := bits.Len(uint(l)) - 1 // floor(log2 l)
+	s := bits.Len(uint(e))     // floor(log2 e) + 1
+	z := e - s
+	if z <= 0 {
+		return l
+	}
+	mask := 1<<z - 1
+	return (l + mask) &^ mask
+}
+
+// paddedLen is the sealed plaintext length a datagram of unpadded length u
+// goes out at (§9.2): at least the floor, Padmé above it, and never past
+// limit, the most the layer below carries. u counts the trailer, so it is
+// never over limit, and neither is the result below u.
+func paddedLen(u, floor, limit int) int {
+	return min(max(floor, padme(u)), limit)
+}
+
+// datagramLen is how long appendDatagram makes d.
+func datagramLen(d datagram) int {
+	n := 1 + 4 + uvarintLen(d.ack)
+	if d.hasEcho {
+		n += 4
+	}
+	if d.frag != nil {
+		n += 8 + len(d.frag.chunk)
+	}
+	if d.padded {
+		n += d.pad + padTrailer
+	}
+	return n
+}
 
 // The flag bits of a datagram's first byte (§3). The others are reserved
 // and must be zero: both ends run the same build (D7), so an unknown bit is
@@ -53,8 +113,8 @@ type datagram struct {
 	// carries; a datagram without one is an ack.
 	frag *fragment
 	// pad, if padded, is how many zero bytes come before the length
-	// trailer. Slice 1 never pads (§9.2); receivers strip it all the same,
-	// so chaff (O10) can add it without a format change.
+	// trailer. A sender pads every datagram (§9.2); a receiver strips
+	// whatever §3's rules allow and does not check the sender's policy.
 	pad    int
 	padded bool
 }

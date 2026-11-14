@@ -32,7 +32,7 @@ type limits struct {
 }
 
 func newLimits(cfg Config) limits {
-	l := limits{chunk: cfg.MaxPayload - HeaderMax, maxInstruction: cfg.MaxRemoteBytes + InstructionHeaderMax}
+	l := limits{chunk: cfg.MaxPayload - HeaderMax - padTrailer, maxInstruction: cfg.MaxRemoteBytes + InstructionHeaderMax}
 	l.maxFragments = min((l.maxInstruction+l.chunk-1)/l.chunk, 1<<16-1)
 	l.maxPartialBytes = 2 * l.maxFragments * l.chunk
 	return l
