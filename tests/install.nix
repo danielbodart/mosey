@@ -5,12 +5,11 @@
 #   session runs over real UDP between the VMs, with the server's roles
 #   sandboxed as released (seccomp KILL, Landlock), and what alice types
 #   in it reaches server's shell.
-# - bare has no mosey at all. TODAY (slice 1) the client says so and
-#   exits: bootstrap.md §4.2's ErrNoServer, which is the hook the
-#   auto-upload slice answers. THE AUTO-UPLOAD SLICE CHANGES THIS CASE: it
-#   asks the first time (D7), so its test answers yes and expects a session
-#   on bare, run by ~/.cache/mosey/<version>/mosey, hash-checked, and a
-#   second run that asks nothing.
+# - bare has no mosey at all (D7, bootstrap.md §4.7). The client's probe
+#   says so, the client asks the first time, alice answers yes, and the
+#   client copies its own file to ~/.cache/mosey/<version>/mosey on bare,
+#   where the installer checks its hash; the session then runs from that
+#   copy. A second run finds it and asks nothing.
 #
 # Throwaway keys, made in the store for this test alone; nothing here reads
 # a real key, agent or known_hosts.
@@ -21,6 +20,8 @@ let
   pkgs = hostPkgs;
   system = pkgs.stdenv.hostPlatform.system;
   mosey = self.packages.${system}.mosey;
+  # Where D7 installs this build on a host that has none.
+  cached = "/home/alice/.cache/mosey/${mosey.version}/mosey";
 
   keys = pkgs.runCommand "mosey-install-test-keys" { nativeBuildInputs = [ pkgs.openssh ]; } ''
     mkdir $out
@@ -111,17 +112,43 @@ in
         # The session's processes end with it.
         server.wait_until_fails("pgrep -u alice -f -- '--serve'")
 
-    # SLICE 1 BEHAVIOUR, to be replaced by the auto-upload slice (see the
-    # header): the client finds no mosey on bare and says how to fix it.
-    with subtest("bare: no mosey there, said plainly (until auto-upload)"):
+    with subtest("bare: asked once, mosey copies itself there and the session runs from the copy"):
         client.succeed(alice(
             "tmux new-session -d -s b -x 100 -y 30 "
             + shlex.quote("mosey bare 2>/tmp/bare-err; echo $? >/tmp/bare-exit")
         ))
+        # The question goes to stderr while the terminal is cooked; the
+        # answer comes from the terminal (bootstrap.md §4.7.5).
+        client.wait_until_succeeds("grep -q 'Copy this one' /tmp/bare-err", timeout=60)
+        client.succeed(alice("tmux send-keys -t b y Enter"))
+        client.wait_until_succeeds(alice("tmux capture-pane -p -t b | grep -q 'alice@bare'"), timeout=60)
+        # The very file the client runs, owned by alice and hers alone.
+        want = client.succeed("sha256sum ${mosey}/bin/mosey").split()[0]
+        got = bare.succeed("sha256sum ${cached}").split()[0]
+        assert got == want, f"the copy on bare is {got}, the client is {want}"
+        bare.succeed("test \"$(stat -c '%U %a' ${cached})\" = 'alice 700'")
+        bare.succeed("test \"$(stat -c '%a' /home/alice/.cache/mosey)\" = 700")
+        # The spawner runs from the copy (a pattern without the version,
+        # whose + pgrep would read as a regular expression).
+        bare.succeed("pgrep -u alice -f -- '/home/alice/[.]cache/mosey/.*/mosey --serve=spawner'")
+        client.succeed(alice("tmux send-keys -t b 'touch /tmp/through-the-copy' Enter"))
+        bare.wait_for_file("/tmp/through-the-copy")
+        client.succeed(alice("tmux send-keys -t b exit Enter"))
         client.wait_for_file("/tmp/bare-exit")
         status = client.succeed("cat /tmp/bare-exit").strip()
-        err = client.succeed("cat /tmp/bare-err")
-        assert status != "0", f"mosey bare exited 0: {err}"
-        assert "no mosey at mosey on bare" in err, f"stderr: {err}"
+        assert status == "0", f"mosey bare exited {status}: {client.succeed('cat /tmp/bare-err')}"
+        bare.wait_until_fails("pgrep -u alice -f -- '--serve'")
+
+    with subtest("bare again: the copy is found, nothing is asked"):
+        client.succeed(alice(
+            "tmux new-session -d -s b2 -x 100 -y 30 "
+            + shlex.quote("mosey bare 2>/tmp/bare2-err; echo $? >/tmp/bare2-exit")
+        ))
+        client.wait_until_succeeds(alice("tmux capture-pane -p -t b2 | grep -q 'alice@bare'"), timeout=60)
+        client.fail("grep -q 'y/N' /tmp/bare2-err")
+        client.succeed(alice("tmux send-keys -t b2 exit Enter"))
+        client.wait_for_file("/tmp/bare2-exit")
+        status = client.succeed("cat /tmp/bare2-exit").strip()
+        assert status == "0", f"mosey bare exited {status}: {client.succeed('cat /tmp/bare2-err')}"
   '';
 }

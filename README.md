@@ -11,11 +11,12 @@ on lossy links and picks up where it left off.
 ([PLAN.md](PLAN.md)) and the specs are written ([docs/spec/](docs/spec)).
 The first slice works: `mosey HOST` bootstraps over your `ssh` and gives
 you an interactive shell over encrypted UDP, with the emulator sandboxed on
-the server. Sessions survive the client: `mosey -r HOST` resumes one from
-here or another device and takes it over (see [Using it](#using-it)). For
-now `mosey` must already be on the host. Agent forwarding, predictive echo
-and copying the binary across are the next slices. Every green commit is
-already released (see [Installing](#installing)).
+the server, and copies itself to a host that doesn't have it (see
+[Zero install](#zero-install)). Sessions survive the client: `mosey -r HOST`
+resumes one from here or another device and takes it over (see
+[Using it](#using-it)). Agent forwarding and predictive echo are the next
+slices. Every green commit is already released (see
+[Installing](#installing)).
 
 ## What it is
 
@@ -82,15 +83,15 @@ install -m 0755 "mosey-$V-linux-amd64" ~/.local/bin/mosey
 The platforms are `linux-amd64`, `linux-arm64`, `darwin-amd64` and
 `darwin-arm64`. The names are fixed
 ([docs/spec/bootstrap.md §4.6](docs/spec/bootstrap.md)), because mosey
-will fetch them itself to copy the right one onto a host of another
+fetches them itself to copy the right one onto a host of another
 platform. With Nix, `nix run github:danielbodart/mosey -- HOST`, or the
 flake's `packages.<system>.mosey`.
 
 ## Using it
 
-mosey needs the same `mosey` binary on both ends for now (copying it over
-by itself comes later; `-remote PATH` says where it is on the host if it
-isn't on the `PATH` there). Then:
+mosey needs the same version of `mosey` on both ends, and copies itself
+over the first time if the host has none (see [Zero install](#zero-install)).
+Then:
 
 ```sh
 mosey host                 # a new session: a login shell on host, over UDP
@@ -110,6 +111,36 @@ Nothing secret is ever saved to disk: each resume is a fresh SSH login and
 a fresh handshake ([docs/spec/bootstrap.md §9](docs/spec/bootstrap.md)).
 A client that just loses its network for a while needs none of this: it
 carries on by itself when packets flow again.
+
+## Zero install
+
+The server is the same `mosey` binary, at exactly the client's version. On
+each connection `mosey HOST` looks on the host for
+`~/.cache/mosey/<version>/mosey`, then `mosey` on its `PATH`, in the same
+ssh login that starts the session. If neither is this version, it asks
+once per host:
+
+```
+mosey: HOST has no mosey 0.123.456. Copy this one (linux/amd64, 9.8 MB) to ~/.cache/mosey/0.123.456/ there? [y/N]
+```
+
+and copies its own file over ssh. If the host is another platform (a Mac
+client, a Linux server) it downloads its own version's release for that
+platform from GitHub instead, and checks it against the release's
+`SHA256SUMS` before sending it. On the host the copy installs itself: it
+checks its own length and SHA-256, refuses to follow a symlink below
+`~/.cache` or to replace a file that isn't yours, and renames itself into
+place. Then the session starts.
+
+- `-upload=yes` copies without asking; `-upload=no` never copies.
+- `-remote PATH` runs that binary on the host instead, and copies nothing.
+- A development build (`dev`, or a local build) can copy only itself, so
+  only to a host of its own platform.
+- The server runs on Linux for now.
+
+The details, and what this does and doesn't protect against, are in
+[docs/spec/bootstrap.md §4.7](docs/spec/bootstrap.md) and
+[docs/threat-model.md §4.13](docs/threat-model.md).
 
 ## Building
 

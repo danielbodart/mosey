@@ -165,8 +165,8 @@
           });
 
           # D7's install path on real machines: a client VM runs mosey
-          # against one server that has it and one that does not. See
-          # tests/install.nix for what the auto-upload slice changes.
+          # against one server that has it and one that does not, which it
+          # copies itself to (tests/install.nix).
           vm-install = pkgs.testers.runNixOSTest (import ./tests/install.nix { inherit self; });
         });
 

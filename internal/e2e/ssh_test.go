@@ -25,6 +25,10 @@ type sshd struct {
 	dir    string
 	config string // the client's ssh_config, for ssh -F
 	host   string // its Host alias
+	// home is $HOME for whoever logs in: a directory of the test's, so
+	// nothing a session does (D7's ~/.cache/mosey, a shell's history)
+	// lands in the user's real home.
+	home string
 	// runtime is the XDG_RUNTIME_DIR sshd gives its sessions, so the
 	// servers' attach sockets are the test's own.
 	runtime string
@@ -48,7 +52,7 @@ func startSSHD(t *testing.T) *sshd {
 	if err != nil {
 		t.Skip(err)
 	}
-	s := &sshd{dir: t.TempDir(), host: "mosey-e2e", runtime: runtimeDir(t)}
+	s := &sshd{dir: t.TempDir(), host: "mosey-e2e", home: t.TempDir(), runtime: runtimeDir(t)}
 	for _, k := range []string{"host", "user"} {
 		if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "mosey-e2e", "-f", filepath.Join(s.dir, k)).CombinedOutput(); err != nil {
 			t.Fatalf("ssh-keygen: %v %s", err, out)
@@ -80,8 +84,8 @@ UsePAM no
 AllowAgentForwarding no
 AllowTcpForwarding no
 X11Forwarding no
-SetEnv XDG_RUNTIME_DIR=%[3]s
-`, port, s.dir, s.runtime))
+SetEnv HOME=%[3]s XDG_RUNTIME_DIR=%[4]s
+`, port, s.dir, s.home, s.runtime))
 	hostPub, err := os.ReadFile(filepath.Join(s.dir, "host.pub"))
 	if err != nil {
 		t.Fatal(err)
