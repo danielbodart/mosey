@@ -19,16 +19,24 @@ import (
 //
 // It runs outside synctest (a fuzz worker lives for minutes), on a memNet
 // with no delay, so the setup is a real, quick handshake.
+//
+// There are two connections, on listeners of their own, and every input
+// goes to both. A genuine END closes the connection it reaches (after
+// which everything sent to it is an unknown index, refused), so the END
+// seeds are sealed for the second, and the first stays open for the rest
+// of the corpus.
 func FuzzReceive(f *testing.F) {
-	s := newSetup(f, 0)
-	client, server, _ := s.connect(clientAddr.String())
-
+	type side struct {
+		s      *setup
+		server *Conn
+		from   netip.AddrPort
+	}
+	sides := make([]side, 2)
 	genuine := map[string]bool{}
-	client.e.lock()
-	for _, fr := range []struct {
+	for i, frames := range [][]struct {
 		kind Kind
 		body []byte
-	}{
+	}{{
 		{KindTerminal, []byte("keystrokes")},
 		{KindTerminal, nil},
 		{KindKeepalive, keepaliveAnswer},
@@ -36,32 +44,54 @@ func FuzzReceive(f *testing.F) {
 		{KindPathChallenge, []byte("12345678")},
 		{KindPathResponse, []byte("87654321")},
 		{KindRekeyInit1, make([]byte, handshake.RekeyPartSize)},
+		{KindRekeyInit2, make([]byte, handshake.RekeyPartSize)},
 		{KindRekeyResp, make([]byte, handshake.RekeyRespSize)},
 		{KindChaff, []byte("cover")},
 		{Kind(0xee), []byte("a later slice")},
-	} {
-		pkt := must(client.cur.seal(fr.kind, fr.body))
-		genuine[string(pkt)] = true
-		f.Add(pkt)
+	}, {
+		// In this order as seeds, so all three are accepted: the END of
+		// the wrong length is ignored, and the genuine one closes it.
+		{KindEnd, []byte{byte(EndClientQuit), 0}},
+		{KindTerminal, []byte("before the END")},
+		{KindEnd, []byte{byte(EndShellExited)}},
+	}} {
+		s := newSetup(f, 0)
+		client, server, _ := s.connect(clientAddr.String())
+		sides[i] = side{s: s, server: server, from: clientAddr}
+		client.e.lock()
+		for _, fr := range frames {
+			pkt := must(client.cur.seal(fr.kind, fr.body))
+			genuine[string(pkt)] = true
+			f.Add(pkt)
+		}
+		client.e.unlock()
 	}
-	client.e.unlock()
 	f.Add([]byte{TypeData})
 	f.Add([]byte{TypeMsg1, handshake.WireVersion})
 
 	used := map[string]bool{}
 	f.Fuzz(func(t *testing.T, pkt []byte) {
-		s.l.e.lock()
-		defer s.l.e.unlock()
-		before := snapshotLocked(server)
-		dropped := totalDrops(s.l.e.drops.count)
-		s.l.handle(pkt, clientAddr)
-		if totalDrops(s.l.e.drops.count) > dropped {
-			if after := snapshotLocked(server); after != before {
-				t.Fatalf("a refused datagram changed the connection: %+v → %+v", before, after)
+		accepted := 0
+		for _, sd := range sides {
+			sd.s.l.e.lock()
+			before := snapshotLocked(sd.server)
+			dropped := totalDrops(sd.s.l.e.drops.count)
+			sd.s.l.handle(pkt, sd.from)
+			refused := totalDrops(sd.s.l.e.drops.count) > dropped
+			after := snapshotLocked(sd.server)
+			sd.s.l.e.unlock()
+			if refused {
+				if after != before {
+					t.Fatalf("a refused datagram changed the connection: %+v → %+v", before, after)
+				}
+				continue
 			}
+			accepted++
+		}
+		if accepted == 0 {
 			return
 		}
-		if !genuine[string(pkt)] {
+		if !genuine[string(pkt)] || accepted > 1 {
 			t.Fatalf("a datagram the client never sealed was accepted: %x", pkt)
 		}
 		if used[string(pkt)] {
