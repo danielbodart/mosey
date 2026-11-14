@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -402,7 +404,7 @@ func TestLostAcksNeverWedgeContinuousOutput(t *testing.T) {
 			settle(p)
 			stop := make(chan struct{})
 			done := make(chan struct{})
-			n := 0
+			var n atomic.Int64 // the setter's, read by the test below
 			go func() {
 				defer close(done)
 				for {
@@ -410,8 +412,7 @@ func TestLostAcksNeverWedgeContinuousOutput(t *testing.T) {
 					case <-stop:
 						return
 					case <-time.After(minFrame):
-						n++
-						p.server.Set(newBoard(strconv.Itoa(n)))
+						p.server.Set(newBoard(strconv.FormatInt(n.Add(1), 10)))
 					}
 				}
 			}()
@@ -424,7 +425,7 @@ func TestLostAcksNeverWedgeContinuousOutput(t *testing.T) {
 				defer c.mu.Unlock()
 				return len(c.log) >= dropFrom+burst
 			})
-			target := n
+			target := int(n.Load())
 			took := sleepUntil(t, 1500*time.Millisecond, fmt.Sprintf("screen %d after %d lost acks", target, burst),
 				func() bool { return counter(p.screen()) >= target })
 			t.Logf("%d lost client datagrams: caught up %v after", burst, took)
@@ -446,6 +447,9 @@ func TestLostServerDatagramsNeverWedgeContinuousTyping(t *testing.T) {
 			settle(p)
 			stop := make(chan struct{})
 			done := make(chan struct{})
+			// The typist owns p.input; the test reads its length under the
+			// same lock.
+			var typing sync.Mutex
 			go func() {
 				defer close(done)
 				for {
@@ -453,7 +457,9 @@ func TestLostServerDatagramsNeverWedgeContinuousTyping(t *testing.T) {
 					case <-stop:
 						return
 					case <-time.After(minFrame):
+						typing.Lock()
 						p.typeKeys("k")
+						typing.Unlock()
 					}
 				}
 			}()
@@ -466,7 +472,9 @@ func TestLostServerDatagramsNeverWedgeContinuousTyping(t *testing.T) {
 				defer s.mu.Unlock()
 				return len(s.log) >= dropFrom+burst
 			})
+			typing.Lock()
 			target := p.input.Len()
+			typing.Unlock()
 			took := sleepUntil(t, 1500*time.Millisecond, fmt.Sprintf("key %d after %d lost server datagrams", target, burst), func() bool {
 				srv, _ := p.server.Remote()
 				return srv.Len() >= target
@@ -582,7 +590,10 @@ func TestAFragmentedInstructionCompletesFromTwoTransmissions(t *testing.T) {
 		}})
 		p := start(t, c, s)
 		settle(p)
+		// drop runs under s.mu, on the server's goroutine.
+		s.mu.Lock()
 		watch = true
+		s.mu.Unlock()
 		big := randomText(7, 5*prodLimits.chunk)
 		p.server.Set(newBoard(big))
 		sleepUntil(t, 5*time.Second, "the big screen", func() bool { return p.screen() == big })

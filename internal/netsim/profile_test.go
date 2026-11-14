@@ -186,10 +186,14 @@ func TestAProfilesEventsFollowTheSeed(t *testing.T) {
 func TestTrainRoamsTheClientEveryTenMinutesOrSo(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		n, client, server := onProfile(t, 1, Train())
+		// Rebound runs on the network's goroutine: told is shared with it.
+		var mu sync.Mutex
 		var told []string
 		n.Rebound = func(c *Conn, from, to netip.AddrPort) {
 			if c == client {
+				mu.Lock()
 				told = append(told, to.String())
+				mu.Unlock()
 			}
 		}
 		// A roam comes in the minute after each tenth minute.
@@ -204,6 +208,8 @@ func TestTrainRoamsTheClientEveryTenMinutesOrSo(t *testing.T) {
 			t.Errorf("the client was at %v, want %v", addrs, want)
 		}
 		// By now, 45 minutes in, the fourth roam has come too.
+		mu.Lock()
+		defer mu.Unlock()
 		if len(told) != 4 || fmt.Sprint(told[:3]) != fmt.Sprint(want[1:]) {
 			t.Errorf("Rebound was told of %v", told)
 		}

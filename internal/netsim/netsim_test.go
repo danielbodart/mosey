@@ -553,6 +553,8 @@ func TestAtRunsScriptedEventsInOrderWithDeliveries(t *testing.T) {
 		a.WriteToAddrPort([]byte("x"), addrB)
 		time.Sleep(time.Second)
 		want := "[first at 5ms second at 10ms, 1 received third at 10ms]"
+		mu.Lock()
+		defer mu.Unlock()
 		if fmt.Sprint(log) != want {
 			t.Errorf("got %v, want %v", log, want)
 		}

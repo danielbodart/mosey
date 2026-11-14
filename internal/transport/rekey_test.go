@@ -316,14 +316,23 @@ func runSchedule(t *testing.T, seed uint64) uint64 {
 		}
 		return out
 	})
+	// rng is the tap's too, which memNet calls under its lock from the
+	// connections' goroutines, so the schedule's own draws take that lock
+	// as well (the race detector's finding: synctest's virtual time orders
+	// the goroutines, but only a lock or Wait makes that ordering one the
+	// memory model knows of).
+	intN := func(n int) (v int) {
+		s.net.locked(func() { v = rng.IntN(n) })
+		return v
+	}
 	start := time.Now()
 	for time.Since(start) < 10*time.Minute {
-		time.Sleep(time.Duration(200+rng.IntN(3000)) * time.Millisecond)
-		switch rng.IntN(5) {
+		time.Sleep(time.Duration(200+intN(3000)) * time.Millisecond)
+		switch intN(5) {
 		case 0:
-			ageBy(client, time.Duration(rng.IntN(int(RekeyAfter))))
+			ageBy(client, time.Duration(intN(int(RekeyAfter))))
 		case 1:
-			ageBy(server, time.Duration(rng.IntN(int(serverRekeyAfter))))
+			ageBy(server, time.Duration(intN(int(serverRekeyAfter))))
 		}
 		client.Send([]byte("c"))
 		server.Send([]byte("s"))
