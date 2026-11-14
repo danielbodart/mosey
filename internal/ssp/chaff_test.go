@@ -165,12 +165,17 @@ func TestTheServerChaffsOnItsOwnGridOnceTheClientsChaffArrives(t *testing.T) {
 	})
 }
 
-func TestChaffDelaysAKeyByAtMostOneTick(t *testing.T) {
+func TestChaffDelaysAKeyByAtMostOneTickAndSendsItOnTheTick(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const delay = 10 * time.Millisecond
 		p := chaffingPair(t, delay, true)
 		time.Sleep(time.Second)
+		// The first key starts the grid and goes at once (§9.1.1); the
+		// gaps keep the client chaffing throughout, so it is one grid.
+		grid := time.Now()
+		var typed []time.Time
 		for i := range 30 {
+			typed = append(typed, time.Now())
 			p.typeKeys("k")
 			// Gaps of 7 ms past a multiple of the frame interval and the
 			// tick, so keys land everywhere between ticks.
@@ -180,7 +185,53 @@ func TestChaffDelaysAKeyByAtMostOneTick(t *testing.T) {
 			}
 			time.Sleep(107*time.Millisecond - took)
 		}
+		// Each key went in the first data datagram at or after it was
+		// typed: on the grid, so after a wait for keys typed between ticks.
+		sends := p.cEnd.sends(t)
+		for i, at := range typed {
+			var carried decoded
+			for _, d := range sends {
+				if d.data() && !d.at.Before(at) {
+					carried = d
+					break
+				}
+			}
+			if carried.at.IsZero() {
+				t.Fatalf("no datagram carried key %d", i)
+			}
+			if !onGrid(grid, carried.at) {
+				t.Errorf("key %d went %v after it was typed, off the %v grid", i, carried.at.Sub(at), chaffTick)
+			}
+			if !onGrid(grid, at) && !carried.at.After(at) {
+				t.Errorf("key %d, typed between ticks, went at once rather than on the next tick", i)
+			}
+		}
 	})
+}
+
+// A late wake-up skips the ticks it missed: the endpoint sends once and
+// moves to the next grid point after now, not a burst of catch-up
+// datagrams (§9.1.1).
+func TestALateWakeUpSkipsTheMissedTicksRatherThanBursting(t *testing.T) {
+	start := time.Unix(1000, 0)
+	c := chaffing{c: chaffEnd{}, tick: chaffTick, next: start, until: start.Add(time.Hour)}
+	late := start.Add(3*chaffTick + 7*time.Millisecond)
+	sent := 0
+	for c.due(late) {
+		sent++
+		c.advance(late)
+	}
+	if sent != 1 {
+		t.Errorf("woken %v late, the endpoint sent %d datagrams; want one", late.Sub(start), sent)
+	}
+	if want := start.Add(4 * chaffTick); !c.next.Equal(want) {
+		t.Errorf("the next tick is %v after the grid's start; want %v, the next grid point", c.next.Sub(start), want.Sub(start))
+	}
+	// Exactly on a grid point, the next tick is the one after.
+	c.advance(c.next)
+	if want := start.Add(5 * chaffTick); !c.next.Equal(want) {
+		t.Errorf("advancing on a tick moved to %v; want %v", c.next.Sub(start), want.Sub(start))
+	}
 }
 
 func TestAnIdleSessionSendsNoChaff(t *testing.T) {
