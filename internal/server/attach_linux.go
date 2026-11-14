@@ -137,6 +137,10 @@ func peerIs(fd, uid int) error {
 	return nil
 }
 
+// connectRetry is how often dialAttach tries again to connect to a
+// session whose backlog is full [choice].
+const connectRetry = 20 * time.Millisecond
+
 // dialAttach connects to a session's attach socket in dir, after checking
 // dir is private, and checks the listener runs as this user too. It
 // returns the connection and the greeting the spawner sent first.
@@ -144,13 +148,31 @@ func dialAttach(dir string) (*os.File, []byte, error) {
 	if err := checkPrivateDir(dir); err != nil {
 		return nil, nil, err
 	}
-	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, 0)
+	// The connect and the greeting share one deadline, so a spawner that
+	// is stopped or wedged with its backlog full is skipped, not waited
+	// on (bootstrap.md §11). A blocking connect to a full backlog sleeps
+	// until there is room; a non-blocking one says EAGAIN and is not left
+	// in progress, so it is simply tried again.
+	deadline := time.Now().Add(GreetingTimeout)
+	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := unix.Connect(fd, &unix.SockaddrUnix{Name: filepath.Join(dir, attachName)}); err != nil {
+	sa := &unix.SockaddrUnix{Name: filepath.Join(dir, attachName)}
+	for {
+		err = unix.Connect(fd, sa)
+		if err != unix.EAGAIN && err != unix.EINTR {
+			break
+		}
+		if time.Now().After(deadline) {
+			err = fmt.Errorf("the session is not accepting: %w", err)
+			break
+		}
+		time.Sleep(connectRetry)
+	}
+	if err != nil {
 		unix.Close(fd)
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("connecting to the session: %w", err)
 	}
 	if err := samePeer(fd); err != nil {
 		unix.Close(fd)
@@ -163,7 +185,7 @@ func dialAttach(dir string) (*os.File, []byte, error) {
 	}
 	// The greeting is one seqpacket message, read whole: a buffer one byte
 	// over the bound tells a long one from one that fits.
-	f.SetReadDeadline(time.Now().Add(GreetingTimeout))
+	f.SetReadDeadline(deadline)
 	buf := make([]byte, bootstrap.MaxSessionLine+1)
 	n, err := f.Read(buf)
 	f.SetReadDeadline(time.Time{})

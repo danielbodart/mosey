@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/ipc"
@@ -302,5 +304,52 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the list lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// A spawner that has stopped accepting, its backlog full, is skipped
+// within GreetingTimeout rather than waited on (bootstrap.md §11): a
+// blocking connect would sleep until there was room.
+func TestASessionWhoseBacklogIsFullIsSkippedNotWaitedOn(t *testing.T) {
+	base := filepath.Join(runtimeDir(t), "mosey")
+	sid := [16]byte{0xf0}
+	l, err := listenAttach(base, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	addr := &unix.SockaddrUnix{Name: filepath.Join(sessionDir(base, sid), attachName)}
+	full := false
+	for range 64 {
+		fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer unix.Close(fd)
+		if err := unix.Connect(fd, addr); errors.Is(err, unix.EAGAIN) {
+			full = true
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !full {
+		t.Fatal("the backlog never filled")
+	}
+	done := make(chan error, 1)
+	go func() {
+		f, _, err := dialAttach(sessionDir(base, sid))
+		if f != nil {
+			f.Close()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("dialled a session that is not accepting")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("dialAttach waited on a session that is not accepting")
 	}
 }
