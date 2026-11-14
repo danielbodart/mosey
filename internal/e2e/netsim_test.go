@@ -23,6 +23,7 @@ import (
 	"github.com/danielbodart/mosey/internal/render"
 	"github.com/danielbodart/mosey/internal/screen"
 	"github.com/danielbodart/mosey/internal/server"
+	"github.com/danielbodart/mosey/internal/terminal"
 	"github.com/danielbodart/mosey/internal/transport"
 )
 
@@ -165,14 +166,26 @@ type simSession struct {
 	user    *userTerminal
 	prog    *shell
 	cc      *netsim.Conn
-	client  chan error
-	server  chan error
+	client  <-chan error
+	server  <-chan error
 	quit    context.CancelFunc // the client's: the user quitting
 	cancel  context.CancelFunc // the server's
 	stop    sync.Once
 }
 
-func startSimSession(t *testing.T, p netsim.Profile) *simSession {
+// simNet is a client's and a server's socket on a netsim network shaped
+// by a profile, and a credential for the client, minted as proto mints it:
+// the bootstrap, minus SSH.
+type simNet struct {
+	cc, sc *netsim.Conn
+	creds  *handshake.Credentials
+	cred   handshake.Credential
+	key    *handshake.OneShotKey
+	log    *slog.Logger
+}
+
+func newSimNet(t *testing.T, p netsim.Profile) *simNet {
+	t.Helper()
 	log := slog.New(slog.DiscardHandler)
 	n := netsim.New(1)
 	t.Cleanup(func() { n.Close() })
@@ -196,10 +209,35 @@ func startSimSession(t *testing.T, p netsim.Profile) *simSession {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return &simNet{cc: cc, sc: sc, creds: creds, cred: cred, key: key, log: log}
+}
+
+// serve runs proto's Session over the server's socket, with prog as the
+// shell's pty and the in-process emulator; its end arrives on the channel.
+func (n *simNet) serve(t *testing.T, ctx context.Context, prog server.Terminal) <-chan error {
+	t.Helper()
 	em, err := emu.New(80, 24, emu.Options{ScrollbackCells: emu.DefaultScrollbackCells})
 	if err != nil {
 		t.Fatal(err)
 	}
+	done := make(chan error, 1)
+	srv := &server.Session{Listener: transport.Listen(n.sc, n.creds, n.log), Terminal: prog, Emulator: em, Log: n.log}
+	go func() { done <- srv.Run(ctx) }()
+	return done
+}
+
+// connect runs the client's Session over the client's socket, on user's
+// terminal; its end arrives on the channel.
+func (n *simNet) connect(ctx context.Context, user terminal.Terminal) <-chan error {
+	done := make(chan error, 1)
+	cli := &client.Session{Conn: n.cc, Server: serverAddr, Credential: n.cred, Key: n.key, Terminal: user, Log: n.log,
+		Capabilities: render.Capabilities{UTF8: true, Colors256: true}}
+	go func() { done <- cli.Run(ctx) }()
+	return done
+}
+
+func startSimSession(t *testing.T, p netsim.Profile) *simSession {
+	n := newSimNet(t, p)
 	ctx, cancel := context.WithCancel(context.Background())
 	cctx, quit := context.WithCancel(ctx)
 	s := &simSession{
@@ -207,17 +245,12 @@ func startSimSession(t *testing.T, p netsim.Profile) *simSession {
 		profile: p.Name,
 		user:    &userTerminal{keys: make(chan []byte), resized: make(chan struct{})},
 		prog:    newShell(),
-		cc:      cc,
-		client:  make(chan error, 1),
-		server:  make(chan error, 1),
+		cc:      n.cc,
 		quit:    quit,
 		cancel:  cancel,
 	}
-	srv := &server.Session{Listener: transport.Listen(sc, creds, log), Terminal: s.prog, Emulator: em, Log: log}
-	go func() { s.server <- srv.Run(ctx) }()
-	cli := &client.Session{Conn: cc, Server: serverAddr, Credential: cred, Key: key, Terminal: s.user, Log: log,
-		Capabilities: render.Capabilities{UTF8: true, Colors256: true}}
-	go func() { s.client <- cli.Run(cctx) }()
+	s.server = n.serve(t, ctx, s.prog)
+	s.client = n.connect(cctx, s.user)
 	// However the test ends, end both sessions and release what they wait
 	// on, so the bubble has nothing left blocked.
 	t.Cleanup(s.end)

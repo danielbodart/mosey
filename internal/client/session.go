@@ -137,5 +137,11 @@ func (s *Session) dial(ctx context.Context, log *slog.Logger) (*transport.Conn, 
 func pendingInput(ep *ssp.Endpoint[*userinput.Stream, *screen.Grid], input *userinput.Stream) int {
 	g, _ := ep.Remote()
 	acked, _ := ep.Acked()
-	return input.EncodedSince(min(g.InputConsumed, acked.Len()))
+	return pendingSince(input, g.InputConsumed, acked.Len())
+}
+
+// pendingSince is pendingInput's arithmetic: the encoded size of input from
+// the lesser of consumed and ackedLen.
+func pendingSince(input *userinput.Stream, consumed, ackedLen uint64) int {
+	return input.EncodedSince(min(consumed, ackedLen))
 }
