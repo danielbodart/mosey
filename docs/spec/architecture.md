@@ -262,12 +262,21 @@ lets `server.Session` run in process for tests.
 `Credential`, `Resize`, `Output`, `Update`, `Replies`, `Exit`, with fixed
 layouts and fuzzed `Parse`.
 
-**bootstrap.** `ClientLine`, `CredentialLine`, their `Marshal`/`Parse`,
-`ReadCredential(r)`, and `SSH.Command(ctx)`.
+**bootstrap.** As `bootstrap.md` §10.1: `ClientLine`, `CredentialLine`,
+`ErrorLine`, their `Marshal`/`Parse`, `ReadCredential(r)`, `Sanitize`,
+`ParseSSHOptions`, `Config` (from `SSH.Resolve`, which runs `ssh -G`),
+`SSH.Command(ctx, Config)`, `AgentSocket` and `ChooseAddr`. The spawner
+uses `ParseClientLine`, `MarshalCredentialLine` and `MarshalErrorLine`.
 
-**client.** `Run(ctx, bootstrap.SSH, terminal.Terminal, log)` for the
-binary; `Session{Conn, Server, Credential, Key, Terminal, Log}.Run(ctx)`
-for after the bootstrap, which the netsim end-to-end test drives.
+**terminal.** `Terminal` (`Read`, `Write`, `Size`, `Resized`, `Raw`,
+`Restore`); `Open(in, out)` leaves the mode alone, since the terminal
+stays cooked for ssh's prompts until the handshake is done.
+
+**client.** `Run(ctx, Options{SSH, Version, Terminal, Stderr, Log,
+Getenv})` for the binary; `Session{Conn, Server, Credential, Key,
+Terminal, Log, Capabilities, UTF8}.Run(ctx)` for after the bootstrap,
+which the netsim end-to-end test drives. Errors are `*Failure`,
+`*TakenOverError` and `*bootstrap.UsageError`; `ExitStatus` maps them.
 
 ## 6. Tests
 

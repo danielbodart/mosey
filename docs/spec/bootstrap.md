@@ -177,7 +177,7 @@ by hand.
 PROGRAM -T
         -o ControlMaster=no -o ControlPath=none -o ControlPersist=no
         -o ForwardAgent=no                     (agent slice: =CAPTURE-SOCKET)
-        -o ForwardX11=no -o ClearAllForwardings=yes
+        -o ForwardX11=no -o ClearAllForwardings=yes -o Tunnel=no
         -o PermitLocalCommand=no -o EscapeChar=none
         -o RemoteCommand=none
         [-o SessionType=default -o StdinNull=no -o ForkAfterAuthentication=no]
@@ -202,9 +202,11 @@ PROGRAM -T
 - **`ForwardAgent=no`** in slice 1. The agent slice replaces `no` with the
   capture socket path (§8). Never the user's real agent: the bootstrap's
   agent channel exists only to make ssh send its bind.
-- **`ForwardX11=no`, `ClearAllForwardings=yes`.** A config `LocalForward`
-  would collide with the user's interactive ssh to the same host, and an
-  `ExitOnForwardFailure` would then kill the bootstrap.
+- **`ForwardX11=no`, `ClearAllForwardings=yes`, `Tunnel=no`.** A config
+  `LocalForward` would collide with the user's interactive ssh to the same
+  host, and an `ExitOnForwardFailure` would then kill the bootstrap; X11
+  and tun forwarding would give the far host a way back to the client
+  (threat-model §4.9, which requires all three).
 - **`PermitLocalCommand=no`, `EscapeChar=none`.** A config `LocalCommand`
   must not run or write to our terminal; no escape processing on a pipe.
 - **`RemoteCommand=none`.** A config `RemoteCommand` together with a
@@ -1047,7 +1049,7 @@ type NoLineError struct {
 }
 
 // Sanitize is the §6.5 filter, as a writer that filters into w.
-func Sanitize(w io.Writer) io.Writer
+func Sanitize(w io.Writer) io.WriteCloser // Close flushes a rune split across Writes
 
 // SSHOptions is §2.1: the user's options, normalised, and the last -A/-a.
 type SSHOptions struct {
@@ -1087,6 +1089,19 @@ func ChooseAddr(ctx context.Context, line CredentialLine, c Config,
 
 `ErrNoServer` is not returned by `ReadCredential`: `client.Run` wraps a
 `*NoLineError` in it when ssh exited 126 or 127 (§4.2, §10).
+
+The implementation adds, beside the above: `*UsageError` (what
+`ParseSSHOptions` and `SSH.Check` return; exit 2), `*ResolveError` (ssh
+-G's failure, carrying its bounded stderr for §10's message),
+`*AddrError` (`ErrBadAddr` with the refused `addr`, its rule and any
+lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
+`ClientEnv` (§6.2's env from the environment, naming what it left out),
+`SSH.RemoteCommand` (§4.1's one argument), `ExitStatus`, `EnvNames`,
+`ValidServer`, `ValidSoftwareVersion`, `ValidEnvValue`, the field sizes
+(`PublicKeySize` and so on), `TailSize`, `MaxSanitizedLine` and
+`MaxConfig`. `Sanitize` returns an `io.WriteCloser` rather than an
+`io.Writer`: a rune split across two writes is held for the next, and
+`Close` writes any held bytes escaped.
 
 ---
 

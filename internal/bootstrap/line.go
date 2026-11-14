@@ -1,59 +1,119 @@
 package bootstrap
 
 import (
+	"bytes"
+	"encoding/base64"
 	"errors"
-	"io"
+	"fmt"
 	"net/netip"
+	"slices"
+	"strconv"
 )
 
-// The line types are bootstrap.md §10.1's, so the server can be written
-// against them; the bodies are bootstrap-client's to fill in.
+// The three lines of bootstrap.md §6. Their sizes are fixed so that every
+// reader can bound what it reads before it knows what it has.
+const (
+	// Version is the bootstrap protocol's version: the second field of
+	// every line, frozen in position forever (§6.1).
+	Version = 1
+	// MaxClientLine bounds the stdin line, LF included. The longest legal
+	// line is 3027 bytes (§6.2); this is the next power of two, so the
+	// launcher's read bound is fixed and generous.
+	MaxClientLine = 4096
+	// MaxCredentialLine bounds the stdout line, LF included: at most 1829
+	// bytes are used (§6.3).
+	MaxCredentialLine = 2048
+	// MaxErrorLine bounds an ErrorLine, LF included. It is frozen with the
+	// ErrorLine's grammar, so a client of any version can read any
+	// server's refusal (§6.4).
+	MaxErrorLine = 128
+	// MaxPreamble bounds the other text a remote shell may print on stdout
+	// before the line (§6.5): far above any motd-like rc noise.
+	MaxPreamble = 64 << 10
+)
+
+// Field sizes, decoded. The keys are X-Wing encapsulation keys from
+// crypto/hpke (S1); the ids and PSK are internal/handshake's.
+const (
+	PublicKeySize    = 1216
+	CredentialIDSize = 8
+	SessionIDSize    = 16
+	PSKSize          = 32
+
+	maxSoftwareVersion = 64
+	maxEnvValue        = 64
+)
 
 const (
-	// Version is the bootstrap protocol's version. A server that sees another
-	// says so on stderr and exits, and D7's copy-over brings it in line.
-	Version           = 1
-	MaxClientLine     = 4096
-	MaxCredentialLine = 2048
-	MaxErrorLine      = 128 // frozen with the ErrorLine grammar
-	MaxPreamble       = 64 << 10
+	clientMagic     = "MOSEY-CLIENT"
+	credentialMagic = "MOSEY-CONNECT"
+	errorMagic      = "MOSEY-ERROR"
+	// protocolPrefix starts every line of ours, so ReadCredential can tell
+	// a malformed line of ours from a shell's chatter and refuse it rather
+	// than step over it (§6.5).
+	protocolPrefix = "MOSEY-"
+
+	attachNew    = "new"
+	attachResume = "resume:"
 )
 
-// ClientLine is what the client writes to ssh's stdin (bootstrap.md §6.2).
+// EnvNames are the only variables a ClientLine may carry (§6.2), in byte
+// order, which is the order they must appear in on the line. The server
+// gives the locale to the shell; TERM and COLORTERM describe the client's
+// terminal, and what the server does with them is server.md's.
+var EnvNames = []string{
+	"COLORTERM", "LANG", "LANGUAGE", "LC_ADDRESS", "LC_ALL",
+	"LC_COLLATE", "LC_CTYPE", "LC_IDENTIFICATION", "LC_MEASUREMENT",
+	"LC_MESSAGES", "LC_MONETARY", "LC_NAME", "LC_NUMERIC",
+	"LC_PAPER", "LC_TELEPHONE", "LC_TIME", "TERM",
+}
+
+// ClientLine is what the client writes to ssh's stdin (§6.2). Marshal
+// always writes proto = Version.
 type ClientLine struct {
-	SoftwareVersion string   // swver
-	Resume          bool     // attach: false = "new"
-	SessionID       [16]byte // attach = resume:SID, when Resume
-	Agent           bool     // agent
-	Cols, Rows      uint16   // 1..65535
-	// Env is TERM, COLORTERM and the locale variables, for the shell.
+	// SoftwareVersion is the client's build, for D7's equality check.
+	SoftwareVersion string
+	// Resume asks to attach to session SessionID rather than start one
+	// (D8). It is reserved: a v1 server refuses it as unsupported.
+	Resume    bool
+	SessionID [SessionIDSize]byte
+	// Agent says whether the client will forward an agent (D25). Reserved
+	// like Resume: slice 1 always sends false.
+	Agent bool
+	// Cols and Rows are the client terminal's size, before the server's
+	// clamp (D23).
+	Cols, Rows uint16
+	// Env holds allow-listed names only (EnvNames); Marshal sorts them.
 	Env map[string]string
 	// Public is the client's one-shot X-Wing public key (D20).
 	Public []byte
 }
 
-// CredentialLine is what `mosey --serve` prints on stdout (§6.3).
+// CredentialLine is what the server prints on ssh's stdout (§6.3).
+// Marshal always writes proto = Version.
 type CredentialLine struct {
 	SoftwareVersion string
-	// Addr is the server's address as SSH reached it (from SSH_CONNECTION),
-	// so the client sends UDP where its SSH config resolved, through any
-	// ProxyJump; the zero Addr is "-".
+	// Addr is the server's address as SSH reached it, or the zero Addr for
+	// "-". The client checks it before using it (ChooseAddr).
 	Addr         netip.Addr
 	Port         uint16
-	CredentialID [8]byte
-	SessionID    [16]byte
-	PSK          [32]byte
+	CredentialID [CredentialIDSize]byte
+	SessionID    [SessionIDSize]byte
+	PSK          [PSKSize]byte
 	// Public is the server's one-shot X-Wing public key.
 	Public []byte
 }
 
-// ErrorLine is a server's refusal on stdout (§6.4); Detail "" is "-".
+// ErrorLine is a server's refusal (§6.4). Its grammar is frozen for every
+// version; Detail "" is written "-".
 type ErrorLine struct {
 	Proto  int
 	Code   string
 	Detail string
 }
 
+// The codes v1 defines (§6.4). A later server may send others, which a
+// client treats as CodeInternal.
 const (
 	CodeLine        = "line"
 	CodeVersion     = "version"
@@ -63,35 +123,468 @@ const (
 )
 
 var (
+	// ErrBadLine is a line of ours that does not parse.
 	ErrBadLine = errors.New("bootstrap: malformed mosey line")
-	ErrNoLine  = errors.New("bootstrap: no mosey line")
+	// ErrNoLine is stdout ending, or overflowing MaxPreamble, before a
+	// line of ours.
+	ErrNoLine = errors.New("bootstrap: no mosey line")
+	// ErrNoServer is ErrNoLine when ssh exited 126 or 127: the remote
+	// /bin/sh could not find or run the server (§4.2). client.Run wraps a
+	// *NoLineError in it; ReadCredential never returns it.
+	ErrNoServer = errors.New("bootstrap: no mosey on the far host")
+	// ErrBadAddr is no usable UDP address for the server (§7.2).
+	ErrBadAddr = errors.New("bootstrap: no usable UDP address")
 )
 
-// VersionError is a line whose proto is not Version; errors.Is(err,
-// ErrBadLine) is true.
+// VersionError is a line whose proto is not Version. errors.Is(err,
+// ErrBadLine) holds.
 type VersionError struct{ Got int }
 
-func (e *VersionError) Error() string { panic("TODO slice 1") }
+func (e *VersionError) Error() string {
+	return fmt.Sprintf("bootstrap: line is protocol version %d, not %d", e.Got, Version)
+}
 
-// MarshalClientLine is c as one line, with its newline.
-func MarshalClientLine(c ClientLine) []byte { panic("TODO slice 1") }
+func (e *VersionError) Unwrap() error { return ErrBadLine }
 
-// ParseClientLine reads a ClientLine, refusing anything not canonical.
-func ParseClientLine(line []byte) (ClientLine, error) { panic("TODO slice 1") }
+// badLine says which rule a line broke, wrapping ErrBadLine.
+func badLine(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrBadLine, fmt.Sprintf(format, args...))
+}
 
-// MarshalCredentialLine is c as one line, with its newline.
-func MarshalCredentialLine(c CredentialLine) []byte { panic("TODO slice 1") }
+var b64 = base64.RawURLEncoding.Strict()
 
-// ParseCredentialLine reads a CredentialLine, refusing anything not
-// canonical.
-func ParseCredentialLine(line []byte) (CredentialLine, error) { panic("TODO slice 1") }
+// MarshalClientLine is c as one line, LF included. A ClientLine that would
+// not parse (a bad size, name or key) marshals to a line ParseClientLine
+// refuses: the far side reports it, rather than this end hiding a bug.
+func MarshalClientLine(c ClientLine) []byte {
+	b := make([]byte, 0, 2048)
+	b = append(b, clientMagic...)
+	b = appendField(b, strconv.Itoa(Version))
+	b = appendField(b, c.SoftwareVersion)
+	if c.Resume {
+		b = appendField(b, attachResume+b64.EncodeToString(c.SessionID[:]))
+	} else {
+		b = appendField(b, attachNew)
+	}
+	b = appendField(b, yesNo(c.Agent))
+	b = appendField(b, strconv.Itoa(int(c.Cols)))
+	b = appendField(b, strconv.Itoa(int(c.Rows)))
+	b = append(b, ' ')
+	b = appendEnv(b, c.Env)
+	b = appendField(b, b64.EncodeToString(c.Public))
+	return append(b, '\n')
+}
 
-// MarshalErrorLine is e as one line, with its newline.
-func MarshalErrorLine(e ErrorLine) []byte { panic("TODO slice 1") }
+// ParseClientLine reads a ClientLine, LF included, refusing anything not
+// canonical (§6.1, §6.2). Its input comes from ssh's stdin, to the
+// unsandboxed spawner, so it is fuzzed.
+func ParseClientLine(line []byte) (ClientLine, error) {
+	fields, err := splitLine(line, MaxClientLine, clientMagic, 10)
+	if err != nil {
+		return ClientLine{}, err
+	}
+	var c ClientLine
+	if c.SoftwareVersion, err = parseSoftwareVersion(fields[2]); err != nil {
+		return ClientLine{}, err
+	}
+	switch attach := fields[3]; {
+	case string(attach) == attachNew:
+	case bytes.HasPrefix(attach, []byte(attachResume)):
+		c.Resume = true
+		if err := decodeFixed(c.SessionID[:], attach[len(attachResume):], "session id"); err != nil {
+			return ClientLine{}, err
+		}
+	default:
+		return ClientLine{}, badLine("attach %q", attach)
+	}
+	if c.Agent, err = parseYesNo(fields[4], "agent"); err != nil {
+		return ClientLine{}, err
+	}
+	if c.Cols, err = parseSize(fields[5], "cols"); err != nil {
+		return ClientLine{}, err
+	}
+	if c.Rows, err = parseSize(fields[6], "rows"); err != nil {
+		return ClientLine{}, err
+	}
+	if c.Env, err = parseEnv(fields[7]); err != nil {
+		return ClientLine{}, err
+	}
+	if c.Public, err = decodeLen(fields[8], PublicKeySize, "public key"); err != nil {
+		return ClientLine{}, err
+	}
+	// fields[9] is the empty remainder after the LF, checked by splitLine.
+	if !bytes.Equal(MarshalClientLine(c), line) {
+		return ClientLine{}, badLine("client line is not canonical")
+	}
+	return c, nil
+}
 
-// ParseErrorLine reads an ErrorLine of any protocol version.
-func ParseErrorLine(line []byte) (ErrorLine, error) { panic("TODO slice 1") }
+// MarshalCredentialLine is c as one line, LF included.
+func MarshalCredentialLine(c CredentialLine) []byte {
+	b := make([]byte, 0, MaxCredentialLine)
+	b = append(b, credentialMagic...)
+	b = appendField(b, strconv.Itoa(Version))
+	b = appendField(b, c.SoftwareVersion)
+	if c.Addr.IsValid() {
+		b = appendField(b, c.Addr.String())
+	} else {
+		b = appendField(b, "-")
+	}
+	b = appendField(b, strconv.Itoa(int(c.Port)))
+	b = appendField(b, b64.EncodeToString(c.CredentialID[:]))
+	b = appendField(b, b64.EncodeToString(c.SessionID[:]))
+	b = appendField(b, b64.EncodeToString(c.PSK[:]))
+	b = appendField(b, b64.EncodeToString(c.Public))
+	return append(b, '\n')
+}
 
-// ReadCredential reads ssh's stdout up to the credential line, skipping
-// other lines, and gives up after a bounded number of bytes.
-func ReadCredential(r io.Reader) (CredentialLine, error) { panic("TODO slice 1") }
+// ParseCredentialLine reads a CredentialLine, LF included, refusing
+// anything not canonical (§6.1, §6.3), and any address no server could
+// legitimately have been reached on (threat-model §4.9).
+func ParseCredentialLine(line []byte) (CredentialLine, error) {
+	fields, err := splitLine(line, MaxCredentialLine, credentialMagic, 10)
+	if err != nil {
+		return CredentialLine{}, err
+	}
+	var c CredentialLine
+	if c.SoftwareVersion, err = parseSoftwareVersion(fields[2]); err != nil {
+		return CredentialLine{}, err
+	}
+	if c.Addr, err = parseLineAddr(fields[3]); err != nil {
+		return CredentialLine{}, err
+	}
+	if c.Port, err = parseSize(fields[4], "port"); err != nil {
+		return CredentialLine{}, err
+	}
+	if err := decodeFixed(c.CredentialID[:], fields[5], "credential id"); err != nil {
+		return CredentialLine{}, err
+	}
+	if err := decodeFixed(c.SessionID[:], fields[6], "session id"); err != nil {
+		return CredentialLine{}, err
+	}
+	if err := decodeFixed(c.PSK[:], fields[7], "psk"); err != nil {
+		return CredentialLine{}, err
+	}
+	if c.Public, err = decodeLen(fields[8], PublicKeySize, "public key"); err != nil {
+		return CredentialLine{}, err
+	}
+	if !bytes.Equal(MarshalCredentialLine(c), line) {
+		return CredentialLine{}, badLine("credential line is not canonical")
+	}
+	return c, nil
+}
+
+// MarshalErrorLine is e as one line, LF included.
+func MarshalErrorLine(e ErrorLine) []byte {
+	b := []byte(errorMagic)
+	b = appendField(b, strconv.Itoa(e.Proto))
+	b = appendField(b, e.Code)
+	if e.Detail == "" {
+		b = appendField(b, "-")
+	} else {
+		b = appendField(b, e.Detail)
+	}
+	return append(b, '\n')
+}
+
+// ParseErrorLine reads an ErrorLine, LF included. Unlike the other two it
+// accepts any proto: its whole grammar is frozen, so a client of any
+// version can read any server's refusal (§6.4).
+func ParseErrorLine(line []byte) (ErrorLine, error) {
+	if len(line) > MaxErrorLine {
+		return ErrorLine{}, badLine("error line of %d bytes", len(line))
+	}
+	fields, err := splitFields(line, errorMagic, 5)
+	if err != nil {
+		return ErrorLine{}, err
+	}
+	var e ErrorLine
+	p := fields[1]
+	if len(p) > 5 {
+		return ErrorLine{}, badLine("error line protocol %q", p)
+	}
+	if e.Proto, err = parseDec(p, "error line protocol"); err != nil {
+		return ErrorLine{}, err
+	}
+	code := fields[2]
+	if len(code) < 1 || len(code) > 16 {
+		return ErrorLine{}, badLine("error code %q", code)
+	}
+	for _, c := range code {
+		if c < 'a' || c > 'z' {
+			return ErrorLine{}, badLine("error code %q", code)
+		}
+	}
+	e.Code = string(code)
+	if d := fields[3]; string(d) != "-" {
+		if e.Detail, err = parseSoftwareVersion(d); err != nil {
+			return ErrorLine{}, err
+		}
+	}
+	if !bytes.Equal(MarshalErrorLine(e), line) {
+		return ErrorLine{}, badLine("error line is not canonical")
+	}
+	return e, nil
+}
+
+// splitLine checks the parts every versioned line shares (§6.1) and
+// returns its fields: the magic, the version, the rest, and an empty last
+// field for what follows the LF. The version is checked before anything
+// else is read, so a line from a later protocol is reported as such.
+func splitLine(line []byte, max int, magic string, n int) ([][]byte, error) {
+	// A later version may change everything after the version field, even
+	// the length, so the version is the first thing judged: it is the only
+	// thing an older reader can usefully report.
+	if v, ok := lineVersion(line, magic); ok && v != Version {
+		return nil, &VersionError{Got: v}
+	}
+	if len(line) > max {
+		return nil, badLine("%s line of %d bytes", magic, len(line))
+	}
+	fields, err := splitFields(line, magic, n)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := parseDec(fields[1], "protocol version"); err != nil {
+		return nil, err
+	}
+	return fields, nil
+}
+
+// lineVersion reads just the version field of a line that starts with
+// magic and a space, however the rest looks.
+func lineVersion(line []byte, magic string) (int, bool) {
+	rest, ok := bytes.CutPrefix(line, []byte(magic+" "))
+	if !ok {
+		return 0, false
+	}
+	if i := bytes.IndexAny(rest, " \n"); i >= 0 {
+		rest = rest[:i]
+	}
+	n, err := parseDec(rest, "")
+	return n, err == nil
+}
+
+// splitFields splits a line of printable ASCII fields separated by single
+// spaces and ended by one LF, into exactly n-1 fields plus an empty one
+// for after the LF. Every rule of §6.1 that is about bytes is checked
+// here, so no field holds a space, control or non-ASCII byte.
+func splitFields(line []byte, magic string, n int) ([][]byte, error) {
+	if len(line) == 0 || line[len(line)-1] != '\n' {
+		return nil, badLine("line does not end in LF")
+	}
+	body := line[:len(line)-1]
+	for _, c := range body {
+		if c != ' ' && (c < 0x21 || c > 0x7e) {
+			return nil, badLine("byte 0x%02x in line", c)
+		}
+	}
+	fields := bytes.Split(body, []byte(" "))
+	if len(fields) != n-1 {
+		return nil, badLine("%d fields, want %d", len(fields), n-1)
+	}
+	for _, f := range fields {
+		if len(f) == 0 {
+			return nil, badLine("empty field")
+		}
+	}
+	if string(fields[0]) != magic {
+		return nil, badLine("line starts %q, want %q", fields[0], magic)
+	}
+	return append(fields, nil), nil
+}
+
+func appendField(b []byte, f string) []byte {
+	return append(append(b, ' '), f...)
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
+func parseYesNo(f []byte, what string) (bool, error) {
+	switch string(f) {
+	case "yes":
+		return true, nil
+	case "no":
+		return false, nil
+	}
+	return false, badLine("%s %q", what, f)
+}
+
+// parseDec reads a decimal field: "0", or a non-zero digit and digits, no
+// sign. It is bounded before conversion, so no field can overflow an int.
+func parseDec(f []byte, what string) (int, error) {
+	if len(f) == 0 || len(f) > 9 {
+		return 0, badLine("%s %q", what, f)
+	}
+	if f[0] == '0' && len(f) > 1 {
+		return 0, badLine("%s %q has a leading zero", what, f)
+	}
+	n := 0
+	for _, c := range f {
+		if c < '0' || c > '9' {
+			return 0, badLine("%s %q", what, f)
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, nil
+}
+
+// parseSize reads a decimal field in 1..65535: a window dimension or a
+// port.
+func parseSize(f []byte, what string) (uint16, error) {
+	n, err := parseDec(f, what)
+	if err != nil {
+		return 0, err
+	}
+	if n < 1 || n > 65535 {
+		return 0, badLine("%s %d out of range", what, n)
+	}
+	return uint16(n), nil
+}
+
+// ValidSoftwareVersion says whether v is a swver (§6.1): what a build's
+// version may be if it is to travel on a line.
+func ValidSoftwareVersion(v string) bool {
+	if len(v) < 1 || len(v) > maxSoftwareVersion {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if !isAlnum(v[i]) && !bytes.ContainsRune([]byte("._+-"), rune(v[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+func parseSoftwareVersion(f []byte) (string, error) {
+	if !ValidSoftwareVersion(string(f)) {
+		return "", badLine("software version %q", f)
+	}
+	return string(f), nil
+}
+
+func isAlnum(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+}
+
+// decodeLen decodes a base64url field that must be exactly n bytes.
+func decodeLen(f []byte, n int, what string) ([]byte, error) {
+	if len(f) != b64.EncodedLen(n) {
+		return nil, badLine("%s of %d characters, want %d", what, len(f), b64.EncodedLen(n))
+	}
+	out := make([]byte, n)
+	got, err := b64.Decode(out, f)
+	if err != nil || got != n {
+		return nil, badLine("%s is not base64url", what)
+	}
+	return out, nil
+}
+
+func decodeFixed(dst []byte, f []byte, what string) error {
+	b, err := decodeLen(f, len(dst), what)
+	if err != nil {
+		return err
+	}
+	copy(dst, b)
+	return nil
+}
+
+// ValidEnvValue says whether v may travel as an env value (§6.2): 1 to 64
+// bytes of letters, digits and ._@:+-, so the line needs no escaping and a
+// value can carry nothing a shell or terminal would act on.
+func ValidEnvValue(v string) bool {
+	if len(v) < 1 || len(v) > maxEnvValue {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if !isAlnum(v[i]) && !bytes.ContainsRune([]byte("._@:+-"), rune(v[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+func appendEnv(b []byte, env map[string]string) []byte {
+	if len(env) == 0 {
+		return append(b, '-')
+	}
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for i, name := range names {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		b = append(append(append(b, name...), '='), env[name]...)
+	}
+	return b
+}
+
+func parseEnv(f []byte) (map[string]string, error) {
+	if string(f) == "-" {
+		return nil, nil
+	}
+	env := map[string]string{}
+	last := ""
+	for _, v := range bytes.Split(f, []byte(",")) {
+		name, value, ok := bytes.Cut(v, []byte("="))
+		if !ok {
+			return nil, badLine("env entry %q has no =", v)
+		}
+		n := string(name)
+		if _, known := slices.BinarySearch(EnvNames, n); !known {
+			return nil, badLine("env name %q is not allowed", name)
+		}
+		if n <= last {
+			return nil, badLine("env name %q out of order", name)
+		}
+		if !ValidEnvValue(string(value)) {
+			return nil, badLine("env value for %s", name)
+		}
+		env[n], last = string(value), n
+	}
+	return env, nil
+}
+
+// parseLineAddr reads the CredentialLine's addr: "-", or an address in
+// exactly netip.Addr.String's form with no zone and never 4-in-6, that is
+// not one no server can have been reached on (§6.3). The last check is a
+// property of the address alone, so it belongs to the grammar.
+func parseLineAddr(f []byte) (netip.Addr, error) {
+	if string(f) == "-" {
+		return netip.Addr{}, nil
+	}
+	a, err := netip.ParseAddr(string(f))
+	if err != nil || a.Zone() != "" || a.Is4In6() || a.String() != string(f) {
+		return netip.Addr{}, badLine("address %q", f)
+	}
+	if rule := addressRule(a); rule != "" {
+		return netip.Addr{}, badLine("address %s is %s", a, rule)
+	}
+	return a, nil
+}
+
+// limitedBroadcast is 255.255.255.255, which every host on the segment
+// receives.
+var limitedBroadcast = netip.AddrFrom4([4]byte{255, 255, 255, 255})
+
+// addressRule is why a is never a server's address, whoever names it, or
+// "" if it may be one (§6.3, §7.2's first three rows).
+func addressRule(a netip.Addr) string {
+	switch {
+	case a.IsUnspecified():
+		return "unspecified"
+	case a.IsMulticast():
+		return "multicast"
+	case a.Unmap() == limitedBroadcast:
+		return "the limited broadcast address"
+	}
+	return ""
+}
