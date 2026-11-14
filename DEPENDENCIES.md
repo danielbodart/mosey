@@ -29,8 +29,8 @@ interface so it can be replaced or forked.
   stalls, fork it (D23). Upstream contributions are listed in
   `docs/spikes/s2-terminal/FINDINGS.md`.
 - **Its own dependencies** (indirect in `go.mod`): charmbracelet's
-  colorprofile, term, termios and x/windows (ultraviolet's, compiled in
-  only on Windows, which mosey never builds for); clipperhouse's
+  colorprofile, term, termios and x/windows (ultraviolet's; off Windows it
+  is only a table of virtual-key constants); clipperhouse's
   displaywidth and uax29; rivo/uniseg; mattn/go-runewidth;
   lucasb-eyer/go-colorful; muesli/cancelreader; xo/terminfo;
   tuios.dev/progstatus; and golang.org/x/sync (ultraviolet's errgroup).
