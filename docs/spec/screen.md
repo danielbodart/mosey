@@ -979,7 +979,8 @@ of nothing else.
 **If the gate fails, the implementer stops and reports the numbers to the
 screen owner. The format is then amended here before the code lands.** The
 gate is set on *uncompressed* bytes on purpose: the format must beat raw
-output on its own, so the result holds whatever O12 settles about padding.
+output on its own, so the result holds whatever padding SSP adds (O12,
+`ssp.md` §9.2).
 
 ### 5.13 Compression (D24, O12)
 
@@ -993,8 +994,8 @@ SSP compresses each instruction with stdlib flate before fragmenting it
   so a secret anywhere on screen influences the length of a frame that
   doesn't contain it [measured S5 §8]. This spec gives SSP no screen
   dictionary interface, and O12 should not add one.
-- **No padding inside the diff.** Padding, if any, is SSP's (O12), applied
-  to the compressed instruction, where it can be one rule for all
+- **No padding inside the diff.** Padding is SSP's (O12, `ssp.md` §9.2),
+  applied to the whole sealed datagram, where it is one rule for all
   objects.
 - **The length side channel.** Diff lengths reveal how many cells change,
   which can echo the length of what's typed. Echo-off keeps password

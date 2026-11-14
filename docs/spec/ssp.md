@@ -19,6 +19,8 @@ Every constant and rule cites where it comes from:
 | [RFC n §x] | the RFC |
 | [S5 §x] | our own measurement in netsim, `docs/spikes/s5-netsim-ssp/FINDINGS.md` section x (virtual time, 280 simulated hours) |
 | [M] | black-box measurement of the `mosh` 1.4.0 binaries, S5 FINDINGS §4 and `docs/spikes/s5-netsim-ssp/mosh-compression.md` |
+| [M S5 padding.md §x] | our own measurement of padding policies on S5's captures, `docs/spikes/s5-netsim-ssp/padding.md` section x |
+| [PURBs] | Nikitin, Barman, Lueks, Underwood, Hubaux and Ford, *Reducing Metadata Leakage from Encrypted Files and Communication with PURBs*, PoPETs 2019(4), §4.4, Algorithm 1 (Padmé) |
 | [D] | decided here, with the reason given beside it |
 | Dn, On | PLAN.md §2 decision, §3 open item |
 
@@ -158,7 +160,7 @@ offset  size   field
 | echo | The paper's optional timestamp reply [P §2.2], absent when there is nothing to echo, which saves 4 bytes on most datagrams [D]. Its value is in §7.1. |
 | ack | In every datagram, not inside the instruction [D]. Acks then flow even in datagrams that carry only part of an instruction, and an instruction's bytes never depend on the ack, so a retransmission can repeat them exactly and the receiver can complete an instruction from fragments of two transmissions (§5). |
 | id, index, count | An explicit count lets the receiver bound and size reassembly before the last fragment arrives, and refuse inconsistent fragments (§5) [D, S5 spec §2.4]. |
-| padding | Reserved for chaff (O10, §9.1): receivers must parse and strip it; slice 1 senders never set P (O12 is decided as no padding, §9.2). Putting the length last means a sender can pad after it has built everything else [D]. |
+| padding | Hides the compressed length (§9.2): a sender sets P on every datagram it sends and chooses k by §9.2's rule; a receiver strips whatever step 2 below allows and does not check the sender's rule, since the peer holds the keys and could send any length it liked by other means [D]. Putting the length last means a sender can pad after it has built everything else [D]. Chaff (O10, §9.1) will use the same field. |
 
 A datagram without F carries no instruction: it is an **ack** (delayed
 ack, heartbeat or probe answer; §6.3, §6.4). After the fields its flags
@@ -177,18 +179,24 @@ failure:
    exactly `Chunk` bytes if `index < count − 1`, and 1 to `Chunk` bytes if
    `index = count − 1`. If not F: nothing may remain.
 
-**Sizes.** The largest header is 1 + 4 + 4 + 10 + 8 = **27** bytes, so a
-fragment's chunk is at most `Chunk = MaxPayload − 27` = **1175** bytes in
-production [derived]. A sender fills every chunk but the last to exactly
+**Sizes.** The largest header is 1 + 4 + 4 + 10 + 8 = **27** bytes, and
+every datagram ends in at least the 2-byte padding trailer (§9.2), so a
+fragment's chunk is at most `Chunk = MaxPayload − 27 − 2` = **1173** bytes
+in production [derived]. Reserving the trailer means the longest datagram
+there can be still has room for P, so the padding rule never has to be
+broken for lack of space. A sender fills every chunk but the last to exactly
 `Chunk`, even when its own header is shorter, so the fragment boundaries of
 an instruction never depend on its ack or echo (§5). Step 4 makes that a
 rule a receiver checks, so a partial instruction of `count` fragments can
 never hold more than `count × Chunk` bytes (§5).
 
 What a keystroke costs on the wire, for orientation (one `a`, an echo, small
-version numbers): transport 30 + SSP header 1 + 4 + 4 + 1 + 8 + instruction
-1 + 1 + 1 + input diff 1 + 1 + 1 + 1 + 1 = **56** bytes of UDP payload.
-Mosh 1.4.0's keystroke datagrams were 60–85 bytes [M].
+version numbers): SSP header 1 + 4 + 4 + 1 + 8 + instruction 1 + 1 + 1 +
+input diff 1 + 1 + 1 + 1 + 1 + padding trailer 2 = 28 bytes of SSP, which
+with the frame kind is 29 bytes of sealed plaintext, padded to 30 (§9.2);
+with the transport's 13-byte clear header and 16-byte tag that is **59**
+bytes of UDP payload. Mosh 1.4.0's keystroke datagrams were 60–85 bytes
+[M].
 
 ## 4. Instructions
 
@@ -665,58 +673,115 @@ after keys) is part of the same measurement.
 
 ### 9.2 Compression padding and dictionary (D24, O12)
 
-**Decision (settles O12 for v1, as D24 asks the spec to):**
+**Decision** (Dan's, which closes O12 as D24 asks the spec to [D]; the
+evidence is [M S5 padding.md]):
 
 - **No dictionary, ever.** A sender must not compress with a preset
   dictionary or with history shared between instructions; each
-  instruction stands alone (§4.1). This is not provisional: the
-  acknowledged screen as a dictionary is the leakiest variant measured,
-  and static dictionaries gained 0–3% [S5 §8]. Encoding `0x02` stays
-  reserved for a codec negotiated in the handshake, never for a
-  dictionary.
-- **No padding in v1.** Senders never set P. Bucket padding costs about a
-  fifth of the saving and only blunts the leak (below), so it buys too
-  little alone.
-- **The residual leak is accepted** as `docs/threat-model.md` risk R1:
-  an on-path observer who can also put chosen output on the user's screen
-  can test guesses at a secret shown on the same screen by datagram size.
-  Mosh 1.4.0 has the same exposure [M]. The owner is **ssp**.
-- **When it is revisited:** together with chaff (O10, §9.1), since chaff
-  needs P anyway and padding to the chaff size is the cheap point to add
-  it. The wire is already ready (the P flag and trailer, which receivers
-  parse today), so revisiting it needs no format change.
+  instruction stands alone (§4.1). The acknowledged screen as a dictionary
+  is the leakiest variant measured, and static dictionaries gained 0–3%
+  [S5 §8]. Encoding `0x02` stays reserved for a codec negotiated in the
+  handshake, never for a dictionary.
+- **Every datagram is padded**: data, acks, heartbeats and probes alike,
+  in both directions. A sender sets P (§3) on every SSP datagram and
+  chooses k by the rule below.
+- **The padded unit is the sealed plaintext**: what the transport
+  encrypts, which is its frame kind byte (`Config.FrameOverhead` =
+  `transport.FrameOverhead` = 1) followed by the whole SSP datagram,
+  header and trailer included. That is the length an observer sees, less
+  a constant: the UDP payload is the sealed plaintext plus the
+  transport's 13-byte clear header and 16-byte tag (transport.md). Padding
+  the whole of it, not just the diff, keeps the uvarints that grow with
+  version numbers (ack, from, to) and the presence of the echo from
+  leaking too [M S5 padding.md §2].
+- **The rule.** Let *U* be the sealed plaintext length of the datagram
+  with P set and k = 0 (so *U* counts the 2-byte trailer). The sender
+  sends *T* bytes of sealed plaintext, k = *T* − *U*, where
 
-The reasoning and the numbers follow. Compressed length is a
-CRIME/BREACH-class side channel: the AEAD hides content, not length, and
-when attacker-influenced output (a log
-line, a chat message, a web page in a terminal browser) is compressed
-together with a secret on the same screen, the datagram size shows whether
-a guess matched [S5 §8]. Mosh 1.4.0 has the same exposure: it compresses
-every update without padding and its datagram sizes follow the compressed
-length to within a byte [M, mosh-compression.md §2.3]. The numbers
-(S5's six sessions at 120x40, 536 frames, 332 kB raw; bytes against raw
-unpadded) [S5 §8]:
+  ```
+  T = min(max(F, Padmé(U)), FrameOverhead + MaxPayload)
+  F = 64 on the server (screen frames, echoes, acks, heartbeats to the client)
+  F = 16 on the client (input frames, acks, heartbeats to the server)
+  ```
 
-| codec | no padding | pad to 64 | pad to 128 | pad to 256 |
-|---|---|---|---|---|
-| none | 1.002 | 1.079 | 1.173 | 1.357 |
-| flate-6 (slice 1) | **0.352** | 0.430 | 0.523 | 0.716 |
-| flate-6, acknowledged screen as preset dictionary | 0.247 | 0.324 | 0.417 | 0.601 |
+  So nothing smaller than F goes out, and everything above F is rounded
+  up by Padmé.
+- **Padmé** [PURBs]: for a length L ≥ 2, E = ⌊log₂ L⌋, S = ⌊log₂ E⌋ + 1,
+  z = E − S, mask = 2^z − 1, and Padmé(L) = (L + mask) with the low z bits
+  cleared; Padmé(1) = 1. The padded length's mantissa is then no longer
+  than its exponent: L under 8 is unchanged, and the rounding step is 2
+  bytes from 8 to 31, 4 to 63, 8 to 127, 16 to 511, 32 to 1023 and 64 to
+  2047. It leaks O(log log M) bits about a length up to M (8 bits up to
+  64 KiB) for at most 12% overhead. (The paper's stated maximum of
+  +11.11% is exceeded by its own Algorithm 1 at 129 → 144, +11.63%
+  [M S5 padding.md §2]; "at most 12%" holds.)
+- **The cap.** Padding never takes a datagram past the D5 limit. Padmé
+  rounds 1153 to 1203 up to 1216, past `FrameOverhead + MaxPayload` =
+  1203, so those are padded to exactly 1203 instead; every full fragment
+  therefore goes out at the D5 maximum, a 1232-byte UDP payload. `Chunk`
+  leaves room for the trailer (§3), so *U* is never over the limit and k is
+  never negative.
+- **Receivers do not enforce the rule.** They strip any padding §3 step 2
+  allows (k bounded, the k bytes all zero, refused before any state
+  changes, §8). The rule is the sender's protection of its own user; a
+  peer that broke it would gain nothing it could not get by other means.
+- **The residual leak is accepted** as `docs/threat-model.md` R1, owned by
+  **ssp**: padding blunts the compression oracle, it does not close it.
+  An on-path observer who can also put chosen output on the user's screen
+  can still push a frame across a Padmé boundary with filler and count
+  samples [M S5 padding.md §6]. Padding does nothing for timing; that is
+  chaff (O10, §9.1).
 
-- Padding to 64-byte buckets gives up about a fifth of the saving
-  ((0.430 − 0.352) / (1 − 0.352) ≈ 22%) and only blunts the signal: an
-  attacker can add filler to sit on a bucket boundary and take more
-  samples. Datagram counts barely move (582, 583, 589, 603 for flate-6).
-- The acknowledged screen as a preset dictionary is the best compressor
-  and the leakiest: the whole acknowledged screen sits in the
-  compressor's window, so the secret need not even be in the changed
-  cells. Static trained dictionaries gained 0–3% [S5 §8].
-- Frame-weighted, flate-6's ratio is 0.96: most frames are small echoes
-  that do not compress; the saving is in full-screen redraws [S5 §8].
+**Why these numbers** [M S5 padding.md §1, §3, §4]. Compressed length is
+a CRIME/BREACH-class side channel: the AEAD hides content, not length, and
+when attacker-influenced output (a log line, a chat message, a web page in
+a terminal browser) is compressed together with a secret on the same
+screen, the datagram size shows whether a guess matched [S5 §8]. Mosh
+1.4.0 compresses every update without padding, so its datagram sizes
+follow the compressed length to within a byte [M, mosh-compression.md
+§2.3]. S5 compared six policies on its six captured sessions (536 server
+frames at 120x40, 331168 raw bytes, flate-6 116561):
 
-`docs/threat-model.md` R1 should cite this decision rather than say the
-question is settled elsewhere, and PLAN O12 can point here as closed for
-v1 (Review notes, items 4 and 12).
+| policy (server frames) | bytes vs raw | flate saving kept | wire vs unpadded | distinct sizes, echo frames | leak bits up to 64 KiB |
+|---|---|---|---|---|---|
+| none (flate-6) | 0.352 | 100% | 1.000 | 13 | 16 |
+| multiple of 64 | 0.430 | 88% | 1.178 | 1 | 10 |
+| multiple of 16 (WireGuard) | 0.362 | 98% | 1.023 | 3 | 12 |
+| Padmé | 0.360 | 99% | 1.020 | 12 | 8 |
+| **under 64 → 64, Padmé above** | **0.427** | **88%** | **1.173** | **1** | **8** |
+| under 128 → 128, Padmé above | 0.511 | 75% | 1.365 | 1 | 8 |
+
+- **The 64-byte floor is what hides echoes.** 81% of server frames are
+  keystroke echoes under 64 bytes, the frames an observer can line up with
+  typing. Padmé alone leaves 12 sizes among them; the floor leaves one.
+  It costs the same as 64-byte buckets (88% of flate's saving kept against
+  88%) but leaks less on large frames (8 bits up to 64 KiB against 10).
+  A 128-byte floor costs another 13 points of the saving for 2 more
+  frames in 536.
+- **Padding large frames is nearly free**: Padmé adds 2324 bytes to the 99
+  frames of 64 bytes or more, 2% of the total. Datagram counts move by 4
+  of 585 for every padded policy.
+- **The client's 16 bytes** were measured on a synthetic typist (three
+  seeds, 100 000 events each, at 20, 100 and 300 ms RTT): 16 bytes of
+  encoding byte plus input diff covers 99.996% of single keystrokes, and
+  at 100 ms RTT costs 1.20x the wire bytes of unpadded input. What
+  exceeds it is mostly keys piling up while unacknowledged, and pastes
+  (0.16% of frames), which then leak at most 8 bits through Padmé.
+
+**What 16 means on the sealed plaintext.** S5 measured the 16 on the
+encoding byte plus the input diff; the rule above applies it to the whole
+sealed plaintext, which adds the frame kind, the SSP header, the
+instruction's versions and the trailer, about 24 bytes for a keystroke.
+So on the client the floor binds acks and heartbeats (9 to 15 bytes while
+versions fit in three-byte uvarints, padded to 16), while a keystroke (29 bytes with an echo and versions under
+128) is padded by Padmé alone, to 30, and to 32 or 36 once versions need
+two-byte uvarints. Measured over a simulated session of 300 keystrokes
+(`TestEverySentDatagramFollowsThePaddingRuleInBothDirections`), the
+client's keystrokes went out at three sizes (26, 30 and 36) and every
+server echo, ack and heartbeat at exactly 64. This section applies the
+decision as written; hiding keystrokes behind one size, as S5's 16 did on
+its own unit, would take a client floor of about 40 bytes of sealed
+plaintext (16 plus the 24 bytes of framing), which is Dan's to choose.
 
 ### 9.3 Other hooks
 
@@ -858,7 +923,7 @@ What SSP needs from it:
 |---|---|---|
 | Max SSP datagram | `Config.MaxPayload` = transport.MaxPayload = 1202 | D5; architecture §4 |
 | SSP header | 6–27 bytes | §3 [D] |
-| `Chunk` | `MaxPayload − 27` = 1175 | [derived] |
+| `Chunk` | `MaxPayload − 27 − 2` = 1173 | [derived], §3 |
 | Instruction header | ≤ 21 bytes | §4 [D] |
 | Frame interval | `clamp(SRTT/2, 20 ms, 250 ms)`, 20 ms before a sample | [P §2.3], [P §2.3 fn. 1], [P §4 Fig. 3], D11 |
 | Collection, server / client | 8 ms / 0 | [P §2.3, §4], D11 / [M], [S5 §7] |
@@ -873,7 +938,10 @@ What SSP needs from it:
 | Outage probing | `clamp(silence/8, frame, 1 s)` from 300 ms of silence | D11, [S5 §5] |
 | Bogus RTT sample | ≥ 60 s | [D] |
 | Timestamp | u32 µs | [D], §3 |
-| Compression | raw DEFLATE, level 6, per instruction, stored when not smaller; no dictionary; no padding in v1 | D24, RFC 1951, [S5 §8], [M]; §9.2 |
+| Compression | raw DEFLATE, level 6, per instruction, stored when not smaller; no dictionary | D24, RFC 1951, [S5 §8], [M]; §9.2 |
+| Padding | every datagram; sealed plaintext `min(max(F, Padmé(U)), FrameOverhead + MaxPayload)` | [D] (O12), [PURBs], [M S5 padding.md]; §9.2 |
+| Padding floor `F`, server / client | 64 / 16 bytes of sealed plaintext | [D] (O12), [M S5 padding.md §5] |
+| `FrameOverhead` | 1 (the transport's frame kind) | transport.md, §9.2 |
 | `Window` (versions outstanding) | 16 | [D], §6.1 |
 | Versions kept, sender / receiver | at most 17 / at most 17, neither evicts | [derived], §6.1, §7.3 |
 | Fragment burst | 16 datagrams per frame interval | [D, provisional], §5 |
@@ -945,7 +1013,15 @@ in the commit message):
   `InputConsumed` ends the connection with `ErrProtocol`;
 - a decompression bomb, an oversized `count` and each row of §8's table
   end `Run` with `ErrProtocol`, or are ignored, as the table says;
-- every datagram SSP sends is at most `MaxPayload` bytes.
+- every datagram SSP sends is at most `MaxPayload` bytes;
+- **padding** (§9.2): Padmé matches hand-worked values, including the
+  paper's Table 1; over a simulated session every datagram either side
+  sends has P set and exactly the sealed length the rule gives, every
+  server echo, ack and heartbeat is 64 bytes, and every full fragment is
+  exactly `MaxPayload`; padding never passes the limit for any length; a
+  datagram with non-zero padding or a k that reaches into the header is
+  refused and changes no state (and `FuzzDatagram` covers padded
+  datagrams).
 
 ## 13. Review notes
 
@@ -980,9 +1056,11 @@ How this revision answers the review of the first draft. Items 1 and 6,
    and a client that ignores it ends its connection with `ErrProtocol`
    instead of being "a bug we report". This changes no ack semantics; it
    adds a field to the screen object, which `screen.md` must take up.
-4. **O12 deferred in a circle.** Settled in §9.2 for v1, as D24 asks: no
-   dictionary ever, no padding in v1, the residual leak accepted as R1
-   with **ssp** as owner, revisited with chaff (O10). `docs/threat-model.md`
+4. **O12 deferred in a circle.** Settled in §9.2, as D24 asks: no
+   dictionary ever, the residual leak accepted as R1 with **ssp** as
+   owner. (This revision said no padding in v1; Dan later decided O12
+   with padding on every datagram, a 64- or 16-byte floor and Padmé
+   above, from S5's `padding.md`, and §9.2 now says so.) `docs/threat-model.md`
    R1 must be changed to cite §9.2's decision (this revision edits only
    `ssp.md`).
 5. Same as 2.

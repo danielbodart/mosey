@@ -402,6 +402,9 @@ bytes, with padding to buckets:
 
 Datagram counts barely move with padding (flate-6: 582, 583, 589, 603).
 
+Padding policies (Padmé, WireGuard's 16, a 64-byte floor) and client
+input frame sizes are compared in `padding.md`.
+
 **Decompression bombs.** The flate decoder had no output bound: one
 1280-byte datagram could inflate to about 1.3 MB. It now reads through a
 limit and fails closed (`o8.MaxFrame`, `TestFlateBombRejected`); the zstd
