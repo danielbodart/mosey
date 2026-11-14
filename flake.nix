@@ -12,7 +12,12 @@
       linuxSystems = [ "x86_64-linux" "aarch64-linux" ];
       # mosey builds for darwin too (D10, D22: nothing may rule macOS out),
       # so the package and the shell are there for a Mac; the checks, which
-      # run VMs and the server's Linux-only sandbox, are Linux's.
+      # run VMs and the server's Linux-only sandbox, are Linux's. Not
+      # x86_64-darwin: nixpkgs 26.05 is the last release to support it (it
+      # warns so on evaluation), and an Intel Mac has the darwin-amd64
+      # release binary, which scripts/build.sh makes without Nix. CI builds
+      # x86_64-linux and evaluates every other system here
+      # (scripts/nix-eval-systems.sh).
       systems = linuxSystems ++ [ "aarch64-darwin" ];
       forAllSystems = lib.genAttrs systems;
       forLinux = lib.genAttrs linuxSystems;

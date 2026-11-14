@@ -143,6 +143,7 @@ jobs:
           mapfile -t checks < <(nix eval --json .#checks.x86_64-linux --apply builtins.attrNames | jq -r '.[]')
           nix build --no-link --print-build-logs "${checks[@]/#/.#checks.x86_64-linux.}" \
             .#devShells.x86_64-linux.default .#formatter.x86_64-linux
+          scripts/nix-eval-systems.sh
 
       # 6.
       - name: Commit and push

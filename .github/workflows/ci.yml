@@ -175,6 +175,13 @@ jobs:
             | xargs nix build --print-build-logs --no-link \
                 .#packages.x86_64-linux.mosey .#devShells.x86_64-linux.default .#formatter.x86_64-linux
 
+      # The other systems the flake offers (aarch64-linux, aarch64-darwin)
+      # are evaluated, not built: no runner here is either, and an
+      # evaluation error is what a change to the flake most often breaks.
+      - name: the other systems, evaluated
+        if: matrix.check == 'rest'
+        run: scripts/nix-eval-systems.sh
+
       # The package a host installs, from the rest leg, which builds it.
       - name: Push mosey's package to Cachix
         if: matrix.check == 'rest' && env.CACHIX_AUTH_TOKEN != '' && github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
