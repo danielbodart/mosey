@@ -11,10 +11,11 @@ on lossy links and picks up where it left off.
 ([PLAN.md](PLAN.md)) and the specs are written ([docs/spec/](docs/spec)).
 The first slice works: `mosey HOST` bootstraps over your `ssh` and gives
 you an interactive shell over encrypted UDP, with the emulator sandboxed on
-the server. For now `mosey` must already be on the host (`-remote PATH`
-names it otherwise). Resume, agent forwarding, predictive echo and copying
-the binary across are the next slices. Every green commit is already
-released (see [Installing](#installing)).
+the server. Sessions survive the client: `mosey -r HOST` resumes one from
+here or another device and takes it over (see [Using it](#using-it)). For
+now `mosey` must already be on the host. Agent forwarding, predictive echo
+and copying the binary across are the next slices. Every green commit is
+already released (see [Installing](#installing)).
 
 ## What it is
 
@@ -88,7 +89,8 @@ flake's `packages.<system>.mosey`.
 ## Using it
 
 mosey needs the same `mosey` binary on both ends for now (copying it over
-by itself comes later). Then:
+by itself comes later; `-remote PATH` says where it is on the host if it
+isn't on the `PATH` there). Then:
 
 ```sh
 mosey host                 # a new session: a login shell on host, over UDP
