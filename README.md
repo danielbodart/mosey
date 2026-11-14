@@ -14,8 +14,10 @@ you an interactive shell over encrypted UDP, with the emulator sandboxed on
 the server, and copies itself to a host that doesn't have it (see
 [Zero install](#zero-install)). Sessions survive the client: `mosey -r HOST`
 resumes one from here or another device and takes it over (see
-[Using it](#using-it)). Agent forwarding and predictive echo are the next
-slices. Every green commit is already released (see
+[Using it](#using-it)). While you type, both ends send cover traffic on a
+fixed tick, which hides the timing of keys within a run of typing (see
+[What it is](#what-it-is)). Agent forwarding and predictive echo are the
+next slices. Every green commit is already released (see
 [Installing](#installing)).
 
 ## What it is
@@ -42,8 +44,8 @@ config, keys and agent, exactly as Mosh does. It aims to be:
   (X-Wing: ML-KEM-768 plus X25519), forward secrecy, rekeying, and
   replay-proof roaming. A leaked SSH log line doesn't hand anyone your
   session. The designs are checked with ProVerif. While you type, both
-  ends send on a fixed 20 ms tick with cover traffic between your keys,
-  which hides the timing of keys within a run of typing from someone
+  ends send on a fixed tick (20 ms for now) with cover traffic between
+  your keys, which hides the timing of keys within a run of typing from someone
   watching the network, as OpenSSH's `ObscureKeystrokeTiming` does for
   SSH. It can't hide when a run starts or stops, or keys that pile up
   while the network stalls.
