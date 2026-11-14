@@ -221,6 +221,13 @@ func (s *setup) mint() (handshake.Credential, *handshake.OneShotKey) {
 // connect dials from addr and accepts on the server, returning both ends.
 func (s *setup) connect(addr string) (client, server *Conn, csock *memSock) {
 	s.t.Helper()
+	return s.connectOffering(addr, nil)
+}
+
+// connectOffering is connect with the client offering offer besides the
+// terminal (DialOffering).
+func (s *setup) connectOffering(addr string, offer []handshake.ChannelType) (client, server *Conn, csock *memSock) {
+	s.t.Helper()
 	cred, key := s.mint()
 	csock = s.net.listen(addr)
 	accepted := make(chan *Conn, 1)
@@ -232,7 +239,7 @@ func (s *setup) connect(addr string) (client, server *Conn, csock *memSock) {
 		}
 		accepted <- c
 	}()
-	client, err := Dial(context.Background(), csock, serverAddr, cred, key, nil)
+	client, err := DialOffering(context.Background(), csock, serverAddr, cred, key, offer, nil)
 	if err != nil {
 		s.t.Fatal(err)
 	}

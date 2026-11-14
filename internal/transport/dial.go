@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/danielbodart/mosey/internal/handshake"
@@ -46,13 +47,29 @@ type clientHandshake struct {
 // handshake.CredentialTTL has passed, which is when the server forgets the
 // credential.
 func Dial(ctx context.Context, pc net.PacketConn, addr netip.AddrPort, cred handshake.Credential, key *handshake.OneShotKey, log *slog.Logger) (*Conn, error) {
+	return DialOffering(ctx, pc, addr, cred, key, nil, log)
+}
+
+// DialOffering is Dial with the channel types the client can serve
+// besides the terminal (D15): the agent, when it has a pinned bind
+// (bootstrap.md §7.3). The connection carries those the server supports
+// too; Conn.Channels says which.
+func DialOffering(ctx context.Context, pc net.PacketConn, addr netip.AddrPort, cred handshake.Credential, key *handshake.OneShotKey, offer []handshake.ChannelType, log *slog.Logger) (*Conn, error) {
+	hello := clientHello
+	hello.Channels = slices.Clone(hello.Channels)
+	for _, ch := range offer {
+		if !slices.Contains(hello.Channels, ch) {
+			hello.Channels = append(hello.Channels, ch)
+		}
+	}
+	slices.Sort(hello.Channels)
 	e := newEngine(pc, log)
 	c := newConn(e, false, nil, &[32]byte{}, &[32]byte{})
 	c.serverAddr = unmap(addr)
 
 	e.lock()
 	idxC := e.table.reserve()
-	ini, err := handshake.NewInitiator(cred, key, clientHello, idxC)
+	ini, err := handshake.NewInitiator(cred, key, hello, idxC)
 	if err != nil {
 		e.table.free(idxC)
 		c.shutdown(net.ErrClosed)
@@ -154,7 +171,7 @@ func (hs *clientHandshake) onMsg2(c *Conn, pkt []byte, from netip.AddrPort) {
 	if hs.accepted != nil && bytes.Equal(pkt, hs.accepted) {
 		return // the cached answer to a resend: nothing new
 	}
-	keys, _, err := hs.ini.ReadMsg2(pkt)
+	keys, server, err := hs.ini.ReadMsg2(pkt)
 	if err != nil {
 		if errors.Is(err, handshake.ErrIncompatible) {
 			// Authentic, so the server is genuine and incompatible:
@@ -174,6 +191,7 @@ func (hs *clientHandshake) onMsg2(c *Conn, pkt []byte, from netip.AddrPort) {
 	c.root, c.hash = keys.Root, keys.Hash
 	keys.Wipe()
 	hs.accepted = bytes.Clone(pkt)
+	c.channels = slices.Clone(server.Channels)
 	hs.established = true
 	c.sendFrame(KindKeepalive, keepaliveAnswer)
 }

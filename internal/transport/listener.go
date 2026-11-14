@@ -317,6 +317,12 @@ func (l *Listener) confirm(pc *pending, pkt []byte, from netip.AddrPort) {
 
 	c := newConn(l.e, true, pc.ks, &pc.root, &pc.hash)
 	c.listener, c.sid = l, pc.p.SessionID
+	// What both offered: the server's answer in msg2 (transport.md §3.6).
+	for _, ch := range pc.p.Hello.Channels {
+		if serverHello.Supports(ch) {
+			c.channels = append(c.channels, ch)
+		}
+	}
 	l.e.table.set(pc.ks.local, c)
 
 	// Validate the client's address only if msg2 went there and nowhere

@@ -54,7 +54,11 @@ type Conn struct {
 
 	listener *Listener
 
+	// channels is what the handshake negotiated (transport.md §4.4).
+	channels []handshake.ChannelType
+
 	recvq chan []byte
+	chanq chan []byte
 	// chaffed is ChaffArrived's (ssp.md §9.1.4).
 	chaffed chan struct{}
 	events  chan Event
@@ -100,6 +104,7 @@ func newConn(e *engine, server bool, cur *keyset, root, hash *[32]byte) *Conn {
 	c := &Conn{
 		e: e, server: server, cur: cur, root: *root, hash: *hash,
 		recvq:   make(chan []byte, recvQueue),
+		chanq:   make(chan []byte, recvQueue),
 		chaffed: make(chan struct{}, 1),
 		events:  make(chan Event, eventQueue),
 		wake:    make(chan struct{}, 1),
@@ -183,6 +188,19 @@ func (c *Conn) act(ks *keyset, plain []byte, from netip.AddrPort) {
 		select {
 		case c.chaffed <- struct{}{}:
 		default:
+		}
+	case KindChannel:
+		// Only a connection that negotiated a channel besides the
+		// terminal carries any (transport.md §4.4): a client that offered
+		// no agent cannot be made to carry an agent channel.
+		if len(c.channels) < 2 {
+			c.stats.ChannelRefused++
+			return
+		}
+		select {
+		case c.chanq <- body:
+		default:
+			c.stats.ChannelQueueFull++
 		}
 	case KindRekeyInit1, KindRekeyInit2:
 		// Rekey frames count only under the current epoch: a delayed INIT

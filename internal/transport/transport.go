@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/danielbodart/mosey/internal/handshake"
@@ -192,13 +193,21 @@ type Stats struct {
 	Blocked uint64
 	// QueueFull is terminal payloads dropped because Recv was not keeping up.
 	QueueFull uint64
+	// ChannelQueueFull is CHANNEL frames dropped because RecvChannel was
+	// not keeping up; ChannelRefused is CHANNEL frames on a connection
+	// that negotiated no channel besides the terminal (transport.md §4.4).
+	ChannelQueueFull uint64
+	ChannelRefused   uint64
 }
 
-// clientHello and serverHello are what this build offers: the terminal
-// channel, exclusive attach (D15, D26).
+// clientHello is what Dial offers: the terminal channel and exclusive
+// attach (D15, D26). DialOffering adds the channels the client can serve.
+// serverHello is what the server supports: the terminal and the agent
+// (agent.md §4); a connection carries what both offered (transport.md
+// §4.4).
 var (
 	clientHello = handshake.Hello{Version: handshake.Revision, Channels: []handshake.ChannelType{handshake.ChannelTerminal}, Attach: handshake.Exclusive}
-	serverHello = clientHello
+	serverHello = handshake.Hello{Version: handshake.Revision, Channels: []handshake.ChannelType{handshake.ChannelTerminal, handshake.ChannelAgent}, Attach: handshake.Exclusive}
 )
 
 // Recv returns the next authentic terminal payload, handling every other
@@ -291,14 +300,57 @@ func (c *Conn) End(reason EndReason) error {
 	return c.Close()
 }
 
+// Channels is the channel types this connection carries: what both sides
+// offered in the handshake (transport.md §3.6, §4.4), in increasing order.
+func (c *Conn) Channels() []handshake.ChannelType {
+	c.e.lock()
+	defer c.e.unlock()
+	return append([]handshake.ChannelType(nil), c.channels...)
+}
+
+// Carries says whether the connection negotiated channel type ch.
+func (c *Conn) Carries(ch handshake.ChannelType) bool {
+	return slices.Contains(c.Channels(), ch)
+}
+
+// RecvChannel returns the body of the next authentic CHANNEL frame
+// (transport.md §4.4). Only a connection that negotiated a channel besides
+// the terminal ever has one. The returned slice is the caller's.
+func (c *Conn) RecvChannel(ctx context.Context) ([]byte, error) {
+	select {
+	case p := <-c.chanq:
+		return p, nil
+	default:
+	}
+	select {
+	case p := <-c.chanq:
+		return p, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.done:
+		return nil, c.err
+	}
+}
+
+// SendChannel seals body as a CHANNEL frame and sends it, under the same
+// rules as Send: a body over MaxPayload is an error, and one held back is
+// ErrBlocked, which the stream layer treats as a loss.
+func (c *Conn) SendChannel(body []byte) error {
+	return c.send(KindChannel, body)
+}
+
 // Send seals payload as a terminal frame and sends it to the peer. A payload
 // over MaxPayload is an error. A send held back is dropped and reported as
 // ErrBlocked: SSP treats it as lost and sends again.
 func (c *Conn) Send(payload []byte) error {
+	return c.send(KindTerminal, payload)
+}
+
+func (c *Conn) send(kind Kind, payload []byte) error {
 	if len(payload) > MaxPayload {
 		return fmt.Errorf("transport: a payload of %d bytes, over %d", len(payload), MaxPayload)
 	}
-	return c.sendData(KindTerminal, payload)
+	return c.sendData(kind, payload)
 }
 
 // SendChaff sends one CHAFF frame whose sealed plaintext, frame kind
@@ -317,9 +369,9 @@ func (c *Conn) SendChaff(size int) error {
 // itself is dropped; this is all it does (ssp.md §9.1.4).
 func (c *Conn) ChaffArrived() <-chan struct{} { return c.chaffed }
 
-// sendData seals one frame of what SSP sends, terminal data or chaff,
-// which the rekey schedule and the key-age limit hold back alike, so chaff
-// never goes when data could not.
+// sendData seals one data frame, terminal, channel or chaff, which the
+// rekey schedule and the key-age limit hold back alike, so chaff never
+// goes when data could not.
 func (c *Conn) sendData(kind Kind, payload []byte) error {
 	c.e.lock()
 	defer c.e.unlock()

@@ -3,7 +3,7 @@ package ssp
 import (
 	"encoding/binary"
 	"fmt"
-	"math/bits"
+	"github.com/danielbodart/mosey/internal/wire"
 )
 
 // The datagram and instruction formats of docs/spec/ssp.md §3 and §4.
@@ -36,38 +36,15 @@ const (
 // (frame kind, SSP header, versions, trailer), so every keystroke is one
 // size too (§9.2). Padmé rounds everything above the floor.
 const (
-	serverPadFloor = 64
+	serverPadFloor = wire.PadFloor
 	clientPadFloor = 40
 )
 
-// padme is Padmé (Nikitin, Barman, Lueks, Underwood, Hubaux and Ford,
-// "Reducing Metadata Leakage from Encrypted Files and Communication with
-// PURBs", PoPETs 2019(4), §4.4, Algorithm 1): l rounded up so that its
-// mantissa has no more bits than its exponent, which leaks O(log log M)
-// bits about lengths up to M for at most 12% overhead. Lengths under 8
-// are unchanged, which covers 1, where the paper's log2 of the exponent
-// is undefined.
-func padme(l int) int {
-	if l < 2 {
-		return l
-	}
-	e := bits.Len(uint(l)) - 1 // floor(log2 l)
-	s := bits.Len(uint(e))     // floor(log2 e) + 1
-	z := e - s
-	if z <= 0 {
-		return l
-	}
-	mask := 1<<z - 1
-	return (l + mask) &^ mask
-}
+// padme and paddedLen are wire's, which channel frames share (agent.md
+// §5.1).
+func padme(l int) int { return wire.Padme(l) }
 
-// paddedLen is the sealed plaintext length a datagram of unpadded length u
-// goes out at (§9.2): at least the floor, Padmé above it, and never past
-// limit, the most the layer below carries. u counts the trailer, so it is
-// never over limit, and neither is the result below u.
-func paddedLen(u, floor, limit int) int {
-	return min(max(floor, padme(u)), limit)
-}
+func paddedLen(u, floor, limit int) int { return wire.PaddedLen(u, floor, limit) }
 
 // datagramLen is how long appendDatagram makes d.
 func datagramLen(d datagram) int {
