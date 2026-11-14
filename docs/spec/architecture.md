@@ -67,7 +67,7 @@ handshake                       (wire)
 transport                       (wire, replay, handshake)
 ssp                             (wire)          -- never transport: it takes a Datagrams
 channel                         (wire)          -- never transport: it takes a Datagrams too
-agent                           (channel)       -- the bind, capture, pin, replay, relay
+agent                           (channel, handshake) -- the bind, capture, pin, replay, relay
 userinput                       ()              -- satisfies ssp.State structurally
 screen                          ()              -- satisfies ssp.State structurally
 render                          (screen)
