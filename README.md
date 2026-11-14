@@ -85,6 +85,27 @@ will fetch them itself to copy the right one onto a host of another
 platform. With Nix, `nix run github:danielbodart/mosey -- HOST`, or the
 flake's `packages.<system>.mosey`.
 
+## Using it
+
+mosey needs the same `mosey` binary on both ends for now (copying it over
+by itself comes later). Then:
+
+```sh
+mosey host                 # a new session: a login shell on host, over UDP
+mosey -r host              # resume your session on host, from here or another device
+mosey -r=SESSION host      # resume a particular one, when you have several
+mosey -list host           # your sessions on host, and whether anyone is attached
+```
+
+A session lives until its shell exits. Closing the terminal, logging out or
+rebooting only detaches the client, and the session waits on the server for
+`mosey -r`. Resuming takes the session over: any client still attached is
+cut off, its keys are wiped, and it exits saying who took over and when.
+Nothing secret is ever saved to disk: each resume is a fresh SSH login and
+a fresh handshake ([docs/spec/bootstrap.md §9](docs/spec/bootstrap.md)).
+A client that just loses its network for a while needs none of this: it
+carries on by itself when packets flow again.
+
 ## Building
 
 With [mise](https://mise.jdx.dev):
