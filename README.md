@@ -25,7 +25,7 @@ much of this in 2012:
 But Mosh's last release was in 2022, its crypto dates from 2012, and a
 session can't be picked up again from another device.
 
-mosey is a successor to Mosh, written from scratch in Go from the Mosh paper
+mosey is inspired by Mosh, written from scratch in Go from the Mosh paper
 and public specifications. It starts over your normal `ssh`, with your own
 config, keys and agent, exactly as Mosh does. It aims to be:
 
