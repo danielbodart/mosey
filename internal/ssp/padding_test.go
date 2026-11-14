@@ -41,10 +41,12 @@ func TestPadmeNeverShrinksIsIdempotentAndCostsAtMostTwelvePercent(t *testing.T) 
 func TestThePaddedLengthIsTheFloorThenPadmeThenTheLimit(t *testing.T) {
 	limit := frameOverhead + maxPayload // 1203
 	for _, c := range []struct{ u, floor, want int }{
-		{9, clientPadFloor, 16},       // a client ack
-		{16, clientPadFloor, 16},      // exactly the floor
-		{17, clientPadFloor, 18},      // Padmé, 2-byte steps
-		{29, clientPadFloor, 30},      // a keystroke with an echo
+		{9, clientPadFloor, 40},       // a client ack
+		{29, clientPadFloor, 40},      // a keystroke with an echo
+		{36, clientPadFloor, 40},      // a keystroke with two-byte versions
+		{40, clientPadFloor, 40},      // exactly the floor
+		{41, clientPadFloor, 44},      // Padmé, 4-byte steps
+		{17, 16, 18},                  // Padmé, 2-byte steps
 		{9, serverPadFloor, 64},       // a server ack
 		{35, serverPadFloor, 64},      // an echo
 		{65, serverPadFloor, 72},      // Padmé, 8-byte steps
@@ -140,6 +142,11 @@ func TestEverySentDatagramFollowsThePaddingRuleInBothDirections(t *testing.T) {
 			if sealed(d.payload) != serverPadFloor {
 				t.Fatalf("the server sent %d sealed bytes while echoing keys, not %d", sealed(d.payload), serverPadFloor)
 			}
+		}
+		// Every keystroke, ack and heartbeat from the client is one size
+		// too: the client's floor (§9.2).
+		if len(clientSizes) != 1 || clientSizes[clientPadFloor] == 0 {
+			t.Errorf("the client sent sizes %v, not only %d", summary(clientSizes), clientPadFloor)
 		}
 		t.Logf("server sealed sizes: %v", summary(serverSizes))
 		t.Logf("client sealed sizes: %v", summary(clientSizes))

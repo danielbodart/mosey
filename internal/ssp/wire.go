@@ -31,11 +31,13 @@ const (
 // The padding floors of §9.2: the smallest sealed plaintext each side
 // sends. Dan's decision on O12 [D], from what spike S5 measured
 // (docs/spikes/s5-netsim-ssp/padding.md): a 64-byte floor gives every
-// keystroke echo one size and keeps 88% of flate's saving; 16 bytes on the
-// client's input frames. Padmé rounds everything above the floor.
+// keystroke echo one size and keeps 88% of flate's saving. On the client,
+// S5's 16 bytes of input plus the ~24 bytes of framing a keystroke carries
+// (frame kind, SSP header, versions, trailer), so every keystroke is one
+// size too (§9.2). Padmé rounds everything above the floor.
 const (
 	serverPadFloor = 64
-	clientPadFloor = 16
+	clientPadFloor = 40
 )
 
 // padme is Padmé (Nikitin, Barman, Lueks, Underwood, Hubaux and Ford,

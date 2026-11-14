@@ -701,7 +701,7 @@ evidence is [M S5 padding.md]):
   ```
   T = min(max(F, Padmé(U)), FrameOverhead + MaxPayload)
   F = 64 on the server (screen frames, echoes, acks, heartbeats to the client)
-  F = 16 on the client (input frames, acks, heartbeats to the server)
+  F = 40 on the client (input frames, acks, heartbeats to the server)
   ```
 
   So nothing smaller than F goes out, and everything above F is rounded
@@ -768,20 +768,18 @@ frames at 120x40, 331168 raw bytes, flate-6 116561):
   exceeds it is mostly keys piling up while unacknowledged, and pastes
   (0.16% of frames), which then leak at most 8 bits through Padmé.
 
-**What 16 means on the sealed plaintext.** S5 measured the 16 on the
-encoding byte plus the input diff; the rule above applies it to the whole
-sealed plaintext, which adds the frame kind, the SSP header, the
-instruction's versions and the trailer, about 24 bytes for a keystroke.
-So on the client the floor binds acks and heartbeats (9 to 15 bytes while
-versions fit in three-byte uvarints, padded to 16), while a keystroke (29 bytes with an echo and versions under
-128) is padded by Padmé alone, to 30, and to 32 or 36 once versions need
-two-byte uvarints. Measured over a simulated session of 300 keystrokes
-(`TestEverySentDatagramFollowsThePaddingRuleInBothDirections`), the
-client's keystrokes went out at three sizes (26, 30 and 36) and every
-server echo, ack and heartbeat at exactly 64. This section applies the
-decision as written; hiding keystrokes behind one size, as S5's 16 did on
-its own unit, would take a client floor of about 40 bytes of sealed
-plaintext (16 plus the 24 bytes of framing), which is Dan's to choose.
+**Why 40 on the client.** S5 measured its 16 on the encoding byte plus
+the input diff alone. The rule above applies the floor to the whole sealed
+plaintext, which adds the frame kind, the SSP header, the instruction's
+versions and the trailer: about 24 bytes for a keystroke. A floor of 16
+on the sealed plaintext therefore bound only acks and heartbeats, and a
+simulated session of 300 keystrokes sent them at three sizes (26, 30 and
+36). Dan chose 40, S5's 16 plus that framing, so that a keystroke goes out
+at one size, as S5 intended [D]. The same session
+(`TestEverySentDatagramFollowsThePaddingRuleInBothDirections`) now sends
+every client datagram, keystroke, ack and heartbeat alike, at exactly 40,
+and every server echo, ack and heartbeat at exactly 64. What exceeds 40
+(keys piling up while unacknowledged, pastes) is rounded by Padmé.
 
 ### 9.3 Other hooks
 
@@ -940,7 +938,7 @@ What SSP needs from it:
 | Timestamp | u32 µs | [D], §3 |
 | Compression | raw DEFLATE, level 6, per instruction, stored when not smaller; no dictionary | D24, RFC 1951, [S5 §8], [M]; §9.2 |
 | Padding | every datagram; sealed plaintext `min(max(F, Padmé(U)), FrameOverhead + MaxPayload)` | [D] (O12), [PURBs], [M S5 padding.md]; §9.2 |
-| Padding floor `F`, server / client | 64 / 16 bytes of sealed plaintext | [D] (O12), [M S5 padding.md §5] |
+| Padding floor `F`, server / client | 64 / 40 bytes of sealed plaintext | [D] (O12), [M S5 padding.md §5]; 40 is S5's 16 plus a keystroke's framing (§9.2) |
 | `FrameOverhead` | 1 (the transport's frame kind) | transport.md, §9.2 |
 | `Window` (versions outstanding) | 16 | [D], §6.1 |
 | Versions kept, sender / receiver | at most 17 / at most 17, neither evicts | [derived], §6.1, §7.3 |
@@ -1059,7 +1057,7 @@ How this revision answers the review of the first draft. Items 1 and 6,
 4. **O12 deferred in a circle.** Settled in §9.2, as D24 asks: no
    dictionary ever, the residual leak accepted as R1 with **ssp** as
    owner. (This revision said no padding in v1; Dan later decided O12
-   with padding on every datagram, a 64- or 16-byte floor and Padmé
+   with padding on every datagram, a 64- or 40-byte floor and Padmé
    above, from S5's `padding.md`, and §9.2 now says so.) `docs/threat-model.md`
    R1 must be changed to cite §9.2's decision (this revision edits only
    `ssp.md`).

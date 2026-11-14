@@ -727,7 +727,7 @@ Y = can, . = cannot, given the mechanisms above.
 | Largest input diff (the server's `MaxRemoteBytes`) | 128 KiB | [`ssp.md` §10.1] |
 | Fragments per instruction / instructions in reassembly / bytes held | `ceil(MaxInstruction / Chunk)` (≤ 65535) / 4 / `MaxPartialBytes = 2 × MaxFragments × Chunk` | [`ssp.md` §5, derived] |
 | Compression | always attempted; sent stored when DEFLATE is not shorter (in practice every frame under 32 B) | [`ssp.md` §4.1, M S5 §8] |
-| Length padding | every SSP datagram: sealed plaintext at least 64 B (server) / 16 B (client), Padmé above, capped at the D5 limit | [`ssp.md` §9.2, D (O12), M S5 padding.md] |
+| Length padding | every SSP datagram: sealed plaintext at least 64 B (server) / 40 B (client), Padmé above, capped at the D5 limit | [`ssp.md` §9.2, D (O12), M S5 padding.md] |
 | Window clamp | 1000 × 500 | [D23, S2] |
 | Scrollback | min(10000, 1e6 / cols) lines | [D23, M S2 memworst] |
 | emu memory | 512 MiB `MemoryMax`, `MemorySwapMax` 0 (cgroup, where available); 1 GiB `RLIMIT_DATA` (always) | [D23, S2; `server.md` §6.3] |

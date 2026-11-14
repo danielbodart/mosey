@@ -85,7 +85,7 @@ Everything from the first version of this section (O1–O9) was settled on
 | O9 | DPLPMTUD (RFC 8899) and ECN | After v1. Base 1200, as QUIC uses (D5). |
 | O10 | Chaff tick and cost (D11) | Measure in netsim before fixing the value. Reserve the frame type now. |
 | O11 | Cell-diff wire format (D9) | S2's prototype was bigger than raw output at its cadence. Redesign it in the spec, and measure it with SSP timing and compression on. |
-| O12 | Compression padding and dictionary (D24) | **Closed** by Dan's decision, in `docs/spec/ssp.md` §9.2: no dictionary, ever; every SSP datagram (data, acks, heartbeats) is padded so its sealed plaintext is at least 64 bytes from the server and 16 from the client, rounded up with Padmé (PURBs, PoPETs 2019) above that and capped at the D5 limit. S5 measured the server rule to keep 88% of flate's saving and give every keystroke echo one size (`docs/spikes/s5-netsim-ssp/padding.md`). The residual leak is threat-model R1. |
+| O12 | Compression padding and dictionary (D24) | **Closed** by Dan's decision, in `docs/spec/ssp.md` §9.2: no dictionary, ever; every SSP datagram (data, acks, heartbeats) is padded so its sealed plaintext is at least 64 bytes from the server and 40 from the client (S5's 16 bytes of input plus a keystroke's framing, so every keystroke is one size), rounded up with Padmé (PURBs, PoPETs 2019) above that and capped at the D5 limit. S5 measured the server rule to keep 88% of flate's saving and give every keystroke echo one size (`docs/spikes/s5-netsim-ssp/padding.md`). The residual leak is threat-model R1. |
 
 ## 4. Clean-room rules (D3)
 
