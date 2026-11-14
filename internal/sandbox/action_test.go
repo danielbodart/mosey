@@ -1,19 +1,13 @@
 package sandbox
 
 import (
-	"os"
 	"testing"
 )
 
-// D22 locks Kill on amd64. Every green commit is a release (D10), so the
-// release job runs this with MOSEY_RELEASE_CHECK=1 and refuses to publish
-// a build whose amd64 action is anything else (server.md §6.1). Ordinary
-// CI skips it while development builds run Errno, until the KILL soak is a
-// CI job and amd64 switches.
+// D22 locks Kill on amd64, and every green commit is a release (D10), so
+// check fails on any build whose amd64 action is anything else (server.md
+// §6.1).
 func TestReleaseAction(t *testing.T) {
-	if os.Getenv("MOSEY_RELEASE_CHECK") != "1" {
-		t.Skip("only the release job checks this (MOSEY_RELEASE_CHECK=1)")
-	}
 	if builtAction[AMD64] != Kill {
 		t.Fatalf("amd64 is built with %s; a release needs kill (D22)", builtAction[AMD64])
 	}

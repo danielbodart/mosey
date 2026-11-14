@@ -60,10 +60,22 @@ jobs:
         env:
           FUZZTIME: 10s
 
-  # TODO(D22): a KILL soak of the real server, at least 120 s under a
-  # systemd CPUQuota (so the runtime's pread64 of cpu.max runs), on every Go
-  # upgrade and every architecture, once server-proc has the roles to soak.
-  # arm64 stays on ERRNO until it passes on arm64 hardware.
+  # The KILL soak of D22 and server.md §9: the real server with its roles
+  # under seccomp Kill, carrying a busy session for 150 s inside a scope
+  # with a CPU quota (so the runtime's pread64 of cpu.max runs), on amd64
+  # and on arm64 hardware, so every Go upgrade, dependency bump and policy
+  # change is soaked on both before it can release. The binaries' default
+  # action stays Errno until this job has been green (sandbox/action.go).
+  kill-soak:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: mise exec -- scripts/soak.sh --scope 150s
 
   # Static binaries for every platform a release ships for (D1, D10), kept
   # as the run's artifacts whether or not the commit is released.
@@ -105,7 +117,7 @@ jobs:
   # vets and tests that configuration (mise run secret). Remove the
   # `false &&` to turn it on.
   release:
-    needs: [check, slow, fuzz-smoke, build]
+    needs: [check, slow, fuzz-smoke, kill-soak, build]
     if: false && github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
     runs-on: ubuntu-latest
     permissions:

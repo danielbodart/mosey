@@ -633,12 +633,9 @@ execution (R4).
   is even if the path is replaced in between (D7's cache is user-writable;
   this only matters as hygiene, since a same-uid writer is T12).
 - **seccomp's action follows D22**: KILL on amd64, ERRNO on arm64 until
-  a CI arm64 soak passes (R13). `architecture.md` §2 and `server.md`
-  §6.1 also let amd64 run ERRNO until the soak job is in `ci.yml` and
-  green. D22 does not say that, so it is **not** a D22 allowance: it is a
-  proposed amendment to D22 that needs Dan's agreement. Until he agrees,
-  an amd64 build with ERRNO is a development build, never a release, and
-  slice 1 is not done until amd64 runs KILL.
+  a CI arm64 soak passes (R13). amd64 runs KILL in every build since the
+  soak job (`server.md` §9) went into `ci.yml`; `TestReleaseAction`
+  keeps it so.
 
 ### 4.12 Denial of service — T1, T3, T4
 
@@ -676,7 +673,7 @@ with Dan.
 | **R10** | **Metadata**: the 5-tuple, the port range 60000–61000, the 3 s heartbeat and datagram sizes reveal that a mosey session exists, when it is active, and how much the screen changes | T2 | UDP state sync is the product; hiding traffic shape is out of scope | The receiver index changes each rekey, so the header doesn't link epochs [S1 §1.1] |
 | **R11** | **Screen spoofing**: a hostile program can draw anything, including a fake mosey status line, a title naming another host, or link text that differs from its URI; and it can **write** the clipboard (pastejacking) | T4 | D27 allows OSC 52 writes and OSC 8 by decision; this is what any terminal does | Clipboard read never; writes capped at 64 KiB; links only http, https, mailto; title bidi controls stripped |
 | **R12** | **Unvalidated addresses get up to 3x** what came from them, including the 0.5-RTT output to an unconfirmed msg1 source (~3.6 KB) | T1 spoofing | RFC 9000's factor; S5 measured 2.96x as the worst case in practice | [M S5 §6] |
-| **R13** | **seccomp in ERRNO mode** on arm64 until a real-hardware soak passes (D22). (ERRNO on amd64 before the soak lands is *not* covered by D22: it is a proposed amendment awaiting Dan, §4.11): a compromised role gets EPERM and carries on probing instead of dying | T6, T7 | KILL with an incomplete allow-list kills a healthy process (a missing `pread64` hid for 60 s [M S4 §3.5]); the denials themselves are identical, so containment holds | The policy exists and is tested by the BPF interpreter for amd64 and arm64; the CI KILL soak (≥ 120 s per Go upgrade and architecture, under a CPU quota) turns KILL on |
+| **R13** | **seccomp in ERRNO mode** on arm64 until a real-hardware soak passes (D22). (amd64 runs KILL, §4.11): a compromised role gets EPERM and carries on probing instead of dying | T6, T7 | KILL with an incomplete allow-list kills a healthy process (a missing `pread64` hid for 60 s [M S4 §3.5]); the denials themselves are identical, so containment holds | The policy exists and is tested by the BPF interpreter for amd64 and arm64; the CI KILL soak (≥ 120 s per Go upgrade and architecture, under a CPU quota) turns KILL on |
 | **R14** | **`crypto/hpke` is outside the 2025 Trail of Bits audit** | all | Composing X-Wing ourselves is closer to writing our own crypto (D19) | Recorded in `DEPENDENCIES.md`; part of the external review before 1.0 (PLAN §6.5) |
 | **R15** | **tuios is young, mostly one author**, and has no bound on OSC 8 link storage | T4 | Best candidate by a wide margin (S2); fork if upstream stalls (D23) | Pinned; fuzzed; the emu sandbox and its memory limits (512 MiB cgroup, 1 GiB `RLIMIT_DATA`; R18) contain it; upstream fixes listed in S2 |
 | **R16** | **Fuzzing so far is minutes, not hours** (S1: 38.5 min across targets; S2: 15–20 min per target) | all | Spikes, not production | Every attacker-reachable parser has a target, each run for minutes locally before it lands and 10 s in CI; continuous fuzzing before 1.0 (PLAN §6.5) |

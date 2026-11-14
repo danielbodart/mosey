@@ -918,18 +918,14 @@ never by the environment in a release build:
 
 | arch | releases | development builds only |
 |---|---|---|
-| amd64 | `Kill`, always [D22] | `Errno` is allowed only in commits before the soak job (§9) is in `ci.yml` and green; such a build is never released (below) |
+| amd64 | `Kill`, always [D22] | `Kill` (since the soak job, §9, is in `ci.yml`) |
 | arm64 | `Errno` until a CI arm64 soak passes, then `Kill` [D22] | as releases |
 
 D22 locks `Kill` on amd64; it gives no amd64 `Errno` allowance, and
 this spec proposes none. Because every green commit is a release (D10),
-the gate is mechanical: the `release` job runs `MOSEY_RELEASE_CHECK=1
-go test -run '^TestReleaseAction$' ./internal/sandbox` before it
-publishes, and that
-test fails unless the action compiled in for amd64 is `Kill`. Until the
-soak job lands and amd64 switches to `Kill`, `release` therefore
-refuses to publish, and slice 1 is not done (threat-model.md §4.11,
-R13).
+the gate is mechanical: `TestReleaseAction`, part of `check`, fails
+unless the action compiled in for amd64 is `Kill`, and `release` needs
+`check` and `kill-soak` (§9).
 
 `Errno` returns EPERM. The architecture and x32 checks (§6.3) kill
 whatever the action: a filter that cannot even read the syscall number
@@ -1229,7 +1225,11 @@ S4 dropped `pread64` and saw nothing for **60 s** idle, then a SIGSYS
 (S4 §3.5). Unit tests cannot find that; only the real roles running long
 enough, under the conditions that trigger the rare paths, can.
 
-**What runs.** `scripts/soak.sh DURATION`, as the CI job `kill-soak`:
+**What runs.** `scripts/soak.sh --scope DURATION`, as the CI job
+`kill-soak` (as built, the test binary is `internal/server`'s, running
+`TestKillSoak` and `TestEmuKillSoak`, and the scope uses the runner's
+user through `setpriv`; without `--scope` it runs as it is, for a
+workstation):
 
 1. Build `mosey` with `-tags soak` and the e2e test binary
    (`go test -c ./internal/e2e`). The `soak` tag adds only two things,
@@ -1466,10 +1466,7 @@ it lands, with the duration and exec count in the commit message.
   action for `F_SETFL` with `O_ASYNC`, `F_SETOWN`, `F_SETOWN_EX`,
   `F_SETSIG` and an unknown command; the jump-length refusal.
 - `TestReleaseAction`: the action compiled in for amd64 is `Kill`
-  (§6.1). Skipped unless `MOSEY_RELEASE_CHECK=1`, which only the
-  `release` job sets, so ordinary CI stays green while development
-  builds run `Errno`, and `release` refuses to publish until the soak
-  job lands and amd64 is switched, which is the point.
+  (§6.1), checked in every run of `check`.
 - `FuzzCompile`: random syscall numbers and arguments through the
   interpreter agree with a plain-Go reference of the same policy.
 - The generated syscall table agrees with `unix.SYS_*` on the host.

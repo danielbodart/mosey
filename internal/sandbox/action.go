@@ -3,13 +3,12 @@ package sandbox
 // builtAction is the action each architecture's binary is built with,
 // never chosen by the environment in a release build (server.md §6.1).
 //
-// D22 says Kill on amd64. Both run Errno until the KILL soak (server.md
-// §9) is a green CI job: before that a missing syscall in a rare runtime
-// path would kill a user's session, and TestReleaseAction, which the
-// release job runs, refuses to let such a build out. arm64 stays on Errno
-// until a soak on arm64 hardware passes (D22).
+// D22: Kill on amd64, which the KILL soak (server.md §9, CI's kill-soak
+// job, scripts/soak.sh) covers on every push; TestReleaseAction keeps it
+// so. arm64 stays on Errno until a soak under Kill on arm64 hardware
+// passes, and a later commit cites that run (D22).
 var builtAction = map[Arch]Action{
-	AMD64: Errno,
+	AMD64: Kill,
 	ARM64: Errno,
 }
 
