@@ -212,9 +212,14 @@ The Go files are the reference; this is the shape.
 **netsim.** `New(seed)`, `NewHost`, `Connect(from, to, LinkParams)` (one
 direction per link), `Host.Listen(addr) *Conn`. `*Conn` is a
 `net.PacketConn` with `ReadFromAddrPort`/`WriteToAddrPort`, `Rebind` (a
-roam) and `RxStats`. `Network.Tap` and `Inject` are the adversary;
-`Profiles()` are the S5 fixtures. Everything runs on the `time` package, so
-under `synctest.Test` it is virtual time.
+roam) and `RxStats`; `Network.Rebound` tells a test of a roam, to play
+netlink (D21). `Network.Tap` and `Inject` are the adversary.
+`Profiles()` are the S5 fixtures (`lan`, `hotel-wifi`, `train`, `hsr`, and
+`lte-driving` when its Mahimahi traces can be fetched); call it outside the
+bubble. Every profile's MTU is `wire.MaxDatagram`, so a layer that sends
+more finds out in every network test. Make the network inside
+`synctest.Test` and close it there. Everything runs on the `time` package,
+so under `synctest.Test` it is virtual time.
 
 **transport.** `Dial(ctx, pc, addr, cred, key, log) (*Conn, error)` for the
 client; `Listen(pc, creds, log)` and `Listener.Accept(ctx)` for the

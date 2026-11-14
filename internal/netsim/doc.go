@@ -13,6 +13,27 @@
 // pure function of its seeds as long as each endpoint is a single goroutine
 // that depends only on what it reads and on time.Now.
 //
+// A network belongs to the bubble it was made in: make it inside
+// synctest.Test and Close it before the test function returns, or the
+// scheduler goroutine outlives the bubble and synctest reports a deadlock.
+//
+//	synctest.Test(t, func(t *testing.T) {
+//		n := netsim.New(1)
+//		defer n.Close()
+//		client, server := n.NewHost("client"), n.NewHost("server")
+//		n.Connect(client, server, netsim.LinkParams{Delay: 20 * time.Millisecond})
+//		n.Connect(server, client, netsim.LinkParams{Delay: 20 * time.Millisecond})
+//		...
+//	})
+//
+// The scheduler waits on nothing when nothing is in flight, so a test that
+// blocks forever on a read is reported by synctest as a deadlock rather than
+// spinning through virtual hours.
+//
 // The design is spike S5's (docs/spikes/s5-netsim-ssp/FINDINGS.md §2),
-// rewritten here as production test code.
+// rewritten here as production test code. The ideas of a single router
+// goroutine and per-link queues come from pion/transport/vnet and
+// marcopolo/simnet (read, not copied); neither is a dependency, because
+// neither runs under synctest with a seeded per-packet PRNG or replays
+// traces.
 package netsim

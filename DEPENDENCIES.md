@@ -76,7 +76,11 @@ GC reuses the memory.
 
 - **OpenSSH `sshd`** for the end-to-end bootstrap test: a throwaway
   unprivileged instance on loopback, skipped when absent.
-- **Mahimahi cellular traces** (GPL-3.0 data): fetched by pinned hash for
-  the lte-driving netsim profiles and git-ignored, never committed; tests
-  that need them skip when they are absent. Whether CI may fetch them is
-  Dan's call (S5 §9, Q6).
+- **Mahimahi cellular traces** (GPL-3.0 data): fetched at test time by
+  `netsim.MahimahiTrace`, from the Mahimahi repository at a pinned commit
+  and checked against pinned SHA-256s, into the user's cache directory
+  (`mosey-netsim/`), never into the repository; tests that need them skip
+  when they cannot be had. `MOSEY_MAHIMAHI_FETCH=0` stops the fetch and
+  `MOSEY_MAHIMAHI_DIR` points at a directory that already has them.
+  Whether CI may fetch them is Dan's call (S5 §9, Q6); until he says no,
+  it does.
