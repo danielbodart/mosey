@@ -587,6 +587,28 @@ func TestSetParamsChangesConditionsFromNow(t *testing.T) {
 	})
 }
 
+func TestALinkCanBeFoundAndItsParamsReadBack(t *testing.T) {
+	n := New(1)
+	defer n.Close()
+	a, b := n.NewHost("a"), n.NewHost("b")
+	p := LinkParams{Delay: 30 * time.Millisecond, Spikes: &DelaySpikes{P: 0.1, Min: time.Millisecond, Max: 2 * time.Millisecond}}
+	l := n.Connect(a, b, p)
+	if n.Link(a, b) != l {
+		t.Error("Link did not find the link Connect made")
+	}
+	if n.Link(b, a) != nil {
+		t.Error("Link found a link the other way that was never connected")
+	}
+	if got := l.Params(); got.Delay != p.Delay || got.Spikes != p.Spikes {
+		t.Errorf("Params gave %+v, not what Connect was given", got)
+	}
+	p.Spikes = nil
+	l.SetParams(p)
+	if l.Params().Spikes != nil {
+		t.Error("Params did not follow SetParams")
+	}
+}
+
 func TestConnectingTwiceIsAMistake(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		n := New(1)

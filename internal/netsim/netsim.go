@@ -132,6 +132,17 @@ func (n *Network) Connect(from, to *Host, p LinkParams) *Link {
 	return l
 }
 
+// Link is the link from one host to another, or nil if they are not
+// connected that way. With Link.Params and Link.SetParams it lets a test
+// vary one parameter of a profile and keep the rest, as the chaff
+// measurement does to separate the cost of a send rate from netsim's
+// per-packet delay spikes (docs/spec/ssp.md §9.1.5).
+func (n *Network) Link(from, to *Host) *Link {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.links[[2]*Host{from, to}]
+}
+
 // At runs fn at simulated time t, in order with packet deliveries, for
 // scripted events such as a roam or the start of an outage. Events at the
 // same instant run after that instant's deliveries and read deadlines, in

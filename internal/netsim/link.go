@@ -86,6 +86,14 @@ type Link struct {
 // Name is the link's name, "from->to".
 func (l *Link) Name() string { return l.name }
 
+// Params is how the link behaves now: what Connect or the last SetParams
+// gave it.
+func (l *Link) Params() LinkParams {
+	l.net.mu.Lock()
+	defer l.net.mu.Unlock()
+	return l.p
+}
+
 // SetParams changes how the link behaves from now on, for a scripted change
 // of conditions. Packets already in flight keep the fate they were given.
 // A link that was FIFO stays FIFO across the change: nothing written after
