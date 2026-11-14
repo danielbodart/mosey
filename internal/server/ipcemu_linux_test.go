@@ -275,3 +275,54 @@ func TestEveryViolationKillsEmuAndChangesNothing(t *testing.T) {
 		})
 	}
 }
+
+// A Resize that arrives while an Output is in flight waits for it, and the
+// Output's answer, at the old size, is no violation: each answer is held
+// to the size its own request implies (found by the KILL soak, where emu
+// was killed for "screen 80x24, not 80x30").
+func TestAnOutputAnsweredWhileAResizeWaitsIsNoViolation(t *testing.T) {
+	h := newEmuHarness(t, 80, 24)
+	release := make(chan struct{})
+	h.link(ipc.EmuFirst, func(f *fakeEmu, req ipc.Message) []ipc.Message {
+		if _, ok := req.(ipc.Output); ok {
+			<-release
+		}
+		return honest("")(f, req)
+	})
+	wrote := make(chan struct{})
+	go func() { h.e.Write([]byte("x")); close(wrote) }()
+	// The Output is with emu (it holds reqMu until answered); now the
+	// window changes.
+	for deadline := time.Now().Add(5 * time.Second); h.e.reqMu.TryLock(); {
+		h.e.reqMu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("the Output never went out")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	resized := make(chan struct{})
+	go func() { h.e.Resize(80, 30); close(resized) }()
+	for {
+		h.e.mu.Lock()
+		rows := h.e.rows
+		h.e.mu.Unlock()
+		if rows == 30 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	for _, done := range []chan struct{}{wrote, resized} {
+		select {
+		case k := <-h.kills:
+			t.Fatalf("emu was killed (KillEmu{%d, %d}) for answering at the old size", k.gen, k.why)
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the Output or the Resize never finished")
+		}
+	}
+	h.wantNoKill()
+	if c, r := h.snapshot().Size(); c != 80 || r != 30 {
+		t.Errorf("the mirror is %dx%d after the resize", c, r)
+	}
+}

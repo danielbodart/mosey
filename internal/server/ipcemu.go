@@ -273,7 +273,7 @@ func (e *ipcEmulator) Write(p []byte) {
 			e.mu.Lock()
 			allowed := e.allow.output(chunk)
 			e.mu.Unlock()
-			return e.take(a, allowed, false)
+			return e.take(a, allowed, nil)
 		})
 		if !ok {
 			return
@@ -293,11 +293,12 @@ func (e *ipcEmulator) Resize(cols, rows int) {
 	if down {
 		return
 	}
+	to := &[2]int{cols, rows}
 	e.do(ipc.Resize{Cols: uint16(cols), Rows: uint16(rows)}, func(a answer) error {
 		if a.replies != nil {
 			return violated("Replies to Resize")
 		}
-		return e.take(a, 0, true)
+		return e.take(a, 0, to)
 	})
 }
 
@@ -315,14 +316,20 @@ func (e *ipcEmulator) Flush() {
 		if a.replies != nil {
 			return violated("Replies to Flush")
 		}
-		return e.take(a, 0, false)
+		return e.take(a, 0, nil)
 	})
 }
 
 // take checks an answer whole and only then takes it: the diff onto the
 // mirror, the counters onto proto's own, and the replies, up to the
 // request's allowance, onto the queue. A refused answer changes nothing.
-func (e *ipcEmulator) take(a answer, allowed int, resize bool) error {
+//
+// resize is the size an answer to Resize must have, and nil for any other
+// answer, which must keep the mirror's size. Not e.cols and e.rows: Resize
+// sets those before its request can go (reqMu), so an Output answered at
+// the old size while a Resize waited would otherwise read as emu breaking
+// the protocol, and emu would be killed for it (the KILL soak found this).
+func (e *ipcEmulator) take(a answer, allowed int, resize *[2]int) error {
 	var tokens [][]byte
 	if a.replies != nil {
 		var err error
@@ -331,11 +338,14 @@ func (e *ipcEmulator) take(a answer, allowed int, resize bool) error {
 		}
 	}
 	e.mu.Lock()
-	cols, rows := e.cols, e.rows
 	mirror := e.mirror
 	e.mu.Unlock()
+	cols, rows := mirror.Size()
+	if resize != nil {
+		cols, rows = resize[0], resize[1]
+	}
 	scratch := mirror.Clone()
-	if err := check(scratch, a.diff, resize, cols, rows); err != nil {
+	if err := check(scratch, a.diff, resize != nil, cols, rows); err != nil {
 		return err
 	}
 
