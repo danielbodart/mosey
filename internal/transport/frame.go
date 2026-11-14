@@ -14,8 +14,11 @@ const (
 	KindRekeyInit1 Kind = 0x01
 	KindRekeyInit2 Kind = 0x02
 	KindRekeyResp  Kind = 0x03
-	// KindKeepalive confirms new keys after a rekey (body 1), or acks that
-	// confirmation (body 0), so an idle responder still confirms (S1 §1.3).
+	// KindKeepalive with body 1 asks for an answer, which is one keepalive
+	// with body 0 under the receiver's current keys. It confirms the
+	// handshake (transport.md §3.9) and a rekey, so an idle responder still
+	// confirms (S1 §1.3), and announces a local address change (§7.4). Body
+	// 0 is never answered, so it amplifies nothing.
 	KindKeepalive Kind = 0x04
 	// KindPathChallenge and KindPathResponse validate a new path (D21).
 	KindPathChallenge Kind = 0x05
