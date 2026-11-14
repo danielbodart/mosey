@@ -229,6 +229,15 @@ func (l *Listener) handleMsg1(pkt []byte, from netip.AddrPort) {
 		return
 	}
 	pc := l.pendings[p]
+	if pc == nil && p.Keys.Wiped() {
+		// A resend answered for a pending the transport has already given
+		// up and wiped: never rebuild it from zero keys, under which
+		// anyone could seal a confirmation. Evict keeps the responder from
+		// returning one; this keeps any other way from getting through.
+		l.e.log.Error("the responder returned a pending whose keys are wiped")
+		l.e.drop(State, from, "msg1 of an erased pending")
+		return
+	}
 	if pc == nil {
 		pc = &pending{p: p, ks: newKeyset(&p.Keys, time.Now()), root: p.Keys.Root, hash: p.Keys.Hash,
 			addrs: map[netip.AddrPort]*budget{}}
@@ -289,6 +298,9 @@ func (l *Listener) confirm(pc *pending, pkt []byte, from netip.AddrPort) {
 	if !ok {
 		l.e.drop(why, from, "confirmation")
 		if pc.ks.failures >= MaxFailedOpens {
+			// The responder forgets it too, so a resend of its msg1 makes a
+			// new pending with new keys rather than this one, wiped.
+			l.resp.Evict(pc.p)
 			pc.erase(l.e)
 			delete(l.pendings, pc.p)
 		}

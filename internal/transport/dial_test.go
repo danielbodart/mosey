@@ -3,6 +3,7 @@ package transport
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"net/netip"
 	"strings"
@@ -139,6 +140,72 @@ func TestARefusedMsg1LeavesNoIndexBehind(t *testing.T) {
 		s.l.handle(genuine, clientAddr)
 		if after := len(s.l.e.table.m); after != before+1 {
 			t.Errorf("the genuine msg1 registered %d indices", after-before)
+		}
+	})
+}
+
+// A pending given up after MaxFailedOpens forgeries is forgotten by the
+// responder too, so a byte-identical resend of its msg1 makes a new
+// pending with new keys, never one rebuilt from the wiped keys of the old,
+// under which anyone could seal a confirmation.
+func TestAPendingGivenUpIsNeverRebuiltFromWipedKeys(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := newSetup(t, 20*time.Millisecond)
+		cred, key := s.mint()
+		msg1 := must(handshake.ForgeMsg1(cred, key.PublicKey(), 7))
+		s.l.e.lock()
+		defer s.l.e.unlock()
+		s.l.handle(msg1, clientAddr)
+		if len(s.l.pendings) != 1 {
+			t.Fatalf("%d pendings after msg1", len(s.l.pendings))
+		}
+		var old *pending
+		for _, pc := range s.l.pendings {
+			old = pc
+		}
+		// One forgery short of the limit, then the last one.
+		old.ks.failures = MaxFailedOpens - 1
+		forged := make([]byte, Overhead+8)
+		forged[0] = TypeData
+		binary.LittleEndian.PutUint32(forged[1:], old.ks.local)
+		s.l.handle(forged, clientAddr)
+		if len(s.l.pendings) != 0 || !old.p.Erased() {
+			t.Fatalf("after MaxFailedOpens: %d pendings, the old erased %v", len(s.l.pendings), old.p.Erased())
+		}
+
+		s.l.handle(msg1, clientAddr)
+		if len(s.l.pendings) != 1 {
+			t.Fatalf("%d pendings after the resend", len(s.l.pendings))
+		}
+		for p, pc := range s.l.pendings {
+			if p == old.p || pc.root == [32]byte{} {
+				t.Fatal("the resend rebuilt the given-up pending")
+			}
+		}
+	})
+}
+
+// Whatever the responder returns, the listener builds no key set from
+// wiped keys: a pending it has no record of, whose keys are zero, is
+// dropped.
+func TestAPendingWithWipedKeysIsDropped(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := newSetup(t, 20*time.Millisecond)
+		cred, key := s.mint()
+		msg1 := must(handshake.ForgeMsg1(cred, key.PublicKey(), 7))
+		s.l.e.lock()
+		defer s.l.e.unlock()
+		s.l.handle(msg1, clientAddr)
+		// The listener forgets its pending without telling the responder:
+		// the bug Evict closes.
+		for p, pc := range s.l.pendings {
+			pc.erase(s.l.e)
+			delete(s.l.pendings, p)
+		}
+		before := len(s.l.e.table.m)
+		s.l.handle(msg1, clientAddr)
+		if len(s.l.pendings) != 0 || len(s.l.e.table.m) != before {
+			t.Fatalf("a pending was rebuilt from wiped keys: %d pendings, %d indices", len(s.l.pendings), len(s.l.e.table.m)-before)
 		}
 	})
 }

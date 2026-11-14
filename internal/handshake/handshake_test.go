@@ -277,6 +277,36 @@ func TestAResendOfMsg1IsAnsweredFromTheCacheAndCreatesNothing(t *testing.T) {
 	}
 }
 
+// A pending the transport gave up (Evict) is not the answer to a resend of
+// its msg1: the resend is answered afresh, with keys of its own, since the
+// transport wiped the evicted pending's.
+func TestAResendAfterEvictionIsAnsweredWithNewKeys(t *testing.T) {
+	w := newWorld(t)
+	i := w.initiator(t, 1)
+	_, p1, err := w.resp.ReadMsg1(i.Msg1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p1.Keys.Wipe() // as the transport does once it has copied them
+	w.resp.Evict(p1)
+	if !p1.Erased() {
+		t.Error("an evicted pending is not erased")
+	}
+	_, p2, err := w.resp.ReadMsg1(i.Msg1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p2 == p1 || p2.Keys.Wiped() {
+		t.Fatal("a resend after eviction got the evicted pending back, wiped keys and all")
+	}
+	if err := w.resp.Confirm(p1); !errors.Is(err, ErrSpent) {
+		t.Errorf("confirming the evicted pending: %v, not ErrSpent", err)
+	}
+	if err := w.resp.Confirm(p2); err != nil {
+		t.Errorf("confirming the new pending: %v", err)
+	}
+}
+
 func TestTheCredentialIsConsumedOnlyByConfirmation(t *testing.T) {
 	w := newWorld(t)
 	i := w.initiator(t, 1)

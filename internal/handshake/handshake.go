@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -83,6 +84,12 @@ func (k *Keys) Wipe() {
 	clear(k.Send[:])
 	clear(k.Recv[:])
 	clear(k.Root[:])
+}
+
+// Wiped says whether the keys are all zero: wiped, or never set. No key
+// set may ever be built from such keys, since anyone could seal under them.
+func (k *Keys) Wiped() bool {
+	return k.Send == [32]byte{} && k.Recv == [32]byte{} && k.Root == [32]byte{}
 }
 
 // Initiator is the client's side of one handshake.
@@ -463,6 +470,25 @@ func (r *Responder) Confirm(p *Pending) error {
 	c.unlistLocked(cred)
 	p.cred = nil
 	return nil
+}
+
+// Evict erases p at the transport's request, when it gives the pending up
+// itself (too many packets under its keys failed to open). p leaves its
+// credential's list, so a resend of its msg1 is answered afresh with new
+// keys, never from the cache with the keys the transport has wiped. An
+// erased p is left as it is. The transport frees p's index itself, so
+// Erased does not hand p over.
+func (r *Responder) Evict(p *Pending) {
+	c := r.creds
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if p.erased {
+		return
+	}
+	if cred := p.cred; cred != nil {
+		cred.pendings = slices.DeleteFunc(cred.pendings, func(q *Pending) bool { return q == p })
+	}
+	p.erase()
 }
 
 // Erased hands over every pending erased since the last call, by expiry,
