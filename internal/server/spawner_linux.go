@@ -252,6 +252,9 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	}
 
 	var line []byte
+	// The credential line passes through, and is wiped however this ends
+	// (threat-model.md §4.10).
+	defer func() { clear(line) }()
 	timeout := time.After(T3)
 	for line == nil {
 		select {

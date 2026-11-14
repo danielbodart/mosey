@@ -109,6 +109,9 @@ func (c *Conn) Send(m Message) error {
 	if err != nil {
 		return err
 	}
+	// Credential and Ready carry the credential line, PSK and all: no
+	// copy of it outlives the send (threat-model.md §4.10).
+	defer clear(b)
 	fs := files(m)
 	if len(fs) == 0 {
 		_, err := c.f.Write(b)
@@ -162,11 +165,14 @@ func (c *Conn) Recv() (Message, error) {
 		return nil, malformed("over %d bytes", MaxMessage)
 	}
 	m, err := Parse(c.peer, c.self, c.buf[:n])
+	want := routes[c.buf[0]].fds
+	// Parse copies what it keeps; the buffer may have held the credential
+	// line, which is wiped as soon as it is read (threat-model.md §4.10).
+	clear(c.buf[:n])
 	if err != nil {
 		closeAll()
 		return nil, err
 	}
-	want := routes[c.buf[0]].fds
 	if len(fds) != want {
 		closeAll()
 		return nil, malformed("%T came with %d fds, not %d", m, len(fds), want)

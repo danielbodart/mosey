@@ -231,10 +231,12 @@ func MarshalCredentialLine(c CredentialLine) []byte {
 		b = appendField(b, "-")
 	}
 	b = appendField(b, strconv.Itoa(int(c.Port)))
-	b = appendField(b, b64.EncodeToString(c.CredentialID[:]))
-	b = appendField(b, b64.EncodeToString(c.SessionID[:]))
-	b = appendField(b, b64.EncodeToString(c.PSK[:]))
-	b = appendField(b, b64.EncodeToString(c.Public))
+	// Encoded straight into b, never through a string: the PSK must be
+	// in nothing its holder cannot wipe (threat-model.md §4.10).
+	b = b64.AppendEncode(append(b, ' '), c.CredentialID[:])
+	b = b64.AppendEncode(append(b, ' '), c.SessionID[:])
+	b = b64.AppendEncode(append(b, ' '), c.PSK[:])
+	b = b64.AppendEncode(append(b, ' '), c.Public)
 	return append(b, '\n')
 }
 
@@ -266,9 +268,13 @@ func ParseCredentialLine(line []byte) (CredentialLine, error) {
 		return CredentialLine{}, err
 	}
 	if c.Public, err = decodeLen(fields[8], PublicKeySize, "public key"); err != nil {
+		clear(c.PSK[:])
 		return CredentialLine{}, err
 	}
-	if !bytes.Equal(MarshalCredentialLine(c), line) {
+	canonical := MarshalCredentialLine(c)
+	defer clear(canonical)
+	if !bytes.Equal(canonical, line) {
+		clear(c.PSK[:])
 		return CredentialLine{}, badLine("credential line is not canonical")
 	}
 	return c, nil
@@ -491,6 +497,7 @@ func decodeFixed(dst []byte, f []byte, what string) error {
 		return err
 	}
 	copy(dst, b)
+	clear(b) // it may be the PSK
 	return nil
 }
 

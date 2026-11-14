@@ -109,7 +109,12 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 		PSK:             cred.PSK,
 		Public:          cred.ServerPublic,
 	})
-	if err := ctl.Send(ipc.Credential{Line: line}); err != nil {
+	err = ctl.Send(ipc.Credential{Line: line})
+	// The store keeps what the handshake needs; these copies, the PSK in
+	// the clear among them, go now (threat-model.md §4.10).
+	clear(line)
+	clear(cred.PSK[:])
+	if err != nil {
 		return fmt.Errorf("sending the credential: %w", err)
 	}
 

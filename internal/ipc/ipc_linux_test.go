@@ -246,3 +246,26 @@ func TestCheckSeqpacket(t *testing.T) {
 		t.Fatal("a pipe passed")
 	}
 }
+
+// The credential line crosses from proto to the spawner and on to the
+// launcher, PSK and all; the receiving Conn's buffer keeps no copy of it
+// once Recv has returned (threat-model.md §4.10).
+func TestRecvKeepsNoCopyOfTheCredentialLine(t *testing.T) {
+	spawner, proto := pairOf(t, Spawner, Proto)
+	secret := []byte("MOSEY-CREDENTIAL this-stands-for-the-psk\n")
+	if err := proto.Send(Credential{Line: append([]byte(nil), secret...)}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := spawner.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.(Credential).Line; string(got) != string(secret) {
+		t.Fatalf("got %q", got)
+	}
+	for i, b := range spawner.buf {
+		if b != 0 {
+			t.Fatalf("the receive buffer still holds byte %#x at %d", b, i)
+		}
+	}
+}

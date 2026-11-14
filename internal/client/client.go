@@ -118,6 +118,9 @@ func Run(ctx context.Context, o Options) error {
 		Log:          o.Log,
 		Capabilities: render.FromEnv(o.Getenv),
 	}
+	// The Session has its own copy, which dial wipes once msg1 is built
+	// (threat-model.md §4.10).
+	clear(line.PSK[:])
 	return s.Run(ctx)
 }
 

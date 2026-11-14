@@ -99,7 +99,10 @@ func (s *Session) Run(ctx context.Context) error {
 // dial runs the handshake (bootstrap.md §7.3) within the credential's
 // life: after CredentialTTL the server has forgotten it anyway.
 func (s *Session) dial(ctx context.Context, log *slog.Logger) (*transport.Conn, error) {
+	// Nothing needs the key or the PSK once the handshake is over, however
+	// it went: resume, when it comes, rekeys instead (D8).
 	defer s.Key.Wipe()
+	defer clear(s.Credential.PSK[:])
 	dctx, cancel := context.WithTimeout(ctx, handshake.CredentialTTL)
 	defer cancel()
 	log.Info("dialling", "server", s.Server)

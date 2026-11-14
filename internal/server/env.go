@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"log/slog"
 	"net/netip"
 	"sort"
@@ -113,10 +114,13 @@ func checkCredential(line []byte, advertised netip.Addr, port uint16, version st
 	if err != nil {
 		return err
 	}
+	defer clear(cl.PSK[:])
 	if cl.Addr != advertised || cl.Port != port || cl.SoftwareVersion != version {
 		return errCredentialFields
 	}
-	if string(bootstrap.MarshalCredentialLine(cl)) != string(line) {
+	canonical := bootstrap.MarshalCredentialLine(cl)
+	defer clear(canonical)
+	if !bytes.Equal(canonical, line) {
 		return errCredentialCanonical
 	}
 	return nil

@@ -63,7 +63,7 @@ func ReadCredential(r io.Reader) (CredentialLine, error) {
 	)
 	var (
 		state   = undecided
-		line    []byte // the line so far, while undecided or ours
+		line    = make([]byte, 0, MaxCredentialLine+1) // the line so far, while undecided or ours
 		skipped int    // bytes of other lines
 		tail    = newTail(TailSize)
 	)
@@ -86,6 +86,10 @@ func ReadCredential(r io.Reader) (CredentialLine, error) {
 				return CredentialLine{}, badLine("mosey line over %d bytes", MaxCredentialLine)
 			}
 			if c == '\n' {
+				// The PSK is in the line: wipe it once parsed. It was
+				// allocated whole up front, so no copy of it is left in
+				// a backing array append outgrew (threat-model.md §4.10).
+				defer clear(line)
 				return parseProtocolLine(line)
 			}
 			continue

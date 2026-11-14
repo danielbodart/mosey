@@ -125,8 +125,12 @@ func (l *Launcher) run(ctx context.Context) error {
 	}
 	switch m := m.(type) {
 	case ipc.Ready:
-		// One write: the client reads a whole line.
-		if _, err := l.Stdout.Write(m.Line); err != nil {
+		// One write: the client reads a whole line. Then the line is
+		// wiped: harmless to leak by D20, but no reason to keep it
+		// (threat-model.md §4.10).
+		_, err := l.Stdout.Write(m.Line)
+		clear(m.Line)
+		if err != nil {
 			// ssh has gone; the spawner tears the session down.
 			cmd.Process.Signal(syscall.SIGTERM)
 			return &silentError{fmt.Errorf("writing the credential line: %w", err)}
