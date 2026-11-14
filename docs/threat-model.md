@@ -2,13 +2,14 @@
 
 What mosey protects, from whom, where the trust boundaries are, what each
 mechanism defends, and which risks are accepted. It grows with the slices
-(PLAN §6.2). This version covers **slice 1**, **resume**,
-**auto-upload** and **chaff** (§4.14): `mosey host` gives an interactive login shell end to end,
-copying mosey to the host first if it has none (D7, §4.13), and `mosey -r
-host` takes a running session over from wherever the user can SSH from
-(§4.5); while the user types, both ends send cover traffic on a fixed
-tick (§4.14). There is no agent forwarding or prediction yet. Items
-marked **[later]** describe the
+(PLAN §6.2). This version covers **slice 1**, **resume**, **auto-upload**,
+**chaff** and **agent forwarding**: `mosey host` gives an interactive login
+shell end to end, copying mosey to the host first if it has none (D7,
+§4.13), with the user's ssh-agent forwarded over a typed channel and
+OpenSSH's bind replayed when their ssh config forwards it (D25, §4.15), and
+`mosey -r host` takes a running session over from wherever the user can SSH
+from (§4.5); while the user types, both ends send cover traffic on a fixed
+tick (§4.14). There is no prediction yet. Items marked **[later]** describe the
 slice that brings them, so slice 1 reserves the right hooks and claims
 nothing it doesn't do.
 
@@ -45,7 +46,7 @@ here, with the working shown. [ours] a value we chose, with the reason.
 | A8 | **Third parties' bandwidth** | The server must never be a traffic reflector | proto's send path |
 | A9 | **Server and client resources**: memory, CPU | One hostile program or peer must not take a host down | emu, proto, client |
 | A10 | **Metadata**: that a session exists, when the user types, how much the screen changes | Traffic analysis | the wire |
-| A11 | **[later]** The forwarded ssh-agent and its session-bind (D25), the handshake hash `h` for provenance (D28), the auto-uploaded binary (D7) | Signing authority; the code that runs on the server | client, proto |
+| A11 | **The forwarded ssh-agent** and the session-bind captured for it (D25); **[later]** the handshake hash `h` for provenance (D28), the auto-uploaded binary (D7) | Signing authority: whoever can reach the forwarded agent can ask it to sign, as under `ssh -A`; the bind is what lets a destination-constrained agent judge the hop | the user's agent (client host); the bind in client memory; the agent socket (spawner), the streams (proto) |
 
 ## 2. Adversaries
 
@@ -84,11 +85,12 @@ here, with the working shown. [ours] a value we chose, with the reason.
 |---|---|---|---|---|
 | B1 | **SSH channel** (the system `ssh` and the far `sshd`) | The server host, authenticated by SSH | `ClientLine` on stdin, `CredentialLine` on stdout, ssh's stderr | **Authentic, not confidential** (D20). Both lines may leak (T9) without harm. stdout may also carry text the far host chose (motd, rc noise, a hostile host) |
 | B2 | **UDP** | Anyone (T1–T3, T10, T13) before the handshake; the key holder after | handshake messages, sealed frames | Nothing is acted on before it authenticates |
-| B3 | **spawner ↔ proto** (seqpacket + SCM_RIGHTS) | proto | `Start`, `EmuLink` (each with fds), `ShellExit` (spawner→proto); `Credential`, `Exit`, `KillEmu` (proto→spawner) (`server.md` §3) | proto compromise is already user compromise (T7), so this is hygiene, not containment; still parsed to a fixed grammar |
+| B3 | **spawner ↔ proto** (seqpacket + SCM_RIGHTS) | proto | `Start`, `EmuLink`, `AgentConn` (each with fds), `ShellExit` (spawner→proto); `Credential`, `Exit`, `KillEmu` (proto→spawner) (`server.md` §3) | proto compromise is already user compromise (T7), so this is hygiene, not containment; still parsed to a fixed grammar |
 | B4 | **proto → emu** | emu | `Init`, `Output`, `Resize` | emu sees program output, which is T4's anyway |
 | B5 | **emu → proto** and **server → client** | emu (T6); the server (T5) | screen diffs | **Hostile.** Both are decoded by the same validating `Grid.Apply` with the same allow-list (architecture §2), so one fuzzed decoder guards both |
 | B6 | **client → local terminal** | the user's terminal emulator | escape sequences the client writes itself | The client is the only author. **No remote byte is ever passed through** (D9) |
 | B7 | **emu replies → pty** | the shell and its programs | query replies | Only replies matching `server.ValidReply`'s fixed grammar |
+| B9 | **The agent channel** (`agent.md`) | client side: the far host's programs (T5, and A1's holder), through proto; server side: the client | client side: stream frames, then opaque agent bytes into the user's agent; server side: the agent's answers to the shell's programs | Client side: **as `ssh -A`**: whoever is the user on the far host may use the agent, and the agent itself judges each request (its confirmations, its destination constraints, quoin's galley). The client parses only stream frames (fuzzed) and, once per channel, the length of the bind's reply. Server side: the user's own processes, behind a 0700 directory and a uid check |
 | B8 | **process metadata**: argv, environment, `/proc`, core dumps | T13 (argv), T12 (the rest) | — | No secret ever appears in argv or the environment. Every process that holds a secret (the client, the launcher, the spawner, proto, emu) suppresses core dumps before it holds one (§4.10) |
 
 ## 4. Mechanisms and what each defends
@@ -469,7 +471,7 @@ size (it comes from the client, an authenticated but untrusted peer).
 ### 4.9 The SSH bootstrap (D6, D20) — T5, T9, T13
 
 - **Fresh connection.** `ssh -T -o ControlMaster=no -o ControlPath=none
-  -o ForwardAgent=no` (D25's capture socket replaces `no` [later]). A
+  -o ForwardAgent=no` (or D25's capture socket, §4.15). A
   multiplexed connection has no key exchange of its own, and a forwarding
   master can route the bootstrap's agent traffic to the user's real agent
   [M S3 E12b].
@@ -678,6 +680,8 @@ execution (R4).
 | A screen-sized diff at the clamp (T4) | a program on the server | up to `MaxDiff` (48 MiB) sent once, compressed | delivered, not dropped: the receiver's limits are derived from it (§4.6) |
 | On-path drop | being on path | the session stalls | unbounded (R8) |
 | Log flooding via evictions | leaked PSK | log lines | **Requirement:** eviction and rejection logs are rate-limited per session |
+| A far program opening agent connections | being the user on the server | one stream each | ≤ 16 live per connection; more are closed at once (`agent.md` §4.2) |
+| A hostile server stalling agent streams (T5) | holding the session | the client's buffers | ≤ 2 MiB per connection; the user's agent sees a connection that waits, as under `ssh -A` |
 
 ### 4.13 Auto-upload (D7) — T5, T12, T13, and the release channel
 
@@ -777,6 +781,55 @@ and Tian, USENIX Security 2001).
   to keep the server chaffing, which an active attacker (T3) cannot
   forge, and can only stop by dropping packets, which it could do anyway.
 
+### 4.15 Agent forwarding (D25) — T5, T13, A11
+
+What forwarding gives away is what `ssh -A` gives away, and no more: a
+program running as the user on the far host can ask the user's agent to
+sign while the session is attached. mosey adds the guarantees below so that
+it gives away no *more*, and so that agents that judge requests (a
+destination-constrained `ssh-agent`, quoin-signer with galley) see the
+same evidence they would under `ssh -A`.
+
+- **Off unless asked** (D25): `forwardagent` from `ssh -G`, with `-A`/`-a`
+  on top, exactly as ssh decides. The bootstrap never forwards the user's
+  real agent; its agent channel reaches only the capture socket
+  (`bootstrap.md` §4.1).
+- **The bind is ssh's own** (T5). A hostile server can mint a valid bind
+  for any host it can reach [S3 E11]. The capture takes only the first
+  frame of one connection from our own ssh's pid and uid, requires exactly
+  the trigger and then EOF after it, and refuses the whole capture on
+  anything else (`agent.md` §2.2); the bind's host key must then be in
+  the user's `known_hosts` for the destination ssh checked (§2.3). The
+  injected-bind attack of [S3 E11] ends in NoBind and the agent off.
+- **No trustworthy bind, no agent.** The client then offers no agent
+  channel in its hello, and the transport drops every CHANNEL frame on a
+  connection that negotiated only the terminal (`transport.md` §4.4): the
+  server cannot open one anyway [S3 E7b].
+- **Replayed at the head of every channel**, before any byte from the far
+  host, on a fresh connection to the agent per channel (`agent.md` §3),
+  so per-connection state in the agent (binds, constraints) sees the shape
+  `ssh -A` gives it [S3 E8].
+- **Opaque after the bind** (D28): the client never parses the agent
+  stream, so extension messages pass through untouched and a parser bug
+  cannot be reached through them. What it does parse, the stream frames,
+  is bounded, validated in full before any state changes, and fuzzed
+  (`FuzzParseFrame`, `FuzzCapture`).
+- **Bounded** (A9): at most 16 streams per connection, 64 KiB of send and
+  receive buffer each, 32 KiB in flight, windows enforced
+  (`agent.md` §5.7). A far host cannot make the client buffer more than
+  2 MiB, and the client's agent connection is back-pressured, not
+  buffered without limit.
+- **The server's socket** (T13) is in the session's 0700 directory, mode
+  0600, and the spawner checks every peer's uid. Other users cannot
+  reach it; the user's own processes can, which is the point.
+- **proto's sandbox is unchanged.** The spawner accepts and passes each
+  connection's fd; proto only reads and writes fds it was given, and its
+  seccomp policy gains nothing (`server.md` §2.7, §6.3).
+- **quoin-attest** (D28): if the host has an attester at the fixed,
+  root-owned path, every agent connection is refused until mosey
+  implements the hand-off (`agent.md` §4.3): fail closed, never a silent
+  plain forward past an attester the host relies on.
+
 ## 5. Accepted residual risks
 
 Each is a deliberate trade, with the reason and the evidence. Revisit only
@@ -801,6 +854,7 @@ with Dan.
 | **R15** | **tuios is young, mostly one author**, and has no bound on OSC 8 link storage | T4 | Best candidate by a wide margin (S2); fork if upstream stalls (D23) | Pinned; fuzzed; the emu sandbox and its memory limits (512 MiB cgroup, 1 GiB `RLIMIT_DATA`; R18) contain it; upstream fixes listed in S2 |
 | **R16** | **Fuzzing so far is minutes, not hours** (S1: 38.5 min across targets; S2: 15–20 min per target) | all | Spikes, not production | Every attacker-reachable parser has a target, each run for minutes locally before it lands and 10 s in CI; continuous fuzzing before 1.0 (PLAN §6.5) |
 | **R17** | **A proto that dies ends the session**: resume brings back a client that went away, not a proto that crashed, so the shell is hung up | T7, bugs | Restarting proto on the same pty is a later slice (`server.md` §5.4) | When proto exits the spawner hangs up the pty, so no unreachable shell is left running |
+| **R19** | **The forwarded agent is usable by the far host** while a client with the agent is attached: any program running as the user there (or root) can ask for signatures, and can learn the public keys | T5, A1's holder | That is what agent forwarding is, under `ssh -A` too; D25 forwards only when the user's ssh config or `-A` says so | Off by default as in ssh. Agents that judge requests do so as under `ssh -A`: confirmation (`ssh-add -c`), destination constraints (`ssh-add -h`, which the replayed bind makes work [S3 E8]), quoin-signer's galley questions. Detaching ends every agent channel; a session started without the agent has no socket. The lengths of agent requests are padded as SSP's are (R1's rule), not hidden |
 | **R18** | **Without a systemd user manager, emu's memory bound is `RLIMIT_DATA` alone**: 1 GiB per session instead of 512 MiB, counted in address space rather than charged memory, with swap not excluded | T4, T6 | Many hosts have no user manager (non-systemd distributions, containers, sshd without PAM [S4 §3.10]); refusing to run there would rule them out for no security gain, since `RLIMIT_DATA` is still a hard bound | `RLIMIT_DATA` set by emu on itself before its sandbox, not raisable (no `setrlimit`/`prlimit64` in its policy); the spawner logs once that the cgroup is missing; if neither limit can be set, emu does not start (§4.8). `TestEmuMemoryLimitRestartsEmu` checks S2's link flood is stopped (`server.md` §6.3) |
 
 ## 6. Who can do what (slice 1)
@@ -896,16 +950,20 @@ target (architecture §6).
 | Only the user reaches the attach socket | `server` | the directory checks refuse group/other bits, a foreign owner and a symlink; a foreign uid is closed unanswered |
 | Chaff hides keys within a run, in both directions, and idle costs nothing | `ssp` | one client datagram per 20 ms tick, all 40 B, ending 1–2 s after the last key; the server on its own grid at 64 B; an idle session sends no chaff; on every netsim profile the server's datagrams name at most 5% of keys and the LAN's wire at most 5% (`TestChaffHidesKeysOnEveryProfile`) |
 | End to end under every netsim profile | `e2e` | client and server sessions in process; real binaries over loopback through a throwaway sshd |
+| Only ssh's own bind is captured | `agent` | `FuzzCapture`; the unit list of `agent.md` §7: another pid, a bind as frame 2, no forwarding flag, a bad signature, a second connection, a byte after the answer, the deadline |
+| The bind is pinned to known_hosts | `agent` | plain, hashed, `[host]:port`, alias, `@revoked` and CA-only entries |
+| No agent channel without a negotiated agent | `transport`, `e2e` | CHANNEL frames on a terminal-only connection never reach `RecvChannel`; `-a` and `ForwardAgent no` give the shell no `SSH_AUTH_SOCK` |
+| The agent sees what `ssh -A` shows it | `e2e` | through a throwaway sshd: remote `ssh-add -l`; an onward ssh signed through the forwarded agent; `ssh-add -h A -h 'A>B'` allows the hop and a key for another hop does not; an extension message passes byte for byte |
+| Agent streams stay within their bounds | `channel` | `FuzzParseFrame`; netsim streams under loss and reordering; windows and limits |
 
 ## 9. Later slices
 
 | Slice | What it adds to this model |
 |---|---|
-| Agent forwarding (D25) | A11. The strict capture state machine (one connection, the ssh child's pid and uid, exactly bind-with-fwd=1 then REQUEST_IDENTITIES then EOF), the bind pinned to known_hosts, and the agent off when no trustworthy bind exists; a hostile server's injected bind was refused [M S3 E11]. The client refuses agent channels it didn't negotiate [M S3 E7b]. proto's policy gains argument-filtered `accept4` |
 | Prediction (D12) | Passwords: the echo-off bit and informative-keystroke confirmation showed 0 of 555 password keys [M S6 §5]; no echo-ack-only frames while echo is off. The input log is zeroed on eviction and nothing is logged while echo is off [S6 §9] |
 | Chaff (D11, O10) | Landed: §4.14, R2 |
 | Auto-upload (D7) | Landed: §4.13. Still to come: signed releases (`bootstrap.md` §14 C) |
-| Provenance (D28) | `Conn.HandshakeHash` exposed for quoin-attest; a keyless, fail-closed forwarder; mosey never signs |
+| Provenance (D28) | `Conn.HandshakeHash` exposed for quoin-attest; the hand-off to the attester in the spawner (today: refused while an attester is present, §4.15); mosey never signs |
 | macOS server (D22) | Seatbelt or nothing; until then the sandbox returns `ErrUnsupported` and the server says it runs unconfined |
 
 ## Review notes

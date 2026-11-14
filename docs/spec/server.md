@@ -156,11 +156,13 @@ ssh ──stdin──► launcher                       spawner                p
       traffic (S4 §1).
    7. Wait up to T3 for `Credential` (0x30). Validate it (§3.4). An
       `Exit` instead carries proto's reason for `Failed`.
-   8. Start the login shell on the pty's slave (§2.5), then close the
+   8. Make the session directory and the attach socket (§2.6), now that
+      the credential has named the session, and, if the `ClientLine`
+      says `agent=yes`, the agent socket (§2.7). A failure is logged; the
+      session goes on, not resumable or without an agent.
+   9. Start the login shell on the pty's slave (§2.5), then close the
       slave. The shell starts this late so a failure earlier leaves no
       shell behind, and so its start-up overlaps the client's handshake.
-   9. Make the attach socket (§2.6), now that the credential has named
-      the session. A failure is logged; the session goes on.
    10. Send `Ready{line}` to the launcher and close B. From here on the
       launcher's fate does not matter.
    11. Supervise (§5) and serve the attach socket until the session ends
@@ -277,7 +279,8 @@ triggers above (nothing emu does is one of them):
   as an ssh login has them), with these changes:
   - `SSH_TTY` removed: it names no tty of this session.
   - `SSH_AUTH_SOCK` removed: sshd's socket dies with the bootstrap
-    connection (`bootstrap.md` §4.4); the agent slice sets mosey's own.
+    connection (`bootstrap.md` §4.4). If the agent socket was made (§2.7)
+    it is set to that socket's path instead.
   - `TERM=xterm-256color`, whatever the client sent [derived]: the
     shell's programs talk to the server's emulator, not to the client's
     terminal (D9, `bootstrap.md` §6.2), and tuios emulates an xterm with
@@ -331,7 +334,9 @@ since it holds the keys.
 - **What the spawner checks** of the `ClientLine`: it parses
   (`bootstrap.ParseClientLine`, whole and canonical), it is a resume, its
   `swver` is the spawner's, its SID is the session's or `AnySession`,
-  `agent` is `no`, and its public key is an X-Wing key
+  and its public key is an X-Wing key (`agent` may be either: the
+  resuming client's own bootstrap triggered its own bind, and whether its
+  connection carries the agent is the hello's business, `agent.md` §4.1)
   (`handshake.CheckPublicKey`). Then it sends proto `Resume` and waits up
   to T3 for the `Credential`, which it checks as in §3.4, and also that
   its `sessionid` is the session's.
@@ -340,6 +345,23 @@ since it holds the keys.
   reach proto one at a time, in order.
 - **Teardown** (§2.4) removes the socket and its directory first, so a
   resume never reaches a session that is ending.
+
+### 2.7 The agent socket (D25)
+
+`R/mosey/SID-HEX/agent.sock`, beside `attach.sock`, belonging to the
+spawner for the same reason: proto cannot make or accept on a filesystem
+socket. `agent.md` §4 is its full rule; in short:
+
+- made, after the attach socket, only when the session's first
+  `ClientLine` says `agent=yes`; `SOCK_STREAM`, bound at
+  `agent.sock.tmp`, listening, mode 0600, renamed to `agent.sock`;
+- the shell's `SSH_AUTH_SOCK` (§2.5) is its path;
+- each accepted connection's `SO_PEERCRED` uid must be the spawner's own;
+  then, unless the host has an attester (`agent.md` §4.3, which refuses
+  the connection until the hand-off exists), the spawner sends it to
+  proto as `AgentConn` (§3.3) and closes its own copy;
+- removed with the session directory at teardown (§2.4), before anything
+  else, as `attach.sock` is.
 
 ---
 
@@ -365,7 +387,8 @@ since it holds the keys.
   of any message it refuses. A message that must carry fds and arrives
   with a different number is refused.
 - **Who reads with what.** spawner: `recvmsg` on B and C (closes any fds:
-  none are allowed in). proto: `recvmsg` on C (Start, EmuLink carry fds),
+  none are allowed in). proto: `recvmsg` on C (Start, EmuLink and
+  AgentConn carry fds),
   `read` on E. emu: `read` on E. launcher: `read` on B.
 - **Encoding.** Byte 0 is the type. Integers are unsigned big-endian
   unless marked `i32` (two's complement, big-endian). Each type has one
@@ -386,7 +409,7 @@ since it holds the keys.
 | 0x01 | Start | spawner → proto | 2 |
 | 0x02 | EmuLink | spawner → proto | 1 |
 | 0x03 | ShellExit | spawner → proto | 0 |
-| 0x04 | *AgentListener* | spawner → proto | reserved (D15, D25): a listening socket for the agent channel |
+| 0x04 | AgentConn | spawner → proto | 1 |
 | 0x05 | Resume | spawner → proto | 0 |
 | 0x06 | EmuPaused | spawner → proto | 0 |
 | 0x10 | Init | proto → emu | 0 |
@@ -441,6 +464,12 @@ Length 10. fds: exactly 1, proto's end of the new E.
 
 **0x03 ShellExit** (spawner → proto): type, then status (i32: exit code
 ≥ 0 or −signal). Length 5.
+
+**0x04 AgentConn** (spawner → proto): type only. Length 1. fds: exactly
+1, a connected `SOCK_STREAM` unix socket accepted on the agent socket
+(§2.7), in non-blocking mode, so proto wraps it with `os.NewFile` inside
+its sandbox as it does each E (§3.6). Any number, at any time after
+`Start`. Proto serves or closes it (`agent.md` §4.2); it never answers.
 
 **0x05 Resume** (spawner → proto): type, then the resuming client's
 X-Wing public key, exactly 1216 bytes (as in `Start`). Length 1217. Proto
@@ -1041,8 +1070,8 @@ rules**, so everything handled is denied:
   (the pty master, the sockets) keep working, including `ioctl` on the
   pty master under `FS_IOCTL_DEV`. A test proves it (§12).
 - What Landlock does not stop on a 6.18 kernel, and seccomp must: a new
-  UDP socket and `sendto`, connecting a pathname unix socket (the agent
-  or the user bus), `io_uring_setup`, `userfaultfd`, `keyctl`, and
+  UDP socket and `sendto`, connecting a pathname unix socket (sshd's
+  agent or the user bus), `io_uring_setup`, `userfaultfd`, `keyctl`, and
   `clone(CLONE_NEWUSER)` (S4 §3.6). It is defence in depth.
 
 ### 6.3 seccomp
@@ -1149,8 +1178,9 @@ Absent from both, on purpose: `socket`, `socketpair`, `connect`, `bind`,
 `listen`, `accept4`, `open`/`openat`, `execve`, `fork`/`vfork`,
 `ptrace`, `process_vm_*`, `pidfd_*`, `kill`, `io_uring_*`,
 `userfaultfd`, `keyctl`, `unshare`, `setns`, `sendmsg`, `mprotect`.
-Later slices add, each with a soak: `accept4` on the agent listener for
-proto (D15, D25; S4 §5.2).
+The agent slice adds nothing: the spawner accepts agent connections and
+passes each to proto (§2.7, `AgentConn`), so proto never needs `accept4`,
+which S4 §5.2 had expected it to.
 
 **S4's list was traced from a stand-in.** Its emu was a toy, not tuios,
 and its proto ran a toy wire format, not B3, SSP and flate. So before
@@ -1253,7 +1283,7 @@ is its threads of control and the ordering rules the IPC imposes:
   new size, and that output must reach an emulator already at it
   [derived].
 - **network**: the transport listener and SSP endpoint (their specs).
-- **C reader**: `EmuLink`, `EmuPaused` and `ShellExit` from the
+- **C reader**: `EmuLink`, `EmuPaused`, `AgentConn` and `ShellExit` from the
   spawner; EOF ends the session at once.
 
 ---
@@ -1465,7 +1495,7 @@ it lands, with the duration and exec count in the commit message.
 - A resume through the socket, with stub proto: greeting, `ClientLine`,
   `Resume` forwarded, `Credential` checked (a different `sessionid`,
   `addr`, `port` or `swver` is a violation), `Ready` returned. A wrong
-  SID, another `swver`, `new`, `agent=yes` or a bad key is `Failed`, and
+  SID, another `swver`, `new` or a bad key is `Failed`, and
   proto never hears of it. `AnySession` is accepted.
 - A lister that closes after the greeting changes nothing.
 - The greeting follows `Attached` and `Detached`.

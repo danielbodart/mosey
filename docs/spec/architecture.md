@@ -27,6 +27,8 @@ decision wins.
 | `internal/handshake` | B3 handshake, one-shot X-Wing keys, credential store, hello, hybrid rekey (D20) | proto, client | **crypto-transport** | `doc.go`, `key.go`, `credential.go`, `hello.go`, `handshake.go`, `rekey.go` |
 | `internal/transport` | Sealed frames over UDP: handshake driving, AEAD, replay, rekey with split INIT, path validation and anti-amplification (D21), exclusive attach (D26) | proto, client | **crypto-transport** | `doc.go`, `frame.go`, `transport.go` (`End` and the END frame added at integration) |
 | `internal/ssp` | Generic State Synchronization Protocol: `State[S]`, `Endpoint`, D11 timing, fragmentation, compression (D24) | proto, client | **ssp** | `doc.go`, `ssp.go`, `endpoint.go` |
+| `internal/channel` | Reliable, flow-controlled byte streams multiplexed over `transport.KindChannel` frames (D15; `agent.md` §5) | proto, client | **agent** | `doc.go`, `frame.go`, `mux.go`, `stream.go` |
+| `internal/agent` | The session-bind, the strict bind capture and its known_hosts pin, the replay, the relay (D25; `agent.md` §2–§3) | client, launcher, proto | **agent** | `doc.go`, `bind.go`, `capture.go`, `pin.go`, `relay.go` |
 | `internal/userinput` | The client's SSP object: keystrokes and resizes | proto, client | **ssp** | `userinput.go` |
 | `internal/screen` | The server's SSP object: `Grid`, the diff format (O11), the D9/D27 allow-list, the D23 bounds | proto, emu, client | **screen** | `doc.go`, `grid.go`, `diff.go`, `allow.go` |
 | `internal/render` | Draws a `Grid` on the local terminal with escape sequences it writes itself | client | **screen** | `render.go` |
@@ -64,6 +66,8 @@ wire, replay, netsim(test-only)
 handshake                       (wire)
 transport                       (wire, replay, handshake)
 ssp                             (wire)          -- never transport: it takes a Datagrams
+channel                         (wire)          -- never transport: it takes a Datagrams too
+agent                           (channel)       -- the bind, capture, pin, replay, relay
 userinput                       ()              -- satisfies ssp.State structurally
 screen                          ()              -- satisfies ssp.State structurally
 render                          (screen)
@@ -344,7 +348,7 @@ Errors are `*Failure`,
 |---|---|
 | Resume (D8) | **built** (resume slice): the attach socket (`server.md` §2.6), `ipc.Resume`, `bootstrap.md` §9.2–§9.4 |
 | Exclusive attach (D26) | **built** (resume slice) on `Hello.Attach`, `transport.KindRevoked`, the `Revoked` event |
-| Agent channel (D15, D25) | `ChannelAgent`, `transport.KindChannel`, `bootstrap.SSH.AgentCapture` |
+| Agent channel (D15, D25) | **built** (agent slice): `agent.md`, `internal/channel`, `internal/agent`, `Conn.SendChannel`/`RecvChannel`, `ipc.AgentConn`, `server.md` §2.7 |
 | Provenance (D28) | `Conn.HandshakeHash` |
 | Prediction (D12) | `Grid.EchoOff`, `Grid.EchoAck`, `userinput.Stream.Len` |
 | Chaff (D11, O10) | **built** (chaff slice): `ssp.Chaffer`, `transport.Conn.SendChaff` and `ChaffArrived`, `ssp.md` §9.1 |

@@ -613,7 +613,7 @@ The kind is the first byte of the plaintext. These match `transport.Kind`.
 | `0x05` | PATH_CHALLENGE | 8 random bytes | 38 | any live receive key | slice 1 |
 | `0x06` | PATH_RESPONSE | the 8 bytes of a challenge | 38 | any live receive key | slice 1 |
 | `0x07` | CHAFF | sent as zeros, received as any bytes | 30–1232 | any live receive key | chaff slice: `ssp.md` §9.1 |
-| `0x08` | CHANNEL | channel id (u32 LE) ‖ datagram | ≤ 1232 | any live receive key | reserved: D15 agent and later channels; the agent slice fixes the body |
+| `0x08` | CHANNEL | a stream frame of `agent.md` §5.1: stream id (u32 LE) ‖ op ‖ fields ‖ zero padding, 6–1202 B | 64–1232 | any live receive key | agent slice (D15, D25); §4.4 |
 | `0x09` | REVOKED | §8.3 | 45 or 57 | any live receive key | slice 1; fires from the resume slice (D26) |
 | `0x0A` | END | 1 B: why (`0x01` the shell exited, `0x02` the client detached; any other value still ends the connection) | 31 | any live receive key | slice 1, added at integration (§8.4) |
 | `0x0B`–`0xFF` | | | | | reserved |
@@ -626,8 +626,9 @@ Rules for every kind:
 - **An unknown kind** is ignored in the same way. That is what lets a
   later slice add kinds; it is safe because only the peer could have
   sealed it.
-- **Only TERMINAL reaches SSP** through `Conn.Recv`. The transport handles
-  the others itself.
+- **Only TERMINAL reaches SSP** through `Conn.Recv`, and only CHANNEL
+  reaches `Conn.RecvChannel` (§4.4). The transport handles the others
+  itself.
 - **KEEPALIVE(answer requested)** is answered with exactly one
   KEEPALIVE(none) under the receiver's *current* keys, once per received
   packet; a KEEPALIVE(none) is never answered. One 31-byte answer per
@@ -670,6 +671,29 @@ Rules for every kind:
 - **The server** keeps one table for its socket, covering pending
   handshakes and every connection. **The client** has one connection, but
   checks the index all the same.
+
+### 4.4 Channels (D15)
+
+The hello (§3.6) settles which channel types a connection carries: the
+intersection of the client's offer and the server's. This build's server
+offers `{terminal, agent}`; the client offers `agent` only when it has a
+pinned bind (`bootstrap.md` §7.3, `agent.md` §2).
+
+- `Conn.SendChannel(body)` seals a CHANNEL frame under the current keys,
+  with the same rules as `Send` (§6.2's `RejectAfterTime` hold,
+  anti-amplification, `ErrBlocked` for a frame held back). The body is at
+  most `MaxPayload` bytes.
+- An authentic CHANNEL frame is queued for `Conn.RecvChannel` **only if
+  the connection negotiated some channel type besides the terminal**;
+  otherwise it is dropped and counted, like a body of the wrong length.
+  So a client that did not offer the agent cannot be made to carry an agent
+  channel, whatever the server sends [S3 E7b]. The transport does not look
+  inside the body: the stream layer (`internal/channel`) parses it, and
+  its parser is the fuzzed one.
+- The queue holds `recvQueue` (256) bodies; more are dropped and counted,
+  which the stream layer treats as loss.
+- `Conn.Channels()` is the negotiated hello's channel list, so the layers
+  above know which channels exist.
 
 ## 5. Receiving a data packet
 

@@ -111,7 +111,8 @@ later channels, the channel id prefix of `transport.KindChannel`) says
 which endpoint a payload is for. A later SSP-synchronised channel gets its
 own `Endpoint` over its own `Datagrams`, with `Config.MaxPayload` reduced
 by the channel prefix. The agent channel (D25) is a byte stream with its
-own reliability, specified in its slice; it does not use SSP. Which
+own reliability (`agent.md` §5); it does not use SSP, but pads its frames
+by §9.2's rule. Which
 channel types each side supports is negotiated in the handshake
 (`transport.md`), not here.
 

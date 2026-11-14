@@ -7,7 +7,7 @@ says what the server must do *as seen from the SSH channel*.
 
 Decisions implemented here: D6 (start over SSH with the user's config), D7
 (one binary, version check, auto-upload hook), D8 (resume hook), D20 (B3:
-one-shot keys over stdin and stdout), D25 (agent bind capture hook), D26
+one-shot keys over stdin and stdout), D25 (agent bind capture, §8; the channel it feeds is `agent.md`), D26
 (exclusive attach). They are locked; where this text and PLAN.md disagree,
 PLAN.md wins and this file is the bug.
 
@@ -160,7 +160,7 @@ The client uses these keywords:
 
 | Keyword | Used for | Slice |
 |---|---|---|
-| `forwardagent` | the agent decision (§5) | value computed and logged in 1; acted on in the agent slice |
+| `forwardagent` | the agent decision (§5) | agent slice |
 | `identityagent` | which socket `ForwardAgent yes` forwards (§5) | agent slice |
 | `hostname`, `port`, `hostkeyalias`, `userknownhostsfile`, `globalknownhostsfile` | pinning a captured bind to `known_hosts` (§8) | agent slice |
 | `hostname` | UDP address fallback (§7.2) | 1 |
@@ -183,7 +183,7 @@ by hand.
 ```
 PROGRAM -T
         -o ControlMaster=no -o ControlPath=none -o ControlPersist=no
-        -o ForwardAgent=no                     (agent slice: =CAPTURE-SOCKET)
+        -o ForwardAgent=no | =CAPTURE-SOCKET    (§5, §8)
         -o ForwardX11=no -o ClearAllForwardings=yes -o Tunnel=no
         -o PermitLocalCommand=no -o EscapeChar=none
         -o RemoteCommand=none
@@ -209,9 +209,9 @@ PROGRAM -T
 - **`-T`.** No pty: the bootstrap is two lines of protocol, and a pty would
   echo stdin and rewrite LF as CRLF. The flag form is used because it beats
   a config `RequestTTY force` [ssh].
-- **`ForwardAgent=no`** in slice 1. The agent slice replaces `no` with the
-  capture socket path (§8). Never the user's real agent: the bootstrap's
-  agent channel exists only to make ssh send its bind.
+- **`ForwardAgent=no`**, or the capture socket's path when §5 says the
+  agent is on (§8). Never the user's real agent: the bootstrap's agent
+  channel exists only to make ssh send its bind.
 - **`ForwardX11=no`, `ClearAllForwardings=yes`, `Tunnel=no`.** A config
   `LocalForward` would collide with the user's interactive ssh to the same
   host, and an `ExitOnForwardFailure` would then kill the bootstrap; X11
@@ -324,9 +324,11 @@ Two ways, chosen by whether the user named one:
   exited and closed its fds, §4.4). The client does not wait for it before
   dialling. It reaps ssh in the background: if ssh has not exited 10 s after
   the line [S3: the capture deadline], SIGTERM, then SIGKILL 1 s later. A
-  non-zero exit after a valid line is logged, not fatal. The agent slice
-  must wait for ssh's exit before reading the capture result (§8), but not
-  before dialling.
+  non-zero exit after a valid line is logged, not fatal. With the agent
+  on, the client waits for the capture's final state before dialling,
+  because the Hello depends on it (§7.3, §8 step 5): that state is final
+  at the capture connection's EOF, which the launcher's trigger causes
+  before the line is printed, or at ssh's exit if no connection came.
 
 ### 4.4 The server's side, as SSH sees it
 
@@ -341,8 +343,7 @@ the timeouts T1–T3 are `server.md` §8.
    must be exactly one ClientLine: one LF, at the end, then EOF. Anything
    else is `MOSEY-ERROR ... line`.
 2. **Launcher.** Parse it (§6.2). Check the protocol version, then the
-   software version (§6.4). Check the reserved fields (§6.2: `attach`,
-   `agent`). Then start the spawner, `mosey --serve=spawner`, as a new
+   software version (§6.4). Then start the spawner, `mosey --serve=spawner`, as a new
    process with `Setsid`, stdio on `/dev/null` and B as fd 3, send it
    `ClientLine` (0x40), and wait up to T2 = 15 s for `Ready` or `Failed`.
 3. **Spawner** (`server.md` §2.1 step 4). Parse the line again, bind UDP,
@@ -358,7 +359,9 @@ the timeouts T1–T3 are `server.md` §8.
    sends UDP or what version it claims. Only then does the spawner start
    the login shell with the line's environment (§6.2), and send `Ready`
    (0x41) with the line.
-4. **Launcher.** Write the line from `Ready` to stdout in **one** write.
+4. **Launcher.** If the line says `agent=yes` and sshd set
+   `SSH_AUTH_SOCK`, trigger ssh's bind (§8, "Server"). Then write the line
+   from `Ready` to stdout in **one** write.
 5. **Launcher. Detach.** No process of the session may keep fds 0, 1 or 2
    of the SSH session open, and the process ssh started must **exit 0**.
    sshd sends the exit status and closes the channel only when the command
@@ -421,8 +424,8 @@ since sshd ran `SHELL -c` to start the launcher (§6.5 exists because rc
 files print), and that login is the user. See the review notes (§15).
 
 **Environment for the shell.** sshd's `SSH_AUTH_SOCK` (if any) dies with
-the bootstrap connection, so the spawner never passes it to the shell; the
-agent slice gives the shell mosey's own socket instead. Other session
+the bootstrap connection, so the spawner never passes it to the shell; with
+`agent=yes` the shell gets mosey's own socket instead (`agent.md` §4.1). Other session
 variables are `server.md`'s concern.
 
 **Known hazard (not ours to fix in slice 1).** With systemd-logind's
@@ -847,10 +850,9 @@ reflects the flags with ssh's own precedence:
 | starts with `$` | the environment variable it names ([ssh]: printed verbatim, e.g. `$FOO`); unset or empty means agent off |
 | anything else | that path ([ssh]: `ssh -G` has already expanded `~`) |
 
-Slice 1 computes this (a pure function of `Config` and the environment,
-unit tested) and logs it at debug level, but always runs the bootstrap with
-`ForwardAgent=no`, sends `agent=no` in the ClientLine, and leaves
-`ChannelAgent` out of its Hello.
+It is a pure function of `Config` and the environment (`AgentSocket`, unit
+tested). Off: the bootstrap runs with `ForwardAgent=no`, the ClientLine says
+`agent=no`, and the Hello has no `ChannelAgent`. On: §8, and `agent.md`.
 
 ---
 
@@ -899,7 +901,7 @@ client-line = "MOSEY-CLIENT" SP proto SP swver SP attach SP agent
               SP cols SP rows SP env SP public LF
 proto   = dec                       ; = 1
 attach  = "new" / "resume:" b64(16) ; resume: §9.2; all-zero SID = AnySession
-agent   = "no" / "yes"              ; yes is reserved (D25)
+agent   = "no" / "yes"              ; D25, §8
 cols    = dec                       ; 1..65535
 rows    = dec                       ; 1..65535
 env     = "-" / var *("," var)      ; names strictly ascending (byte order), no repeats
@@ -917,7 +919,7 @@ public  = b64(1216)                 ; 1622 characters
 | `proto` | `bootstrap.Version` |
 | `swver` | the client's software version (`main.version`), for D7's equality check (§6.4) |
 | `attach` | `new`: start a session. `resume:SID`: attach to session SID, or with the all-zero SID (`AnySession`) to the user's one session (D8, §9.2) |
-| `agent` | whether the client will forward an agent (D25). The server needs it at spawn time to give the shell an `SSH_AUTH_SOCK` and to trigger ssh's bind (§8). Slice 1 sends `no`; a v1 server answers `yes` with `unsupported agent` |
+| `agent` | whether the client will forward an agent (D25). The server needs it at spawn time to give the shell an `SSH_AUTH_SOCK` (`agent.md` §4.1) and, for `new` and resume alike, to trigger ssh's bind (§8). Slice 1 sent `no` only and refused `yes` with `unsupported agent`; the agent slice accepts both |
 | `cols`, `rows` | the client terminal's size; a terminal that reports 0 is sent as 80×24. The server clamps it (D23, `screen.ClampSize`). The client sends its size again as the first userinput event after connecting, in case it changed during the bootstrap |
 | `env` | the client's locale and terminal variables, from the allow-list only. A variable that is unset, empty, longer than 64 bytes or holds a byte outside `vchar` is left out (logged at debug), never escaped. The server gives the locale variables to the shell; what it does with `TERM` and `COLORTERM` is `server.md`'s (the shell's `TERM` describes the server's emulator, not the client's terminal) |
 | `public` | the client's one-shot X-Wing encapsulation key, `OneShotKey.PublicKey()`, 1216 bytes [S1, measured from `crypto/hpke`] |
@@ -1006,7 +1008,7 @@ generic message below, with the code shown in it). The codes v1 defines:
 |---|---|---|---|
 | `line` | the stdin line is malformed or not alone | `-` | `mosey: the server could not read this client's request: a bug, please report it` |
 | `version` | the ClientLine's `proto` is not the server's, **or** its `swver` is not byte-for-byte the server's (for a resume, the session's, §9.2 step 5) | the server's (or session's) `swver` | new: `mosey: the remote mosey is version D, this is V: install V there or pass -remote` (D7 slice: upload, retry once). Resume: `mosey: the session runs version D; this is V: resume it with mosey D, or end it from a new session` |
-| `unsupported` | a reserved value (`agent=yes`) the server does not yet accept | `agent` | `mosey: the remote mosey can't do F yet` |
+| `unsupported` | a reserved value the server does not yet accept (slice 1 sent it for `agent=yes`; no v1 value is reserved now) | the field's name | `mosey: the remote mosey can't do F yet` |
 | `session` | `resume:SID` names no session of this user that answers, or `AnySession` finds none (§9.2) | `-` | `mosey: no session to resume on DEST` |
 | `ambiguous` | `AnySession` finds more than one session (§9.2) | their count | `mosey: N sessions on DEST: name one with -r=SESSION (mosey -list DEST shows them)` |
 | `internal` | the server failed to start the session; stderr says why | `-` | `mosey: the server failed to start (see above)` |
@@ -1170,9 +1172,12 @@ over UDP: is UDP port PORT open?` (the classic firewall case). Then
 
 Only after Dial succeeds does the client put the terminal in raw mode and
 start `client.Session` (§4.3: ssh's prompts need a cooked terminal). The
-Hello it sends: `Version` = the hello version, `Channels` = `{Terminal}`
-(plus `Agent` in the agent slice when §5 says on and §8 captured a bind),
-`Attach` = `Exclusive` (D26: the only mode in v1).
+Hello it sends: `Version` = the hello version, `Channels` = `{Terminal}`,
+plus `Agent` when §5 says on and §8 captured and pinned a bind, `Attach` =
+`Exclusive` (D26: the only mode in v1). So with the agent on, Dial waits
+for the capture's final state (§4.3), which costs nothing when the bind
+came (it was in before the line) and at most until ssh exits when it did
+not.
 
 ### 7.4 The client's log
 
@@ -1198,11 +1203,11 @@ it; before raw mode, what the user must read is printed as a message by
 
 ---
 
-## 8. Bind capture (D25, agent slice)
+## 8. Bind capture (D25)
 
-Slice 1 implements none of this; it reserves `SSH.AgentCapture`, the
-`agent` field and `ChannelAgent`. The design is S3's option (a′), whose
-hardening is required, not optional ([S3] recommendation 1–5).
+The design is S3's option (a′), whose hardening is required, not optional
+([S3] recommendation 1–5). The state machine's exact rules, the pin's and
+the replay's are `agent.md` §2 and §3; this section is the procedure.
 
 **Client.**
 
@@ -1237,8 +1242,12 @@ hardening is required, not optional ([S3] recommendation 1–5).
    from the server, which can mint a valid bind for any host it reaches
    ([S3] E11, the critical review finding), hence "anything else means no
    bind at all".
-5. Read the result **after ssh has exited** (so the server controls no
-   timer) and pin the bind's host key to `known_hosts`: it must be a key
+5. Read the result once it is **final**: at EOF on the one connection
+   (nothing more can arrive on it, and nothing can connect), or when ssh
+   has exited with no connection made, or at the deadline. The server
+   controls no timer that matters: holding the connection open past the
+   deadline is NoBind. Then pin the bind's host key to `known_hosts`: it
+   must be a key
    that the files `userknownhostsfile` and `globalknownhostsfile` from
    `ssh -G` list for `hostkeyalias` if set, else `hostname`, at `port`
    (hashed entries included; `x/crypto/ssh/knownhosts`). Certificates
@@ -1253,7 +1262,8 @@ hardening is required, not optional ([S3] recommendation 1–5).
 **Server.** With `agent=yes` and `SSH_AUTH_SOCK` set by sshd, the launcher,
 before printing the CredentialLine, triggers ssh's bind: connect to
 `SSH_AUTH_SOCK`, send `SSH_AGENTC_REQUEST_IDENTITIES`, read one reply frame
-(at most 256 KiB), close; deadline 5 s [choice]. It is the open that makes
+(at most 256 KiB), close; deadline 5 s [choice]. A failure is logged and
+otherwise ignored: the client then sees NoBind. It is the open that makes
 ssh connect to the capture socket and send its bind ([S3]: the trigger
 took 0.82 ms). With no `SSH_AUTH_SOCK` (the host has
 `AllowAgentForwarding no`) it skips the trigger; the client sees no
@@ -1347,8 +1357,10 @@ only one, so a second device sees exactly what the first would.
 
 1. **Client.** It bootstraps exactly as §4–§7 with a fresh one-shot key
    and `attach=resume:SID`. Its `cols`/`rows` are its own terminal's.
-2. **Launcher.** It checks the protocol version and the reserved `agent`
-   field as for `new`, but **not** its own `swver` (step 5). It finds the
+2. **Launcher.** It checks the protocol version as for `new`, but **not**
+   its own `swver` (step 5), and triggers ssh's bind before printing the
+   line as for `new` (§4.4 step 4, §8) when `agent=yes`: the resuming
+   client captures its own bind from its own SSH login. It finds the
    session's attach socket, `R/mosey/SID-HEX/attach.sock` (`server.md`
    §2.6 says what `R` is and how the directory is checked), and connects.
    For `AnySession` it connects to every `R/mosey/*/attach.sock` and keeps
@@ -1663,7 +1675,7 @@ type SSH struct {
 	Options      SSHOptions
 	Server       string // the remote mosey binary, §4.1's charset; "" is §4.7's probe
 	Version      string // this client's swver, for the probe (§4.7.2)
-	AgentCapture string // agent slice; "" is ForwardAgent=no
+	AgentCapture string // the capture socket (§8); "" is ForwardAgent=no
 	Role         string // "" runs --serve; "list" runs --serve=list (§9.4)
 }
 
@@ -1890,7 +1902,7 @@ durations in the commit message; 10 s each in CI):
 | a hostile or compromised remote writes control sequences to stdout or stderr | stdout is parsed, never shown; stderr and skipped lines pass the filter (§6.5), D9 |
 | a hostile remote sends a huge or endless stdout | `MaxPreamble`, line maxima, ssh killed 10 s after the line |
 | the stdin line attacks the unsandboxed spawner | fixed grammar, 4 KiB read bound, 30 s deadline, fuzzed, canonical |
-| a hostile remote injects a session-bind after ssh's (agent slice) | §8's state machine: anything after ssh's own bind means no bind ([S3] E11) |
+| a hostile remote injects a session-bind after ssh's | §8's state machine: anything after ssh's own bind means no bind ([S3] E11) |
 | a live ControlMaster carries the bootstrap | always a fresh connection ([S3] E12, E12b) |
 | the user's config undoes a bootstrap option | ours come first; flags that beat `-o` are filtered (§2.1, §4.1) |
 | version skew between client and server | exact equality, refused before anything starts (§6.4, D7) |
