@@ -9,7 +9,8 @@ import (
 // The client never parses a remote escape sequence (D9), so nothing on its
 // drawing path may depend on a VT parser (docs/spec/screen.md §9 item 1).
 // This checks the screen owner's two client-side packages; the test over
-// the whole client path belongs with internal/client.
+// the whole client path is internal/client's
+// TestTheClientPathImportsNoEscapeParser.
 func TestTheDrawingPathImportsNoEscapeParser(t *testing.T) {
 	gobin, err := exec.LookPath("go")
 	if err != nil {
