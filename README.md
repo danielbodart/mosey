@@ -60,14 +60,43 @@ config, keys and agent, exactly as Mosh does. It aims to be:
 mosey is clean-room: it contains no Mosh code. The rules
 are in [PLAN.md](PLAN.md#4-clean-room-rules-d3).
 
+## Installing
+
+Every green commit on `trunk` that changes the code is a
+[GitHub Release](https://github.com/danielbodart/mosey/releases), tagged
+`v<version>`, with one static binary per platform and their checksums:
+
+```sh
+V=0.123.456   # a release's version, without the v
+curl -fLO "https://github.com/danielbodart/mosey/releases/download/v$V/mosey-$V-linux-amd64"
+curl -fLO "https://github.com/danielbodart/mosey/releases/download/v$V/SHA256SUMS"
+sha256sum --ignore-missing -c SHA256SUMS
+install -m 0755 "mosey-$V-linux-amd64" ~/.local/bin/mosey
+```
+
+The platforms are `linux-amd64`, `linux-arm64`, `darwin-amd64` and
+`darwin-arm64`. The names are fixed
+([docs/spec/bootstrap.md §4.6](docs/spec/bootstrap.md)), because mosey
+will fetch them itself to copy the right one onto a host of another
+platform. With Nix, `nix run github:danielbodart/mosey -- HOST`, or the
+flake's `packages.<system>.mosey`.
+
 ## Building
 
 With [mise](https://mise.jdx.dev):
 
 ```sh
-mise run check    # lint and test
+mise run check    # gofmt, vet, tests, shellcheck, actionlint
 mise run build    # the static mosey binary for linux and darwin, amd64 and arm64
+mise run race     # the tests under the race detector (needs a C compiler)
 ```
+
+or with Nix: `nix build` for the package, `nix flake check` for the tests,
+the VM test and the lint, and `nix develop` for a shell with the tools.
+
+CI runs all of that on every push, plus a fuzz smoke test of every parser,
+the slow tests, and a 150-second soak of the server under its seccomp
+`KILL` policy on amd64 and arm64. A release needs every job green.
 
 ## License
 
