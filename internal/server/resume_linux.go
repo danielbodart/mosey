@@ -13,17 +13,33 @@ import (
 	"github.com/danielbodart/mosey/internal/ipc"
 )
 
+// acceptBackoff is how long serveAttach waits after an accept that failed
+// for a reason that may pass (EMFILE, ENFILE, ENOMEM, ECONNABORTED)
+// before it tries again [choice: long enough not to spin, short beside a
+// resume's ssh login].
+const acceptBackoff = 100 * time.Millisecond
+
 // serveAttach accepts on the attach socket until it closes, serving at
 // most MaxAttachConns connections at once (server.md §2.6).
-func (s *spawner) serveAttach() {
+func (s *spawner) serveAttach() { s.acceptLoop(s.attach.Accept) }
+
+// acceptLoop is serveAttach's loop over accept. Only a closed socket ends
+// it: anything else is logged and retried, since a session whose loop had
+// ended would run on with nobody able to resume it, and nobody would know
+// until `mosey -r` said there was no session.
+func (s *spawner) acceptLoop(accept func() (*os.File, error)) {
 	for {
-		f, err := s.attach.Accept()
-		if errors.Is(err, errForeignPeer) {
+		f, err := accept()
+		switch {
+		case errors.Is(err, os.ErrClosed):
+			return
+		case errors.Is(err, errForeignPeer):
 			s.log.Warn("refused an attach-socket connection", "err", err)
 			continue
-		}
-		if err != nil {
-			return
+		case err != nil:
+			s.log.Warn("accepting on the attach socket; trying again", "err", err)
+			time.Sleep(acceptBackoff)
+			continue
 		}
 		if s.serving.Add(1) > MaxAttachConns {
 			s.serving.Add(-1)

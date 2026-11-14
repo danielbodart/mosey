@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -17,6 +18,7 @@ import (
 type attachListener struct {
 	f         *os.File
 	dir, path string
+	closed    atomic.Bool
 }
 
 // listenAttach makes base (if absent) and the session's directory under
@@ -70,8 +72,18 @@ var errForeignPeer = errors.New("a process of another user")
 
 // Accept returns the next connection from a process of this user, wrapped
 // for IPC. A connection from any other uid is closed unanswered, and
-// reported as errForeignPeer so the caller can log it and carry on.
+// reported as errForeignPeer so the caller can log it and carry on. Once
+// the listener is closed it returns an error that is os.ErrClosed, and
+// only then: the poller's own word for a closed file is not that error.
 func (l *attachListener) Accept() (*os.File, error) {
+	f, err := l.accept()
+	if err != nil && l.closed.Load() {
+		return nil, fmt.Errorf("the attach socket: %w", os.ErrClosed)
+	}
+	return f, err
+}
+
+func (l *attachListener) accept() (*os.File, error) {
 	raw, err := l.f.SyscallConn()
 	if err != nil {
 		return nil, err
@@ -103,6 +115,7 @@ func (l *attachListener) Accept() (*os.File, error) {
 // Close stops accepting and removes the socket and its directory, so a
 // resume never reaches a session that is ending.
 func (l *attachListener) Close() error {
+	l.closed.Store(true)
 	os.Remove(l.path)
 	os.Remove(l.dir)
 	return l.f.Close()

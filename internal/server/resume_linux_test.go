@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -397,5 +399,54 @@ func TestThePeerCheckPassesThisUserOnlyAndCannotBeFooled(t *testing.T) {
 	}
 	if err := peerIs(fds[0], os.Getuid()+1); !errors.Is(err, errForeignPeer) {
 		t.Errorf("as seen by another user: %v", err)
+	}
+}
+
+// An accept that fails for a reason that may pass is retried; only the
+// socket's closing ends the loop, or the session could never be resumed
+// again.
+func TestTheAttachLoopOutlivesAFailedAcceptAndEndsWhenClosed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := &spawner{log: discardLog()}
+		calls := 0
+		s.acceptLoop(func() (*os.File, error) {
+			calls++
+			switch calls {
+			case 1:
+				return nil, unix.EMFILE
+			case 2:
+				return nil, unix.ECONNABORTED
+			case 3:
+				return nil, errForeignPeer
+			}
+			return nil, fmt.Errorf("the attach socket: %w", os.ErrClosed)
+		})
+		if calls != 4 {
+			t.Errorf("the loop accepted %d times, not 4", calls)
+		}
+	})
+}
+
+func TestAClosedAttachSocketSaysItIsClosed(t *testing.T) {
+	l, err := listenAttach(filepath.Join(runtimeDir(t), "mosey"), [16]byte{0x5e, 6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan error, 1)
+	go func() {
+		_, err := l.Accept()
+		got <- err
+	}()
+	l.Close()
+	select {
+	case err := <-got:
+		if !errors.Is(err, os.ErrClosed) {
+			t.Errorf("an Accept blocked on a closing socket: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Accept did not return when the socket closed")
+	}
+	if _, err := l.Accept(); !errors.Is(err, os.ErrClosed) {
+		t.Errorf("an Accept after the close: %v", err)
 	}
 }
