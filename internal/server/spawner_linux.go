@@ -256,16 +256,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	if s.ctl, err = ipc.NewConn(local, ipc.Spawner, ipc.Proto); err != nil {
 		return err
 	}
-	s.ctlMsgs = make(chan ctlEvent, 8)
-	go func() {
-		for {
-			m, err := s.ctl.Recv()
-			s.ctlMsgs <- ctlEvent{m, err}
-			if err != nil {
-				return
-			}
-		}
-	}()
+	s.readCtl()
 	err = s.ctl.Send(ipc.Start{
 		Cols: uint16(cols), Rows: uint16(rows), Port: port, Addr: s.advertised,
 		ClientPublic: cl.Public, UDP: udp, PTY: master,
@@ -343,6 +334,21 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	s.launcher = nil
 	s.ready = true
 	return nil
+}
+
+// readCtl reads proto's messages into ctlMsgs, for the bootstrap and then
+// supervise, until the first error.
+func (s *spawner) readCtl() {
+	s.ctlMsgs = make(chan ctlEvent, 8)
+	go func() {
+		for {
+			m, err := s.ctl.Recv()
+			s.ctlMsgs <- ctlEvent{m, err}
+			if err != nil {
+				return
+			}
+		}
+	}()
 }
 
 func (s *spawner) openLog() error {

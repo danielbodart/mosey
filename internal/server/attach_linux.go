@@ -110,12 +110,15 @@ func (l *attachListener) Close() error {
 
 // samePeer checks with SO_PEERCRED that the process at the other end of fd
 // runs as this user [S1 resume.go].
-func samePeer(fd int) error {
+func samePeer(fd int) error { return peerIs(fd, os.Getuid()) }
+
+// peerIs is samePeer for a given uid, so a test can play another user.
+func peerIs(fd, uid int) error {
 	cred, err := unix.GetsockoptUcred(fd, unix.SOL_SOCKET, unix.SO_PEERCRED)
 	if err != nil {
 		return fmt.Errorf("reading the peer's credentials: %w", err)
 	}
-	if int(cred.Uid) != os.Getuid() {
+	if int(cred.Uid) != uid {
 		return fmt.Errorf("%w (uid %d)", errForeignPeer, cred.Uid)
 	}
 	return nil
