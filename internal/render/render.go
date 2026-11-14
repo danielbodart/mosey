@@ -2,7 +2,8 @@
 // escape sequences it chooses itself. It is the only code in the client
 // that writes to the terminal, and it never passes on a byte it did not
 // generate: cell text and titles have been through the allow-list, and
-// every other byte comes from a fixed table here (D9).
+// every other byte comes from a fixed table here (D9, docs/spec/screen.md
+// §8.2).
 //
 // It redraws only what changed since the last frame, and places each run
 // of cells with an explicit cursor move, so a disagreement between the
@@ -11,7 +12,9 @@
 package render
 
 import (
+	"encoding/base64"
 	"io"
+	"strconv"
 
 	"github.com/danielbodart/mosey/internal/screen"
 )
@@ -26,28 +29,564 @@ type Capabilities struct {
 	Clipboard bool
 	// SyncUpdates wraps each frame in mode 2026, so a frame never tears.
 	SyncUpdates bool
+	// UTF8 is whether the locale's codeset is UTF-8. Without it no byte
+	// at or above 0x80 is written: a terminal not in UTF-8 mode can read
+	// UTF-8's continuation bytes as C1 controls (threat-model.md §4.7).
+	UTF8 bool
 }
 
-// Renderer draws grids to one terminal.
-type Renderer struct{}
+// Renderer draws grids to one terminal. It is not safe for concurrent use.
+type Renderer struct {
+	w    io.Writer
+	caps Capabilities
+	buf  []byte
+
+	// cols, rows is the local terminal's size; 0 means "the grid's".
+	cols, rows int
+	// last is what the terminal shows, or nil when that is unknown and the
+	// next frame redraws everything.
+	last *screen.Grid
+	// drawn is whether any grid has been drawn: the first only records
+	// the counters, so attaching never replays an old clipboard write or
+	// bell (docs/spec/screen.md §8.4).
+	drawn bool
+
+	pen     string // the SGR parameters in force, "" for unknown
+	link    string // the OSC 8 link open, if any
+	title   string
+	modes   screen.Modes
+	shape   screen.CursorShape
+	clipSeq uint64
+	bell    uint64
+	rebuilt screen.Rebuilt
+	notice  *screen.Rebuilt
+	entered bool
+}
 
 // New is a renderer that writes to w, which is the terminal in raw mode.
 func New(w io.Writer, caps Capabilities) *Renderer {
-	panic("TODO slice 1")
+	return &Renderer{w: w, caps: caps}
 }
 
-// Render draws g, writing only what differs from what it drew last.
-func (r *Renderer) Render(g *screen.Grid) error {
-	panic("TODO slice 1")
+// Resize tells the renderer the local terminal's size, which it clips to,
+// and invalidates, since the terminal's content is unknown after a resize.
+func (r *Renderer) Resize(cols, rows int) {
+	r.cols, r.rows = max(cols, 0), max(rows, 0)
+	r.Invalidate()
 }
 
 // Invalidate forgets what is on the terminal, so the next Render draws all
 // of it: after a local resize, or a resume from suspend.
 func (r *Renderer) Invalidate() {
-	panic("TODO slice 1")
+	r.last = nil
+	r.pen = ""
 }
 
-// Enter sets the terminal up for a session (alternate screen, modes);
-// Leave puts it back as it was.
-func (r *Renderer) Enter() error { panic("TODO slice 1") }
-func (r *Renderer) Leave() error { panic("TODO slice 1") }
+// Rebuilt is the server's notice that its emulator was rebuilt, if the
+// last Render saw a new one, for the client to tell the user (D23).
+func (r *Renderer) Rebuilt() (screen.Rebuilt, bool) {
+	if r.notice == nil {
+		return screen.Rebuilt{}, false
+	}
+	return *r.notice, true
+}
+
+// Enter sets the terminal up for a session: the title saved, the
+// alternate screen, autowrap off so the last column never scrolls, the
+// cursor hidden until the first frame places it.
+func (r *Renderer) Enter() error {
+	r.buf = r.buf[:0]
+	r.csi("22;2t")
+	r.csi("?1049h")
+	r.csi("?7l")
+	r.csi("?25l")
+	r.csi("2J")
+	r.entered = true
+	r.Invalidate()
+	return r.flush()
+}
+
+// Leave undoes everything Enter and any Render set. It is safe to call
+// more than once, and the client calls it on every exit path.
+func (r *Renderer) Leave() error {
+	if !r.entered {
+		return nil
+	}
+	r.entered = false
+	r.buf = r.buf[:0]
+	r.csi("0m")
+	if r.link != "" {
+		r.closeLink()
+	}
+	for _, m := range []string{"?1000l", "?1002l", "?1003l", "?1006l", "?1004l", "?2004l"} {
+		r.csi(m)
+	}
+	r.buf = append(r.buf, "\x1b>"...)
+	r.csi("?1l")
+	r.csi("0 q")
+	r.csi("?25h")
+	r.csi("?7h")
+	r.csi("?1049l")
+	r.csi("23;2t")
+	r.modes, r.shape, r.pen = screen.Modes{}, 0, ""
+	return r.flush()
+}
+
+// Render draws g, writing only what differs from what it drew last, as one
+// Write.
+func (r *Renderer) Render(g *screen.Grid) error {
+	r.notice = nil
+	if r.last != nil && r.last.Equal(g) {
+		return nil
+	}
+	r.buf = r.buf[:0]
+	if r.caps.SyncUpdates {
+		r.csi("?2026h")
+	}
+	r.csi("?25l")
+	r.cells(g)
+	if r.link != "" {
+		r.closeLink()
+	}
+	r.state(g)
+	r.cursor(g)
+	if r.caps.SyncUpdates {
+		r.csi("?2026l")
+	}
+	r.last = g.Clone()
+	r.drawn = true
+	return r.flush()
+}
+
+func (r *Renderer) flush() error {
+	if len(r.buf) == 0 {
+		return nil
+	}
+	_, err := r.w.Write(r.buf)
+	return err
+}
+
+func (r *Renderer) csi(s string) {
+	r.buf = append(r.buf, "\x1b["...)
+	r.buf = append(r.buf, s...)
+}
+
+func (r *Renderer) cup(x, y int) {
+	r.buf = append(r.buf, "\x1b["...)
+	r.buf = strconv.AppendInt(r.buf, int64(y+1), 10)
+	r.buf = append(r.buf, ';')
+	r.buf = strconv.AppendInt(r.buf, int64(x+1), 10)
+	r.buf = append(r.buf, 'H')
+}
+
+// size is the area drawn: the grid clipped to the local terminal.
+func (r *Renderer) size(g *screen.Grid) (cols, rows int) {
+	cols, rows = g.Size()
+	if r.cols > 0 {
+		cols = min(cols, r.cols)
+	}
+	if r.rows > 0 {
+		rows = min(rows, r.rows)
+	}
+	return cols, rows
+}
+
+// cells draws every cell that differs from the last frame, or all of them
+// after an invalidation or a change of size (docs/spec/screen.md §8.3).
+func (r *Renderer) cells(g *screen.Grid) {
+	full := r.last == nil
+	if !full {
+		lc, lr := r.last.Size()
+		gc, gr := g.Size()
+		full = lc != gc || lr != gr
+	}
+	if full {
+		// Clear in the default style, so every local cell outside g is a
+		// default blank, drawn once.
+		r.setPen("0")
+		r.csi("2J")
+	}
+	cols, rows := r.size(g)
+	changed := make([]bool, cols)
+	for y := range rows {
+		row := g.Row(y)
+		var old []screen.Cell
+		if !full {
+			old = r.last.Row(y)
+			if len(old) > 0 && len(row) > 0 && &old[0] == &row[0] {
+				continue
+			}
+		}
+		any := false
+		for x := range cols {
+			if full {
+				// The clear left a default blank everywhere.
+				changed[x] = row[x] != defaultBlank
+			} else {
+				changed[x] = row[x] != old[x]
+			}
+			any = any || changed[x]
+		}
+		if !any {
+			continue
+		}
+		// A changed continuation is drawn by its wide character.
+		for x := range cols {
+			if changed[x] && row[x].Width == 0 && x > 0 {
+				changed[x-1] = true
+			}
+		}
+		r.row(y, row[:cols], changed)
+	}
+}
+
+var defaultBlank = screen.Cell{Width: 1}
+
+// row draws the changed cells of one row, each run starting with a CUP.
+func (r *Renderer) row(y int, row []screen.Cell, changed []bool) {
+	placed := false
+	for x := 0; x < len(row); x++ {
+		if !changed[x] {
+			placed = false
+			continue
+		}
+		c := row[x]
+		if c.Width == 0 {
+			// Its wide character was drawn, or does not fit and was drawn
+			// as a blank; a stray one is a blank.
+			if x == 0 || row[x-1].Width != 2 {
+				r.blankAt(x, y, c.Style, &placed)
+			}
+			continue
+		}
+		// EL and ECH only for blanks in the completely default style, so
+		// nothing depends on the local terminal's background-colour-erase.
+		if c == defaultBlank {
+			n := 1
+			for x+n < len(row) && changed[x+n] && row[x+n] == defaultBlank {
+				n++
+			}
+			if n >= 4 || x+n == len(row) && n >= 2 {
+				if !placed {
+					r.cup(x, y)
+				}
+				r.linkTo("")
+				r.setPen("0")
+				if x+n == len(row) {
+					// To the end of the line: past the grid's last column
+					// the local cells are default blanks already.
+					r.csi("K")
+				} else {
+					r.buf = append(r.buf, "\x1b["...)
+					r.buf = strconv.AppendInt(r.buf, int64(n), 10)
+					r.buf = append(r.buf, 'X')
+				}
+				// ECH and EL do not move the cursor.
+				placed = false
+				x += n - 1
+				continue
+			}
+		}
+		if !placed {
+			r.cup(x, y)
+			placed = true
+		}
+		r.linkTo(c.Style.Link)
+		r.setPen(r.sgr(c.Style))
+		if c.Width == 2 && x+1 >= len(row) {
+			// A wide character in the local last column is drawn as a blank.
+			r.buf = append(r.buf, ' ')
+			continue
+		}
+		simple := r.text(c)
+		if c.Width == 2 {
+			x++
+		}
+		// After anything but a single printable ASCII byte or a blank, the
+		// next cell is placed afresh: the local terminal's idea of its
+		// width shifts nothing past it.
+		if !simple {
+			placed = false
+		}
+	}
+}
+
+func (r *Renderer) blankAt(x, y int, st screen.Style, placed *bool) {
+	if !*placed {
+		r.cup(x, y)
+		*placed = true
+	}
+	r.linkTo(st.Link)
+	r.setPen(r.sgr(st))
+	r.buf = append(r.buf, ' ')
+}
+
+// text writes a cell's text and says whether it was one byte wide on any
+// terminal.
+func (r *Renderer) text(c screen.Cell) bool {
+	switch {
+	case c.Text == "":
+		r.buf = append(r.buf, ' ')
+		return true
+	case len(c.Text) == 1 && c.Text[0] > 0x20 && c.Text[0] < 0x7f:
+		r.buf = append(r.buf, c.Text[0])
+		return true
+	case !r.caps.UTF8 || !screen.ValidCluster(c.Text):
+		// Never a byte ≥ 0x80 to a terminal that is not in UTF-8, and
+		// never text the allow-list refuses (a Grid can be built by client
+		// code, not only by Apply).
+		r.buf = append(r.buf, '?')
+		if c.Width == 2 {
+			r.buf = append(r.buf, ' ')
+		}
+		return false
+	}
+	r.buf = append(r.buf, c.Text...)
+	return false
+}
+
+func (r *Renderer) setPen(sgr string) {
+	if sgr == r.pen {
+		return
+	}
+	r.buf = append(r.buf, "\x1b["...)
+	r.buf = append(r.buf, sgr...)
+	r.buf = append(r.buf, 'm')
+	r.pen = sgr
+}
+
+// linkTo opens link (or none) for the cells that follow, if the terminal
+// takes OSC 8.
+func (r *Renderer) linkTo(link string) {
+	if !r.caps.Hyperlinks || link == r.link {
+		return
+	}
+	if r.link != "" {
+		r.closeLink()
+	}
+	if link != "" && screen.ValidLink(link) {
+		r.buf = append(r.buf, "\x1b]8;;"...)
+		r.buf = append(r.buf, link...)
+		r.buf = append(r.buf, "\x1b\\"...)
+		r.link = link
+	}
+}
+
+func (r *Renderer) closeLink() {
+	r.buf = append(r.buf, "\x1b]8;;\x1b\\"...)
+	r.link = ""
+}
+
+// sgr is the SGR parameters for a style, always from a reset, so the local
+// terminal never carries a pen state the renderer doesn't know.
+func (r *Renderer) sgr(s screen.Style) string {
+	b := []byte{'0'}
+	for _, a := range []struct {
+		attr screen.Attrs
+		code string
+	}{
+		{screen.Bold, "1"}, {screen.Faint, "2"}, {screen.Italic, "3"},
+		{screen.Underlined | screen.DoubleUnderline | screen.CurlyUnderline, "4"},
+		{screen.Blink, "5"}, {screen.Reverse, "7"}, {screen.Invisible, "8"}, {screen.Strikethrough, "9"},
+	} {
+		if s.Attrs&a.attr != 0 {
+			b = append(b, ';')
+			b = append(b, a.code...)
+		}
+	}
+	b = r.color(b, s.Fg, false)
+	b = r.color(b, s.Bg, true)
+	return string(b)
+}
+
+func (r *Renderer) color(b []byte, c screen.Color, bg bool) []byte {
+	if c == screen.DefaultColor {
+		return b
+	}
+	idx, isPal := c.IsPalette()
+	if red, green, blue, ok := c.IsRGB(); ok {
+		if r.caps.TrueColor {
+			b = append(b, ";38;2;"...)
+			if bg {
+				b[len(b)-5] = '4'
+			}
+			b = strconv.AppendInt(b, int64(red), 10)
+			b = append(b, ';')
+			b = strconv.AppendInt(b, int64(green), 10)
+			b = append(b, ';')
+			b = strconv.AppendInt(b, int64(blue), 10)
+			return b
+		}
+		if r.caps.Colors256 {
+			idx = nearest(red, green, blue, 16, 256)
+		} else {
+			idx = nearest(red, green, blue, 0, 16)
+		}
+		isPal = true
+	}
+	if !isPal {
+		return b
+	}
+	if idx >= 16 && !r.caps.Colors256 {
+		rgb := xterm256[idx]
+		idx = nearest(rgb[0], rgb[1], rgb[2], 0, 16)
+	}
+	switch {
+	case idx < 8:
+		code := 30 + int64(idx)
+		if bg {
+			code += 10
+		}
+		b = append(b, ';')
+		return strconv.AppendInt(b, code, 10)
+	case idx < 16:
+		code := 90 + int64(idx-8)
+		if bg {
+			code += 10
+		}
+		b = append(b, ';')
+		return strconv.AppendInt(b, code, 10)
+	}
+	if bg {
+		b = append(b, ";48;5;"...)
+	} else {
+		b = append(b, ";38;5;"...)
+	}
+	return strconv.AppendInt(b, int64(idx), 10)
+}
+
+// state writes the title, clipboard, bell and modes (§8.4 items 4 to 7).
+func (r *Renderer) state(g *screen.Grid) {
+	if g.Title != r.title {
+		r.title = g.Title
+		if screen.ValidTitle(g.Title) {
+			r.buf = append(r.buf, "\x1b]2;"...)
+			for _, ch := range g.Title {
+				if ch >= 0x80 && !r.caps.UTF8 {
+					r.buf = append(r.buf, '?')
+				} else {
+					r.buf = append(r.buf, string(ch)...)
+				}
+			}
+			r.buf = append(r.buf, "\x1b\\"...)
+		}
+	}
+	if g.Clipboard.Seq != r.clipSeq {
+		if r.drawn && g.Clipboard.Seq > r.clipSeq && r.caps.Clipboard && len(g.Clipboard.Data) <= screen.MaxClipboard {
+			r.buf = append(r.buf, "\x1b]52;c;"...)
+			r.buf = base64.StdEncoding.AppendEncode(r.buf, g.Clipboard.Data)
+			r.buf = append(r.buf, "\x1b\\"...)
+		}
+		r.clipSeq = g.Clipboard.Seq
+	}
+	if g.Bell != r.bell {
+		if r.drawn && g.Bell > r.bell {
+			r.buf = append(r.buf, '\a')
+		}
+		r.bell = g.Bell
+	}
+	if g.Rebuilt != r.rebuilt {
+		if r.drawn && g.Rebuilt.Seq > r.rebuilt.Seq {
+			n := g.Rebuilt
+			r.notice = &n
+		}
+		r.rebuilt = g.Rebuilt
+	}
+	r.mirror(g.Modes)
+}
+
+// mirror sets the local terminal into the input modes the remote program
+// asked for (docs/spec/screen.md §8.5). The alternate screen is not
+// mirrored: the client is always on its own. Kitty keyboard flags wait
+// for a later slice.
+func (r *Renderer) mirror(m screen.Modes) {
+	old := r.modes
+	flag := func(was, now bool, set, reset string) {
+		if was != now {
+			if now {
+				r.buf = append(r.buf, set...)
+			} else {
+				r.buf = append(r.buf, reset...)
+			}
+		}
+	}
+	flag(old.AppCursorKeys, m.AppCursorKeys, "\x1b[?1h", "\x1b[?1l")
+	flag(old.AppKeypad, m.AppKeypad, "\x1b=", "\x1b>")
+	flag(old.BracketedPaste, m.BracketedPaste, "\x1b[?2004h", "\x1b[?2004l")
+	flag(old.FocusEvents, m.FocusEvents, "\x1b[?1004h", "\x1b[?1004l")
+	if old.Mouse != m.Mouse {
+		if code := mouseCode(old.Mouse); code != "" {
+			r.csi("?" + code + "l")
+		}
+		if code := mouseCode(m.Mouse); code != "" {
+			r.csi("?" + code + "h")
+		}
+	}
+	flag(old.MouseEncoding == screen.MouseSGR, m.MouseEncoding == screen.MouseSGR, "\x1b[?1006h", "\x1b[?1006l")
+	r.modes = m
+}
+
+func mouseCode(m screen.MouseMode) string {
+	switch m {
+	case screen.MouseClicks:
+		return "1000"
+	case screen.MouseDrag:
+		return "1002"
+	case screen.MouseAll:
+		return "1003"
+	}
+	return ""
+}
+
+// cursor places the cursor, clipped to the local size, sets its shape and
+// shows it if it is visible (§8.4 item 8).
+func (r *Renderer) cursor(g *screen.Grid) {
+	cols, rows := r.size(g)
+	if cols == 0 || rows == 0 {
+		return
+	}
+	r.cup(min(g.Cursor.X, cols-1), min(g.Cursor.Y, rows-1))
+	if g.Cursor.Shape != r.shape && g.Cursor.Shape <= 6 {
+		r.buf = append(r.buf, "\x1b["...)
+		r.buf = strconv.AppendInt(r.buf, int64(g.Cursor.Shape), 10)
+		r.buf = append(r.buf, " q"...)
+		r.shape = g.Cursor.Shape
+	}
+	if g.Cursor.Visible {
+		r.csi("?25h")
+	}
+}
+
+// nearest is the palette entry in [from, to) closest to (r, g, b) by
+// squared distance in sRGB, over xterm's default palette.
+func nearest(red, green, blue uint8, from, to int) uint8 {
+	best, bestD := from, -1
+	for i := from; i < to; i++ {
+		p := xterm256[i]
+		dr, dg, db := int(red)-int(p[0]), int(green)-int(p[1]), int(blue)-int(p[2])
+		if d := dr*dr + dg*dg + db*db; bestD < 0 || d < bestD {
+			best, bestD = i, d
+		}
+	}
+	return uint8(best)
+}
+
+// xterm256 is xterm's default 256-colour palette: the 16 system colours,
+// the 6x6x6 cube and the 24 greys.
+var xterm256 = func() [256][3]uint8 {
+	var p [256][3]uint8
+	sys := [16][3]uint8{
+		{0, 0, 0}, {205, 0, 0}, {0, 205, 0}, {205, 205, 0}, {0, 0, 238}, {205, 0, 205}, {0, 205, 205}, {229, 229, 229},
+		{127, 127, 127}, {255, 0, 0}, {0, 255, 0}, {255, 255, 0}, {92, 92, 255}, {255, 0, 255}, {0, 255, 255}, {255, 255, 255},
+	}
+	copy(p[:16], sys[:])
+	levels := []uint8{0, 95, 135, 175, 215, 255}
+	for i := range 216 {
+		p[16+i] = [3]uint8{levels[i/36], levels[i/6%6], levels[i%6]}
+	}
+	for i := range 24 {
+		v := uint8(8 + 10*i)
+		p[232+i] = [3]uint8{v, v, v}
+	}
+	return p
+}()
