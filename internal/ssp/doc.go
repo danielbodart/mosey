@@ -26,5 +26,6 @@
 // The files follow the spec: wire.go is the datagram and instruction
 // formats (§3, §4), compress.go compression (§4.1), reassembly.go
 // fragments (§5), timing.go the D11 timers and the RTT estimator (§6.2,
-// §7.1), and endpoint.go the sender and receiver (§6, §7).
+// §7.1), chaff.go the chaff schedule that hides keystroke timing (§9.1),
+// and endpoint.go the sender and receiver (§6, §7).
 package ssp

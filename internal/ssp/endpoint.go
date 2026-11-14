@@ -76,7 +76,17 @@ type Endpoint[L State[L], R State[R]] struct {
 	ackDue time.Time
 	// queue is what this pass has made to send. Run sends it once the lock
 	// is released, so a slow Send never holds up Set or Remote.
-	queue [][]byte
+	queue []outgoing
+
+	// ch is the chaff schedule (§9.1).
+	ch chaffing
+}
+
+// outgoing is one datagram queued to send: an SSP payload, or, if payload
+// is nil, a CHAFF frame of chaff bytes of sealed plaintext.
+type outgoing struct {
+	payload []byte
+	chaff   int
 }
 
 // made is an instruction encoded and ready to fragment. A retransmission
@@ -127,6 +137,9 @@ func NewEndpoint[L State[L], R State[R]](d Datagrams, cfg Config, local L, remot
 	}
 	e.sent[0] = e.pending
 	e.re.limits = e.lim
+	if c, ok := d.(Chaffer); ok {
+		e.ch = chaffing{c: c, tick: chaffTick}
+	}
 	if cfg.Role == Server {
 		e.collection = serverCollection
 	}
@@ -159,6 +172,13 @@ func (e *Endpoint[L, R]) Run(ctx context.Context) error {
 	defer reader.Wait()
 	defer cancel()
 
+	// Only the server chaffs because the peer does; the client chaffs
+	// because the user types (§9.1.1).
+	var chaffArrived <-chan struct{}
+	if e.ch.c != nil && e.cfg.Role == Server {
+		chaffArrived = e.ch.c.ChaffArrived()
+	}
+
 	timer := time.NewTimer(time.Hour)
 	defer timer.Stop()
 	var payload []byte
@@ -178,6 +198,10 @@ func (e *Endpoint[L, R]) Run(ctx context.Context) error {
 			}
 			return fmt.Errorf("ssp: receiving: %w", err)
 		case payload = <-received:
+		case <-chaffArrived:
+			e.mu.Lock()
+			e.ch.extend(time.Now(), serverLinger)
+			e.mu.Unlock()
 		case <-e.wake:
 		case <-timer.C:
 		}
@@ -194,17 +218,46 @@ func (e *Endpoint[L, R]) pass(payload []byte) (time.Time, error) {
 		err = e.receive(payload, now)
 	}
 	if err == nil {
-		err = e.send(now)
+		switch {
+		case !e.ch.active(now):
+			err = e.send(now)
+		case e.ch.due(now):
+			err = e.tick(now)
+		}
+		// Chaffing, between ticks: nothing goes until the next (§9.1.1).
 	}
-	next := e.nextWake()
+	next := e.nextWake(now)
 	queue := e.queue
 	e.queue = nil
 	e.mu.Unlock()
-	for _, p := range queue {
+	for _, o := range queue {
 		// A failed send is a loss, and SSP recovers from losses (§6.3).
-		_ = e.d.Send(p)
+		if o.payload != nil {
+			_ = e.d.Send(o.payload)
+		} else {
+			_ = e.ch.c.SendChaff(o.chaff)
+		}
 	}
 	return next, err
+}
+
+// tick is one tick of the grid while chaffing (§9.1.1): whatever §6.3 has
+// due, else an owed ack, early, since a datagram goes this tick anyway,
+// else one CHAFF frame the size of this side's padding floor, so that it
+// looks like a keystroke or an echo.
+func (e *Endpoint[L, R]) tick(now time.Time) error {
+	before := len(e.queue)
+	if err := e.send(now); err != nil {
+		return err
+	}
+	if len(e.queue) == before && !e.ackDue.IsZero() {
+		e.emit(now, nil)
+	}
+	if len(e.queue) == before {
+		e.queue = append(e.queue, outgoing{chaff: e.padFloor()})
+	}
+	e.ch.advance(now)
+	return nil
 }
 
 // Set makes local the newest version of the local object. The endpoint
@@ -216,6 +269,10 @@ func (e *Endpoint[L, R]) Set(local L) {
 		return
 	}
 	e.pending = local.Clone()
+	if e.cfg.Role == Client {
+		// Every input starts or extends the chaff (§9.1.1).
+		e.ch.extend(time.Now(), clientLinger())
+	}
 	if e.pending.Equal(e.sent[e.latest]) {
 		// Changed back to what was last sent: nothing to send after all.
 		e.changeAt = time.Time{}
@@ -501,7 +558,7 @@ func (e *Endpoint[L, R]) emit(now time.Time, frag *fragment) {
 		e.echoDue = false
 	}
 	e.pad(&d)
-	e.queue = append(e.queue, appendDatagram(make([]byte, 0, e.cfg.MaxPayload), d))
+	e.queue = append(e.queue, outgoing{payload: appendDatagram(make([]byte, 0, e.cfg.MaxPayload), d)})
 	e.ackDue = time.Time{}
 	e.lastAny = now
 }
@@ -511,18 +568,27 @@ func (e *Endpoint[L, R]) emit(now time.Time, frag *fragment) {
 // floor, Padmé above it, capped at the most the layer below carries. Acks
 // and heartbeats are padded like data, so size does not tell them apart.
 func (e *Endpoint[L, R]) pad(d *datagram) {
-	floor := clientPadFloor
-	if e.cfg.Role == Server {
-		floor = serverPadFloor
-	}
 	d.padded, d.pad = true, 0
 	u := e.cfg.FrameOverhead + datagramLen(*d)
-	d.pad = paddedLen(u, floor, e.cfg.FrameOverhead+e.cfg.MaxPayload) - u
+	d.pad = paddedLen(u, e.padFloor(), e.cfg.FrameOverhead+e.cfg.MaxPayload) - u
+}
+
+// padFloor is this side's F (§9.2), which is also the size of its chaff
+// (§9.1.1).
+func (e *Endpoint[L, R]) padFloor() int {
+	if e.cfg.Role == Server {
+		return serverPadFloor
+	}
+	return clientPadFloor
 }
 
 // nextWake is when send next has something to do, short of a payload
-// arriving or Set.
-func (e *Endpoint[L, R]) nextWake() time.Time {
+// arriving or Set. While chaffing that is the next tick, which comes far
+// more often than anything else falls due (§9.1.1).
+func (e *Endpoint[L, R]) nextWake(now time.Time) time.Time {
+	if e.ch.active(now) {
+		return e.ch.next
+	}
 	next := e.lastAny.Add(heartbeat)
 	at := func(t time.Time) {
 		if t.Before(next) {

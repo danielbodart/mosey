@@ -681,7 +681,7 @@ one due (a burst of fragments, §5).
 | | Client | Server |
 |---|---|---|
 | Starts or extends | on every `Set` that changes `pending` (a key or a resize; §10.1) | on every CHAFF frame from the client |
-| Until | `now + L`, `L` drawn afresh, uniformly from [1 s, 2 s), on each input | `now + 1 s` |
+| Until | at least `now + L`, `L` drawn afresh, uniformly from [1 s, 2 s), on each input | at least `now + 1 s` |
 | Chaff size (sealed plaintext) | 40, its floor `F` (§9.2) | 64, its floor `F` |
 
 - **Starting.** An endpoint that was not chaffing starts its grid at
@@ -699,8 +699,8 @@ one due (a burst of fragments, §5).
 - **The grid holds.** After a late wake-up (a busy scheduler) the next tick
   is the first grid point after `now`; missed ticks are not made up in a
   burst [D].
-- **Ending.** At `until` the mode ends and §6.3 applies as before; anything
-  deferred goes at once.
+- **Ending.** The mode ends at the first tick at or after `until`, which
+  §6.3 handles as it would without chaff, as it does everything after.
 - **Heartbeats** need nothing new: a chaffing endpoint sends far more often
   than every 3 s, and SSP's datagrams among its ticks keep `lastAny`
   current.

@@ -46,11 +46,22 @@ type (
 	serverEnd = Endpoint[*board, *userinput.Stream]
 )
 
-// sent is one datagram an end handed to its path.
+// sent is one datagram an end handed to its path: an SSP payload, or,
+// with chaff set, a CHAFF frame of that many bytes of sealed plaintext.
 type sent struct {
 	at      time.Time
 	payload []byte
+	chaff   int
 	dropped bool
+}
+
+// sealed is the datagram's sealed plaintext length, what an observer sees
+// less the transport's constant overhead.
+func (s sent) sealed() int {
+	if s.chaff > 0 {
+		return s.chaff
+	}
+	return frameOverhead + len(s.payload)
 }
 
 // end is one end of a simulated path: SSP's own tests need nothing of the
@@ -67,6 +78,8 @@ type end struct {
 	queue [][]byte
 	ready chan struct{}
 	log   []sent
+	// chaffed is signalled when a chaff frame arrives, which Recv drops.
+	chaffed chan struct{}
 	// arrivals is when the last delivery to this end lands, so jitter
 	// never reorders.
 	last time.Time
@@ -82,8 +95,8 @@ type path struct {
 
 // link makes a client and a server end joined by paths each way.
 func link(up, down *path) (client, server *end) {
-	client = &end{name: "client", path: up, ready: make(chan struct{}, 1)}
-	server = &end{name: "server", path: down, ready: make(chan struct{}, 1)}
+	client = &end{name: "client", path: up, ready: make(chan struct{}, 1), chaffed: make(chan struct{}, 1)}
+	server = &end{name: "server", path: down, ready: make(chan struct{}, 1), chaffed: make(chan struct{}, 1)}
 	client.peer, server.peer = server, client
 	return client, server
 }
@@ -96,23 +109,41 @@ func (e *end) Send(p []byte) error {
 	if len(p) > maxPayload {
 		panic("ssp sent a datagram over MaxPayload")
 	}
+	e.send(bytes.Clone(p), 0)
+	return nil
+}
+
+// send puts p, or a chaff frame of chaff bytes if p is nil, on the path.
+func (e *end) send(p []byte, chaff int) {
 	now := time.Now()
-	p = bytes.Clone(p)
 	e.mu.Lock()
 	n := len(e.log)
 	drop := e.path.drop != nil && e.path.drop(n, now, p)
-	e.log = append(e.log, sent{at: now, payload: p, dropped: drop})
+	e.log = append(e.log, sent{at: now, payload: p, chaff: chaff, dropped: drop})
 	e.mu.Unlock()
 	if drop {
-		return nil
+		return
 	}
 	d := e.path.delay
 	if e.path.jitter > 0 {
 		d += time.Duration(e.path.rng.ExpFloat64() * float64(e.path.jitter))
 	}
 	e.peer.deliverAfter(now, d, p)
+}
+
+// chaffEnd is an end that can chaff, as transport.Conn can: an Endpoint
+// over one chaffs (§9.1.4); over a plain end it does not.
+type chaffEnd struct{ *end }
+
+func (c chaffEnd) SendChaff(size int) error {
+	if size < 1 || size > frameOverhead+maxPayload {
+		panic("ssp sent chaff outside the frame limits")
+	}
+	c.send(nil, size)
 	return nil
 }
+
+func (c chaffEnd) ChaffArrived() <-chan struct{} { return c.chaffed }
 
 func (e *end) deliverAfter(now time.Time, d time.Duration, p []byte) {
 	e.mu.Lock()
@@ -140,6 +171,14 @@ func (e *end) Recv(ctx context.Context) ([]byte, error) {
 			p := e.queue[0]
 			e.queue = e.queue[1:]
 			e.mu.Unlock()
+			if p == nil {
+				// Chaff: as the transport does, drop it and say it came.
+				select {
+				case e.chaffed <- struct{}{}:
+				default:
+				}
+				continue
+			}
 			return p, nil
 		}
 		e.mu.Unlock()
@@ -163,6 +202,10 @@ func decode(t testing.TB, log []sent) []decoded {
 	t.Helper()
 	out := make([]decoded, len(log))
 	for i, s := range log {
+		if s.chaff > 0 {
+			out[i] = decoded{sent: s}
+			continue
+		}
 		d, err := parseDatagram(s.payload, prodLimits.chunk, 1<<16-1)
 		if err != nil {
 			t.Fatalf("sent a datagram that does not parse: %v", err)
@@ -226,10 +269,17 @@ type pair struct {
 // It is called inside a synctest bubble.
 func start(t *testing.T, c, s *end) *pair {
 	t.Helper()
+	return startOver(t, c, s, c, s)
+}
+
+// startOver is start with each endpoint over its own Datagrams, which may
+// be a chaffEnd around its end.
+func startOver(t *testing.T, cd, sd Datagrams, c, s *end) *pair {
+	t.Helper()
 	p := &pair{
-		client: NewEndpoint(c, Config{Role: Client, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: boardLimit},
+		client: NewEndpoint(cd, Config{Role: Client, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: boardLimit},
 			userinput.NewStream(), newBoard("")),
-		server: NewEndpoint(s, Config{Role: Server, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: userinput.MaxDiffBytes},
+		server: NewEndpoint(sd, Config{Role: Server, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: userinput.MaxDiffBytes},
 			newBoard(""), userinput.NewStream()),
 		cEnd: c, sEnd: s,
 		input: userinput.NewStream(),
