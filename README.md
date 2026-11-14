@@ -1,3 +1,5 @@
+<p align="center"><img src="logo.png" alt="mosey" width="600"></p>
+
 # mosey
 
 A remote terminal for bad networks. It roams between networks, stays usable
