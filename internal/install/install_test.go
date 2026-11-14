@@ -192,13 +192,38 @@ func TestSomeoneElsesFileIsNeverReplaced(t *testing.T) {
 	}
 }
 
-func TestADirectoryOfAnotherUserIsRefused(t *testing.T) {
+func TestAHomeOfAnotherUserIsRefused(t *testing.T) {
 	f := newFixture(t, "build")
 	r, err := Parse(f.args("1.2.3"), f.home, os.Getuid()+1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustRefuse(t, Install(r), "belongs to uid")
+	mustRefuse(t, Install(r), f.home+" belongs to uid")
+}
+
+// Each directory below the home is checked for its owner on its own: one
+// that is another user's is refused by name, and nothing is installed.
+func TestEachDirectoryOfAnotherUserIsRefused(t *testing.T) {
+	for _, dir := range []string{"~/.cache", "~/.cache/mosey", "~/.cache/mosey/1.2.3"} {
+		t.Run(dir, func(t *testing.T) {
+			f := newFixture(t, "build")
+			os.Chmod(filepath.Join(f.home, ".cache"), 0o700)
+			// An unprivileged test cannot chown, so the installer is told
+			// this one directory belongs to another uid.
+			saved := owner
+			t.Cleanup(func() { owner = saved })
+			owner = func(path string, st *unix.Stat_t) int {
+				if path == dir {
+					return int(st.Uid) + 1
+				}
+				return int(st.Uid)
+			}
+			mustRefuse(t, f.install(t, "1.2.3"), dir+" belongs to uid")
+			if _, err := os.Lstat(f.installed("1.2.3")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("something is installed: %v", err)
+			}
+		})
+	}
 }
 
 // The rename goes by name, so a file put at the upload's name after the
