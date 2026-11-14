@@ -24,12 +24,21 @@ var version = "dev"
 
 const usage = `mosey -- a remote terminal for bad networks
 
-  mosey [-remote PATH] [-ssh PROGRAM] [-A | -a] [-- SSH-OPTION...] DESTINATION
+  mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a]
+        [-- SSH-OPTION...] DESTINATION
         Log in to DESTINATION with ssh, as your ssh config says, start
-        the mosey server there (PATH is the remote mosey binary, by
-        default mosey on the remote PATH), and stay connected over UDP as
-        the network comes and goes. -A and -a are ssh's own: forward the
-        agent or don't (agent forwarding arrives in a later version).
+        the mosey server there, and stay connected over UDP as the
+        network comes and goes.
+
+        The server is this same version of mosey, from ~/.cache/mosey/
+        or the remote PATH. If DESTINATION has none, mosey copies itself
+        there (or, for another platform, its own version's release from
+        GitHub), asking the first time for each host; -upload=yes copies
+        without asking, -upload=no never copies. -remote PATH runs that
+        remote binary instead and copies nothing.
+
+        -A and -a are ssh's own: forward the agent or don't (agent
+        forwarding arrives in a later version).
 
   mosey -r [OPTIONS] DESTINATION
   mosey -r=SESSION [OPTIONS] DESTINATION
@@ -59,6 +68,7 @@ func main() {
 // cli is the client's command line, parsed (bootstrap.md §2).
 type cli struct {
 	ssh         bootstrap.SSH
+	upload      client.UploadMode
 	showVersion bool
 	// resume is -r or -r=SESSION (bootstrap.md §9.2), list is -list.
 	resume resumeFlag
@@ -90,15 +100,18 @@ func (r *resumeFlag) Set(v string) error {
 	return nil
 }
 
-// parseArgs reads `mosey [-remote PATH] [-ssh PROGRAM] [-A | -a] [--
-// SSH-OPTION...] DESTINATION`. Every plain word belongs to the client (D7):
+// parseArgs reads `mosey [-remote PATH] [-upload MODE] [-ssh PROGRAM]
+// [-A | -a] [-- SSH-OPTION...] DESTINATION`. Every plain word belongs to the client (D7):
 // the destination is the last argument, whatever it is called.
 func parseArgs(args []string) (cli, error) {
 	var c cli
 	flags := flag.NewFlagSet("mosey", flag.ContinueOnError)
 	flags.SetOutput(io.Discard) // runClient prints the error and usage once
 	flags.Usage = func() {}
-	flags.StringVar(&c.ssh.Server, "remote", "mosey", "the remote mosey `binary`, run as PATH --serve")
+	// No -remote is D7: this version, from the cache or PATH, copied over
+	// if missing (bootstrap.md §4.7).
+	flags.StringVar(&c.ssh.Server, "remote", "", "the remote mosey `binary`, run as PATH --serve")
+	upload := flags.String("upload", string(client.UploadAsk), "copy mosey to a host without it: ask, yes or no")
 	flags.StringVar(&c.ssh.Program, "ssh", "ssh", "the ssh `program`")
 	var agent agentFlag
 	flags.Var(agent.letter('A'), "A", "forward the agent, as ssh -A")
@@ -109,6 +122,11 @@ func parseArgs(args []string) (cli, error) {
 	if err := flags.Parse(args); err != nil {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: " + err.Error()}
 	}
+	mode, err := client.ParseUploadMode(*upload)
+	if err != nil {
+		return cli{}, err
+	}
+	c.upload = mode
 	if c.showVersion {
 		return c, nil
 	}
@@ -212,6 +230,10 @@ func runClient(args []string) int {
 		Getenv:    os.Getenv,
 		Resume:    c.resume.set,
 		SessionID: c.resume.sid,
+		Upload:    c.upload,
+		// The terminal is still cooked when D7 asks (bootstrap.md
+		// §4.7.5), and Open has made sure stdin is one.
+		Ask: client.AskLine(os.Stdin, os.Stderr),
 	})
 	tty.Close()
 	if err != nil && !errors.Is(err, context.Canceled) {

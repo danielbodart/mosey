@@ -40,6 +40,8 @@ type spawn struct {
 	stderr io.Writer
 	log    *slog.Logger
 	getenv func(string) string
+	// cfg is what ssh -G said, once run has asked it.
+	cfg bootstrap.Config
 }
 
 func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Config, error) {
@@ -55,6 +57,7 @@ func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Co
 		}
 		return bootstrap.CredentialLine{}, nil, fail(err, "ssh -G %s failed", dest)
 	}
+	b.cfg = cfg
 	// D25: slice 1 always bootstraps with ForwardAgent=no, but works out
 	// what the user's config asks for, for the log and the agent slice.
 	sock, on := bootstrap.AgentSocket(cfg, b.getenv)
@@ -103,7 +106,8 @@ func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Co
 	cred, err := bootstrap.ReadCredential(p.stdout)
 	if err != nil {
 		var nl *bootstrap.NoLineError
-		if !errors.As(err, &nl) || nl.Overflow {
+		var ns *bootstrap.NoServerError
+		if !errors.As(err, &ns) && (!errors.As(err, &nl) || nl.Overflow) {
 			// ssh may be running on: nothing more it says is wanted.
 			cmd.Process.Kill()
 		}
@@ -130,8 +134,12 @@ func (b *spawn) explain(err error, status int) error {
 		remote *bootstrap.RemoteError
 		nl     *bootstrap.NoLineError
 		ver    *bootstrap.VersionError
+		ns     *bootstrap.NoServerError
 	)
 	switch {
+	case errors.As(err, &ns):
+		// The probe's answer (§4.7.2): Run copies mosey over.
+		return fail(err, "no mosey %s on %s", b.line.SoftwareVersion, dest)
 	case errors.As(err, &remote):
 		return b.refused(remote)
 	case errors.As(err, &ver):

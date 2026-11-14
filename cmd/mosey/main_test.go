@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
+	"github.com/danielbodart/mosey/internal/client"
 )
 
 func TestTheClientCommandLine(t *testing.T) {
@@ -16,13 +17,13 @@ func TestTheClientCommandLine(t *testing.T) {
 		ssh    []string
 		agent  byte
 	}{
-		{[]string{"far"}, "far", "mosey", nil, 0},
-		{[]string{"server"}, "server", "mosey", nil, 0}, // a host called server is a host
+		{[]string{"far"}, "far", "", nil, 0},
+		{[]string{"server"}, "server", "", nil, 0}, // a host called server is a host
 		{[]string{"-remote", "~/bin/mosey", "me@far"}, "me@far", "~/bin/mosey", nil, 0},
-		{[]string{"-A", "--", "-p2222", "-v", "far"}, "far", "mosey", []string{"-p", "2222", "-v"}, 'A'},
-		{[]string{"-A", "-a", "far"}, "far", "mosey", nil, 'a'},
-		{[]string{"-a", "-A", "far"}, "far", "mosey", nil, 'A'},
-		{[]string{"-A", "--", "-a", "far"}, "far", "mosey", nil, 'a'}, // ssh's options come last, so win
+		{[]string{"-A", "--", "-p2222", "-v", "far"}, "far", "", []string{"-p", "2222", "-v"}, 'A'},
+		{[]string{"-A", "-a", "far"}, "far", "", nil, 'a'},
+		{[]string{"-a", "-A", "far"}, "far", "", nil, 'A'},
+		{[]string{"-A", "--", "-a", "far"}, "far", "", nil, 'a'}, // ssh's options come last, so win
 	} {
 		got, err := parseArgs(c.args)
 		if err != nil {
@@ -52,6 +53,24 @@ func TestABadCommandLineIsAUsageError(t *testing.T) {
 		if !errors.As(err, &u) {
 			t.Errorf("%q: %v", args, err)
 		}
+	}
+}
+
+// No -remote is D7's probe and copy-over; -upload says whether to copy.
+func TestUploadIsAskByDefaultAndOtherwiseAsSaid(t *testing.T) {
+	for args, want := range map[string]client.UploadMode{"": client.UploadAsk, "yes": client.UploadYes, "no": client.UploadNo, "ask": client.UploadAsk} {
+		a := []string{"far"}
+		if args != "" {
+			a = []string{"-upload", args, "far"}
+		}
+		got, err := parseArgs(a)
+		if err != nil || got.upload != want || got.ssh.Server != "" {
+			t.Errorf("%q: %+v %v", a, got, err)
+		}
+	}
+	var u *bootstrap.UsageError
+	if _, err := parseArgs([]string{"-upload", "maybe", "far"}); !errors.As(err, &u) {
+		t.Errorf("-upload maybe: %v", err)
 	}
 }
 

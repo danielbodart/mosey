@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 
@@ -29,13 +30,30 @@ type Options struct {
 	// Log is the client's log file (bootstrap.md §7.4), never the
 	// terminal.
 	Log *slog.Logger
-	// Getenv reads the environment: TERM, the locale, SSH_AUTH_SOCK.
+	// Getenv reads the environment: TERM, the locale, SSH_AUTH_SOCK,
+	// and where the state directory is.
 	Getenv func(string) string
 	// Resume asks to take over a running session rather than start one
 	// (D8, bootstrap.md §9.2): SessionID, or with bootstrap.AnySession
 	// the user's one session on the host.
 	Resume    bool
 	SessionID [16]byte
+
+	// D7's auto-upload (bootstrap.md §4.7), when SSH.Server is "".
+	//
+	// Upload is -upload; "" is UploadAsk.
+	Upload UploadMode
+	// Ask puts a question to the user and returns the line they answer
+	// with, while the terminal is still cooked. nil means there is no one
+	// to ask, and UploadAsk then refuses unless the host is remembered.
+	Ask func(question string) (string, error)
+	// Releases is where release assets are fetched from; "" is
+	// bootstrap.ReleaseBase. Tests point it at their own HTTPS server,
+	// with HTTP the client that trusts it.
+	Releases string
+	HTTP     *http.Client
+	// Self reads this client's own file; nil reads the running image.
+	Self func() ([]byte, error)
 }
 
 // Run is `mosey host` (or `mosey -r host`): the SSH bootstrap, then a
@@ -50,6 +68,8 @@ func Run(ctx context.Context, o Options) error {
 	if o.Getenv == nil {
 		o.Getenv = os.Getenv
 	}
+	// The probe looks for this very version (bootstrap.md §4.7.2).
+	o.SSH.Version = o.Version
 	if err := o.SSH.Check(); err != nil {
 		return err
 	}
@@ -86,6 +106,19 @@ func Run(ctx context.Context, o Options) error {
 		getenv: o.Getenv,
 	}
 	line, cfg, err := b.run(ctx)
+	var ns *bootstrap.NoServerError
+	if errors.As(err, &ns) && o.SSH.Probes() {
+		// D7: no mosey of this version there. Copy it over, with the
+		// user's consent, and start once more with the same line, whose
+		// one-shot key no launcher has read (bootstrap.md §4.7.8).
+		if err := newCopier(o, o.SSH, b.cfg).copy(ctx, ns.Probe); err != nil {
+			return err
+		}
+		line, cfg, err = b.run(ctx)
+		if errors.As(err, &ns) {
+			return fail(err, "copied mosey %s to %s, but it is still not found there", o.Version, o.SSH.Destination)
+		}
+	}
 	if err != nil {
 		return err
 	}
