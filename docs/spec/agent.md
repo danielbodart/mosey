@@ -481,3 +481,42 @@ answered.
   constrained to another hop does not; no `SSH_AUTH_SOCK` with
   `ForwardAgent no` or `-a`; and the session goes on with the agent off
   when the server has `AllowAgentForwarding no`.
+
+## 8. quoin (D16, D17, D28)
+
+mosey needs nothing from quoin and quoin needs nothing new from mosey for
+plain forwarding. The contract mosey made in quoin's
+`docs/mosey-integration.md` §1, item by item:
+
+1. **The bind is OpenSSH's own**, replayed byte for byte at the head of
+   every agent channel (§2, §3): done. quoin-signer's `agentsrv` reads
+   `session-bind@openssh.com` as `ssh-agent` does, so it sees exactly what
+   `ssh -A` would show it. The e2e test with `ssh-add -h` checks the same
+   bind semantics with OpenSSH's agent, the reference quoin follows.
+2. **One binary, `mosey`**; the shells' parent is the spawner, argv
+   `mosey --serve=spawner` (`bootstrap.md` §8): unchanged here.
+3. **Extension messages pass through**: done, and tested byte for byte
+   with `provenance-v00@bodar.com` (§7).
+4. **The hand-off forwarder**: the seam is in the spawner (§4.3), at the
+   fixed path, never from the environment, and fails closed while an
+   attester is present; the hand-off itself is not implemented yet.
+5. **The session binding**: `Conn.HandshakeHash` is there; handing it to
+   the attester is part of 4.
+6. **Without quoin, plain forwarding**: done.
+
+**Why there is no local test against quoin-signer itself.** It cannot run
+without Dan's live setup: `quoin-signer serve` loads its keys only as
+TPM-wrapped files used through `/dev/tpmrm0` (`internal/tpmkey`), takes
+its listener only from systemd socket activation (`sdnotify.Listen`, a
+socket named `agent`), and asks galley, a desktop prompt, about every
+forwarded sign (`internal/galleyask`). Its `agentsrv.Server`, which could
+take a software signer, is in quoin's `internal/` and cannot be imported
+from mosey's module. A test would therefore touch the TPM, the user's
+systemd units and galley, which mosey's tests must never do. What stands
+in for it: spike S3 ran quoin's real `agentsrv` on frames recorded from a
+mosey-relayed connection and it asked "sudo on spikeA" unchanged (quoin
+8bb8de0); since then mosey relays the same bytes in the same order, which
+`TestAFarProgramReachesTheUsersAgentThroughTheSession` and the `ssh-add
+-h` test pin down. A quoin-side test that runs `agentsrv` with a software
+key behind mosey belongs in quoin's own suite, or in the NixOS VM check
+S3 asked for.

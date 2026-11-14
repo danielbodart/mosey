@@ -257,6 +257,21 @@ protocol), `Set(local)`, `Remote()`, `Acked()` (the acknowledged local
 version, for the client's input flow control, `ssp.md` §10.1),
 `RemoteChanged()`, `Stats()`.
 
+**channel.** `NewMux(d, Config{Role, Accept, Log})` over a `Datagrams`
+(`SendChannel`, `RecvChannel`, which `*transport.Conn` satisfies), then
+`Run`, `Open(ctx, typ)` and `Live`; a `*Stream` is `Read`, `Write`,
+`CloseWrite`, `Close`. `ParseFrame` and `Marshal` are the frame codec
+(`agent.md` §5).
+
+**agent.** `ParseBind`, `ListenCapture(dir)` with `Expect(pid)` and
+`Result(ctx, sshExited)`, `CaptureDir`, `Pin`, `Trigger` (the launcher's),
+`Forwarder{Dial, Bind, Log}` whose `Accept` is a `channel.Accept`,
+`Relay` and `Serve` (proto's, one local connection over one stream).
+Transport adds `DialOffering`, `Conn.Channels`, `Conn.Carries`,
+`Conn.SendChannel` and `Conn.RecvChannel` (`transport.md` §4.4);
+`client.Session` gains `Agent`, `server.Session` gains `AgentConn`, and
+`ipc` gains `AgentConn` (0x04).
+
 **userinput.** `*Stream` is an `ssp.State[*Stream]`: `Type`, `Resize`,
 `Len`, `Since(n)`, and `EncodedSince(n)`, the pending input the client
 throttles on (`ssp.md` §10.1).

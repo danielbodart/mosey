@@ -14,10 +14,11 @@ you an interactive shell over encrypted UDP, with the emulator sandboxed on
 the server, and copies itself to a host that doesn't have it (see
 [Zero install](#zero-install)). Sessions survive the client: `mosey -r HOST`
 resumes one from here or another device and takes it over (see
-[Using it](#using-it)). While you type, both ends send cover traffic on a
-fixed tick, which hides the timing of keys within a run of typing (see
-[What it is](#what-it-is)). Agent forwarding and predictive echo are the
-next slices. Every green commit is already released (see
+[Using it](#using-it)), and your ssh-agent comes along when your ssh config
+forwards it (see [Agent forwarding](#agent-forwarding)). While you type,
+both ends send cover traffic on a fixed tick, which hides the timing of
+keys within a run of typing (see [What it is](#what-it-is)). Predictive
+echo is the next slice. Every green commit is already released (see
 [Installing](#installing)).
 
 ## What it is
@@ -118,6 +119,21 @@ Nothing secret is ever saved to disk: each resume is a fresh SSH login and
 a fresh handshake ([docs/spec/bootstrap.md §9](docs/spec/bootstrap.md)).
 A client that just loses its network for a while needs none of this: it
 carries on by itself when packets flow again.
+
+### Agent forwarding
+
+mosey forwards your ssh-agent exactly when `ssh` would: when your
+`~/.ssh/config` says `ForwardAgent yes` (or a socket path) for the host,
+or when you pass `-A`; `-a` turns it off. Any agent that speaks the
+protocol works: OpenSSH's `ssh-agent`, gpg-agent, 1Password, quoin. On the
+host, `SSH_AUTH_SOCK` points at mosey's own socket, and every connection to
+it reaches your agent as it would under `ssh -A`, starting with the
+`session-bind` OpenSSH made for the login mosey started over, so keys you
+added with destination constraints (`ssh-add -h`) work for exactly the
+hops you allowed. If that bind can't be had (the host has
+`AllowAgentForwarding no`, or its host key isn't in your `known_hosts`),
+mosey says so once and carries on without the agent. After a resume the
+agent is the resuming device's. Details: [docs/spec/agent.md](docs/spec/agent.md).
 
 ## Zero install
 
