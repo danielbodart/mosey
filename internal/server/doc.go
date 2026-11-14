@@ -1,4 +1,4 @@
-// Package server is mosey-server's three roles, layout C of S4 (D22):
+// Package server is `mosey server`'s three roles, layout C of S4 (D22):
 //
 //   - spawner: tiny and unsandboxed. It reads the client's bootstrap line
 //     from SSH stdin, binds the UDP socket, opens the pty and starts the
@@ -11,9 +11,6 @@
 //     keystrokes to the pty, and enforces the grammar of emu's replies.
 //   - emu: sandboxed. The terminal emulator, and nothing else: no key, no
 //     pty, no socket but its IPC.
-//
-// The process that is the parent of the shells has comm mosey-server; quoin
-// relies on that name (D7, S3).
 //
 // Proto's logic is also callable in process, with an in-process emulator
 // and any Terminal, which is how the end-to-end tests run the whole server

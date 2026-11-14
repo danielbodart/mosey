@@ -116,11 +116,11 @@ jobs:
             exit 0
           fi
           V="$(scripts/version.sh)"
-          # One archive per platform, each holding both binaries.
+          # One archive per platform, holding the one binary.
           mkdir -p release
           for dir in artifacts/*/*/; do
             platform=$(basename "$dir")
-            tar -C "$dir" -czf "release/mosey-$V-$platform.tar.gz" mosey mosey-server
+            tar -C "$dir" -czf "release/mosey-$V-$platform.tar.gz" mosey
           done
           (cd release && sha256sum ./*.tar.gz > SHA256SUMS)
           # Notes from the commits since the last release: trunk-based means

@@ -35,11 +35,10 @@ decision wins.
 | `internal/sandbox` | Landlock deny-all, seccomp cBPF compiler and per-role policies, `DUMPABLE=0` (D22) | proto, emu | **server-proc** | `doc.go`, `sandbox.go`, `bpf.go`, `sandbox_linux.go`, `sandbox_other.go` |
 | `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
 | `internal/server` | The three roles; proto's `Session`, runnable in process for tests; the emu reply grammar | all server roles | **server-proc** | `doc.go`, `proto.go`, `roles.go` |
-| `cmd/mosey-server` | The server binary; re-executes itself as `proto` and `emu` | | **server-proc** | `main.go` |
 | `internal/bootstrap` | The SSH command line, the stdin and stdout lines (D6, D20, D25) | client, spawner | **bootstrap-client** | `doc.go`, `line.go`, `ssh.go` |
 | `internal/terminal` | The client's own tty: raw mode, size, SIGWINCH | client | **bootstrap-client** | `terminal.go` |
 | `internal/client` | `mosey host`: bootstrap, then `Session` (SSP + render + input) | client | **bootstrap-client** | `client.go` |
-| `cmd/mosey` | The client binary | | **bootstrap-client** | `main.go` |
+| `cmd/mosey` | The one binary: `main.go` is the client (`mosey host`), `server.go` the server (`mosey server`, re-executing itself as `mosey server proto` and `mosey server emu`) | | **bootstrap-client** (`main.go`), **server-proc** (`server.go`) | `main.go`, `server.go` |
 | `internal/e2e` | End-to-end tests: netsim + synctest in process, and real binaries over loopback through a throwaway sshd | tests only | **bootstrap-client** (integrator) | `doc.go` |
 
 Each owner writes their spec section in `docs/spec/` **before** the code
@@ -82,11 +81,11 @@ accident) and never imports `netsim`.
 
 ## 2. Processes
 
-Layout C of S4 (D22). One `mosey-server` per session.
+Layout C of S4 (D22). One `mosey server` per session. mosey is a single binary: the client and every server role are the same file (D7).
 
 ```
             ssh (system, user's config)
- mosey ─────────────────────────────────► mosey-server  (spawner: unsandboxed)
+ mosey ─────────────────────────────────► mosey server  (spawner: unsandboxed)
    │       stdin: ClientLine                   │   binds UDP, opens pty, forks login shell
    │      stdout: CredentialLine               │   re-execs itself as proto and emu
    │                                           │   SCM_RIGHTS: UDP socket + pty master → proto
@@ -134,7 +133,7 @@ proto writes them to the pty.
 1. `mosey host` makes a `handshake.OneShotKey` and runs
    `bootstrap.SSH.Command`: the system ssh with `-T -o ControlMaster=no -o
    ControlPath=none -o ForwardAgent=no` (D25's capture socket replaces
-   `no` in a later slice), then `mosey-server` (or `--server`).
+   `no` in a later slice), then `mosey server` (the remote mosey on PATH, or `--server PATH`).
 2. The client writes `bootstrap.ClientLine` (its public key, window size,
    TERM/COLORTERM/locale) to ssh's stdin.
 3. The spawner parses it, sets up as in §2, and proto mints a

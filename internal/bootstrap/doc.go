@@ -1,5 +1,5 @@
 // Package bootstrap is the SSH part of starting a session (D6, D20, D25):
-// the system ssh, with the user's own config, runs mosey-server on the far
+// the system ssh, with the user's own config, runs `mosey server` on the far
 // host; the client writes one line to its stdin and reads one line back
 // from its stdout.
 //

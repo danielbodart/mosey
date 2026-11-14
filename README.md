@@ -24,7 +24,7 @@ With [mise](https://mise.jdx.dev):
 
 ```sh
 mise run check    # lint and test
-mise run build    # static mosey and mosey-server for linux and darwin, amd64 and arm64
+mise run build    # the static mosey binary for linux and darwin, amd64 and arm64
 ```
 
 ## License

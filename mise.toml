@@ -5,7 +5,7 @@ go = "1.27.3"
 shellcheck = "0.11.0"
 
 [env]
-# Static binaries with no libc (D1): a copied-over mosey-server (D7) must
+# Static binaries with no libc (D1): a copied-over mosey (D7) must
 # run on any Linux, whatever its libc.
 CGO_ENABLED = "0"
 # What a release carries: the Go source and the module's requirements. A
@@ -45,7 +45,7 @@ outputs = { auto = true }
 run = "shellcheck scripts/*.sh"
 
 [tasks.build]
-description = "Static mosey and mosey-server for linux and darwin on amd64 and arm64, in dist/"
+description = "The static mosey binary for linux and darwin on amd64 and arm64, in dist/"
 run = "scripts/build.sh"
 
 [tasks.release-due]
