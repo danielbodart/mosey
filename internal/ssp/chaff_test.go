@@ -114,8 +114,11 @@ func TestWhileTheUserTypesTheClientSendsOneDatagramPerTickAllOfOneSize(t *testin
 // The client's 64-byte size holds only while it chaffs (§9.1.1, Dan's
 // decision of 2026-11-15): its acks and heartbeats before the user types
 // and after the chaff ends go at its floor of 40 (§9.2), so being idle
-// costs no more than it did.
+// costs no more than it did. The sizes are written out, not read from
+// clientChaffSize and clientPadFloor, because they are Dan's decided
+// values (O10/O12 as amended): a change to either constant must fail here.
 func TestTheClientPadsTo64WhileItChaffsAnd40WhenNotTyping(t *testing.T) {
+	const whileChaffing, notTyping = 64, 40
 	synctest.Test(t, func(t *testing.T) {
 		p := chaffingPair(t, 30*time.Millisecond, true)
 		time.Sleep(4 * time.Second)
@@ -137,18 +140,18 @@ func TestTheClientPadsTo64WhileItChaffsAnd40WhenNotTyping(t *testing.T) {
 			switch {
 			case d.at.Before(first):
 				before++
-				if d.sealed() != clientPadFloor {
-					t.Errorf("a datagram of %d bytes before the user typed; the floor is %d", d.sealed(), clientPadFloor)
+				if d.sealed() != notTyping {
+					t.Errorf("a datagram of %d bytes before the user typed; the floor is %d", d.sealed(), notTyping)
 				}
 			case !d.at.After(end):
 				during++
-				if d.sealed() != clientChaffSize {
-					t.Errorf("a datagram (chaff %v) of %d bytes while chaffing; want %d", d.chaff > 0, d.sealed(), clientChaffSize)
+				if d.sealed() != whileChaffing {
+					t.Errorf("a datagram (chaff %v) of %d bytes while chaffing; want %d", d.chaff > 0, d.sealed(), whileChaffing)
 				}
 			default:
 				after++
-				if d.sealed() != clientPadFloor {
-					t.Errorf("a datagram of %d bytes after the chaff ended; the floor is %d", d.sealed(), clientPadFloor)
+				if d.sealed() != notTyping {
+					t.Errorf("a datagram of %d bytes after the chaff ended; the floor is %d", d.sealed(), notTyping)
 				}
 			}
 		}
