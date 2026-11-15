@@ -72,7 +72,7 @@ agent                           (channel, handshake) -- the bind, capture, pin, 
 userinput                       ()              -- satisfies ssp.State structurally
 screen                          ()              -- satisfies ssp.State structurally
 render                          (screen)
-predict                         (screen)        -- never parses remote output (D9)
+predict                         (screen; golang.org/x/text/width) -- never parses remote output (D9)
 emu                             (screen)
 bootstrap                       ()              -- raw bytes; never handshake
 pty, sandbox, ipc, nocore       ()
@@ -80,7 +80,7 @@ install                         (bootstrap)     -- the version and path rules on
 terminal                        ()
 server                          (all of the above but client, terminal, render)
 client                          (all of the above but server, pty, sandbox, ipc, emu)
-cmd/mosey                       (client, server, install, bootstrap, terminal, nocore)
+cmd/mosey                       (client, server, install, bootstrap, terminal, nocore, predict)
 e2e                             (everything; tests only)
 ```
 
@@ -289,7 +289,7 @@ bounds. `render.Renderer` (`Render`, `Invalidate`, `Enter`, `Leave`,
 
 **predict.** `New(Config{Mode})`, then `Key(n, bytes)` for each key event
 (n is the stream's `Len()` after it), `Skip(n)` for a resize, `Frame(g)`
-for each new screen, `SetRTT(srtt)`, and `Overlay(g)`, the grid the
+for each new screen, `SetRTT(srtt)`, and `Overlay()`, the grid the
 renderer draws (`prediction.md` §16).
 
 **emu.** `Emulator` (`Write`, `Resize`, `Snapshot(*screen.Grid)`,

@@ -233,9 +233,12 @@ received, and a hostile one is held to what was sent [D, §12].
 3. **Cells.** Each cell prediction with event number `n ≤ A`, in order of
    (number, row, column):
    - **Ack horizon** [ours, S6 §4.2]: if an event that bumped the epoch
-     has a number in `(n, R]`, the frame shows the program's response to
+     has a number in `[n, R]`, the frame shows the program's response to
      that later key too (a redrawn line after Enter, a transient prompt),
-     so it can't judge this prediction. It is dropped, neither right nor
+     so it can't judge this prediction. A bump at `n` itself counts: an
+     event stops predicting at its first unpredictable key, so every
+     prediction it made came before that key (one read of `ls` and Enter
+     together, say) [D: S6 had one key per event and never met this]. It is dropped, neither right nor
      wrong. Without the horizon, frames after Enter judge correct
      predictions against a redrawn line and they flicker off: visible
      mistakes at 450 ms fall from 38 to 5 with it [M S6 §4.2].
@@ -247,7 +250,7 @@ received, and a hostile one is held to what was sent [D, §12].
      it. If it was informative, its epoch is confirmed.
    - **Mismatch**: the epoch is refuted (step 5).
 4. **Cursor.** Each cursor prediction with `n ≤ A` is judged only when
-   `n == R` and no bump lies in `(n, R]`; older ones have been overtaken
+   `n == R` and no bump lies in `[n, R]`; older ones have been overtaken
    by later keys the server already has, and are dropped. A position that
    differs from the frame's cursor refutes the epoch; one that matches
    **does not confirm** it, since vi's `l` moves the cursor exactly as a
@@ -357,11 +360,12 @@ server's emulator does.
 - **Agreement with the server.** The client and the server are the same
   build (D7), so the tables never skew between versions, only between the
   two libraries. A test in `internal/emu` writes every code point the
-  client would predict into the server's emulator and compares the width
-  it gives (`TestPredictionWidthsAgreeWithTheEmulator`); the code points
-  where they disagree are listed in `predict` and not predicted. If they
-  did disagree somewhere the test missed, the cost is a wrong prediction,
-  corrected within a round trip, never a safety problem.
+  client would predict (152,580 of them) into the server's emulator and
+  compares the cell it gets (`TestPredictionWidthsAgreeWithTheEmulator`).
+  They agree on every one [M], so there is no list of exceptions; if a
+  library update makes them differ, the test names the code points and
+  they are excluded. A disagreement the test could not see costs a wrong
+  prediction, corrected within a round trip, never a safety problem.
 - A width-2 glyph takes its cell plus a continuation cell. Backspace and
   the arrows step over both.
 
@@ -401,7 +405,7 @@ cell's other underline styles are replaced by the plain underline
 
 ### 11.3 How it is drawn
 
-`Engine.Overlay(frame)` returns the grid to draw: the frame itself when
+`Engine.Overlay()` returns the grid to draw: the frame itself when
 nothing is displayed, or a clone with the displayed predictions written
 into it and the cursor moved to the newest displayed cursor prediction
 (its visibility and shape stay the frame's). The renderer draws it like
@@ -506,8 +510,41 @@ of the key and matched the screen the program settled on before the next
 key; "wrong" a key whose drawn prediction did not.
 
 `MOSEY_PREDICT_REPORT=1 go test ./internal/predict -run TestReplay -v`
-prints the tables below; without the variable the test asserts only the
-floors of §14.1 on a subset, so CI stays quick.
+prints the tables below (12 s); without the variable the test replays
+bash at 100 and 450 ms and asserts floors (65% and 45% instant, at most
+1% wrong) and that no password key is drawn, so CI stays quick.
+
+### 14.1 Results (9 traces, 9,544 keys, 3 seeds; this slice's engine)
+
+Instant / wrong, as a percentage of all keys:
+
+| trace | LAN 5 ms | Wi-Fi 30 ms, 1% | 100 ms | 100 ms, 29% | train 250 ms | EV-DO 450 ms |
+|---|---|---|---|---|---|---|
+| bash | 81.0 / 0.00 | 79.7 / 0.00 | 77.6 / 0.00 | 74.3 / 0.00 | 61.3 / 0.00 | 59.2 / 0.00 |
+| Claude Code | 85.6 / 1.02 | 85.3 / 1.02 | 83.6 / 1.02 | 82.3 / 0.96 | 72.9 / 2.88 | 73.6 / 2.88 |
+| fish | 80.0 / 0.00 | 79.6 / 0.00 | 77.1 / 0.00 | 73.6 / 0.00 | 63.8 / 0.24 | 61.6 / 0.76 |
+| less | 32.1 / 0.00 | 32.1 / 0.00 | 31.4 / 0.00 | 27.3 / 0.00 | 20.9 / 0.00 | 16.1 / 0.00 |
+| TUI, drawn cursor | 0.0 / 0.00 | 0.0 / 0.00 | 0.0 / 0.00 | 0.0 / 0.00 | 0.0 / 0.00 | 0.0 / 0.00 |
+| TUI, real cursor | 84.6 / 0.00 | 83.5 / 0.00 | 81.6 / 0.00 | 79.0 / 0.00 | 71.3 / 0.00 | 69.8 / 0.00 |
+| vim | 71.5 / 0.00 | 70.7 / 0.00 | 69.0 / 0.00 | 64.6 / 0.00 | 54.7 / 0.00 | 53.0 / 0.00 |
+| zsh, full | 75.8 / 0.14 | 74.8 / 0.14 | 72.7 / 0.21 | 65.5 / 0.21 | 54.1 / 0.30 | 52.2 / 0.30 |
+| zsh, plain | 82.2 / 0.00 | 81.4 / 0.00 | 79.7 / 0.00 | 77.1 / 0.00 | 66.9 / 0.00 | 65.7 / 0.00 |
+| **all** | **74.1 / 0.10** | **73.4 / 0.10** | **71.5 / 0.11** | **67.8 / 0.11** | **57.9 / 0.30** | **56.4 / 0.40** |
+
+Row-stale (§9.1) was 4.0–5.7% of keys. **Password keys drawn: 0 of 555
+on every profile.** Echo-ack-only frames sent while echo was off: 0.
+
+Against S6's targets (79.8% instant and 0.1% wrong on the LAN, 62.4% at
+450 ms with rebase): wrong is on target, and the difference in instant is
+the drawn-cursor TUI, which S6's figures predicted with the heuristic D12
+turns off. S6's ablation without it gave 71.4% at 100 ms [M S6 §4.1];
+this engine gives 71.5%. Claude Code's wrong predictions are S6's too:
+its input box wraps a word before the margin [M S6 §8].
+
+End to end (`internal/e2e`, netsim under synctest, 400 ms round trip): a
+key is on the user's screen before any virtual time passes, and a wrong
+guess is taken back 660 ms after it was typed, the round trip plus the
+50 ms echo-ack wait plus the server's frame pacing.
 
 ## 15. Where this differs from S6's draft
 
@@ -532,8 +569,8 @@ floors of §14.1 on a subset, so CI stays quick.
   (`screen.md` §7.3).
 - `internal/predict`: `New(Config)`, `Engine.Key(n, bytes)`,
   `Engine.Skip(n)`, `Engine.Frame(grid)`, `Engine.SetRTT(d)`,
-  `Engine.Overlay(grid)`, `Engine.Stats()`; `Mode` (`Adaptive`, `Always`,
-  `Never`) and `ParseMode`.
+  `Engine.Overlay()`, `Engine.Stats()`; `Width(r)`; `Mode` (`Adaptive`,
+  `Always`, `Never`) and `ParseMode`.
 - `client.Session.Predict` and `client.Options.Predict`: the mode, from
   `mosey -predict`.
 - `server.Session`: the write log and the rules of §3.1.

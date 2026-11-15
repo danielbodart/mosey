@@ -66,6 +66,23 @@ dependency (S4).
 
 Raw mode and window size for the client's own terminal, on Linux and macOS.
 
+### `golang.org/x/text` v0.44.0
+
+Only `golang.org/x/text/width`: Unicode's East Asian Width property, which
+prediction needs to know how many cells a typed character takes before
+the server says (D12, `docs/spec/prediction.md` §10). The client path may
+depend on nothing outside the standard library and `golang.org/x/*`
+(D9, `internal/client`'s import test), so tuios' own width code is out of
+reach there, and writing a Unicode table ourselves would be a table to
+keep in step by hand. `internal/emu`'s
+`TestPredictionWidthsAgreeWithTheEmulator` checks every code point the
+client predicts against the server's emulator: they agree on all 152,580.
+
+The version is the one `golang.org/x/crypto` v0.59.0 already required.
+Naming it directly brings its own `go.mod` into the graph, which moved
+the indirect `golang.org/x/sync` from v0.22.0 to v0.25.0 (ultraviolet's
+`errgroup`, emu role only).
+
 ## In the standard library, with a known gap
 
 ### `crypto/hpke`: X-Wing (ML-KEM-768 + X25519)

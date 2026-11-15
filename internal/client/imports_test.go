@@ -11,7 +11,7 @@ import (
 // client's own included. mosey is one binary, so it does contain tuios, but
 // only the server's emu role may reach it.
 var clientPath = []string{
-	"client", "render", "screen", "terminal", "userinput",
+	"client", "render", "screen", "terminal", "userinput", "predict",
 	"ssp", "transport", "handshake", "bootstrap", "nocore", "channel", "agent",
 }
 
@@ -41,6 +41,7 @@ func TestTheClientPathImportsNoEscapeParser(t *testing.T) {
 	allowed := append([]string{
 		mosey + "wire", mosey + "replay",
 		"golang.org/x/crypto/", "golang.org/x/sys/", "golang.org/x/term", "golang.org/x/net/",
+		"golang.org/x/text/width", "golang.org/x/text/transform",
 		"vendor/golang.org/x/",
 	}, pkgs...)
 	for _, goos := range []string{"linux", "darwin"} {
