@@ -56,6 +56,32 @@ interface so it can be replaced or forked.
 ChaCha20-Poly1305, the packet AEAD (D20). The standard library has it only
 internally. Audited by Trail of Bits in 2025 with the rest of Go's crypto.
 
+The agent slice (D25, `agent.md` §2) also uses two of its SSH packages,
+client side only, to check the session-bind before replaying it:
+
+- **`golang.org/x/crypto/ssh`**: `ParsePublicKey`, `Unmarshal` and
+  `PublicKey.Verify`, in `internal/agent`'s `ParseBind`, to parse the
+  host key and signature in the session-bind and verify the signature
+  over the session id. The frame comes from the user's own ssh, on the
+  capture socket mosey made for it; the key and signature in it are the
+  far host's, so they are attacker-reachable input. mosey's own framing
+  bounds the frame first, and `FuzzCapture` runs the whole path. Writing
+  our own SSH key and signature parsing would be our own crypto (D19).
+  `internal/client` names its `PublicKey` type and fingerprints a key for
+  messages.
+- **`golang.org/x/crypto/ssh/knownhosts`**: `New`, `Normalize` and its
+  `KeyError` and `RevokedError`, in `internal/agent`'s pin, to check the
+  bind's host key against the user's `known_hosts` files, the ones ssh
+  itself used (`ssh -G`), so a bind is replayed only for a host ssh
+  trusted. It reads local files the user owns, not the network.
+
+Neither package was in the scope of the 2025 audit above, which covered
+the standard library's crypto; they are maintained by the Go team in the
+same module. mosey calls only the functions listed: the `ssh` package's
+client and server are part of the package but never called, and its
+`agent` subpackage is not imported. The agent protocol mosey relays is
+opaque bytes, never parsed by these packages.
+
 ### `golang.org/x/sys` v0.50.0
 
 Landlock, seccomp, `PR_SET_DUMPABLE`, SCM_RIGHTS and the pty ioctls (D22).

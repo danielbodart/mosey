@@ -34,7 +34,7 @@ much of this in 2012:
 - it echoes your typing locally, so it feels instant even on a slow link.
 
 But Mosh's last release was in 2022, its crypto dates from 2012, and a
-session can't be picked up again from another device without tmux
+session can't be picked up again from another device without tmux.
 
 mosey is inspired by Mosh, written from scratch in Go from the Mosh paper
 and public specifications. It starts over your normal `ssh`, with your own
