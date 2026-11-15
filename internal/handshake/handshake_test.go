@@ -7,8 +7,8 @@ import (
 )
 
 var (
-	terminalOnly   = Hello{Version: Revision, Channels: []ChannelType{ChannelTerminal}}
-	terminalyAgent = Hello{Version: Revision, Channels: []ChannelType{ChannelTerminal, ChannelAgent}}
+	terminalOnly   = Hello{Min: MinProtocol, Max: MaxProtocol, Channels: []ChannelType{ChannelTerminal}}
+	terminalyAgent = Hello{Min: MinProtocol, Max: MaxProtocol, Channels: []ChannelType{ChannelTerminal, ChannelAgent}}
 )
 
 // world is one server's credential store and responder, with the indices it
@@ -145,10 +145,10 @@ func TestBothSidesAgreeOnTheKeys(t *testing.T) {
 }
 
 func TestMessagesAreTheSizesTheSpecSays(t *testing.T) {
-	if Msg1Size(1) != 1170 || Msg1Size(MaxChannels) != 1185 {
+	if Msg1Size(1) != 1171 || Msg1Size(MaxChannels) != 1186 {
 		t.Errorf("msg1 is %d to %d bytes", Msg1Size(1), Msg1Size(MaxChannels))
 	}
-	if Msg2Size(1) != 1150 || Msg2Size(MaxChannels) != 1165 {
+	if Msg2Size(1) != 1151 || Msg2Size(MaxChannels) != 1166 {
 		t.Errorf("msg2 is %d to %d bytes", Msg2Size(1), Msg2Size(MaxChannels))
 	}
 	if Msg1Size(MaxChannels) > 1200 {
@@ -169,7 +169,7 @@ func TestMessagesAreTheSizesTheSpecSays(t *testing.T) {
 	}
 
 	w.newClient(t)
-	all := Hello{Version: Revision}
+	all := Hello{Min: MinProtocol, Max: MaxProtocol}
 	for c := range MaxChannels {
 		all.Channels = append(all.Channels, ChannelType(c))
 	}
@@ -466,7 +466,7 @@ func TestAMsg1WithReceiverIndexZeroIsRefusedBeforeAnyWork(t *testing.T) {
 
 func TestAClientHelloWithoutTheTerminalIsRefused(t *testing.T) {
 	w := newWorld(t)
-	agentOnly := Hello{Version: Revision, Channels: []ChannelType{ChannelAgent}}
+	agentOnly := Hello{Min: MinProtocol, Max: MaxProtocol, Channels: []ChannelType{ChannelAgent}}
 	i, err := NewInitiator(w.cred, w.key, agentOnly, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -500,13 +500,13 @@ func TestTheServerAnswersWithTheChannelsBothSupport(t *testing.T) {
 
 func TestAServerHelloNamingAChannelNotOfferedIsIncompatible(t *testing.T) {
 	offered := terminalOnly
-	if err := (Hello{Version: 1, Channels: []ChannelType{ChannelTerminal, ChannelAgent}}).agrees(offered); !errors.Is(err, ErrIncompatible) {
+	if err := (Hello{Min: 1, Max: 1, Channels: []ChannelType{ChannelTerminal, ChannelAgent}}).agrees(offered); !errors.Is(err, ErrIncompatible) {
 		t.Errorf("an extra channel: %v", err)
 	}
-	if err := (Hello{Version: 1, Channels: []ChannelType{ChannelAgent}}).agrees(terminalyAgent); !errors.Is(err, ErrIncompatible) {
+	if err := (Hello{Min: 1, Max: 1, Channels: []ChannelType{ChannelAgent}}).agrees(terminalyAgent); !errors.Is(err, ErrIncompatible) {
 		t.Errorf("no terminal: %v", err)
 	}
-	if err := (Hello{Version: 1, Attach: 1, Channels: []ChannelType{ChannelTerminal}}).agrees(offered); !errors.Is(err, ErrIncompatible) {
+	if err := (Hello{Min: 1, Max: 1, Attach: 1, Channels: []ChannelType{ChannelTerminal}}).agrees(offered); !errors.Is(err, ErrIncompatible) {
 		t.Errorf("another attach mode: %v", err)
 	}
 }

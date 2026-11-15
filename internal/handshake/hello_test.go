@@ -10,7 +10,7 @@ func TestAHelloSurvivesARoundTrip(t *testing.T) {
 	for _, h := range []Hello{
 		terminalOnly,
 		terminalyAgent,
-		{Version: 255, Attach: 7, Channels: []ChannelType{3, 200}},
+		{Min: 3, Max: 255, Attach: 7, Channels: []ChannelType{3, 200}},
 	} {
 		got, err := ParseHello(MarshalHello(h))
 		if err != nil {
@@ -25,14 +25,16 @@ func TestAHelloSurvivesARoundTrip(t *testing.T) {
 func TestParseHelloRefusesWhatIsNotCanonical(t *testing.T) {
 	for name, b := range map[string][]byte{
 		"empty":                 {},
-		"short":                 {1, 0},
-		"version 0":             {0, 0, 1, 0},
-		"no channels":           {1, 0, 0},
-		"seventeen channels":    append([]byte{1, 0, 17}, make([]byte, 17)...),
-		"count over the length": {1, 0, 2, 0},
-		"trailing byte":         {1, 0, 1, 0, 0},
-		"duplicate channel":     {1, 0, 2, 0, 0},
-		"decreasing channels":   {1, 0, 2, 1, 0},
+		"short":                 {1, 1, 0},
+		"min 0":                 {0, 1, 0, 1, 0},
+		"max 0":                 {1, 0, 0, 1, 0},
+		"max below min":         {2, 1, 0, 1, 0},
+		"no channels":           {1, 1, 0, 0},
+		"seventeen channels":    append([]byte{1, 1, 0, 17}, make([]byte, 17)...),
+		"count over the length": {1, 1, 0, 2, 0},
+		"trailing byte":         {1, 1, 0, 1, 0, 0},
+		"duplicate channel":     {1, 1, 0, 2, 0, 0},
+		"decreasing channels":   {1, 1, 0, 2, 1, 0},
 	} {
 		if _, err := ParseHello(b); !errors.Is(err, ErrMalformed) {
 			t.Errorf("%s: %v", name, err)
@@ -41,7 +43,7 @@ func TestParseHelloRefusesWhatIsNotCanonical(t *testing.T) {
 }
 
 func TestParseHelloLeavesUnknownChannelsAndAttachModesToPolicy(t *testing.T) {
-	h, err := ParseHello([]byte{1, 9, 2, 0, 0x42})
+	h, err := ParseHello([]byte{1, 1, 9, 2, 0, 0x42})
 	if err != nil {
 		t.Fatal(err)
 	}

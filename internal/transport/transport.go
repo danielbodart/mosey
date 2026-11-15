@@ -206,8 +206,8 @@ type Stats struct {
 // (agent.md §4); a connection carries what both offered (transport.md
 // §4.4).
 var (
-	clientHello = handshake.Hello{Version: handshake.Revision, Channels: []handshake.ChannelType{handshake.ChannelTerminal}, Attach: handshake.Exclusive}
-	serverHello = handshake.Hello{Version: handshake.Revision, Channels: []handshake.ChannelType{handshake.ChannelTerminal, handshake.ChannelAgent}, Attach: handshake.Exclusive}
+	clientHello = handshake.Hello{Min: handshake.MinProtocol, Max: handshake.MaxProtocol, Channels: []handshake.ChannelType{handshake.ChannelTerminal}, Attach: handshake.Exclusive}
+	serverHello = handshake.Hello{Min: handshake.MinProtocol, Max: handshake.MaxProtocol, Channels: []handshake.ChannelType{handshake.ChannelTerminal, handshake.ChannelAgent}, Attach: handshake.Exclusive}
 )
 
 // Recv returns the next authentic terminal payload, handling every other
@@ -301,6 +301,10 @@ func (c *Conn) End(reason EndReason) error {
 	}
 	return c.Close()
 }
+
+// Protocol is the protocol version the handshake agreed on: the highest
+// version both sides speak (D8 V1, transport.md §2.3, §3.6).
+func (c *Conn) Protocol() uint8 { return c.version }
 
 // Channels is the channel types this connection carries: what both sides
 // offered in the handshake (transport.md §3.6, §4.4), in increasing order.

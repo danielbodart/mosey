@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -239,6 +240,12 @@ func (l *Listener) handleMsg1(pkt []byte, from netip.AddrPort) {
 		return
 	}
 	if pc == nil {
+		if p.Version == 0 {
+			// Answered so the client learns why (transport.md §3.6); its
+			// confirmation is refused below.
+			l.e.log.Info("answered a client with no protocol version in common", "from", from,
+				"client", fmt.Sprintf("%d..%d", p.Hello.Min, p.Hello.Max))
+		}
 		pc = &pending{p: p, ks: newKeyset(&p.Keys, time.Now()), root: p.Keys.Root,
 			addrs: map[netip.AddrPort]*budget{}}
 		p.Keys.Wipe()
@@ -306,6 +313,12 @@ func (l *Listener) confirm(pc *pending, pkt []byte, from netip.AddrPort) {
 		}
 		return
 	}
+	if pc.p.Version == 0 {
+		// No protocol version in common: msg2 told the client so, and a
+		// connection is never made at no version (transport.md §3.6).
+		l.e.drop(State, from, "confirmation with no protocol version in common")
+		return
+	}
 	pc.ks.window.Commit(counter)
 	if err := l.resp.Confirm(pc.p); err != nil {
 		l.e.log.Error("a pending outlived its credential; dropping its confirmation", "err", err)
@@ -316,7 +329,7 @@ func (l *Listener) confirm(pc *pending, pkt []byte, from netip.AddrPort) {
 	l.collectErased()
 
 	c := newConn(l.e, true, pc.ks, &pc.root)
-	c.listener, c.sid, c.cred = l, pc.p.SessionID, pc.p.CredentialID
+	c.listener, c.sid, c.cred, c.version = l, pc.p.SessionID, pc.p.CredentialID, pc.p.Version
 	// What both offered: the server's answer in msg2 (transport.md §3.6).
 	for _, ch := range pc.p.Hello.Channels {
 		if serverHello.Supports(ch) {

@@ -20,6 +20,8 @@ import (
 type clientHandshake struct {
 	ini  *handshake.Initiator
 	msg1 []byte
+	// offered is the client's own hello, for the version it agrees on.
+	offered handshake.Hello
 	// accepted is the msg2 the current epoch-0 keys came from. A
 	// byte-identical one (the server's cached answer to a resend) is
 	// ignored; a different authentic one replaces the keys.
@@ -80,7 +82,7 @@ func DialOffering(ctx context.Context, pc net.PacketConn, addr netip.AddrPort, c
 	e.table.set(idxC, c)
 	now := time.Now()
 	c.hs = &clientHandshake{
-		ini: ini, msg1: ini.Msg1(), addr: c.serverAddr,
+		ini: ini, msg1: ini.Msg1(), offered: hello, addr: c.serverAddr,
 		deadline: now.Add(handshake.CredentialTTL),
 		next:     now.Add(handshakeFirst), interval: handshakeFirst,
 		done: make(chan struct{}),
@@ -193,6 +195,8 @@ func (hs *clientHandshake) onMsg2(c *Conn, pkt []byte, from netip.AddrPort) {
 	keys.Wipe()
 	hs.accepted = bytes.Clone(pkt)
 	c.channels = slices.Clone(server.Channels)
+	// ReadMsg2 has checked there is one (handshake.Negotiate).
+	c.version, _ = handshake.Negotiate(hs.offered, server)
 	hs.established = true
 	c.sendFrame(KindKeepalive, keepaliveAnswer)
 }

@@ -59,6 +59,9 @@ type Conn struct {
 
 	// channels is what the handshake negotiated (transport.md §4.4).
 	channels []handshake.ChannelType
+	// version is the protocol version the handshake agreed (D8 V1,
+	// transport.md §3.6).
+	version uint8
 
 	recvq chan []byte
 	chanq chan []byte

@@ -20,8 +20,10 @@ const (
 	// datagrams; transport.TypeMsg1 and TypeMsg2 are the same numbers.
 	TypeMsg1 = 0x01
 	TypeMsg2 = 0x02
-	// WireVersion is the second byte of msg1 and msg2. A peer is the same
-	// build (D7), so another version is a bug or an attack, never answered.
+	// WireVersion is the second byte of msg1 and msg2: the layout of the
+	// two messages, tied to the protocol name, so another is never
+	// answered. What changes between releases is the protocol version,
+	// negotiated in the hello (D8 V1, transport.md §2.3).
 	WireVersion = 0x01
 
 	msg1Header = 1 + 1 + 8 + 4 // type, version, cred_id, idx_C
@@ -31,13 +33,13 @@ const (
 )
 
 // Msg1Size is the size of a msg1 whose hello offers channels channel types:
-// 1169 + channels, so 1170 to 1185 bytes.
+// 1170 + channels, so 1171 to 1186 bytes.
 func Msg1Size(channels int) int {
 	return msg1Header + EncapsulationSize + helloFixed + channels + tagSize + mac1Size
 }
 
 // Msg2Size is the size of a msg2 whose hello names channels channel types:
-// 1149 + channels, so 1150 to 1165 bytes.
+// 1150 + channels, so 1151 to 1166 bytes.
 func Msg2Size(channels int) int {
 	return msg2Header + EncapsulationSize + helloFixed + channels + tagSize
 }
@@ -171,7 +173,7 @@ func buildMsg1(cred *Credential, clientPublic []byte, hello Hello, idxC uint32) 
 // the transport's tests can play that attacker against the real listener.
 func ForgeMsg1(cred Credential, clientPublic []byte, idxC uint32) ([]byte, error) {
 	defer cred.Wipe()
-	hello := Hello{Version: Revision, Channels: []ChannelType{ChannelTerminal}}
+	hello := Hello{Min: MinProtocol, Max: MaxProtocol, Channels: []ChannelType{ChannelTerminal}}
 	msg, st, err := buildMsg1(&cred, clientPublic, hello, idxC)
 	st.wipe()
 	return msg, err
@@ -281,6 +283,11 @@ type Pending struct {
 	Keys Keys
 	// Hello is the client's.
 	Hello Hello
+	// Version is the protocol version the two hellos agree on (D8 V1), or
+	// 0 when they have none in common: the client was answered so that it
+	// learns why, and the pending must never be confirmed (transport.md
+	// §3.6).
+	Version uint8
 	// SessionID and CredentialID are public, for revocation (D26) and logs.
 	SessionID    [16]byte
 	CredentialID [8]byte
@@ -358,6 +365,7 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 
 	var keys Keys
 	var client Hello
+	var version uint8
 	secretDo(func() {
 		st := cred.initial
 		defer st.wipe()
@@ -379,8 +387,19 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 		if client, err = ParseHello(plain); err != nil {
 			return
 		}
-		if err = client.acceptable(); err != nil {
-			return
+		answer := r.hello.answer(client)
+		if v, ok := Negotiate(client, r.hello); ok {
+			if err = client.acceptable(); err != nil {
+				return
+			}
+			version = v
+		} else {
+			// No version in common: the client knows the PSK, so it is the
+			// genuine client of an incompatible build. It is answered with
+			// this server's whole hello, so that it learns why and says so,
+			// and the pending can never be confirmed (D8 V1: no silent
+			// lockout).
+			answer = Hello{Min: r.hello.Min, Max: r.hello.Max, Attach: client.Attach, Channels: r.hello.Channels}
 		}
 
 		// Every check has passed: only now draw idx_S, which msg2 and so
@@ -401,7 +420,7 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 		st.mixHash(enc2)
 		st.mixKey(ss2)
 		clear(ss2)
-		out = append(out, st.encryptAndHash(MarshalHello(r.hello.answer(client)))...)
+		out = append(out, st.encryptAndHash(MarshalHello(answer))...)
 		i2r, r2i, root := st.split()
 		keys.Send, keys.Recv, keys.Root = r2i, i2r, root
 		clear(i2r[:])
@@ -415,7 +434,7 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 	}
 
 	p = &Pending{
-		Keys: keys, Hello: client, SessionID: cred.sid, CredentialID: cred.id,
+		Keys: keys, Hello: client, Version: version, SessionID: cred.sid, CredentialID: cred.id,
 		store: c, cred: cred, msg1Hash: hash, msg2: msg2,
 	}
 	if len(cred.pendings) >= MaxPending {
