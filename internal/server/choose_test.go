@@ -41,14 +41,14 @@ func TestAPlainClientTakesTheNewestDetachedSessionAndNeverAnAttachedOne(t *testi
 		session("recent", 3, bootstrap.SessionDetached, 500),
 		session("starting", 4, bootstrap.SessionNew, 950),
 	}
-	if c := choose(line(bootstrap.AttachAuto, ""), sessions, nil, fixedName); c.start || c.err != nil || c.take != 2 {
+	if c := choose(line(bootstrap.AttachAuto, ""), sessions, fixedName); c.start || c.err != nil || c.take != 2 {
 		t.Errorf("took %+v, not the most recently detached", c)
 	}
 	attachedOnly := sessions[1:2]
-	if c := choose(line(bootstrap.AttachAuto, ""), attachedOnly, nil, fixedName); !c.start || c.name != "made-up" {
+	if c := choose(line(bootstrap.AttachAuto, ""), attachedOnly, fixedName); !c.start || c.name != "made-up" {
 		t.Errorf("with only an attached session: %+v, not a new session", c)
 	}
-	if c := choose(line(bootstrap.AttachAuto, ""), nil, nil, fixedName); !c.start || c.name != "made-up" {
+	if c := choose(line(bootstrap.AttachAuto, ""), nil, fixedName); !c.start || c.name != "made-up" {
 		t.Errorf("with no session: %+v", c)
 	}
 }
@@ -59,14 +59,14 @@ func TestAPlainClientTakesTheNewestDetachedSessionAndNeverAnAttachedOne(t *testi
 // start a new one beside it.
 func TestSessionsOfEveryVersionAreChosenAlike(t *testing.T) {
 	older := of("v0", session("work", 1, bootstrap.SessionDetached, 900))
-	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{older}, nil, fixedName); c.start || c.err != nil || c.take != 0 {
+	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{older}, fixedName); c.start || c.err != nil || c.take != 0 {
 		t.Errorf("a plain client with only a v0 session detached: %+v; want it taken", c)
 	}
 	ours := session("play", 2, bootstrap.SessionDetached, 100)
-	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{older, ours}, nil, fixedName); c.start || c.err != nil || c.take != 0 {
+	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{older, ours}, fixedName); c.start || c.err != nil || c.take != 0 {
 		t.Errorf("a plain client: %+v, not the most recently detached, whatever its version", c)
 	}
-	if c := choose(line(bootstrap.AttachName, "work"), []bootstrap.SessionLine{older}, nil, fixedName); c.start || c.err != nil || c.take != 0 {
+	if c := choose(line(bootstrap.AttachName, "work"), []bootstrap.SessionLine{older}, fixedName); c.start || c.err != nil || c.take != 0 {
 		t.Errorf("-s work with only a v0 work: %+v, not the v0 work", c)
 	}
 }
@@ -79,19 +79,19 @@ func TestNamedAndNewSessionsAreChosenAsTheSpecSays(t *testing.T) {
 		held(session("work", 1, bootstrap.SessionAttached, 100), 7),
 		session("play", 2, bootstrap.SessionDetached, 200),
 	}
-	if c := choose(line(bootstrap.AttachName, "work"), sessions, nil, fixedName); c.start || c.err != nil || c.take != 0 {
+	if c := choose(line(bootstrap.AttachName, "work"), sessions, fixedName); c.start || c.err != nil || c.take != 0 {
 		t.Errorf("-s work: %+v, not a takeover of the attached work", c)
 	}
-	if c := choose(line(bootstrap.AttachName, "home"), sessions, nil, fixedName); !c.start || c.name != "home" {
+	if c := choose(line(bootstrap.AttachName, "home"), sessions, fixedName); !c.start || c.name != "home" {
 		t.Errorf("-s home: %+v, not a new session called home", c)
 	}
 	var taken map[string]bool
-	c := choose(line(bootstrap.AttachNew, ""), sessions, nil, func(t map[string]bool) string { taken = t; return "fresh" })
+	c := choose(line(bootstrap.AttachNew, ""), sessions, func(t map[string]bool) string { taken = t; return "fresh" })
 	if !c.start || c.name != "fresh" || !taken["work"] || !taken["play"] {
 		t.Errorf("-new: %+v, avoiding %v", c, taken)
 	}
 	// new:NAME is the launcher's word to its spawner, never a client's.
-	if c := choose(line(bootstrap.AttachNew, "sneaky"), sessions, nil, fixedName); c.err == nil || c.err.Code != bootstrap.CodeLine {
+	if c := choose(line(bootstrap.AttachNew, "sneaky"), sessions, fixedName); c.err == nil || c.err.Code != bootstrap.CodeLine {
 		t.Errorf("new:NAME from a client: %+v", c)
 	}
 }
@@ -113,7 +113,7 @@ func TestReconnectTakesItsOwnSessionAndNeverAnothers(t *testing.T) {
 		"a pending resume's": {held(session("work", 1, bootstrap.SessionAttached, 100), 9), "taken 100"},
 		"never attached":     {session("work", 1, bootstrap.SessionNew, 100), "taken 100"},
 	} {
-		got := choose(reconnecting, []bootstrap.SessionLine{c.s}, nil, fixedName)
+		got := choose(reconnecting, []bootstrap.SessionLine{c.s}, fixedName)
 		var says string
 		switch {
 		case got.err != nil:
@@ -132,44 +132,15 @@ func TestReconnectTakesItsOwnSessionAndNeverAnothers(t *testing.T) {
 	if c := reconnect(true, mine, held(session("work", 1, bootstrap.SessionAttached, 1), 8), 0); c.err != nil || c.start || c.take != 0 {
 		t.Errorf("with reconnectTakesBack: %+v, not a takeover", c)
 	}
-	gone := choose(reconnecting, []bootstrap.SessionLine{session("other", 2, bootstrap.SessionDetached, 1)}, nil, fixedName)
+	gone := choose(reconnecting, []bootstrap.SessionLine{session("other", 2, bootstrap.SessionDetached, 1)}, fixedName)
 	if gone.err == nil || gone.err.Code != bootstrap.CodeSession {
 		t.Errorf("a reconnect of a session that has gone: %+v", gone)
 	}
 	// Without a holder, resume:SID is the launcher's own word: a takeover.
 	plain := choose(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: [16]byte{1}},
-		[]bootstrap.SessionLine{held(session("work", 1, bootstrap.SessionAttached, 1), 8)}, nil, fixedName)
+		[]bootstrap.SessionLine{held(session("work", 1, bootstrap.SessionAttached, 1), 8)}, fixedName)
 	if plain.err != nil || plain.start || plain.take != 0 {
 		t.Errorf("resume:SID: %+v", plain)
-	}
-}
-
-// A session the launcher passed over (a version whose attach protocol it
-// does not speak) keeps its name: a generated one avoids it, and -s with
-// it is refused rather than start a second session of that name.
-func TestAPassedOverSessionKeepsItsName(t *testing.T) {
-	passed := map[string]string{"work": "0.100.5"}
-	var taken map[string]bool
-	c := choose(line(bootstrap.AttachNew, ""), nil, passed, func(t map[string]bool) string { taken = t; return "fresh" })
-	if !c.start || c.name != "fresh" || !taken["work"] {
-		t.Errorf("-new: %+v, taken %v; want work taken", c, taken)
-	}
-	taken = nil
-	c = choose(line(bootstrap.AttachAuto, ""), nil, passed, func(t map[string]bool) string { taken = t; return "fresh" })
-	if !c.start || !taken["work"] {
-		t.Errorf("plain: %+v, taken %v; want work taken", c, taken)
-	}
-	c = choose(line(bootstrap.AttachName, "work"), nil, passed, fixedName)
-	if c.start || c.err == nil || c.err.Code != bootstrap.CodeInternal || !strings.Contains(c.err.Text, "mosey 0.100.5") {
-		t.Errorf("-s work: %+v; want a refusal naming its version", c)
-	}
-	// An attachable session of that name is still the one -s takes.
-	c = choose(line(bootstrap.AttachName, "work"), []bootstrap.SessionLine{session("work", 1, bootstrap.SessionDetached, 1)}, passed, fixedName)
-	if c.start || c.err != nil || c.take != 0 {
-		t.Errorf("-s work with an attachable work too: %+v", c)
-	}
-	if c := choose(line(bootstrap.AttachName, "home"), nil, passed, fixedName); !c.start || c.name != "home" {
-		t.Errorf("-s home: %+v", c)
 	}
 }
 

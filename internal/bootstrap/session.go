@@ -9,10 +9,9 @@ import (
 
 // The attach socket's greeting (bootstrap.md §9.2.1): the first message a
 // session's spawner sends to whoever connects to it, a launcher resuming
-// the session or a lister. It is not an IPC message. Its first two fields
-// were always frozen, so a launcher of any version reads any session's
-// version; since the stable attach protocol (D8 V1, server.md §2.8) the
-// whole line is, so a launcher of any later version reads all of it.
+// the session or a lister. It is not an IPC message. The whole line is
+// stable across releases (D8 V1, server.md §2.8), so a launcher of any
+// later version reads all of it.
 const (
 	sessionMagic = "MOSEY-SESSION"
 	// MaxSessionLine bounds a greeting, LF included: at most 238 bytes
@@ -103,12 +102,10 @@ func MarshalSessionLine(s SessionLine) []byte {
 	return append(b, '\n')
 }
 
-// ParseSessionLine reads a greeting in the stable form, of any version
-// from the stable attach protocol on, LF included, refusing anything not
-// canonical. A greeting from a build before it (no attach range) is
-// refused; SessionLineVersion still reads its version. A launcher reads it
-// from a socket only the user can reach, but it is a parser of another
-// process's bytes, so it is fuzzed like the rest.
+// ParseSessionLine reads a greeting, LF included, refusing anything not
+// canonical. A launcher reads it from a socket only the user can reach,
+// but it is a parser of another process's bytes, so it is fuzzed like the
+// rest.
 func ParseSessionLine(line []byte) (SessionLine, error) {
 	if len(line) > MaxSessionLine {
 		return SessionLine{}, badLine("session line of %d bytes", len(line))
@@ -161,29 +158,6 @@ func ParseSessionLine(line []byte) (SessionLine, error) {
 		return SessionLine{}, badLine("session line is not canonical")
 	}
 	return s, nil
-}
-
-// SessionLineVersion reads only the frozen part of a greeting from a
-// session of any version: the magic and the software version, which a
-// launcher compares with the client's before it sends anything (§9.2 step
-// 5). Whatever follows the second field is another version's business, as
-// long as it is printable and the line is bounded and ends in one LF.
-func SessionLineVersion(line []byte) (string, error) {
-	if len(line) > MaxSessionLine || len(line) == 0 || line[len(line)-1] != '\n' {
-		return "", badLine("session line of %d bytes, or no LF", len(line))
-	}
-	body := line[:len(line)-1]
-	for _, c := range body {
-		if c != ' ' && (c < 0x21 || c > 0x7e) {
-			return "", badLine("byte 0x%02x in session line", c)
-		}
-	}
-	rest, ok := bytes.CutPrefix(body, []byte(sessionMagic+" "))
-	if !ok {
-		return "", badLine("not a session line")
-	}
-	v, _, _ := bytes.Cut(rest, []byte(" "))
-	return parseSoftwareVersion(v)
 }
 
 // parseRange reads an arange, MIN-MAX, each 1..255 with no leading zero,
@@ -275,9 +249,7 @@ const (
 	MaxListed = 1024
 )
 
-// ListLine is one session as --serve=list prints it (§9.4). A session of
-// another version shows only its version: Name "" , State 0 and a zero
-// Since are each "-".
+// ListLine is one session as --serve=list prints it (§9.4).
 type ListLine struct {
 	Name            string
 	State           SessionState
@@ -290,17 +262,9 @@ func MarshalListLine(l ListLine) []byte {
 	b := make([]byte, 0, MaxListLine)
 	b = append(b, listMagic...)
 	b = appendField(b, strconv.Itoa(listVersion))
-	b = appendField(b, dash(l.Name))
-	if l.State == 0 {
-		b = appendField(b, "-")
-	} else {
-		b = appendField(b, l.State.String())
-	}
-	if l.Since.IsZero() {
-		b = appendField(b, "-")
-	} else {
-		b = appendField(b, strconv.FormatInt(l.Since.Unix(), 10))
-	}
+	b = appendField(b, l.Name)
+	b = appendField(b, l.State.String())
+	b = appendField(b, strconv.FormatInt(l.Since.Unix(), 10))
 	b = appendField(b, l.SoftwareVersion)
 	return append(b, '\n')
 }
@@ -320,21 +284,15 @@ func ParseListLine(line []byte) (ListLine, error) {
 		return ListLine{}, badLine("list line version %q", fields[1])
 	}
 	var l ListLine
-	if n := fields[2]; string(n) != "-" {
-		if !ValidSessionName(string(n)) {
-			return ListLine{}, badLine("session name %q", n)
-		}
-		l.Name = string(n)
+	if !ValidSessionName(string(fields[2])) {
+		return ListLine{}, badLine("session name %q", fields[2])
 	}
-	if st := fields[3]; string(st) != "-" {
-		if l.State, err = parseState(st); err != nil {
-			return ListLine{}, err
-		}
+	l.Name = string(fields[2])
+	if l.State, err = parseState(fields[3]); err != nil {
+		return ListLine{}, err
 	}
-	if t := fields[4]; string(t) != "-" {
-		if l.Since, err = parseUnix(t, "since"); err != nil {
-			return ListLine{}, err
-		}
+	if l.Since, err = parseUnix(fields[4], "since"); err != nil {
+		return ListLine{}, err
 	}
 	if l.SoftwareVersion, err = parseSoftwareVersion(fields[5]); err != nil {
 		return ListLine{}, err
@@ -343,13 +301,6 @@ func ParseListLine(line []byte) (ListLine, error) {
 		return ListLine{}, badLine("list line is not canonical")
 	}
 	return l, nil
-}
-
-func dash(s string) string {
-	if s == "" {
-		return "-"
-	}
-	return s
 }
 
 // ReadList reads what `mosey --serve=list` printed, after anything a login

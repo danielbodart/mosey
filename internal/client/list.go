@@ -57,17 +57,7 @@ func List(ctx context.Context, o ListOptions) error {
 	tw := tabwriter.NewWriter(o.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tSTATE\tSINCE\tVERSION")
 	for _, r := range rows {
-		name, state, since := "?", "?", "?"
-		if r.Name != "" {
-			name = r.Name
-		}
-		if r.State != 0 {
-			state = r.State.String()
-		}
-		if !r.Since.IsZero() {
-			since = r.Since.Local().Format(takenOverTime)
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", name, state, since, r.SoftwareVersion)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Name, r.State, r.Since.Local().Format(takenOverTime), r.SoftwareVersion)
 	}
 	if err := tw.Flush(); err != nil {
 		return err

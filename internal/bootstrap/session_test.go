@@ -40,9 +40,6 @@ func TestASessionLineRoundTripsInEveryState(t *testing.T) {
 				got.Name != s.Name || got.HasHolder != s.HasHolder || got.HasHolder && got.Holder != s.Holder {
 				t.Fatalf("%q parsed as %+v, not %+v", line, got, s)
 			}
-			if v, err := SessionLineVersion(line); err != nil || v != s.SoftwareVersion {
-				t.Fatalf("SessionLineVersion(%q) = %q, %v", line, v, err)
-			}
 		}
 	}
 }
@@ -95,21 +92,6 @@ func TestASessionLineThatBreaksARuleIsRefused(t *testing.T) {
 	}
 }
 
-// A greeting from a build before the stable attach protocol has a session
-// id where the attach range now is: ParseSessionLine refuses it, so the
-// launcher passes the session over (§9.2 step 5), and SessionLineVersion
-// still reads its version for -list.
-func TestAGreetingFromBeforeTheStableAttachProtocolGivesOnlyItsVersion(t *testing.T) {
-	stable := string(MarshalSessionLine(sampleSessionLine()))
-	old := strings.Replace(stable, " 1-1 ", " ", 1)
-	if _, err := ParseSessionLine([]byte(old)); !errors.Is(err, ErrBadLine) {
-		t.Errorf("an old greeting parsed: %v", err)
-	}
-	if v, err := SessionLineVersion([]byte(old)); err != nil || v != "0.214.20261114093012" {
-		t.Errorf("an old greeting's version: %q, %v", v, err)
-	}
-}
-
 // A launcher and a session use the highest attach version both speak, and
 // none when their ranges do not meet (server.md §2.8).
 func TestTheAttachVersionIsTheHighestBothSpeak(t *testing.T) {
@@ -124,24 +106,6 @@ func TestTheAttachVersionIsTheHighestBothSpeak(t *testing.T) {
 		got, ok := AttachVersion(SessionLine{AttachMin: c.lo, AttachMax: c.hi})
 		if got != c.want || ok != c.ok {
 			t.Errorf("%d-%d: %d %v, want %d %v", c.lo, c.hi, got, ok, c.want, c.ok)
-		}
-	}
-}
-
-// The first two fields are frozen (§9.2.1): a later version's greeting,
-// whatever follows them, still tells this launcher the session's version.
-func TestALaterVersionsGreetingStillGivesItsVersion(t *testing.T) {
-	for _, line := range []string{
-		"MOSEY-SESSION 9.9.9\n",
-		"MOSEY-SESSION 9.9.9 whatever a later version says=here\n",
-	} {
-		if v, err := SessionLineVersion([]byte(line)); err != nil || v != "9.9.9" {
-			t.Errorf("%q: %q, %v", line, v, err)
-		}
-	}
-	for _, line := range []string{"", "MOSEY-SESSION\n", "MOSEY-SESSION 9.9\x1b9\n", "MOSEY-CLIENT 9.9.9\n", "MOSEY-SESSION " + strings.Repeat("x", 300) + "\n"} {
-		if _, err := SessionLineVersion([]byte(line)); !errors.Is(err, ErrBadLine) {
-			t.Errorf("%q gave %v", line, err)
 		}
 	}
 }
@@ -204,11 +168,10 @@ func sampleListLine() ListLine {
 	return ListLine{Name: "quiet-heron", State: SessionDetached, Since: time.Unix(1794651234, 0), SoftwareVersion: "0.214.20261114"}
 }
 
-// A list line round-trips, including another version's session whose
-// name and state are unknown, and its longest form fits its bound (§9.4).
+// A list line round-trips, and its longest form fits its bound (§9.4).
 func TestAListLineRoundTripsAndFitsItsBound(t *testing.T) {
 	longest := ListLine{Name: strings.Repeat("n", 32), State: SessionDetached, Since: time.Unix(999999999999, 0), SoftwareVersion: strings.Repeat("9", 64)}
-	for _, l := range []ListLine{sampleListLine(), {SoftwareVersion: "9.9.9"}, longest} {
+	for _, l := range []ListLine{sampleListLine(), longest} {
 		line := MarshalListLine(l)
 		got, err := ParseListLine(line)
 		if err != nil || got.Name != l.Name || got.State != l.State || !got.Since.Equal(l.Since) || got.SoftwareVersion != l.SoftwareVersion {
@@ -238,6 +201,9 @@ func TestAListLineThatBreaksARuleIsRefused(t *testing.T) {
 		"a leading zero":        strings.Replace(good, " 1794651234 ", " 01794651234 ", 1),
 		"another magic":         strings.Replace(good, "MOSEY-LIST", "MOSEY-LISTS", 1),
 		"a missing field":       strings.Replace(good, " detached", "", 1),
+		"no name":               strings.Replace(good, "quiet-heron", "-", 1),
+		"no state":              strings.Replace(good, "detached", "-", 1),
+		"no since":              strings.Replace(good, " 1794651234 ", " - ", 1),
 	} {
 		if _, err := ParseListLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%s: %q gave %v", name, line, err)
@@ -247,7 +213,6 @@ func TestAListLineThatBreaksARuleIsRefused(t *testing.T) {
 
 func FuzzParseListLine(f *testing.F) {
 	f.Add(MarshalListLine(sampleListLine()))
-	f.Add(MarshalListLine(ListLine{SoftwareVersion: "dev"}))
 	f.Add([]byte("MOSEY-LIST 1 - - - dev\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		l, err := ParseListLine(line)
@@ -267,7 +232,7 @@ func FuzzParseListLine(f *testing.F) {
 				}
 			}
 		}
-		if l.Name != "" && !ValidSessionName(l.Name) {
+		if !ValidSessionName(l.Name) {
 			t.Fatalf("accepted name %q", l.Name)
 		}
 	})
@@ -279,10 +244,7 @@ func FuzzParseSessionLine(f *testing.F) {
 	n.State, n.Peer, n.HasHolder = SessionNew, netip.AddrPort{}, false
 	f.Add(MarshalSessionLine(n))
 	f.Add([]byte("MOSEY-SESSION 1.2.3 and more\n"))
-	old := MarshalSessionLine(sampleSessionLine())
-	f.Add(bytes.Replace(old, []byte(" 1-1 "), []byte(" "), 1)) // a pre-stable greeting
 	f.Fuzz(func(t *testing.T, line []byte) {
-		v, verr := SessionLineVersion(line)
 		s, err := ParseSessionLine(line)
 		if err != nil {
 			if !errors.Is(err, ErrBadLine) {
@@ -292,9 +254,6 @@ func FuzzParseSessionLine(f *testing.F) {
 		}
 		if !bytes.Equal(MarshalSessionLine(s), line) {
 			t.Fatalf("accepted %q, which re-marshals differently", line)
-		}
-		if verr != nil || v != s.SoftwareVersion {
-			t.Fatalf("SessionLineVersion disagrees on %q: %q, %v", line, v, verr)
 		}
 		if s.Peer.IsValid() && (s.Peer.Port() == 0 || s.Peer.Addr().Zone() != "" || s.Peer.Addr().Is4In6()) {
 			t.Fatalf("accepted peer %s", s.Peer)
@@ -314,7 +273,7 @@ func TestReadListKeepsOnlyListLinesThatParse(t *testing.T) {
 	good := MarshalListLine(sampleListLine())
 	out := append([]byte("motd\r\nwelcome \x1b[31mred\x1b[0m\n"), good...)
 	out = append(out, "MOSEY-LIST 1 bad\x1bname detached 1 v1\n"...)
-	out = append(out, MarshalListLine(ListLine{SoftwareVersion: "v9"})...)
+	out = append(out, MarshalListLine(ListLine{Name: "other", State: SessionNew, Since: time.Unix(1, 0), SoftwareVersion: "v9"})...)
 	rows, dropped := ReadList(out)
 	if len(rows) != 2 || dropped != 1 || rows[0].Name != "quiet-heron" || rows[1].SoftwareVersion != "v9" {
 		t.Fatalf("%+v, dropped %d", rows, dropped)

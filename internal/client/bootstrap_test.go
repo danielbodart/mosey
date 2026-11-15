@@ -146,7 +146,6 @@ func TestAMissingServerIsReportedAsSuch(t *testing.T) {
 
 func TestTheServersRefusalIsExplained(t *testing.T) {
 	for line, want := range map[string]string{
-		"MOSEY-ERROR 1 version 0.9.9\n":      "the remote mosey 0.9.9 predates the stable protocol and serves only clients of its own version: install 1.2.3 there or pass -remote",
 		"MOSEY-ERROR 2 version 0.9.9\n":      "the remote mosey 0.9.9 cannot read this client's request (bootstrap protocol 1, it speaks 2)",
 		"MOSEY-ERROR 1 line -\n":             "the server could not read this client's request: a bug, please report it",
 		"MOSEY-ERROR 1 unsupported attach\n": "the remote mosey can't do attach yet",

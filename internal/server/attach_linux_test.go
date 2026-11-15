@@ -163,9 +163,9 @@ func TestTheAttachSocketGreetsAndLeavesNothingBehind(t *testing.T) {
 // The launcher's resume against a fake spawner: a plain client's line
 // (auto) finds the detached session, which gets the line as resume:SID,
 // and the credential line it answers with comes out on stdout; a session
-// of another version is attached all the same (D8 V1), and one from a
-// build before the stable attach protocol is passed over (bootstrap.md
-// §9.2 steps 2 and 5).
+// of another version is attached all the same (D8 V1), and one whose
+// attach protocol range does not meet this build's is passed over
+// (bootstrap.md §9.2 steps 2 and 5).
 func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	runtime := runtimeDir(t)
 	base := filepath.Join(runtime, "mosey")
@@ -176,16 +176,14 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	got := make(chan []byte, 1)
 	var sessionVersion atomic.Value
 	sessionVersion.Store("v1")
-	var legacy atomic.Bool
+	var dropsV1 atomic.Bool
 	fakeSession(t, base, sid, func(f *os.File) {
-		g := bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: sessionVersion.Load().(string), AttachMin: 1, AttachMax: 1,
-			SessionID: sid, Name: "work", Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650000, 0)})
-		if legacy.Load() {
-			// A greeting as builds before the stable attach protocol
-			// wrote it: no attach range.
-			g = bytes.Replace(g, []byte(" 1-1 "), []byte(" "), 1)
+		lo, hi := 1, 1
+		if dropsV1.Load() {
+			lo, hi = 2, 3
 		}
-		f.Write(g)
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: sessionVersion.Load().(string), AttachMin: lo, AttachMax: hi,
+			SessionID: sid, Name: "work", Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650000, 0)}))
 		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
 		m, err := conn.Recv()
 		if err != nil {
@@ -220,26 +218,14 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 		t.Fatalf("a session of another version: %v, stdout %q, stderr %q", err, out, errs)
 	}
 	<-got
-	// A session from before the stable attach protocol is passed over: a
-	// plain client starts its own (here there is no spawner to start, Self
-	// being empty), never a refusal for the version (D8 R1, V1).
-	legacy.Store(true)
-	out, errs, err = run(auto)
+	// A session whose attach range this build does not speak is passed
+	// over: a plain client starts its own (here there is no spawner to
+	// start, Self being empty).
+	dropsV1.Store(true)
+	out, _, err = run(auto)
 	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeInternal ||
 		!strings.Contains(err.Error(), "starting the spawner") {
-		t.Errorf("a plain client with only a v0 session detached: %v, %q; want it to start a session", err, out)
-	}
-	// The user is told it is there, and which release resumes it.
-	if want := "session work runs mosey v0, which predates the stable protocol and live upgrade: resume it with mosey v0, or end it"; !strings.Contains(errs, want) {
-		t.Errorf("stderr %q does not say %q", errs, want)
-	}
-	// -s with the passed-over session's name is refused, never a second
-	// session of that name beside it.
-	named := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachName, Name: "work", Cols: 80, Rows: 24, Public: key})
-	out, _, err = run(named)
-	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeInternal ||
-		!strings.Contains(err.Error(), "session work runs mosey v0, which this one cannot attach") {
-		t.Errorf("-s work with only a v0 session called work: %v, %q; want a refusal naming it", err, out)
+		t.Errorf("a plain client with only a 2-3 session detached: %v, %q; want it to start a session", err, out)
 	}
 	// R3's reconnect of a session that is not there.
 	gone := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume,
@@ -312,14 +298,21 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 	}
 	sid := [16]byte{0xab, 0xcd}
 	fakeSession(t, base, sid, greet("v1", sid))
+	// A session of another version is listed like any other (D8 V1), and
+	// one whose greeting does not parse is not listed at all.
 	other := [16]byte{0xef}
-	fakeSession(t, base, other, func(f *os.File) { f.Write([]byte("MOSEY-SESSION v9 a later version's fields\n")) })
+	fakeSession(t, base, other, func(f *os.File) {
+		// Started after s-ab's, so it is listed second (oldest first).
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: "v9", AttachMin: 1, AttachMax: 1,
+			SessionID: other, Name: "s-ef", Started: time.Unix(1794650050, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650100, 0)}))
+	})
+	broken := [16]byte{0x01}
+	fakeSession(t, base, broken, func(f *os.File) { f.Write([]byte("MOSEY-SESSION v9 not a greeting\n")) })
 	out.Reset()
 	if err := List(&out, getenv); err != nil {
 		t.Fatal(err)
 	}
-	// Oldest first: the v9 session's start is unknown, so it sorts first.
-	want := "MOSEY-LIST 1 - - - v9\nMOSEY-LIST 1 s-ab detached 1794650100 v1\n"
+	want := "MOSEY-LIST 1 s-ab detached 1794650100 v1\nMOSEY-LIST 1 s-ef detached 1794650100 v9\n"
 	if out.String() != want {
 		t.Errorf("the list is\n%s\nnot\n%s", out.String(), want)
 	}

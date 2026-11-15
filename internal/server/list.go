@@ -29,13 +29,6 @@ func List(w io.Writer, getenv func(string) string) error {
 		s.f.Close()
 		g, err := bootstrap.ParseSessionLine(s.greeting)
 		if err != nil {
-			// A session of a build before the stable attach protocol:
-			// its version is all that can be read of it (§9.2 step 5).
-			v, verr := bootstrap.SessionLineVersion(s.greeting)
-			if verr != nil {
-				continue
-			}
-			rows = append(rows, row{line: bootstrap.ListLine{SoftwareVersion: v}})
 			continue
 		}
 		rows = append(rows, row{started: g.Started, line: bootstrap.ListLine{

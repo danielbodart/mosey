@@ -17,7 +17,7 @@ import (
 // A refusal the user can meet says what it means (bootstrap.md §6.4).
 func TestARefusalIsExplained(t *testing.T) {
 	for line, want := range map[string]string{
-		"MOSEY-ERROR 1 version 0.9.9\n": "the remote mosey 0.9.9 predates the stable protocol and serves only clients of its own version: install 1.2.3 there or pass -remote",
+		"MOSEY-ERROR 2 version 0.9.9\n": "the remote mosey 0.9.9 cannot read this client's request (bootstrap protocol 1, it speaks 2)",
 		"MOSEY-ERROR 1 session -\n":     "no such session on far",
 		"MOSEY-ERROR 1 internal -\n":    "the server failed to start (see above)",
 	} {
@@ -74,7 +74,7 @@ func TestTheListIsLaidOutFromLinesThatParse(t *testing.T) {
 		"printf 'welcome \\033[2J\\n'\n" +
 		"printf 'MOSEY-LIST 1 quiet-heron detached 1794651234 0.4.2\\n'\n" +
 		"printf 'MOSEY-LIST 1 evil\\033[2J attached 1 0.4.2\\n'\n" +
-		"printf 'MOSEY-LIST 1 - - - 0.3.9\\n'\n"
+		"printf 'MOSEY-LIST 1 old-work new 1794650000 0.3.9\\n'\n"
 	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
