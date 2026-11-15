@@ -208,7 +208,10 @@ func TestAChainOfUpgradesKeepsTheShellAndTheAgentAndTellsATakenOverClient(t *tes
 	}
 	third := startAgentClient(t, "the newest client", c, s, agentKeys)
 	third.shows("middle-chain-" + m[1])
-	third.typeLine("echo newest-$KEPT-$$; ssh-add -l")
+	// ssh-add first, as for the middle client: the line's echo then
+	// shows only once ssh-add has printed, so the count below never
+	// races its output.
+	third.typeLine("ssh-add -l; echo newest-$KEPT-$$")
 	third.shows("newest-chain-" + m[1])
 	waitFor(t, "the middle build's roles to exit", func() bool {
 		return len(roles(b, "spawner"))+len(roles(b, "proto"))+len(roles(b, "emu")) == 0
