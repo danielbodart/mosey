@@ -97,7 +97,7 @@ func (s *spawner) serveResume(f *os.File) error {
 	if err != nil {
 		return refuse(err)
 	}
-	r := resumeRequest{public: cl.Public, reply: make(chan []byte, 1)}
+	r := resumeRequest{public: cl.Public, requester: cl.Holder, hasRequester: cl.HasHolder, reply: make(chan []byte, 1)}
 	timeout := time.NewTimer(T3)
 	defer timeout.Stop()
 	select {
@@ -130,8 +130,10 @@ func (s *spawner) serveResume(f *os.File) error {
 
 // checkResumeLine is what the spawner checks of a resuming client's line
 // before proto hears of it (server.md §2.6): the whole canonical parse, a
-// bare resume of this session (the launcher chose it, and checked any
-// holder, under its lock), this version, and a key proto can mint for.
+// resume of this session (the launcher chose it, and checked any holder,
+// under its lock), this version, and a key proto can mint for. A holder
+// is only a label for the hold (§9.2.2): the launcher has already said
+// whose the session is.
 func checkResumeLine(line []byte, version string, sid [16]byte) (bootstrap.ClientLine, error) {
 	cl, err := bootstrap.ParseClientLine(line)
 	switch {
@@ -139,8 +141,6 @@ func checkResumeLine(line []byte, version string, sid [16]byte) (bootstrap.Clien
 		return cl, fmt.Errorf("the client's line: %w", err)
 	case cl.Attach != bootstrap.AttachResume:
 		return cl, errors.New("a new session asked of a running one")
-	case cl.HasHolder:
-		return cl, errors.New("a resume the launcher has not resolved")
 	case cl.SessionID != sid:
 		return cl, errors.New("a resume of another session")
 	case cl.SoftwareVersion != version:
@@ -179,6 +179,13 @@ func (s *spawner) greeting() bootstrap.SessionLine {
 	}
 	if time.Now().Before(s.holdUntil) {
 		g.State, g.Since, g.Holder, g.HasHolder = bootstrap.SessionAttached, s.holdFrom, s.hold, true
+		if s.hasHoldOwner {
+			// A reconnect's hold is the reconnecting client's: if that try
+			// is dropped (roaming won, §9.2.2) and the path goes quiet
+			// again, the same client's next try must still find the
+			// session its own, not "taken" by a credential nobody used.
+			g.Holder = s.holdOwner
+		}
 	}
 	return g
 }
@@ -205,8 +212,9 @@ func (s *spawner) setDetached() {
 }
 
 // holdFor marks the session held by a resume's credential for that
-// credential's life (bootstrap.md §9.2 "The lock").
-func (s *spawner) holdFor(cred [8]byte) {
+// credential's life (bootstrap.md §9.2 "The lock"), on behalf of the
+// reconnecting client whose credential was requester, if any (§9.2.2).
+func (s *spawner) holdFor(cred, requester [8]byte, hasRequester bool) {
 	s.greetMu.Lock()
 	defer s.greetMu.Unlock()
 	ttl := s.holdTTL
@@ -215,6 +223,7 @@ func (s *spawner) holdFor(cred [8]byte) {
 	}
 	now := time.Now()
 	s.hold, s.holdFrom, s.holdUntil = cred, now, now.Add(ttl)
+	s.holdOwner, s.hasHoldOwner = requester, hasRequester
 }
 
 // serveAgent accepts on the agent socket until it closes, and passes each

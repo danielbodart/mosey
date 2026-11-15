@@ -171,18 +171,25 @@ type spawner struct {
 	holder    [8]byte
 	hasHolder bool
 	hold      [8]byte
-	holdFrom  time.Time
-	holdUntil time.Time
+	// holdOwner is the credential of the reconnecting client the hold is
+	// for, if hasHoldOwner (bootstrap.md §9.2.2).
+	holdOwner    [8]byte
+	hasHoldOwner bool
+	holdFrom     time.Time
+	holdUntil    time.Time
 	// holdTTL is how long a resume holds the greeting; zero is
 	// handshake.CredentialTTL. Tests shorten it.
 	holdTTL time.Duration
 }
 
 // resumeRequest is a checked resume on its way to proto: the client's key,
-// and where the credential line goes back to.
+// the credential a reconnecting client named (bootstrap.md §9.2.2), and
+// where the credential line goes back to.
 type resumeRequest struct {
-	public []byte
-	reply  chan []byte
+	public       []byte
+	requester    [8]byte
+	hasRequester bool
+	reply        chan []byte
 }
 
 type ctlEvent struct {
@@ -788,7 +795,7 @@ func (s *spawner) supervise(ctx context.Context) error {
 				// Held for the credential's life, so the next launcher does
 				// not choose this session too (bootstrap.md §9.2).
 				if cl, err := bootstrap.ParseCredentialLine(m.Line); err == nil {
-					s.holdFor(cl.CredentialID)
+					s.holdFor(cl.CredentialID, r.requester, r.hasRequester)
 					clear(cl.PSK[:])
 				}
 				// reply has room for one, so the loop never waits on a

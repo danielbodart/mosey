@@ -129,8 +129,11 @@ func (l *Launcher) run(ctx context.Context) error {
 	}
 	taken := conns[c.take]
 	defer taken.f.Close()
+	// A reconnect keeps its holder (resume:SID:CREDID): the spawner holds
+	// the session for that client while the new credential is out, so the
+	// same client's next try still finds it its own (bootstrap.md §9.2.2).
 	to := cl
-	to.Attach, to.SessionID, to.Name, to.HasHolder = bootstrap.AttachResume, sessions[c.take].SessionID, "", false
+	to.Attach, to.SessionID, to.Name = bootstrap.AttachResume, sessions[c.take].SessionID, ""
 	return l.resume(ctx, taken.f, taken.greeting, bootstrap.MarshalClientLine(to), cl)
 }
 

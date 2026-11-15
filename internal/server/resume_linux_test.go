@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -183,11 +184,16 @@ type launchResult struct {
 
 func (ss *stubSession) launch(sid [16]byte) (public []byte, result <-chan launchResult) {
 	ss.t.Helper()
+	return ss.launchLine(bootstrap.ClientLine{SoftwareVersion: stubVersion, Attach: bootstrap.AttachResume, SessionID: sid})
+}
+
+// launchLine is launch with the client's line, to which it adds the size
+// and a fresh key.
+func (ss *stubSession) launchLine(cl bootstrap.ClientLine) (public []byte, result <-chan launchResult) {
+	ss.t.Helper()
 	public = oneShotKey(ss.t)
-	line := bootstrap.MarshalClientLine(bootstrap.ClientLine{
-		SoftwareVersion: stubVersion, Attach: bootstrap.AttachResume, SessionID: sid,
-		Cols: 80, Rows: 24, Public: public,
-	})
+	cl.Cols, cl.Rows, cl.Public = 80, 24, public
+	line := bootstrap.MarshalClientLine(cl)
 	ch := make(chan launchResult, 1)
 	go func() {
 		var stdout, stderr bytes.Buffer
@@ -461,6 +467,50 @@ func TestAResumesCredentialHoldsTheSessionUntilItCouldNoLongerBeConfirmed(t *tes
 			t.Fatalf("the hold never ended: %+v", ss.greetingOf())
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A reconnect's hold is the reconnecting client's: the greeting names the
+// credential that client last had, so if its try is dropped because the
+// old path was heard again, and the path then goes quiet once more, its
+// next try still takes the session instead of being told it was taken
+// over by a credential nobody used (bootstrap.md §9.2.2). Another
+// client's reconnect is still refused.
+func TestAReconnectsHoldIsTheReconnectingClientsOwn(t *testing.T) {
+	sid := [16]byte{0x5e, 0x0a}
+	ss := startStubSession(t, sid)
+	mine := [8]byte{7}
+	ss.send(ipc.Attached{Credential: mine})
+	for g := ss.greetingOf(); g.State != bootstrap.SessionAttached; g = ss.greetingOf() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	reconnect := func(holder [8]byte) <-chan launchResult {
+		_, done := ss.launchLine(bootstrap.ClientLine{SoftwareVersion: stubVersion, Attach: bootstrap.AttachResume,
+			SessionID: sid, Holder: holder, HasHolder: true})
+		return done
+	}
+	// The first try gets credential 9, which its client never uses.
+	done := reconnect(mine)
+	ss.recvResume()
+	ss.send(ipc.Credential{Line: bootstrap.MarshalCredentialLine(credential(t, sid, 9))})
+	if r := wait(t, done); r.err != nil {
+		t.Fatal(r.err)
+	}
+	if g := ss.greetingOf(); g.State != bootstrap.SessionAttached || !g.HasHolder || g.Holder != mine {
+		t.Errorf("while the reconnect's credential is out: %+v, not held for its client", g)
+	}
+	// Another client's reconnect is refused as taken, and proto hears
+	// nothing of it.
+	if r := wait(t, reconnect([8]byte{8})); r.err == nil || !strings.HasPrefix(r.out, "MOSEY-ERROR 1 taken ") {
+		t.Errorf("another client's reconnect: %v, %q", r.err, r.out)
+	}
+	// The same client's next try is its own again.
+	done = reconnect(mine)
+	ss.recvResume()
+	line := bootstrap.MarshalCredentialLine(credential(t, sid, 10))
+	ss.send(ipc.Credential{Line: bytes.Clone(line)})
+	if r := wait(t, done); r.err != nil || r.out != string(line) {
+		t.Errorf("the same client's next try: %v, %q", r.err, r.out)
 	}
 }
 

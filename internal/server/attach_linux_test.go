@@ -246,17 +246,20 @@ func TestTheSpawnerRefusesAResumeLineThatIsNotForIt(t *testing.T) {
 	if _, err := checkResumeLine(agent, "v1", sid); err != nil {
 		t.Errorf("agent=yes: %v", err)
 	}
+	// A reconnect's holder passes through as the hold's label (§9.2.2).
+	holder := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid,
+		Holder: [8]byte{1}, HasHolder: true, Cols: 80, Rows: 24, Public: oneShotKey(t)})
+	if cl, err := checkResumeLine(holder, "v1", sid); err != nil || !cl.HasHolder || cl.Holder != [8]byte{1} {
+		t.Errorf("a reconnect's line: %v", err)
+	}
 	badKey := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid,
 		Cols: 80, Rows: 24, Public: bytes.Repeat([]byte{0xff}, bootstrap.PublicKeySize)})
 	newLine := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Cols: 80, Rows: 24, Public: oneShotKey(t)})
-	holder := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid,
-		Holder: [8]byte{1}, HasHolder: true, Cols: 80, Rows: 24, Public: oneShotKey(t)})
 	auto := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachAuto, Cols: 80, Rows: 24, Public: oneShotKey(t)})
 	for name, line := range map[string][]byte{
 		"another session":      resumeLine(t, "v1", [16]byte{6}),
 		"another version":      resumeLine(t, "v2", sid),
 		"a new session":        newLine,
-		"an unresolved holder": holder,
 		"an unresolved choice": auto,
 		"a bad key":            badKey,
 		"malformed":            append(bytes.Clone(good[:len(good)-1]), ' ', '\n'),

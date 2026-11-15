@@ -337,9 +337,10 @@ since it holds the keys.
   The spawner reads with `recvmsg` and closes any fd that arrives, as on B
   (§3.1).
 - **What the spawner checks** of the `ClientLine`: it parses
-  (`bootstrap.ParseClientLine`, whole and canonical), it is a bare
-  `resume:SID` (the launcher has chosen, under its lock, and checked any
-  holder, `bootstrap.md` §9.2), its `swver` is the spawner's, its SID is
+  (`bootstrap.ParseClientLine`, whole and canonical), it is
+  `resume:SID`, or a reconnect's `resume:SID:CREDID` (the launcher has
+  chosen, under its lock, and checked any holder, `bootstrap.md` §9.2;
+  CREDID only labels the hold, §9.2.2), its `swver` is the spawner's, its SID is
   the session's, and its public key is an X-Wing key (`agent` may be either: the
   resuming client's own bootstrap triggered its own bind, and whether its
   connection carries the agent is the hello's business, `agent.md` §4.1)
@@ -1529,11 +1530,12 @@ it lands, with the duration and exec count in the commit message.
 - A resume through the socket, with stub proto: greeting, `ClientLine`,
   `Resume` forwarded, `Credential` checked (a different `sessionid`,
   `addr`, `port` or `swver` is a violation), `Ready` returned. A wrong
-  SID, another `swver`, `new`, a resume with a holder, or a bad key is
+  SID, another `swver`, `new` or a bad key is
   `Failed`, and proto never hears of it.
 - A lister that closes after the greeting changes nothing.
 - The greeting follows `Attached` and `Detached`, says `attached` held by
-  a resume's credential until its TTL, and carries the name.
+  a resume's credential until its TTL (a reconnect's hold naming the
+  reconnecting client's credential), and carries the name.
 - `Hangup` and the idle timeout (short, injected) send the shell SIGHUP,
   and an attach resets the idle timer.
 - The launcher's choice (`bootstrap.md` §9.2): `auto` takes the newest

@@ -1024,7 +1024,7 @@ public  = b64(1216)                 ; 1622 characters
 |---|---|
 | `proto` | `bootstrap.Version` |
 | `swver` | the client's software version (`main.version`), for D7's equality check (§6.4) |
-| `attach` | which session (D8, §9.2): `auto` for a plain `mosey DEST`, `new` for `-new`, `name:NAME` for `-s NAME`, and `resume:SID:CREDID` for R3's background reconnect, naming the session and the credential this client last held it with. `new:NAME` and a bare `resume:SID` are what the launcher, having chosen, hands the session's spawner (§9.2); a launcher refuses `new:NAME` from a client with `line`. The all-zero SID is refused: no session has it |
+| `attach` | which session (D8, §9.2): `auto` for a plain `mosey DEST`, `new` for `-new`, `name:NAME` for `-s NAME`, and `resume:SID:CREDID` for R3's background reconnect, naming the session and the credential this client last held it with. `new:NAME` and `resume:SID` are what the launcher, having chosen, hands the session's spawner (§9.2), with a reconnect's CREDID kept (§9.2.2); a launcher refuses `new:NAME` from a client with `line`. The all-zero SID is refused: no session has it |
 | `agent` | whether the client will forward an agent (D25). The server needs it at spawn time to give the shell an `SSH_AUTH_SOCK` (`agent.md` §4.1) and, for `new` and resume alike, to trigger ssh's bind (§8). Slice 1 sent `no` only and refused `yes` with `unsupported agent`; the agent slice accepts both |
 | `cols`, `rows` | the client terminal's size; a terminal that reports 0 is sent as 80×24. The server clamps it (D23, `screen.ClampSize`). The client sends its size again as the first userinput event after connecting, in case it changed during the bootstrap |
 | `env` | the client's locale and terminal variables, from the allow-list only. A variable that is unset, empty, longer than 64 bytes or holds a byte outside `vchar` is left out (logged at debug), never escaped. The server gives the locale variables to the shell; what it does with `TERM` and `COLORTERM` is `server.md`'s (the shell's `TERM` describes the server's emulator, not the client's terminal) |
@@ -1513,13 +1513,14 @@ The steps:
    chooses as the table says. To start a session it rewrites the line's
    `attach` as `new:NAME` and goes on as §4.4 does, starting a spawner of
    its own. To take one it closes every other connection, rewrites the
-   line's `attach` as `resume:SID` and sends it to that session's spawner.
+   line's `attach` as `resume:SID` (a reconnect keeps its CREDID,
+   `resume:SID:CREDID`, §9.2.2) and sends it to that session's spawner.
    A `new:NAME` or the all-zero SID from a client is `MOSEY-ERROR 1 line -`.
 3. **Spawner.** The session's spawner owns the socket. It checks the
    peer's uid with `SO_PEERCRED` [S1 `resume.go`], sends its greeting
    (§9.2.1), and reads the launcher's `ClientLine` (0x40). It parses it
    again (it trusts no other process's parse) and checks it is
-   `resume:SID` for its own SID, `swver` against its own, and that the
+   `resume:SID` or `resume:SID:CREDID` for its own SID, `swver` against its own, and that the
    client's public key is an X-Wing key. It forwards the key to proto
    (`Resume`, 0x05), and proto mints a credential for the **same SID**
    with the usual TTL (30 s) and cap (2 unused, the oldest evicted and
@@ -1578,7 +1579,8 @@ expired (§9.2 "The lock"); `detached` one whose last client said it was
 leaving, whose connection failed, or which proto has not heard from for
 `SilentAfter` (§9.2). `holder` is the id of the credential the attached
 connection was made with, or the one the pending resume was minted with,
-and `-` when the session is `new` or `detached`. A credential id is not
+except that a reconnect's pending resume names the CREDID the reconnecting
+client gave (§9.2.2), and `-` when the session is `new` or `detached`. A credential id is not
 secret: it travels in the clear in msg1 (`transport.md` §3.4), and only
 the user's own processes can read a greeting. R3 uses it to tell "still
 held by me" from "held by someone else" (§9.2.2).
@@ -1627,7 +1629,13 @@ own session, in the background, and never asks the user anything:
   the second case is a path broken one way only (the server still hears
   the client, so it never went `detached`), and the takeover revokes this
   client's own old transport. A session any other credential holds is
-  `MOSEY-ERROR 1 taken SINCE`, SINCE its greeting's `since`.
+  `MOSEY-ERROR 1 taken SINCE`, SINCE its greeting's `since`. The
+  launcher passes CREDID on to the spawner, and while the credential it
+  mints is out the greeting's `holder` is CREDID, not the new one: the
+  hold is that client's. Otherwise a try dropped at the swap (below)
+  would leave the session held by a credential nobody will use, and if
+  the path went quiet again within its 30 s, the same client's next try
+  would read `taken` and exit, though nobody took the session.
 - **The swap.** Before it dials, the try checks the old transport is still
   silent: if anything authentic has arrived since the try began, roaming
   has won, the try is dropped and its credential expires unused (30 s,
