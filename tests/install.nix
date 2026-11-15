@@ -10,7 +10,10 @@
 #   says so, the client asks the first time, alice answers yes, and the
 #   client copies its own file to ~/.cache/mosey/mosey on bare,
 #   where the installer checks its hash; the session then runs from that
-#   copy. A second run finds it and asks nothing.
+#   copy. A second run finds it and asks nothing. Hopping on from that
+#   copy (`mosey otherhost` inside the session) is not checked: NixOS's
+#   bash profile assigns PATH, so it does not work here (bootstrap.md
+#   §4.7.9, §14 question G, open).
 #
 # Throwaway keys, made in the store for this test alone; nothing here reads
 # a real key, agent or known_hosts.

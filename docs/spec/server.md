@@ -308,8 +308,9 @@ triggers above (nothing emu does is one of them):
     `$HOME/.cache/mosey` put first, so `mosey otherhost` in the session
     finds it. A `PATH` that already has a `mosey`, or a server that is
     not the cached copy (Nix's, a package's, `-remote`'s), leaves `PATH`
-    as it is. A login profile that assigns `PATH` outright undoes this
-    (`bootstrap.md` §14 question G).
+    as it is. A login profile that assigns `PATH` outright undoes this,
+    and Debian's and NixOS's do, so there it does not work (`bootstrap.md`
+    §4.7.9, §14 question G, open).
   The spawner re-checks each `ClientLine` variable against
   `bootstrap.md` §6.2's names and its `vchar` alphabet, 1–64 bytes,
   whatever the parser accepted. Anything else is dropped and logged.

@@ -102,7 +102,9 @@ func shellEnv(base []string, from map[string]string, agentSock, hop string, log 
 // running binary: /proc/self/exe), and env's PATH has no mosey of its own,
 // so `mosey otherhost` in the session finds the copy. A server Nix, a
 // package or -remote put anywhere else, or a host whose PATH already has a
-// mosey, changes nothing.
+// mosey, changes nothing. A login profile that assigns PATH outright, as
+// Debian's and NixOS's do for bash, undoes it by the first prompt: there
+// hopping does not work (bootstrap.md §14 question G, open for Dan).
 func hopDir(env []string, exe string) string {
 	home, path := lookup(env, "HOME"), lookup(env, "PATH")
 	if !filepath.IsAbs(home) {

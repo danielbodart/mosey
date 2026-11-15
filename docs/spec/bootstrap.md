@@ -901,9 +901,13 @@ A session whose server is the cached copy, on a host with no `mosey` on
 (`server.md` §2.5), so `mosey otherhost` typed inside it finds the same
 file and carries on (D7: "a host can hop on with it"). Nothing else on the
 host changes: no rc file is edited and nothing is linked into a `PATH`
-directory. A login shell whose profile sets `PATH` outright, rather than
-adding to it, undoes this (Debian's `/etc/profile` and NixOS's
-`set-environment` both do, for bash): §14 question G.
+directory. **This is known not to work on Debian or NixOS**, the two most
+common hosts: a login shell whose profile sets `PATH` outright, rather
+than adding to it, undoes it by the first prompt (Debian's `/etc/profile`
+and NixOS's `set-environment` both do, for bash), so `mosey otherhost` is
+not found there. Hopping is proven (§12's e2e test) only for a shell
+whose profile does not reset `PATH`. Whether to accept that or to touch
+something the profile reads is open for Dan: §14 question G.
 
 #### 4.7.10 Costs and failures
 
@@ -2329,8 +2333,12 @@ G. **Hopping through a login profile that sets `PATH`** (§4.7.9). For
    `~/.cache/mosey` mosey puts first is gone by the prompt and `mosey
    otherhost` is not found. A host that has mosey on `PATH` is
    unaffected. Making it survive means touching something the profile
-   reads (an rc file, or a link into a `PATH` directory), which this
-   slice does not do.
+   reads, which this slice does not do. The choice: (a) accept it as it
+   is, hopping working only where the profile adds to `PATH` (or where
+   mosey is on `PATH` already); (b) edit an rc file to add
+   `~/.cache/mosey`; or (c) link `~/.cache/mosey/mosey` into a directory
+   already on `PATH` (such as `~/.local/bin` or `~/bin`). (b) and (c) are
+   user-visible changes outside `~/.cache`, which D7 so far avoids.
 
 ---
 

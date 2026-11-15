@@ -188,10 +188,12 @@ func farPathDir(t *testing.T, s *sshd, bin string) string {
 }
 
 // plainShell is a session shell that keeps the PATH it is given: an
-// interactive /bin/sh, which reads no profile. A login shell whose profile
-// assigns PATH (NixOS's and Debian's do, for bash) would hide what the
-// spawner put there (bootstrap.md §14 question G), and this test is about
-// what the spawner puts there.
+// interactive /bin/sh, which reads no profile. So hopping is proven here
+// only for a shell whose profile does not reset PATH. A bash login shell
+// on Debian or NixOS, whose profile assigns PATH outright, loses what the
+// spawner put there by the first prompt, and `mosey otherhost` is not
+// found: a known limitation, open for Dan (bootstrap.md §4.7.9, §14
+// question G), which this test does not hide.
 func plainShell(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "plainsh")
@@ -242,7 +244,8 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 		c.master.Write([]byte("y\r"))
 		c.up(t)
 		// D7: the session's shell finds the copy first on its PATH, so
-		// `mosey otherhost` works in it (bootstrap.md §4.7.9).
+		// `mosey otherhost` works in it (bootstrap.md §4.7.9), for a shell
+		// whose profile does not reset PATH (plainShell; §14 question G).
 		c.answers(t, `[ "$(command -v mosey)" = "$HOME/.cache/mosey/mosey" ] && echo hop-$((40+2))`, "hop-42")
 		c.end(t, state)
 		if !sameFile(t, s.cached(), a) {
