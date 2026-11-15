@@ -1788,6 +1788,15 @@ it lands, with the duration and exec count in the commit message.
 - An abort before `HandoffTaken` (the adopting spawner closes the
   connection) thaws proto-O, and the session goes on serving; the
   launcher then attaches plainly.
+- The adopter refuses a forged `HandoffState`, each lie on its own:
+  another session's id, a pipe or a pidfd where the pty master goes, a
+  pidfd for another process or a pty master in its place, another
+  session's listener or a pty master in its place, a screen of another
+  size or length than said, an attach listener for the agent's; and
+  every fd it was sent is closed again.
+- A failed upgrade (an adopter that takes the state and dies) thaws the
+  session, and the launcher says so and attaches it as it is, the shell
+  untouched.
 - The two-phase commit: `HandoffTaken` is answered with
   `HandoffReleased` and proto-O is told `Revoke`; a `HandoffTaken` after
   the old side's wait draws no `HandoffReleased` and the session goes

@@ -1,6 +1,9 @@
 package server
 
 import (
+	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -320,5 +323,104 @@ func TestAnAdopterTakesTheSessionOnlyOnceTheOldSideLetsGo(t *testing.T) {
 				t.Errorf("commit: %v", err)
 			}
 		})
+	}
+}
+
+// adopterDies is a newer spawner that fails mid-upgrade: it asks the
+// session for its state, takes it all, and exits without a word, as one
+// that crashed would.
+func adopterDies(f *os.File) error {
+	launcher, err := wrapRoleSocket(f, ipc.Spawner, ipc.Launcher)
+	if err != nil {
+		return err
+	}
+	m, err := launcher.Recv()
+	if err != nil {
+		return err
+	}
+	ad, ok := m.(ipc.Adopt)
+	if !ok {
+		return fmt.Errorf("the launcher sent %T", m)
+	}
+	attach, err := ipc.NewConn(ad.Conn, ipc.Launcher, ipc.Spawner)
+	if err != nil {
+		return err
+	}
+	if err := attach.Send(ipc.HandoffRequest{Version: 1, SoftwareVersion: "0.2.1"}); err != nil {
+		return err
+	}
+	for {
+		m, err := attach.Recv()
+		if err != nil {
+			return err
+		}
+		if sc, ok := m.(ipc.HandoffScreen); ok && !sc.More {
+			os.Exit(3)
+		}
+	}
+}
+
+// A failed upgrade costs the session nothing (server.md §2.8, "Aborts"):
+// the adopting spawner takes the state and dies, so the session thaws,
+// and the launcher attaches it as it is, saying so, with the shell the
+// same process throughout.
+func TestALauncherAttachesTheSessionAsItIsWhenTheUpgradeFails(t *testing.T) {
+	sid := [16]byte{0x4a, 6}
+	ss := startHandoffSession(t, sid)
+	shell := ss.s.shell
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The launcher starts `Self --serve=spawner`; this Self is the test
+	// binary as an adopter that dies.
+	stub := filepath.Join(t.TempDir(), "mosey")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexec "+self+" --serve=adopter-dies\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cl := bootstrap.ClientLine{SoftwareVersion: "0.2.1", Attach: bootstrap.AttachName, Name: stubName, Cols: 80, Rows: 24, Public: oneShotKey(t)}
+	var stdout, stderr bytes.Buffer
+	l := &Launcher{Stdin: bytes.NewReader(bootstrap.MarshalClientLine(cl)), Stdout: &stdout, Stderr: &stderr,
+		Self: stub, Version: "0.2.1", Env: []string{"XDG_RUNTIME_DIR=" + ss.runtime}}
+	done := make(chan error, 1)
+	go func() { done <- l.Run(context.Background()) }()
+
+	ss.freezeAndAnswer(snapshotOf("kept"))
+	// The thaw and the plain resume may reach proto in either order.
+	var thawed, resumed bool
+	for !thawed || !resumed {
+		switch m := ss.recv().(type) {
+		case ipc.Thaw:
+			thawed = true
+		case ipc.Resume:
+			if string(m.ClientPublic) != string(cl.Public) {
+				t.Fatal("the resume is not the client's")
+			}
+			resumed = true
+		default:
+			t.Fatalf("proto got %T", m)
+		}
+	}
+	cred := credential(t, sid, 7)
+	cred.SoftwareVersion = handoffSessionVersion
+	ss.send(ipc.Credential{Line: bootstrap.MarshalCredentialLine(cred)})
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("the launcher: %v\nstderr: %s\nlog:\n%s", err, stderr.String(), ss.log.String())
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the launcher did not finish\nlog:\n%s", ss.log.String())
+	}
+	if !strings.HasPrefix(stdout.String(), "MOSEY-CONNECT ") {
+		t.Errorf("the client was sent %q, not the session's credential", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "the live upgrade failed") || !strings.Contains(stderr.String(), "attaching the session as it is") {
+		t.Errorf("stderr does not say the upgrade failed: %q", stderr.String())
+	}
+	select {
+	case <-shell.done:
+		t.Fatal("the shell ended with the failed upgrade")
+	default:
 	}
 }
