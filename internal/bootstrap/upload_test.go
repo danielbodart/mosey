@@ -91,7 +91,7 @@ func TestOnlyACIVersionIsARelease(t *testing.T) {
 			t.Errorf("%q is not a release", v)
 		}
 	}
-	for _, v := range []string{"dev", "0.123.20261114093000", "0-unstable-2026-11-14+abc1234", "0.123.0", "0.123", "0.1.2.3", "00.1.2", "0.1.2+x", "v0.1.2", "", "e2e"} {
+	for _, v := range []string{"dev", "0.123.20261114093000", "0.190.20261115173516", "0-unstable-2026-11-14+abc1234", "0.123.0", "0.123", "0.1.2.3", "00.1.2", "0.1.2+x", "v0.1.2", "", "e2e"} {
 		if IsRelease(v) {
 			t.Errorf("%q is a release", v)
 		}

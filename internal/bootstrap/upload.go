@@ -63,8 +63,9 @@ func Platform(p ProbeLine) (goos, goarch string, ok bool) {
 // IsRelease says whether v is a version CI released, and so has assets
 // to fetch (§4.7.4): MAJOR.MINOR.PATCH, each a decimal of at most 9 digits
 // with no leading zero, and PATCH, CI's run number, at least 1. A local
-// build's patch is a 14-digit timestamp (scripts/version.sh), the flake's
-// version says unstable, and a plain go build says dev: none of them is.
+// build's patch is a 14-digit timestamp (scripts/version.sh), and so is a
+// flake build's (its commit's time) or its version says unstable, and a
+// plain go build says dev: none of them is.
 func IsRelease(v string) bool {
 	parts := bytes.Split([]byte(v), []byte("."))
 	if len(parts) != 3 {

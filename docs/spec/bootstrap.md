@@ -675,8 +675,9 @@ goes when a macOS server lands.
   remote's os/arch. Only a release version has one: `V` must match
   `MAJOR.MINOR.PATCH` with each part a decimal of at most 9 digits, no
   leading zero, and `PATCH` ≥ 1 (CI's run number) [derived from
-  `scripts/version.sh`: a local build's patch is a 14-digit timestamp, the
-  flake's version says `unstable`, a plain `go build` says `dev`]. Anything
+  `scripts/version.sh`: a local build's patch is a 14-digit timestamp, a
+  flake build's is its commit's 14-digit time or its version says
+  `unstable`, a plain `go build` says `dev`]. Anything
   else is a development build: `mosey: this is a development build (V) and
   DEST is OS/ARCH, which it cannot copy itself to: build mosey for OS/ARCH
   and pass -remote, or put it at ~/.cache/mosey/V/mosey there`.
@@ -1552,9 +1553,11 @@ The steps:
    version alike: an upgraded client's plain `mosey DEST` takes its
    detached session back, and `-s NAME` finds NAME, whichever binary runs
    it. Having taken a session, the launcher compares versions
-   (`bootstrap.CompareVersions`: release and local versions are
-   `MAJOR.COMMITS.PATCH` and compare part by part as numbers; anything
-   else, `dev` above all, compares with nothing):
+   (`bootstrap.CompareVersions`: release and local versions, and
+   `flake.nix`'s build of a clean git checkout, are `MAJOR.COMMITS.PATCH`
+   and compare part by part as numbers; anything else, `dev` and the
+   flake's `MAJOR-unstable-DATE+REV` from a `github:` input or a dirty
+   tree above all, compares with nothing):
    - **This launcher is newer** than the session: a **live upgrade**
      (`server.md` §2.8). The launcher starts a spawner of its own binary
      and hands it the attach connection; that spawner asks the session

@@ -4,12 +4,13 @@ import "strings"
 
 // CompareVersions orders two software versions (bootstrap.md §9.2 step
 // 5): -1 if a is older than b, 0 if they are the same, 1 if a is newer.
-// Release and local builds are MAJOR.COMMITS.PATCH (scripts/version.sh):
-// the major is the one part that is a decision, the commit count only
+// Release and local builds are MAJOR.COMMITS.PATCH (scripts/version.sh),
+// and so is flake.nix's build of a clean git checkout, with the commit's
+// time as its patch: the major is the one part that is a decision, the commit count only
 // rises along trunk, and the patch is CI's run number or a local build's
-// timestamp, so comparing the three as numbers, in order, puts every
-// build after the ones it descends from. Anything else, "dev" above all,
-// has no order: ok is false, and a launcher then never upgrades (D8 V2's
+// timestamp (or the flake's commit time), so comparing the three as numbers, in order, puts every
+// build after the ones it descends from. Anything else, "dev" and the
+// flake's MAJOR-unstable-DATE+REV above all, has no order: ok is false, and a launcher then never upgrades (D8 V2's
 // upgrades only go forward, so when in doubt it does not move).
 func CompareVersions(a, b string) (cmp int, ok bool) {
 	pa, oka := versionParts(a)
