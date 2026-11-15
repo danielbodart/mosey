@@ -1,5 +1,5 @@
 // Package install is `mosey --serve=install`: the one piece of code that
-// writes D7's cache, ~/.cache/mosey/<version>/mosey, on the far host
+// writes D7's cache, the one file ~/.cache/mosey/mosey, on the far host
 // (bootstrap.md §4.7.7).
 //
 // The client copies a build over ssh's stdin into a mktemp file in

@@ -13,8 +13,8 @@ import (
 	"github.com/danielbodart/mosey/internal/bootstrap"
 )
 
-// UploadMode is -upload: what to do when the far host has no mosey of
-// this version (D7, bootstrap.md §4.7.5).
+// UploadMode is -upload: what to do when the far host has no mosey this
+// client can use (D7, bootstrap.md §4.7.5).
 type UploadMode string
 
 const (

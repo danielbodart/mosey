@@ -153,37 +153,35 @@ HOME='` + home + `' PATH=/usr/bin:/bin exec /bin/sh -c "$last"
 // which is the only mosey on most hosts (bootstrap.md §9.4).
 func TestTheListFindsTheCachedCopy(t *testing.T) {
 	ssh, home, _ := listHost(t)
-	cached := filepath.Join(home, ".cache", "mosey", "0.4.2", "mosey")
+	cached := filepath.Join(home, ".cache", "mosey", "mosey")
 	if err := os.MkdirAll(filepath.Dir(cached), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\ncase \"$1\" in\n--serve=version) echo 0.4.2;;\n--serve=list) echo 'MOSEY-LIST 1 abcd detached 1';;\n*) exit 9;;\nesac\n"
+	script := "#!/bin/sh\ncase \"$1\" in\n--serve=protocol) echo '" + probeProtocol + "';;\n--serve=list) echo 'MOSEY-LIST 1 abcd detached 1';;\n*) exit 9;;\nesac\n"
 	if err := os.WriteFile(cached, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
 	err := List(context.Background(), ListOptions{
-		SSH:     bootstrap.SSH{Program: ssh, Destination: "far"},
-		Version: "0.4.2",
-		Stdout:  &out, Stderr: &errs,
+		SSH:    bootstrap.SSH{Program: ssh, Destination: "far"},
+		Stdout: &out, Stderr: &errs,
 	})
 	if err != nil || !strings.Contains(out.String(), "abcd") || !strings.Contains(out.String(), "detached") {
 		t.Errorf("%v: listed %q; stderr %q", err, out.String(), errs.String())
 	}
 }
 
-// A host with no mosey of this version is told so by -list, and nothing
-// is copied: the probe's line is not shown as a list (§9.4).
+// A host with no mosey is told so by -list, and nothing is copied: the
+// probe's line is not shown as a list (§9.4).
 func TestTheListCopiesNothingToAHostWithoutMosey(t *testing.T) {
 	ssh, home, ran := listHost(t)
 	var out, errs bytes.Buffer
 	err := List(context.Background(), ListOptions{
-		SSH:     bootstrap.SSH{Program: ssh, Destination: "far"},
-		Version: "0.4.2",
-		Stdout:  &out, Stderr: &errs,
+		SSH:    bootstrap.SSH{Program: ssh, Destination: "far"},
+		Stdout: &out, Stderr: &errs,
 	})
 	var f *Failure
-	if !errors.As(err, &f) || !errors.Is(err, bootstrap.ErrNoServer) || !strings.HasPrefix(f.Msg, "no mosey 0.4.2 on far") {
+	if !errors.As(err, &f) || !errors.Is(err, bootstrap.ErrNoServer) || !strings.HasPrefix(f.Msg, "no mosey on far, so no sessions") {
 		t.Errorf("%v", err)
 	}
 	if out.Len() != 0 {

@@ -16,8 +16,6 @@ import (
 type Request struct {
 	// Home is $HOME, absolute.
 	Home string
-	// Version names the directory under ~/.cache/mosey.
-	Version string
 	// Hash and Size are what the client sent: the upload must be exactly
 	// this.
 	Hash [32]byte
@@ -32,35 +30,32 @@ type Request struct {
 // tempPrefix is what the upload script's mktemp names start with.
 const tempPrefix = ".upload."
 
-// Parse checks the installer's arguments, `V HASH SIZE TEMP`, against
+// Parse checks the installer's arguments, `HASH SIZE TEMP`, against
 // home, $HOME as the upload script expanded it (§4.7.7 step 1).
 func Parse(args []string, home string, uid int) (Request, error) {
-	if len(args) != 4 {
-		return Request{}, errors.New("usage: mosey --serve=install VERSION SHA256 SIZE TEMP")
+	if len(args) != 3 {
+		return Request{}, errors.New("usage: mosey --serve=install SHA256 SIZE TEMP")
 	}
 	if home == "" || !filepath.IsAbs(home) {
 		return Request{}, fmt.Errorf("HOME %q is not an absolute path", home)
 	}
-	r := Request{Home: home, Version: args[0], UID: uid}
-	if !bootstrap.CanUpload(r.Version) {
-		return Request{}, fmt.Errorf("%q is not a version", r.Version)
+	r := Request{Home: home, UID: uid}
+	if len(args[0]) != 64 || strings.ToLower(args[0]) != args[0] {
+		return Request{}, fmt.Errorf("%q is not a SHA-256", args[0])
 	}
-	if len(args[1]) != 64 || strings.ToLower(args[1]) != args[1] {
-		return Request{}, fmt.Errorf("%q is not a SHA-256", args[1])
+	if _, err := hex.Decode(r.Hash[:], []byte(args[0])); err != nil {
+		return Request{}, fmt.Errorf("%q is not a SHA-256", args[0])
 	}
-	if _, err := hex.Decode(r.Hash[:], []byte(args[1])); err != nil {
-		return Request{}, fmt.Errorf("%q is not a SHA-256", args[1])
-	}
-	size, err := strconv.ParseInt(args[2], 10, 64)
-	if err != nil || size < 1 || size > bootstrap.MaxBinary || strconv.FormatInt(size, 10) != args[2] {
-		return Request{}, fmt.Errorf("size %q is not 1 to %d", args[2], bootstrap.MaxBinary)
+	size, err := strconv.ParseInt(args[1], 10, 64)
+	if err != nil || size < 1 || size > bootstrap.MaxBinary || strconv.FormatInt(size, 10) != args[1] {
+		return Request{}, fmt.Errorf("size %q is not 1 to %d", args[1], bootstrap.MaxBinary)
 	}
 	r.Size = size
 	// The very string the script built: "$HOME/.cache/mosey" then
 	// mktemp's name, so it is compared before any cleaning.
-	base, ok := strings.CutPrefix(args[3], home+"/.cache/mosey/")
+	base, ok := strings.CutPrefix(args[2], home+"/.cache/mosey/")
 	if !ok || !validTemp(base) {
-		return Request{}, fmt.Errorf("%q is not an upload in %s/.cache/mosey", args[3], home)
+		return Request{}, fmt.Errorf("%q is not an upload in %s/.cache/mosey", args[2], home)
 	}
 	r.Temp = base
 	return r, nil

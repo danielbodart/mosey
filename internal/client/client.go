@@ -23,7 +23,9 @@ import (
 // Options is what Run needs from cmd/mosey.
 type Options struct {
 	SSH bootstrap.SSH
-	// Version is this build's, sent for the server's equality check (D7).
+	// Version is this build's: which release asset to fetch for a host
+	// of another platform (D7, bootstrap.md §4.7.4), and nothing else.
+	// No line carries it (D8 V1).
 	Version  string
 	Terminal terminal.Terminal
 	// Stderr is where the user reads what happens before raw mode: ssh's
@@ -61,6 +63,11 @@ type Options struct {
 	Predict predict.Mode
 }
 
+// probeProtocol is what D7's probe needs a cached copy's --serve=protocol
+// to say: this build's bootstrap line version and handshake protocol
+// (bootstrap.md §4.7.2).
+var probeProtocol = bootstrap.ProtocolAnswer(handshake.ProtocolVersion)
+
 // Run is `mosey host` (and -s and -new): the SSH bootstrap, then a Session
 // over a real UDP socket, until the session ends, this client detaches
 // (*DetachedError), another client takes the session over
@@ -73,8 +80,9 @@ func Run(ctx context.Context, o Options) error {
 	if o.Getenv == nil {
 		o.Getenv = os.Getenv
 	}
-	// The probe looks for this very version (bootstrap.md §4.7.2).
-	o.SSH.Version = o.Version
+	// The probe asks a cached copy for this build's protocol numbers
+	// (bootstrap.md §4.7.2); its version does not matter.
+	o.SSH.Protocol = probeProtocol
 	if err := o.SSH.Check(); err != nil {
 		return err
 	}
@@ -112,15 +120,15 @@ func Run(ctx context.Context, o Options) error {
 	line, cfg, err := b.run(ctx)
 	var ns *bootstrap.NoServerError
 	if errors.As(err, &ns) && o.SSH.Probes() {
-		// D7: no mosey of this version there. Copy it over, with the
-		// user's consent, and start once more with the same line, whose
-		// one-shot key no launcher has read (bootstrap.md §4.7.8).
+		// D7: no mosey there that this client can use. Copy it over, with
+		// the user's consent, and start once more with the same line,
+		// whose one-shot key no launcher has read (bootstrap.md §4.7.8).
 		if err := newCopier(o, o.SSH, b.cfg).copy(ctx, ns.Probe); err != nil {
 			return err
 		}
 		line, cfg, err = b.run(ctx)
 		if errors.As(err, &ns) {
-			return fail(err, "copied mosey %s to %s, but it is still not found there", o.Version, o.SSH.Destination)
+			return fail(err, "copied mosey to %s, but it is still not found there", o.SSH.Destination)
 		}
 	}
 	if err != nil {

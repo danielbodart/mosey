@@ -8,7 +8,7 @@
 #   in it reaches server's shell.
 # - bare has no mosey at all (D7, bootstrap.md §4.7). The client's probe
 #   says so, the client asks the first time, alice answers yes, and the
-#   client copies its own file to ~/.cache/mosey/<version>/mosey on bare,
+#   client copies its own file to ~/.cache/mosey/mosey on bare,
 #   where the installer checks its hash; the session then runs from that
 #   copy. A second run finds it and asks nothing.
 #
@@ -19,10 +19,9 @@
 
 let
   pkgs = hostPkgs;
-  # Where D7 installs this build on a host that has none: under the
-  # version the package has from nix/release.json, which is what the
-  # binary says it is (scripts/release-assets.sh checks).
-  cached = "/home/alice/.cache/mosey/${mosey.version}/mosey";
+  # Where D7 installs this build on a host that has none: the one cached
+  # file, whatever its version (bootstrap.md §4.7).
+  cached = "/home/alice/.cache/mosey/mosey";
 
   keys = pkgs.runCommand "mosey-install-test-keys" { nativeBuildInputs = [ pkgs.openssh ]; } ''
     mkdir $out
@@ -131,7 +130,7 @@ in
         bare.succeed("test \"$(stat -c '%a' /home/alice/.cache/mosey)\" = 700")
         # The spawner runs from the copy (a pattern without the version,
         # whose + pgrep would read as a regular expression).
-        bare.succeed("pgrep -u alice -f -- '/home/alice/[.]cache/mosey/.*/mosey --serve=spawner'")
+        bare.succeed("pgrep -u alice -f -- '/home/alice/[.]cache/mosey/mosey --serve=spawner'")
         client.succeed(alice("tmux send-keys -t b 'touch /tmp/through-the-copy' Enter"))
         bare.wait_for_file("/tmp/through-the-copy")
         client.succeed(alice("tmux send-keys -t b exit Enter"))

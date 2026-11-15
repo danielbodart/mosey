@@ -15,50 +15,61 @@ import (
 
 func TestAProbeLineSurvivesARoundTrip(t *testing.T) {
 	for _, p := range []ProbeLine{
-		{"Linux", "x86_64"},
-		{"unknown", "unknown"},
-		{strings.Repeat("S", 64), strings.Repeat("m", 64)},
+		{"Linux", "x86_64", false},
+		{"Linux", "x86_64", true},
+		{"unknown", "unknown", false},
+		{strings.Repeat("S", 64), strings.Repeat("m", 64), true},
 	} {
 		line := MarshalProbeLine(p)
 		got, err := ParseProbeLine(line)
 		if err != nil || got != p {
 			t.Errorf("%q: %+v %v", line, got, err)
 		}
+		if len(line) > MaxProbeLine {
+			t.Errorf("%q is over MaxProbeLine", line)
+		}
 	}
-	if got := string(MarshalProbeLine(ProbeLine{"Linux", "aarch64"})); got != "MOSEY-PROBE 1 Linux aarch64\n" {
+	if got := string(MarshalProbeLine(ProbeLine{"Linux", "aarch64", false})); got != "MOSEY-PROBE 1 Linux aarch64 none\n" {
 		t.Errorf("marshalled %q", got)
+	}
+	if got := string(MarshalProbeLine(ProbeLine{"Linux", "aarch64", true})); got != "MOSEY-PROBE 1 Linux aarch64 other\n" {
+		t.Errorf("marshalled %q", got)
+	}
+	if n := len(MarshalProbeLine(ProbeLine{strings.Repeat("S", 64), strings.Repeat("m", 64), true})); n != 150 {
+		t.Errorf("the longest probe line is %d bytes", n)
 	}
 }
 
 func TestAProbeLineOutsideItsGrammarIsRefused(t *testing.T) {
 	for _, line := range []string{
-		"MOSEY-PROBE 1 Linux\n",
-		"MOSEY-PROBE 1 Linux x86_64 extra\n",
-		"MOSEY-PROBE 1 Linux  x86_64\n",
-		"MOSEY-PROBE 1 Linux x86_64 \n",
-		"MOSEY-PROBE 1 Linux x86_64",
-		"MOSEY-PROBE 1 Linux x86_64\r\n",
-		"MOSEY-PROBE 01 Linux x86_64\n",
-		"MOSEY-PROBE 1 Lin\x00ux x86_64\n",
-		"MOSEY-PROBE 1 " + strings.Repeat("S", 65) + " x86_64\n",
+		"MOSEY-PROBE 1 Linux x86_64\n",
+		"MOSEY-PROBE 1 Linux x86_64 maybe\n",
+		"MOSEY-PROBE 1 Linux x86_64 none extra\n",
+		"MOSEY-PROBE 1 Linux  x86_64 none\n",
+		"MOSEY-PROBE 1 Linux x86_64 none \n",
+		"MOSEY-PROBE 1 Linux x86_64 none",
+		"MOSEY-PROBE 1 Linux x86_64 none\r\n",
+		"MOSEY-PROBE 01 Linux x86_64 none\n",
+		"MOSEY-PROBE 1 Lin\x00ux x86_64 none\n",
+		"MOSEY-PROBE 1 " + strings.Repeat("S", 65) + " x86_64 none\n",
 	} {
 		if p, err := ParseProbeLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%q: %+v %v", line, p, err)
 		}
 	}
 	var ve *VersionError
-	if _, err := ParseProbeLine([]byte("MOSEY-PROBE 2 Linux x86_64\n")); !errors.As(err, &ve) || ve.Got != 2 {
+	if _, err := ParseProbeLine([]byte("MOSEY-PROBE 2 Linux x86_64 none\n")); !errors.As(err, &ve) || ve.Got != 2 {
 		t.Errorf("another version: %v", err)
 	}
 }
 
 func TestReadCredentialReturnsTheProbeAsNoServer(t *testing.T) {
-	_, err := ReadCredential(strings.NewReader("Welcome\nMOSEY-PROBE 1 Linux aarch64\n"))
+	_, err := ReadCredential(strings.NewReader("Welcome\nMOSEY-PROBE 1 Linux aarch64 other\n"))
 	var ns *NoServerError
-	if !errors.As(err, &ns) || !errors.Is(err, ErrNoServer) || ns.Probe != (ProbeLine{"Linux", "aarch64"}) {
+	if !errors.As(err, &ns) || !errors.Is(err, ErrNoServer) || ns.Probe != (ProbeLine{"Linux", "aarch64", true}) {
 		t.Fatalf("%v", err)
 	}
-	if _, err := ReadCredential(strings.NewReader("MOSEY-PROBE 1 Linux x86 64\n")); !errors.Is(err, ErrBadLine) {
+	if _, err := ReadCredential(strings.NewReader("MOSEY-PROBE 1 Linux x86 64 none\n")); !errors.Is(err, ErrBadLine) {
 		t.Errorf("a probe line with a space in a field: %v", err)
 	}
 }
@@ -73,12 +84,12 @@ func TestEveryPlatformWithABuildIsMappedAndNoOther(t *testing.T) {
 		{"Darwin", "arm64", "darwin", "arm64"},
 		{"Darwin", "x86_64", "darwin", "amd64"},
 	} {
-		os, arch, ok := Platform(ProbeLine{c.sys, c.machine})
+		os, arch, ok := Platform(ProbeLine{System: c.sys, Machine: c.machine})
 		if !ok || os != c.os || arch != c.arch {
 			t.Errorf("%s %s: %s %s %v", c.sys, c.machine, os, arch, ok)
 		}
 	}
-	for _, p := range []ProbeLine{{"linux", "x86_64"}, {"FreeBSD", "amd64"}, {"Linux", "armv7l"}, {"Linux", "riscv64"}, {"unknown", "unknown"}, {"Linux", "i686"}} {
+	for _, p := range []ProbeLine{{"linux", "x86_64", false}, {"FreeBSD", "amd64", false}, {"Linux", "armv7l", false}, {"Linux", "riscv64", false}, {"unknown", "unknown", false}, {"Linux", "i686", false}} {
 		if os, arch, ok := Platform(p); ok {
 			t.Errorf("%+v mapped to %s/%s", p, os, arch)
 		}
@@ -101,16 +112,23 @@ func TestOnlyACIVersionIsARelease(t *testing.T) {
 	}
 }
 
-func TestOnlyAVersionThatNamesADirectoryCanBeUploaded(t *testing.T) {
-	for _, v := range []string{"0.1.2", "dev", "0-unstable-2026-11-14+abc", "e2e-a"} {
-		if !CanUpload(v) || !ValidServer(CachePath(v)) {
-			t.Errorf("%q", v)
+// The one cached file is a path -remote could name too, and the probe's
+// protocol answer is two small decimals and nothing a script could
+// misread (§4.7.2).
+func TestTheCachePathAndTheProtocolAnswerAreSafeInAScript(t *testing.T) {
+	if !ValidServer(CachePath) {
+		t.Errorf("%q", CachePath)
+	}
+	if got := ProtocolAnswer(1); got != "1 1" || !validProtocolAnswer(got) {
+		t.Errorf("%q", got)
+	}
+	for _, a := range []string{"", "1", "1  1", "1 1 1", "01 1", "1 x", "1;1", "1 1'", "1000 1"} {
+		if validProtocolAnswer(a) {
+			t.Errorf("%q passes", a)
 		}
 	}
-	for _, v := range []string{".", "..", "", "a/b", "a b", "a'b", strings.Repeat("v", 65)} {
-		if CanUpload(v) {
-			t.Errorf("%q can be uploaded", v)
-		}
+	if cmd := (SSH{Destination: "far", Protocol: "1 1; rm -rf ~"}).RemoteCommand(); strings.Contains(cmd, "rm -rf") {
+		t.Errorf("the probe took a script in its protocol answer: %q", cmd)
 	}
 }
 
@@ -144,18 +162,14 @@ func TestSHA256SUMSIsReadStrictly(t *testing.T) {
 }
 
 func TestWithoutRemoteTheBootstrapProbes(t *testing.T) {
-	s := SSH{Destination: "far", Version: "0.1.2"}
+	s := SSH{Destination: "far", Protocol: ProtocolAnswer(1)}
 	if err := s.Check(); err != nil {
 		t.Fatal(err)
 	}
-	if !s.Probes() || !strings.Contains(s.RemoteCommand(), "v=0.1.2;") {
+	if !s.Probes() || !strings.Contains(s.RemoteCommand(), `--serve=protocol </dev/null 2>/dev/null)" = "1 1" ]`) {
 		t.Errorf("no probe: %q", s.RemoteCommand())
 	}
-	s.Version = ".."
-	if s.Probes() || s.RemoteCommand() != "exec /bin/sh -c 'exec mosey --serve'" {
-		t.Errorf("a version that names no directory: %q", s.RemoteCommand())
-	}
-	s = SSH{Destination: "far", Server: "/opt/mosey", Version: "0.1.2"}
+	s = SSH{Destination: "far", Server: "/opt/mosey"}
 	if s.Probes() || s.RemoteCommand() != "exec /bin/sh -c 'exec /opt/mosey --serve'" {
 		t.Errorf("-remote: %q", s.RemoteCommand())
 	}
@@ -168,8 +182,8 @@ func TestTheProbeRunsTheRolesFlag(t *testing.T) {
 		s    SSH
 		want string
 	}{
-		{SSH{Destination: "far", Version: "0.1.2", Role: RoleList}, `then exec "$m" --serve=list; fi`},
-		{SSH{Destination: "far", Version: "..", Role: RoleList}, "exec /bin/sh -c 'exec mosey --serve=list'"},
+		{SSH{Destination: "far", Protocol: "1 1", Role: RoleList}, `then exec mosey --serve=list; fi`},
+		{SSH{Destination: "far", Protocol: "1 1", Role: RoleList}, `then exec "$f" --serve=list; fi`},
 		{SSH{Destination: "far", Server: "/opt/mosey", Role: RoleList}, "exec /bin/sh -c 'exec /opt/mosey --serve=list'"},
 	} {
 		if err := c.s.Check(); err != nil {
@@ -185,8 +199,9 @@ func TestTheProbeRunsTheRolesFlag(t *testing.T) {
 // inside single quotes (§4.7.2): no ', no \, no !, no newline.
 func TestTheScriptsNeedNoQuotingInAnyLoginShell(t *testing.T) {
 	for _, cmd := range []string{
-		probeCommand("0-unstable-2026-11-14+abc_1.x", "--serve"),
-		uploadCommand("0.1.2", [32]byte{1, 2}, 12345),
+		probeCommand("1 1", "--serve"),
+		probeCommand("1 1", "--serve=kill a.b_c-1"),
+		uploadCommand([32]byte{1, 2}, 12345),
 	} {
 		inner, ok := strings.CutPrefix(cmd, "exec /bin/sh -c '")
 		inner, ok2 := strings.CutSuffix(inner, "'")
@@ -236,53 +251,63 @@ func needTools(t *testing.T, path string, tools ...string) {
 	}
 }
 
-// writeMosey is a stand-in mosey that says it is version and, as the
-// launcher, says which it is and what it read on stdin.
-func writeMosey(t *testing.T, path, version, name string) {
+// writeMosey is a stand-in mosey that answers --serve=protocol with
+// answer and, as the launcher, says which it is and what it read on
+// stdin. An answer of "" is a file that answers nothing.
+func writeMosey(t *testing.T, path, answer, name string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\ncase \"$1\" in\n--serve=version) echo " + version + ";;\n--serve) echo \"" + name + " read $(cat)\";;\nesac\n"
+	script := "#!/bin/sh\ncase \"$1\" in\n--serve=protocol) echo " + answer + ";;\n--serve) echo \"" + name + " read $(cat)\";;\nesac\n"
+	if answer == "" {
+		script = "#!/bin/sh\nexit 1\n"
+	}
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// The probe runs, as each login shell would run it, whichever of the cache
-// and PATH says it is this version, handing it stdin; and with neither
-// prints a ProbeLine that parses and exits 0 (§4.7.2).
-func TestTheProbeFindsThisVersionOrSaysWhatTheHostIs(t *testing.T) {
-	const v = "0.9.1+e2e"
+// The probe, as each login shell would run it (§4.7.2): mosey on PATH
+// first, whatever it answers; else the cached copy if it answers this
+// client's protocol and the installer would have written it; else a
+// ProbeLine that parses, exit 0, saying whether a cached file was there
+// that could not be used.
+func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
+	const ours = "1 1"
 	needTools(t, remotePath(), "uname", "cat")
 	for _, shell := range shells(t) {
 		for _, c := range []struct {
 			name   string
-			cache  string // version of a mosey in ~/.cache/mosey/v, "" for none
-			path   string // version of a mosey on PATH
-			served string
+			cache  string // the cached copy's answer; "-" for none
+			path   string // the PATH mosey's answer; "-" for none
+			served string // which ran, or "" for a probe line
+			cached bool   // the probe line's cached field
 			link   string // "dir": ~/.cache/mosey is a symlink; "file": the file is
 		}{
-			{"cache", v, "", "cache", ""},
+			{"PATH", "-", ours, "path", false, ""},
+			// Dan, 2026-11-15: whatever mosey the host has. PATH's is not
+			// asked anything: a mismatch is the bootstrap's to report.
+			{"PATH of another protocol", "-", "2 2", "path", false, ""},
+			{"PATH first", ours, ours, "path", false, ""},
+			{"cache", ours, "-", "cache", false, ""},
+			{"cache of another protocol", "1 2", "-", "", true, ""},
+			{"cache that answers nothing", "", "-", "", true, ""},
 			// The installer's rules hold for the probe too: a cache it
-			// would refuse to write is not run from (§4.7.2).
-			{"symlinked cache directory", v, "", "", "dir"},
-			{"symlinked cache directory, right path", v, v, "path", "dir"},
-			{"symlinked cached file", v, "", "", "file"},
-			{"path", "", v, "path", ""},
-			{"cache first", v, v, "cache", ""},
-			{"wrong cache, right path", "0.9.0", v, "path", ""},
-			{"wrong everywhere", "0.9.0", "0.8.0", "", ""},
-			{"nothing", "", "", "", ""},
+			// would refuse to write is not run from.
+			{"symlinked cache directory", ours, "-", "", true, "dir"},
+			{"symlinked cache directory, PATH", ours, ours, "path", false, "dir"},
+			{"symlinked cached file", ours, "-", "", true, "file"},
+			{"nothing", "-", "-", "", false, ""},
 		} {
 			home, bin := t.TempDir(), t.TempDir()
-			if c.cache != "" {
+			if c.cache != "-" {
 				switch c.link {
 				case "dir":
 					// A copy that would pass, in a directory elsewhere
 					// that ~/.cache/mosey points at.
 					elsewhere := t.TempDir()
-					writeMosey(t, filepath.Join(elsewhere, v, "mosey"), c.cache, "cache")
+					writeMosey(t, filepath.Join(elsewhere, "mosey"), c.cache, "cache")
 					os.MkdirAll(filepath.Join(home, ".cache"), 0o700)
 					if err := os.Symlink(elsewhere, filepath.Join(home, ".cache", "mosey")); err != nil {
 						t.Fatal(err)
@@ -290,24 +315,24 @@ func TestTheProbeFindsThisVersionOrSaysWhatTheHostIs(t *testing.T) {
 				case "file":
 					real := filepath.Join(t.TempDir(), "mosey")
 					writeMosey(t, real, c.cache, "cache")
-					os.MkdirAll(filepath.Join(home, ".cache", "mosey", v), 0o700)
-					if err := os.Symlink(real, filepath.Join(home, ".cache", "mosey", v, "mosey")); err != nil {
+					os.MkdirAll(filepath.Join(home, ".cache", "mosey"), 0o700)
+					if err := os.Symlink(real, filepath.Join(home, ".cache", "mosey", "mosey")); err != nil {
 						t.Fatal(err)
 					}
 				default:
-					writeMosey(t, filepath.Join(home, ".cache", "mosey", v, "mosey"), c.cache, "cache")
+					writeMosey(t, filepath.Join(home, ".cache", "mosey", "mosey"), c.cache, "cache")
 				}
 			}
-			if c.path != "" {
+			if c.path != "-" {
 				writeMosey(t, filepath.Join(bin, "mosey"), c.path, "path")
 			}
-			if c.path != "" && !keepsPath(shell, bin) {
+			if c.path != "-" && !keepsPath(shell, bin) {
 				// NixOS's /etc/zshenv, which zsh reads even with -f, sets
 				// PATH afresh and hides the test's mosey; the cases that
 				// need no PATH still test this shell's quoting.
 				continue
 			}
-			cmd := exec.Command(shell, "-c", SSH{Version: v}.RemoteCommand())
+			cmd := exec.Command(shell, "-c", SSH{Protocol: ours}.RemoteCommand())
 			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath(bin)}
 			cmd.Dir = home
 			cmd.Stdin = strings.NewReader("THE-LINE\n")
@@ -331,6 +356,9 @@ func TestTheProbeFindsThisVersionOrSaysWhatTheHostIs(t *testing.T) {
 			if _, _, ok := Platform(ns.Probe); !ok {
 				t.Errorf("%s, %s: this host is not a platform: %+v", filepath.Base(shell), c.name, ns.Probe)
 			}
+			if ns.Probe.Cached != c.cached {
+				t.Errorf("%s, %s: the probe says cached %v", filepath.Base(shell), c.name, ns.Probe.Cached)
+			}
 		}
 	}
 }
@@ -344,7 +372,7 @@ func keepsPath(shell, bin string) bool {
 }
 
 // The upload script puts stdin in a mktemp file in ~/.cache/mosey, runs it
-// as the installer with the version, hash, size and its own path, passes
+// as the installer with the hash, size and its own path, passes
 // on its status, and removes the temporary file whatever happened
 // (§4.7.6).
 func TestTheUploadScriptRunsTheCopyAsItsInstaller(t *testing.T) {
@@ -354,8 +382,7 @@ func TestTheUploadScriptRunsTheCopyAsItsInstaller(t *testing.T) {
 			home := t.TempDir()
 			copy := []byte("#!/bin/sh\necho \"$@\" > \"$HOME/args\"\nexit " + status + "\n")
 			sum := sha256.Sum256(copy)
-			s := SSH{Version: "0.1.2", Destination: "far"}
-			cmd := exec.Command(shell, "-c", uploadCommand(s.Version, sum, int64(len(copy))))
+			cmd := exec.Command(shell, "-c", uploadCommand(sum, int64(len(copy))))
 			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath()}
 			cmd.Dir = home
 			cmd.Stdin = bytes.NewReader(copy)
@@ -366,8 +393,8 @@ func TestTheUploadScriptRunsTheCopyAsItsInstaller(t *testing.T) {
 			}
 			args, _ := os.ReadFile(filepath.Join(home, "args"))
 			f := strings.Fields(string(args))
-			if len(f) != 5 || f[0] != "--serve=install" || f[1] != "0.1.2" || f[2] != hexOf(sum) || f[3] != strconv.Itoa(len(copy)) ||
-				!strings.HasPrefix(f[4], home+"/.cache/mosey/.upload.") {
+			if len(f) != 4 || f[0] != "--serve=install" || f[1] != hexOf(sum) || f[2] != strconv.Itoa(len(copy)) ||
+				!strings.HasPrefix(f[3], home+"/.cache/mosey/.upload.") {
 				t.Errorf("%s: installer ran with %q", filepath.Base(shell), args)
 			}
 			if entries, _ := os.ReadDir(filepath.Join(home, ".cache", "mosey")); len(entries) != 0 {
@@ -393,14 +420,14 @@ func hexOf(sum [32]byte) string {
 }
 
 func TestTheUploadSSHHasTheBootstrapsOptions(t *testing.T) {
-	s := SSH{Program: "/usr/bin/ssh", Destination: "far", Version: "0.1.2", Options: SSHOptions{Args: []string{"-p", "2222"}}}
+	s := SSH{Program: "/usr/bin/ssh", Destination: "far", Protocol: "1 1", Options: SSHOptions{Args: []string{"-p", "2222"}}}
 	up := s.UploadCommand(context.Background(), nil, [32]byte{}, 10)
 	boot := s.Command(context.Background(), nil)
 	n := len(boot.Args) - 1
 	if len(up.Args) != len(boot.Args) || strings.Join(up.Args[:n], " ") != strings.Join(boot.Args[:n], " ") {
 		t.Errorf("upload %q\nboot %q", up.Args, boot.Args)
 	}
-	if last := up.Args[n]; !strings.Contains(last, "--serve=install 0.1.2 "+strings.Repeat("0", 64)+" 10 ") {
+	if last := up.Args[n]; !strings.Contains(last, "--serve=install "+strings.Repeat("0", 64)+" 10 ") {
 		t.Errorf("upload command %q", last)
 	}
 }

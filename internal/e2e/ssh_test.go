@@ -54,6 +54,12 @@ type sshdOptions struct {
 	// identityAgent is the client config's IdentityAgent: none, unless a
 	// test forwards an agent, which ssh does only from an agent it uses.
 	identityAgent string
+	// path, if set, is the PATH sshd gives its sessions, so a test decides
+	// which mosey, if any, the far host has on it (bootstrap.md §4.7.2).
+	path string
+	// shell, if set, is the SHELL sshd gives its sessions, which the
+	// spawner starts as the session's login shell (server.md §2.5).
+	shell string
 }
 
 func startSSHD(t *testing.T) *sshd { return startSSHDWith(t, sshdOptions{}) }
@@ -100,6 +106,13 @@ func startSSHDWith(t *testing.T, o sshdOptions) *sshd {
 	if o.identityAgent == "" {
 		o.identityAgent = "none"
 	}
+	setEnv := fmt.Sprintf("HOME=%s XDG_RUNTIME_DIR=%s", s.home, s.runtime)
+	if o.path != "" {
+		setEnv += " PATH=" + o.path
+	}
+	if o.shell != "" {
+		setEnv += " SHELL=" + o.shell
+	}
 
 	write := func(name, text string) string {
 		path := filepath.Join(s.dir, name)
@@ -120,8 +133,8 @@ UsePAM no
 AllowAgentForwarding %[6]s
 AllowTcpForwarding no
 X11Forwarding no
-SetEnv HOME=%[3]s XDG_RUNTIME_DIR=%[4]s
-`, port, s.dir, s.home, s.runtime, authorized, allowAgent))
+SetEnv %[3]s
+`, port, s.dir, setEnv, s.runtime, authorized, allowAgent))
 	hostPub, err := os.ReadFile(filepath.Join(s.dir, "host.pub"))
 	if err != nil {
 		t.Fatal(err)

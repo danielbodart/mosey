@@ -39,8 +39,8 @@ const usage = `mosey -- a remote terminal for bad networks
         Start a new session, with a generated name.
 
   mosey -list [OPTIONS] DESTINATION
-        List your sessions there: name, attached or detached, since
-        when, and version.
+        List your sessions there: name, attached or detached, and since
+        when.
 
   mosey -kill NAME [OPTIONS] DESTINATION
         End the session called NAME: its shell gets SIGHUP.
@@ -48,12 +48,14 @@ const usage = `mosey -- a remote terminal for bad networks
   OPTIONS: [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a]
            [-predict adaptive|always|never] [-- SSH-OPTION...]
 
-        The server is this same version of mosey, from ~/.cache/mosey/
-        or the remote PATH. If DESTINATION has none, mosey copies itself
-        there (or, for another platform, its own version's release from
-        GitHub), asking the first time for each host; -upload=yes copies
-        without asking, -upload=no never copies. -remote PATH runs that
-        remote binary instead and copies nothing.
+        The server is whatever mosey DESTINATION has, of any version:
+        mosey on its PATH, or else ~/.cache/mosey/mosey. If it has none,
+        mosey copies itself there (or, for another platform, its own
+        version's release from GitHub), asking the first time for each
+        host; -upload=yes copies without asking, -upload=no never copies.
+        A host's mosey is upgraded with Nix or by replacing the binary,
+        never by this. -remote PATH runs that remote binary instead and
+        copies nothing.
 
         -A and -a are ssh's own: forward the agent or don't.
 
@@ -104,8 +106,8 @@ func parseArgs(args []string) (cli, error) {
 	flags := flag.NewFlagSet("mosey", flag.ContinueOnError)
 	flags.SetOutput(io.Discard) // runClient prints the error and usage once
 	flags.Usage = func() {}
-	// No -remote is D7: this version, from the cache or PATH, copied over
-	// if missing (bootstrap.md §4.7).
+	// No -remote is D7: whatever mosey the host has, PATH's or the cached
+	// copy, and a copy over only if it has none (bootstrap.md §4.7).
 	flags.StringVar(&c.ssh.Server, "remote", "", "the remote mosey `binary`, run as PATH --serve")
 	upload := flags.String("upload", string(client.UploadAsk), "copy mosey to a host without it: ask, yes or no")
 	flags.StringVar(&c.ssh.Program, "ssh", "ssh", "the ssh `program`")
@@ -243,9 +245,9 @@ func runClient(args []string) int {
 	if c.list || c.kill != "" {
 		var err error
 		if c.list {
-			err = client.List(ctx, client.ListOptions{SSH: c.ssh, Version: version, Stdout: os.Stdout, Stderr: os.Stderr, Log: log})
+			err = client.List(ctx, client.ListOptions{SSH: c.ssh, Stdout: os.Stdout, Stderr: os.Stderr, Log: log})
 		} else {
-			err = client.Kill(ctx, client.KillOptions{SSH: c.ssh, Version: version, Name: c.kill, Stdout: os.Stdout, Stderr: os.Stderr, Log: log})
+			err = client.Kill(ctx, client.KillOptions{SSH: c.ssh, Name: c.kill, Stdout: os.Stdout, Stderr: os.Stderr, Log: log})
 		}
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "mosey:", err)

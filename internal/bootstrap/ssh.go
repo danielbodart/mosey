@@ -27,13 +27,14 @@ type SSH struct {
 	// Options are the user's own ssh options, filtered (§2.1).
 	Options SSHOptions
 	// Server is the remote mosey binary, run as `Server --serve`: -remote's
-	// path. Empty is D7's probe (§4.7.2), which runs whichever of
-	// ~/.cache/mosey/<Version>/mosey and mosey on the remote PATH says it
-	// is Version, and otherwise says what the host is.
+	// path. Empty is D7's probe (§4.7.2), which runs mosey on the remote
+	// PATH, of whatever version, or else ~/.cache/mosey/mosey if it
+	// answers Protocol, and otherwise says what the host is.
 	Server string
-	// Version is this client's swver, which the probe looks for. Only the
+	// Protocol is what the probe needs the cached copy's --serve=protocol
+	// to say: ProtocolAnswer, this client's protocol numbers. Only the
 	// probe uses it.
-	Version string
+	Protocol string
 	// AgentCapture is the capture socket for D25's bind capture (§8):
 	// when set, the bootstrap runs with ForwardAgent=AgentCapture. Empty
 	// is ForwardAgent=no.
@@ -99,7 +100,7 @@ func (s SSH) Check() error {
 //
 // Nothing in it needs quoting in any login shell or in /bin/sh, so the
 // remote command can be written without quoting it, and a leading ~/ is
-// left for the remote /bin/sh to expand, as D7's ~/.cache/mosey/ needs.
+// left for the remote /bin/sh to expand, as D7's ~/.cache/mosey/mosey needs.
 func ValidServer(path string) bool {
 	if len(path) > maxServer {
 		return false
@@ -182,12 +183,7 @@ func (s SSH) program() string {
 // launcher the process sshd waits for.
 func (s SSH) RemoteCommand() string {
 	if s.Server == "" {
-		if CanUpload(s.Version) {
-			return probeCommand(s.Version, s.flag())
-		}
-		// A version that cannot name a directory cannot be looked for in
-		// the cache or copied there (§4.7.1): slice 1's mosey on PATH.
-		return wrap("exec mosey " + s.flag())
+		return probeCommand(s.Protocol, s.flag())
 	}
 	return wrap("exec " + s.Server + " " + s.flag())
 }
@@ -206,9 +202,9 @@ func (s SSH) flag() string {
 }
 
 // Probes reports whether RemoteCommand is §4.7.2's probe, which may answer
-// with a ProbeLine. Only a new session's is answered with an upload: -r
-// and -list copy nothing (§4.7.1).
-func (s SSH) Probes() bool { return s.Server == "" && CanUpload(s.Version) }
+// with a ProbeLine. Only a new session's is answered with an upload: R3,
+// -list and -kill copy nothing (§4.7.1).
+func (s SSH) Probes() bool { return s.Server == "" }
 
 // wrap is §4.1's wrapper: script, run by /bin/sh whatever the login shell.
 // script must hold no ' (it ends the quoting), no \ (fish reads \' and \\
@@ -218,39 +214,48 @@ func wrap(script string) string {
 	return "exec /bin/sh -c '" + script + "'"
 }
 
-// probeCommand is §4.7.2's probe for version v, which CanUpload accepts,
-// so v is pathchars and needs no quoting. The cached copy is a candidate
-// only if neither ~/.cache/mosey, its version directory nor the file is a
-// symlink and all of them, and ~/.cache, are the user's: the installer's
-// own rules (§4.7.7), so the probe never runs from a place it would
-// refuse to write. (The script may hold no !, so "not a symlink" is the
-// empty then-branch.) Each candidate is asked its version with stdin on
-// /dev/null (the ClientLine waiting there is the launcher's) and stderr
-// dropped (not finding mosey on PATH is the usual case); the first that
-// says v is run as flag, the launcher's --serve or -list's --serve=list
-// (§9.4), so both find the copy D7 put in the cache. Neither: one
-// MOSEY-PROBE line, and exit 0, so 126 and 127 keep their slice-1
-// meaning.
-func probeCommand(v, flag string) string {
-	return wrap("v=" + v + `; c="$HOME/.cache/mosey"; d="$c/$v"; set -- mosey; ` +
-		`if test -h "$c" || test -h "$d" || test -h "$d/mosey"; then :; ` +
-		`elif test -O "$HOME/.cache" && test -O "$c" && test -O "$d" && test -O "$d/mosey"; then set -- "$d/mosey" mosey; fi; ` +
-		`for m in "$@"; do ` +
-		`if [ "$("$m" --serve=version </dev/null 2>/dev/null)" = "$v" ]; then exec "$m" ` + flag + `; fi; done; ` +
+// probeCommand is §4.7.2's probe. protocol is this client's
+// ProtocolAnswer, digits and one space, so it needs no quoting; anything
+// else is never put in the script, and no cached copy is run.
+//
+// mosey on the remote PATH comes first and is exec'd as it is, whatever
+// its version (Dan, 2026-11-15: whatever mosey the host has): if it
+// speaks another protocol, the bootstrap line or the handshake says so.
+// Otherwise the cached copy, ~/.cache/mosey/mosey, is a candidate only if
+// neither ~/.cache/mosey nor the file is a symlink and both, and
+// ~/.cache, are the user's: the installer's own rules (§4.7.7), so the
+// probe never runs a file from a place it would refuse to write. It is
+// asked --serve=protocol with stdin on /dev/null (the ClientLine waiting
+// there is the launcher's) and stderr dropped, and exec'd as flag (the
+// launcher's --serve, or a role's) only if it says exactly protocol.
+// Otherwise one MOSEY-PROBE line saying what the host is and whether a
+// cached file was there ("other") or not ("none"), and exit 0, so 126 and
+// 127 keep their slice-1 meaning. (The script may hold no !, so "not a
+// symlink" is the empty then-branch.)
+func probeCommand(protocol, flag string) string {
+	if !validProtocolAnswer(protocol) {
+		protocol = "-"
+	}
+	return wrap(`if command -v mosey >/dev/null 2>&1; then exec mosey ` + flag + `; fi; ` +
+		`c="$HOME/.cache/mosey"; f="$c/mosey"; k=` + cachedNone + `; ` +
+		`if test -e "$f" || test -h "$f"; then k=` + cachedOther + `; ` +
+		`if test -h "$c" || test -h "$f"; then :; ` +
+		`elif test -O "$HOME/.cache" && test -O "$c" && test -O "$f" && ` +
+		`[ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "` + protocol + `" ]; then exec "$f" ` + flag + `; fi; fi; ` +
 		`s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); ` +
-		`echo "` + probeMagic + ` ` + strconv.Itoa(Version) + ` ${s:-unknown} ${a:-unknown}"`)
+		`echo "` + probeMagic + ` ` + strconv.Itoa(Version) + ` ${s:-unknown} ${a:-unknown} $k"`)
 }
 
 // uploadCommand is §4.7.6's: the binary arrives on stdin, goes to a
 // mktemp file in ~/.cache/mosey (not /tmp, which is often noexec, and on
 // the filesystem it is renamed within), and then runs as
-// --serve=install, which checks it and moves it into place (§4.7.7). The
-// temporary name is removed whatever happened; after a success it is
-// already gone.
-func uploadCommand(v string, hash [32]byte, size int64) string {
+// --serve=install, which checks it and moves it into place as
+// ~/.cache/mosey/mosey (§4.7.7). The temporary name is removed whatever
+// happened; after a success it is already gone.
+func uploadCommand(hash [32]byte, size int64) string {
 	return wrap(`umask 077; d="$HOME/.cache/mosey"; mkdir -p "$d" || exit 1; ` +
 		`t=$(mktemp "$d/.upload.XXXXXXXX") || exit 1; ` +
-		`cat >"$t" && chmod 700 "$t" && "$t" --serve=install ` + v + " " + hex.EncodeToString(hash[:]) + " " + strconv.FormatInt(size, 10) + ` "$t"; ` +
+		`cat >"$t" && chmod 700 "$t" && "$t" --serve=install ` + hex.EncodeToString(hash[:]) + " " + strconv.FormatInt(size, 10) + ` "$t"; ` +
 		`s=$?; rm -f "$t"; exit $s`)
 }
 
@@ -268,9 +273,9 @@ func (s SSH) Command(ctx context.Context, c Config) *exec.Cmd {
 // UploadCommand is §4.7.6's ssh: the bootstrap's own options, so nothing
 // is forwarded and the user's config cannot undo them, running the upload
 // script, which reads a binary of size bytes and SHA-256 hash on stdin
-// and installs it as version s.Version. CanUpload(s.Version) must hold.
+// and installs it as ~/.cache/mosey/mosey.
 func (s SSH) UploadCommand(ctx context.Context, c Config, hash [32]byte, size int64) *exec.Cmd {
-	return s.command(ctx, c, uploadCommand(s.Version, hash, size))
+	return s.command(ctx, c, uploadCommand(hash, size))
 }
 
 func (s SSH) command(ctx context.Context, c Config, remote string) *exec.Cmd {

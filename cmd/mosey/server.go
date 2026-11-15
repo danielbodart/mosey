@@ -29,6 +29,8 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/danielbodart/mosey/internal/bootstrap"
+	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/install"
 	"github.com/danielbodart/mosey/internal/server"
 )
@@ -53,7 +55,7 @@ func serveRole(arg string) (role string, ok bool) {
 
 // runServer runs `mosey --serve[=role]`.
 func runServer(role string) {
-	if role == "version" || role == "install" {
+	if role == "protocol" || role == "install" {
 		// Neither needs the executable's path, and install runs from a
 		// file that is about to be renamed.
 		runOneShot(role)
@@ -130,12 +132,14 @@ func runServer(role string) {
 // bootstrap.md §4.7): they start nothing and hold no secret.
 func runOneShot(role string) {
 	switch role {
-	case "version":
-		// The probe's question: is this the client's version?
-		fmt.Println(version)
+	case "protocol":
+		// The probe's question of the cached copy: does it speak the
+		// client's protocol? Its version does not matter (D8 V1,
+		// bootstrap.md §4.7.2).
+		fmt.Println(bootstrap.ProtocolAnswer(handshake.ProtocolVersion))
 	case "install":
 		// Run from the copy the client just uploaded, which puts itself
-		// into ~/.cache/mosey/<version>/ (bootstrap.md §4.7.7).
+		// at ~/.cache/mosey/mosey (bootstrap.md §4.7.7).
 		if err := install.Run(os.Args[2:], os.Getenv, os.Getuid()); err != nil {
 			fmt.Fprintln(os.Stderr, "mosey --serve=install:", err)
 			os.Exit(1)

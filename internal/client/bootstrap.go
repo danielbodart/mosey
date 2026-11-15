@@ -235,6 +235,12 @@ func (b *spawn) explain(err error, status int) error {
 			// ssh has said why on stderr already.
 			return fail(err, "ssh to %s failed", dest)
 		case status == 126 || status == 127:
+			if b.ssh.Server == "" {
+				// The probe never exits so itself: the mosey on the
+				// host's PATH would not run (§4.7.2).
+				return fail(fmt.Errorf("%w: %w", bootstrap.ErrNoServer, err),
+					"the mosey on %s's PATH would not run (exit %d)", dest, status)
+			}
 			return fail(fmt.Errorf("%w: %w", bootstrap.ErrNoServer, err),
 				"no mosey at %s on %s: install it there or pass -remote", b.ssh.Server, dest)
 		case status < 0:

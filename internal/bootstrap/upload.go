@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"strconv"
 )
 
 // The rules of D7's auto-upload (§4.6, §4.7) that both ends need: the
@@ -26,16 +27,31 @@ const ReleaseBase = "https://github.com/danielbodart/mosey/releases/download"
 // SumsName is the checksums asset of every release (§4.6).
 const SumsName = "SHA256SUMS"
 
-// CanUpload says whether a client of version v can be copied over (§4.7.1):
-// v must name a directory under ~/.cache/mosey, so it is a swver, every
-// byte of which is a pathchar, and neither "." nor "..".
-func CanUpload(v string) bool {
-	return validWord(v) && v != "." && v != ".."
+// CachePath is the one file D7 installs on the far host (§4.7), as the
+// remote /bin/sh expands it.
+const CachePath = "~/.cache/mosey/mosey"
+
+// ProtocolAnswer is what `mosey --serve=protocol` prints, LF excluded
+// (§4.7.2): this build's bootstrap line version and its handshake
+// protocol, which the probe compares with the cached copy's answer. The
+// handshake's number is passed in, since this package does not import
+// handshake (architecture §1).
+func ProtocolAnswer(handshakeProtocol int) string {
+	return strconv.Itoa(Version) + " " + strconv.Itoa(handshakeProtocol)
 }
 
-// CachePath is where D7 installs version v on the far host, as the remote
-// /bin/sh will expand it (§4.7).
-func CachePath(v string) string { return "~/.cache/mosey/" + v + "/mosey" }
+// validProtocolAnswer is what ProtocolAnswer can give: two decimals of at
+// most 3 digits, one space between. It goes into the probe's script, so
+// nothing else may.
+func validProtocolAnswer(s string) bool {
+	a, b, ok := bytes.Cut([]byte(s), []byte(" "))
+	if !ok || len(a) > 3 || len(b) > 3 {
+		return false
+	}
+	_, errA := parseDec(a, "")
+	_, errB := parseDec(b, "")
+	return errA == nil && errB == nil
+}
 
 // Platform maps what the probe saw (§4.7.3) to Go's os and arch, the
 // names a release's assets use. ok is false for a platform mosey has no

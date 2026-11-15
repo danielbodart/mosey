@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,7 +50,7 @@ HOME='` + h.home + `' exec /bin/sh -c "$last"
 // the real one would, so the test sees exactly the bytes that were sent.
 const installer = `#!/bin/sh
 [ "$1" = --serve=install ] || exit 9
-mkdir -p "$HOME/.cache/mosey/$2" && cp "$5" "$HOME/.cache/mosey/$2/mosey"
+mkdir -p "$HOME/.cache/mosey" && cp "$4" "$HOME/.cache/mosey/mosey"
 `
 
 func (h *uploadHost) copier(mode UploadMode, self string) *copier {
@@ -69,21 +70,40 @@ func (h *uploadHost) copier(mode UploadMode, self string) *copier {
 		},
 		Self: func() ([]byte, error) { return []byte(self), nil },
 		// Nothing may reach the network unless a test says so.
-		HTTP: &http.Client{Transport: failTransport{}},
+		HTTP:    &http.Client{Transport: failTransport{}},
+		Version: "0.4.2",
 	}
-	s := bootstrap.SSH{Program: h.ssh, Destination: "far", Version: "0.4.2"}
+	s := bootstrap.SSH{Program: h.ssh, Destination: "far", Protocol: probeProtocol}
 	c := newCopier(o, s, bootstrap.Config{"user": {"me"}, "hostname": {"far.example"}, "port": {"22"}})
 	c.goos, c.goarch = "linux", "amd64"
 	return c
 }
 
 func (h *uploadHost) installed() ([]byte, error) {
-	return os.ReadFile(filepath.Join(h.home, ".cache", "mosey", "0.4.2", "mosey"))
+	return os.ReadFile(filepath.Join(h.home, ".cache", "mosey", "mosey"))
 }
 
 func (h *uploadHost) sshRan() bool {
 	_, err := os.Stat(filepath.Join(h.dir, "ran"))
 	return err == nil
+}
+
+// toolsOnly is a PATH of links to just these tools, so a far host's
+// scripts find what they need and never a mosey the machine running the
+// test may have installed.
+func toolsOnly(t *testing.T, tools ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, tool := range tools {
+		path, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("no %s", tool)
+		}
+		if err := os.Symlink(path, filepath.Join(dir, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
 }
 
 type failTransport struct{}
@@ -102,7 +122,7 @@ func TestTheFirstCopyIsAskedForAndRemembered(t *testing.T) {
 	if got, err := h.installed(); err != nil || string(got) != installer {
 		t.Fatalf("installed %q %v", got, err)
 	}
-	if len(h.asked) != 1 || h.asked[0] != "mosey: far has no mosey 0.4.2. Copy this one (linux/amd64, 0.0 MB) to ~/.cache/mosey/0.4.2/ there? [y/N] " {
+	if len(h.asked) != 1 || h.asked[0] != "mosey: far has no mosey. Copy this one (linux/amd64, 0.0 MB) to ~/.cache/mosey/ there? [y/N] " {
 		t.Errorf("asked %q", h.asked)
 	}
 	hosts, _ := os.ReadFile(filepath.Join(h.state, "mosey", "upload-hosts"))
@@ -113,6 +133,35 @@ func TestTheFirstCopyIsAskedForAndRemembered(t *testing.T) {
 	h.asked = nil
 	if err := h.copier(UploadAsk, installer).copy(context.Background(), linux); err != nil || len(h.asked) != 0 {
 		t.Errorf("second copy: asked %q, %v", h.asked, err)
+	}
+}
+
+// A cached copy the probe could not use is replaced, and the question
+// says so; for another platform it names the release instead
+// (bootstrap.md §4.7.5).
+func TestReplacingTheCachedCopyIsAskedForAsSuch(t *testing.T) {
+	stale := bootstrap.ProbeLine{System: "Linux", Machine: "x86_64", Cached: true}
+	h := newUploadHost(t)
+	if err := os.MkdirAll(filepath.Join(h.home, ".cache", "mosey"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.home, ".cache", "mosey", "mosey"), []byte("a build of another protocol"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.copier(UploadAsk, installer).copy(context.Background(), stale); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.asked) != 1 || h.asked[0] != "mosey: far's ~/.cache/mosey/mosey cannot serve this mosey. Replace it with this one (linux/amd64, 0.0 MB)? [y/N] " {
+		t.Errorf("asked %q", h.asked)
+	}
+	if got, err := h.installed(); err != nil || string(got) != installer {
+		t.Errorf("installed %q %v", got, err)
+	}
+	if q := question("far", "0.4.2", "linux/arm64", nil, false, true); q != "mosey: far's ~/.cache/mosey/mosey cannot serve this mosey. Replace it with mosey 0.4.2 for linux/arm64 from GitHub? [y/N] " {
+		t.Errorf("for another platform: %q", q)
+	}
+	if q := question("far", "0.4.2", "linux/arm64", nil, false, false); q != "mosey: far has no mosey. Download mosey 0.4.2 for linux/arm64 from GitHub and copy it to ~/.cache/mosey/ there? [y/N] " {
+		t.Errorf("for another platform: %q", q)
 	}
 }
 
@@ -284,7 +333,7 @@ func TestADevelopmentBuildDoesNotLookForARelease(t *testing.T) {
 	h := newUploadHost(t)
 	r := newRelease(t, nil)
 	c := h.foreignCopier(r, "")
-	c.ssh.Version = "0.4.20261114120000"
+	c.version = "0.4.20261114120000"
 	err := c.copy(context.Background(), linux)
 	if err == nil || !strings.Contains(err.Error(), "this is a development build (0.4.20261114120000) and far is linux/amd64") {
 		t.Errorf("got %v", err)
@@ -361,29 +410,31 @@ func TestAHostIsRememberedByUserHostAndPort(t *testing.T) {
 }
 
 // Run answers a probe with a copy and then starts once more, running what
-// it copied; if the far host still has no mosey of this version, it stops
+// it copied; if the far host still has no mosey it can use, it stops
 // rather than copy again (bootstrap.md §4.7.8).
 func TestRunCopiesThenStartsOnceMore(t *testing.T) {
 	for _, c := range []struct {
-		says string // what the copied mosey says its version is
+		says string // what the copied mosey answers --serve=protocol
 		want string
 	}{
-		{"0.4.2", "the server failed to start"},
-		{"0.4.1", "copied mosey 0.4.2 to far, but it is still not found there"},
+		{probeProtocol, "the server failed to start"},
+		{"9 9", "copied mosey to far, but it is still not found there"},
 	} {
 		h := newUploadHost(t)
 		// ssh -G answers with a config; anything else runs as the far host.
+		// PATH has the tools the scripts run and no mosey, so the probe
+		// finds only what was copied.
 		script := `#!/bin/sh
 if [ "$1" = -G ]; then printf 'hostname far.example\nuser me\nport 22\n'; exit 0; fi
 echo ran >> '` + h.dir + `/ran'
 for last in "$@"; do :; done
-HOME='` + h.home + `' exec /bin/sh -c "$last"
+HOME='` + h.home + `' PATH='` + toolsOnly(t, "uname", "mkdir", "mktemp", "cat", "chmod", "rm", "cp") + `' exec /bin/sh -c "$last"
 `
 		os.WriteFile(h.ssh, []byte(script), 0o755)
 		self := `#!/bin/sh
 case "$1" in
---serve=install) mkdir -p "$HOME/.cache/mosey/$2" && cp "$5" "$HOME/.cache/mosey/$2/mosey";;
---serve=version) echo ` + c.says + `;;
+--serve=install) mkdir -p "$HOME/.cache/mosey" && cp "$4" "$HOME/.cache/mosey/mosey";;
+--serve=protocol) echo '` + c.says + `';;
 --serve) cat >/dev/null; echo "MOSEY-ERROR 1 internal -";;
 esac
 `
@@ -398,11 +449,11 @@ esac
 			Self:     func() ([]byte, error) { return []byte(self), nil },
 		})
 		if err == nil || !strings.Contains(err.Error(), c.want) {
-			t.Errorf("a copy that says %s: %v\n%s", c.says, err, stderr.String())
+			t.Errorf("a copy that answers %s: %v\n%s", c.says, err, stderr.String())
 		}
 		ran, _ := os.ReadFile(filepath.Join(h.dir, "ran"))
 		if n := strings.Count(string(ran), "ran"); n != 3 {
-			t.Errorf("a copy that says %s: ssh ran %d times, want 3 (probe, upload, start)", c.says, n)
+			t.Errorf("a copy that answers %s: ssh ran %d times, want 3 (probe, upload, start)", c.says, n)
 		}
 	}
 }

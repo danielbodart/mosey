@@ -10,6 +10,8 @@ import (
 	"os"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/danielbodart/mosey/internal/bootstrap"
 )
 
 // owner is the uid a stat says owns a file. Tests replace it to play a
@@ -21,7 +23,7 @@ var owner = func(path string, st *unix.Stat_t) int { return int(st.Uid) }
 // swap the upload's name for another file, as the same user could.
 var beforeRename = func() {}
 
-// Install puts r's upload into ~/.cache/mosey/<Version>/mosey, or refuses
+// Install puts r's upload at ~/.cache/mosey/mosey, or refuses
 // (bootstrap.md §4.7.7). Every step works through the descriptor of the
 // step before, so no path is looked up twice.
 func Install(r Request) error {
@@ -54,15 +56,12 @@ func Install(r Request) error {
 	}
 	defer upload.Close()
 
-	vname := "~/.cache/mosey/" + r.Version
-	vdir, err := openDir(mosey, r.Version, vname, false, r.UID)
-	if err != nil {
-		return err
-	}
-	defer unix.Close(vdir)
-	dest := vname + "/mosey"
+	// What is there now: the user's own regular file is replaced (one of
+	// another protocol, §4.7.2); anything else is left as it is (D7: never
+	// replace a file someone else owns).
+	const dest = bootstrap.CachePath
 	var st unix.Stat_t
-	switch err := unix.Fstatat(vdir, "mosey", &st, unix.AT_SYMLINK_NOFOLLOW); {
+	switch err := unix.Fstatat(mosey, "mosey", &st, unix.AT_SYMLINK_NOFOLLOW); {
 	case errors.Is(err, unix.ENOENT):
 	case err != nil:
 		return fmt.Errorf("looking at %s: %w", dest, err)
@@ -89,21 +88,23 @@ func Install(r Request) error {
 	// rename(2) takes names, not descriptors, so TEMP is looked up once
 	// more here. What it moved is checked to be the very file that was
 	// hashed, by device and inode, and removed if not: the hash then
-	// holds for what is installed, not only for what was read.
-	if err := unix.Renameat(mosey, r.Temp, vdir, "mosey"); err != nil {
+	// holds for what is installed, not only for what was read. A session
+	// running from the file this replaces keeps the old one: its roles
+	// re-exec /proc/self/exe (server.md §2.3).
+	if err := unix.Renameat(mosey, r.Temp, mosey, "mosey"); err != nil {
 		return fmt.Errorf("moving the upload to %s: %w", dest, err)
 	}
 	var moved unix.Stat_t
-	if err := unix.Fstatat(vdir, "mosey", &moved, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		unix.Unlinkat(vdir, "mosey", 0)
+	if err := unix.Fstatat(mosey, "mosey", &moved, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		unix.Unlinkat(mosey, "mosey", 0)
 		return fmt.Errorf("looking at %s: %w", dest, err)
 	}
 	if moved.Dev != checked.Dev || moved.Ino != checked.Ino {
-		unix.Unlinkat(vdir, "mosey", 0)
+		unix.Unlinkat(mosey, "mosey", 0)
 		return refuse("%s is not the file that was checked: it was replaced during the install, and is removed", dest)
 	}
-	if err := unix.Fsync(vdir); err != nil {
-		return fmt.Errorf("syncing %s: %w", vname, err)
+	if err := unix.Fsync(mosey); err != nil {
+		return fmt.Errorf("syncing ~/.cache/mosey: %w", err)
 	}
 	return nil
 }

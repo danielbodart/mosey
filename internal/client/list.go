@@ -18,11 +18,10 @@ const maxList = 256 << 10
 
 // ListOptions is what List needs from cmd/mosey.
 type ListOptions struct {
+	// SSH is how to reach the host: with no -remote, the probe runs the
+	// host's mosey, PATH's or the cached copy (bootstrap.md §4.7.2), so
+	// -list finds the copy D7 put there.
 	SSH bootstrap.SSH
-	// Version is this build's: with no -remote, the probe looks for a
-	// mosey of this version, in ~/.cache/mosey/ first (bootstrap.md
-	// §4.7.2), so -list finds the copy D7 put there.
-	Version string
 	// Stdout gets the table; Stderr ssh's own words, through the stderr
 	// filter (bootstrap.md §6.5), and the hints.
 	Stdout, Stderr io.Writer
@@ -33,15 +32,15 @@ type ListOptions struct {
 // --serve=list` there over the user's ssh, parses the MOSEY-LIST lines it
 // prints, and lays out the table itself: name, state, since when.
 // Every field is from a grammar of printable ASCII, so no remote escape
-// sequence reaches the terminal (D9). A host with no mosey of this version
-// is told so, and nothing is copied there: listing is not a reason to
-// install anything.
+// sequence reaches the terminal (D9). A host with no mosey is told so,
+// and nothing is copied there: listing is not a reason to install
+// anything.
 func List(ctx context.Context, o ListOptions) error {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
 	o.SSH.Role, o.SSH.RoleArg = bootstrap.RoleList, ""
-	out, err := runRole(ctx, o.SSH, o.Version, o.Stderr, o.Log)
+	out, err := runRole(ctx, o.SSH, o.Stderr, o.Log)
 	if err != nil {
 		return err
 	}
@@ -68,8 +67,7 @@ func List(ctx context.Context, o ListOptions) error {
 
 // KillOptions is what Kill needs from cmd/mosey.
 type KillOptions struct {
-	SSH     bootstrap.SSH
-	Version string
+	SSH bootstrap.SSH
 	// Name is the session to end.
 	Name           string
 	Stdout, Stderr io.Writer
@@ -83,7 +81,7 @@ func Kill(ctx context.Context, o KillOptions) error {
 		o.Log = slog.New(slog.DiscardHandler)
 	}
 	o.SSH.Role, o.SSH.RoleArg = bootstrap.RoleKill, o.Name
-	out, err := runRole(ctx, o.SSH, o.Version, o.Stderr, o.Log)
+	out, err := runRole(ctx, o.SSH, o.Stderr, o.Log)
 	var remote *bootstrap.RemoteError
 	if err != nil && errors.As(err, &remote) && remote.Code == bootstrap.CodeSession {
 		return fail(err, "no session called %s on %s", o.Name, o.SSH.Destination)
@@ -106,11 +104,11 @@ func Kill(ctx context.Context, o KillOptions) error {
 // returns what it printed (bootstrap.md §9.4, §9.5): ssh -G first, its
 // stderr through the filter, the probe answered as §4.7.1 says, and a
 // remote ErrorLine as a *bootstrap.RemoteError.
-func runRole(ctx context.Context, ssh bootstrap.SSH, version string, stderr io.Writer, log *slog.Logger) ([]byte, error) {
+func runRole(ctx context.Context, ssh bootstrap.SSH, stderr io.Writer, log *slog.Logger) ([]byte, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	ssh.Version = version
+	ssh.Protocol = probeProtocol
 	if err := ssh.Check(); err != nil {
 		return nil, err
 	}
@@ -142,7 +140,7 @@ func runRole(ctx context.Context, ssh bootstrap.SSH, version string, stderr io.W
 		// shell's rc file said.
 		if p, perr := bootstrap.ParseProbeLine(last); perr == nil {
 			ns := &bootstrap.NoServerError{Probe: p}
-			return nil, fail(ns, "no mosey %s on %s, so no sessions of it: mosey %s starts one, copying mosey there", version, ssh.Destination, ssh.Destination)
+			return nil, fail(ns, "no mosey on %s, so no sessions: mosey %s starts one, copying mosey there", ssh.Destination, ssh.Destination)
 		}
 	}
 	switch status := bootstrap.ExitStatus(err); {

@@ -13,11 +13,12 @@ import (
 	"github.com/danielbodart/mosey/internal/bootstrap"
 )
 
-// copier is D7's answer to a probe that found no mosey of this version
+// copier is D7's answer to a probe that found no mosey the client can use
 // (bootstrap.md §4.7): consent, the binary, the upload. On success the
 // caller runs the bootstrap once more.
 type copier struct {
-	ssh     bootstrap.SSH // Version is this client's
+	ssh     bootstrap.SSH
+	version string // this client's: which release asset to fetch
 	cfg     bootstrap.Config
 	mode    UploadMode
 	ask     func(question string) (string, error)
@@ -33,7 +34,7 @@ type copier struct {
 
 func newCopier(o Options, s bootstrap.SSH, cfg bootstrap.Config) *copier {
 	c := &copier{
-		ssh: s, cfg: cfg, mode: o.Upload, ask: o.Ask, stderr: o.Stderr, log: o.Log, getenv: o.Getenv,
+		ssh: s, version: o.Version, cfg: cfg, mode: o.Upload, ask: o.Ask, stderr: o.Stderr, log: o.Log, getenv: o.Getenv,
 		release: o.Releases, http: o.HTTP, self: o.Self,
 		goos: runtime.GOOS, goarch: runtime.GOARCH,
 	}
@@ -52,11 +53,13 @@ func newCopier(o Options, s bootstrap.SSH, cfg bootstrap.Config) *copier {
 	return c
 }
 
-// copy answers the probe p: it ends with the client's version installed
-// at ~/.cache/mosey/V/mosey on the far host, or with an error for the
-// user.
+// copy answers the probe p: it ends with a build of the client's own
+// installed at ~/.cache/mosey/mosey on the far host, or with an error for
+// the user. It never touches a mosey on the host's PATH: the probe ran
+// that, whatever its version, and only reports a host with none it could
+// use (Dan, 2026-11-15).
 func (c *copier) copy(ctx context.Context, p bootstrap.ProbeLine) error {
-	dest, v := c.ssh.Destination, c.ssh.Version
+	dest, v := c.ssh.Destination, c.version
 	goos, goarch, ok := bootstrap.Platform(p)
 	if !ok {
 		return fail(&bootstrap.NoServerError{Probe: p}, "%s is %s %s, which mosey has no build for", dest, p.System, p.Machine)
@@ -68,7 +71,7 @@ func (c *copier) copy(ctx context.Context, p bootstrap.ProbeLine) error {
 	}
 	platform := goos + "/" + goarch
 	if c.mode == UploadNo {
-		return fail(&bootstrap.NoServerError{Probe: p}, "%s has no mosey %s: install it there, or run without -upload=no", dest, v)
+		return fail(&bootstrap.NoServerError{Probe: p}, "%s has no mosey: install it there, or run without -upload=no", dest)
 	}
 	ours := goos == c.goos && goarch == c.goarch
 	if !ours && !bootstrap.IsRelease(v) {
@@ -77,20 +80,19 @@ func (c *copier) copy(ctx context.Context, p bootstrap.ProbeLine) error {
 	}
 
 	// Our own file is read first, so the question can say how big it is;
-	// a release is fetched only once the user has said yes.
+	// a release is fetched only once the user has said yes. A cached copy
+	// the probe could not use is replaced, and the question says so
+	// (§4.7.5).
 	var bin []byte
-	question := fmt.Sprintf("mosey: %s has no mosey %s. Download mosey %s for %s from GitHub and copy it to ~/.cache/mosey/%s/ there? [y/N] ", dest, v, v, platform, v)
 	if ours {
 		var err error
 		if bin, err = c.self(); err != nil {
 			return fail(err, "reading this mosey's own file to copy it to %s: %v", dest, err)
 		}
-		question = fmt.Sprintf("mosey: %s has no mosey %s. Copy this one (%s, %s) to ~/.cache/mosey/%s/ there? [y/N] ", dest, v, platform, megabytes(len(bin)), v)
 	}
-	if err := c.consent(question); err != nil {
+	if err := c.consent(question(dest, v, platform, bin, ours, p.Cached)); err != nil {
 		return err
 	}
-
 	var sum [32]byte
 	if ours {
 		sum = sha256.Sum256(bin)
@@ -112,13 +114,31 @@ func (c *copier) copy(ctx context.Context, p bootstrap.ProbeLine) error {
 	if err := c.upload(ctx, bin, sum); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.stderr, "mosey: copied mosey %s to %s\n", v, dest)
+	fmt.Fprintf(c.stderr, "mosey: copied mosey to %s\n", dest)
 	return nil
+}
+
+// question is §4.7.5's: copy this client's own file, or download its
+// version's release for another platform, to a host with no mosey, or in
+// place of a cached copy the probe could not use. Every field is the
+// client's own, never the far side's.
+func question(dest, v, platform string, bin []byte, ours, replace bool) string {
+	what := fmt.Sprintf("mosey %s for %s from GitHub", v, platform)
+	if ours {
+		what = fmt.Sprintf("this one (%s, %s)", platform, megabytes(len(bin)))
+	}
+	if replace {
+		return fmt.Sprintf("mosey: %s's ~/.cache/mosey/mosey cannot serve this mosey. Replace it with %s? [y/N] ", dest, what)
+	}
+	if ours {
+		return fmt.Sprintf("mosey: %s has no mosey. Copy %s to ~/.cache/mosey/ there? [y/N] ", dest, what)
+	}
+	return fmt.Sprintf("mosey: %s has no mosey. Download %s and copy it to ~/.cache/mosey/ there? [y/N] ", dest, what)
 }
 
 // byHand is the advice when the client cannot supply a build itself.
 func (c *copier) byHand(platform string) string {
-	return fmt.Sprintf("build mosey %s for %s and put it at ~/.cache/mosey/%s/mosey there, or pass -remote", c.ssh.Version, platform, c.ssh.Version)
+	return fmt.Sprintf("build mosey for %s and put it at ~/.cache/mosey/mosey there, or pass -remote", platform)
 }
 
 // consent is bootstrap.md §4.7.5: remembered, asked, or given by -upload.
@@ -143,7 +163,7 @@ func (c *copier) consent(question string) error {
 		}
 	}
 	if c.ask == nil {
-		return fail(nil, "%s has no mosey %s, and there is no terminal to ask on: pass -upload=yes to copy it there", dest, c.ssh.Version)
+		return fail(nil, "%s has no mosey this one can use, and there is no terminal to ask on: pass -upload=yes to copy it there", dest)
 	}
 	answer, err := c.ask(question)
 	if err != nil {
