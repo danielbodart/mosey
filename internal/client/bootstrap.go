@@ -126,7 +126,7 @@ func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Co
 	go drain(p.stdout)
 	exited := make(chan struct{})
 	go func() { reap(cmd, b.log); close(exited) }()
-	b.log.Info("credential line read", "server", cred.SoftwareVersion, "addr", cred.Addr, "port", cred.Port)
+	b.log.Info("credential line read", "addr", cred.Addr, "port", cred.Port)
 	if capt != nil {
 		b.finishCapture(ctx, capt, cfg, sock, exited)
 	}
@@ -218,11 +218,12 @@ func (b *spawn) explain(err error, status int) error {
 	switch {
 	case errors.As(err, &ns):
 		// The probe's answer (§4.7.2): Run copies mosey over.
-		return fail(err, "no mosey %s on %s", b.line.SoftwareVersion, dest)
+		return fail(err, "no mosey on %s", dest)
 	case errors.As(err, &remote):
 		return b.refused(remote)
 	case errors.As(err, &ver):
-		return fail(err, "%s sent a mosey line of protocol %d; this mosey speaks %d: install %s there or pass -remote", dest, ver.Got, bootstrap.Version, b.line.SoftwareVersion)
+		// D8 V1: one line version each side, both named (§6.4).
+		return fail(err, "%s's mosey speaks protocol %d; this mosey speaks %d", dest, ver.Got, bootstrap.Version)
 	case errors.Is(err, bootstrap.ErrBadLine):
 		return fail(err, "%s sent a malformed mosey line", dest)
 	case errors.As(err, &nl):
@@ -251,11 +252,18 @@ func (b *spawn) refused(e *bootstrap.RemoteError) error {
 	case bootstrap.CodeLine:
 		return fail(e, "the server could not read this client's request: a bug, please report it")
 	case bootstrap.CodeVersion:
-		// A line version the server cannot read: with one line version
-		// there is none older to send again at (§6.1). The software
-		// version is never refused (D8 V1).
-		return fail(e, "the remote mosey %s cannot read this client's request (bootstrap protocol %d, it speaks %d)",
-			e.Detail, bootstrap.Version, e.Proto)
+		// A line version the server cannot read: there is one each side,
+		// and no fallback (D8 V1, §6.4).
+		return fail(e, "%s's mosey speaks protocol %d; this mosey speaks %d", b.ssh.Destination, e.Proto, bootstrap.Version)
+	case bootstrap.CodeAttach:
+		// The session's spawner is of another attach protocol; the
+		// launcher's stderr, shown above, names both numbers (§9.2 step 5).
+		session := "the session"
+		if b.line.Name != "" {
+			session = "session " + b.line.Name
+		}
+		return fail(e, "%s on %s was started by a mosey that speaks attach protocol %s, which %s's mosey cannot attach (see above)",
+			session, b.ssh.Destination, e.Detail, b.ssh.Destination)
 	case bootstrap.CodeUnsupported:
 		return fail(e, "the remote mosey can't do %s yet", e.Detail)
 	case bootstrap.CodeSession:

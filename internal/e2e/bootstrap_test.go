@@ -44,11 +44,10 @@ func TestAnAbandonedSessionEndsByItself(t *testing.T) {
 	}
 	defer key.Wipe()
 	line := bootstrap.MarshalClientLine(bootstrap.ClientLine{
-		SoftwareVersion: "e2e",
-		Cols:            80,
-		Rows:            24,
-		Env:             map[string]string{"TERM": "xterm-256color"},
-		Public:          key.PublicKey(),
+		Cols:   80,
+		Rows:   24,
+		Env:    map[string]string{"TERM": "xterm-256color"},
+		Public: key.PublicKey(),
 	})
 
 	launcher := exec.Command(mosey, "--serve")

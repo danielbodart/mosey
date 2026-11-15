@@ -31,7 +31,7 @@ type ListOptions struct {
 
 // List is `mosey -list host` (bootstrap.md §9.4): it runs `mosey
 // --serve=list` there over the user's ssh, parses the MOSEY-LIST lines it
-// prints, and lays out the table itself: name, state, since when, version.
+// prints, and lays out the table itself: name, state, since when.
 // Every field is from a grammar of printable ASCII, so no remote escape
 // sequence reaches the terminal (D9). A host with no mosey of this version
 // is told so, and nothing is copied there: listing is not a reason to
@@ -55,9 +55,9 @@ func List(ctx context.Context, o ListOptions) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(o.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tSTATE\tSINCE\tVERSION")
+	fmt.Fprintln(tw, "NAME\tSTATE\tSINCE")
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Name, r.State, r.Since.Local().Format(takenOverTime), r.SoftwareVersion)
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Name, r.State, r.Since.Local().Format(takenOverTime))
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -87,6 +87,12 @@ func Kill(ctx context.Context, o KillOptions) error {
 	var remote *bootstrap.RemoteError
 	if err != nil && errors.As(err, &remote) && remote.Code == bootstrap.CodeSession {
 		return fail(err, "no session called %s on %s", o.Name, o.SSH.Destination)
+	}
+	if err != nil && errors.As(err, &remote) && remote.Code == bootstrap.CodeAttach {
+		// Its spawner speaks another attach protocol, so this host's mosey
+		// cannot ask it to end (bootstrap.md §9.2 step 5).
+		return fail(err, "session %s on %s was started by a mosey that speaks attach protocol %s, which %s's mosey cannot reach (see above)",
+			o.Name, o.SSH.Destination, remote.Detail, o.SSH.Destination)
 	}
 	if err != nil {
 		return err

@@ -135,9 +135,8 @@ func (s *spawner) serveResume(f *os.File) error {
 // resume of this session (the launcher chose it, and checked any holder,
 // under its lock), and a key proto can mint for. A holder is only a label
 // for the hold (§9.2.2): the launcher has already said whose the session
-// is. The client's software version is never compared with the session's
-// (D8 V1): any release's client attaches, and the handshake negotiates
-// what the two speak.
+// is. No software version is on the line (D8 V1): any release's client
+// attaches, and the handshake checks the one protocol number each speaks.
 func checkResumeLine(line []byte, sid [16]byte) (bootstrap.ClientLine, error) {
 	cl, err := bootstrap.ParseClientLine(line)
 	switch {
@@ -157,7 +156,7 @@ func checkResumeLine(line []byte, sid [16]byte) (bootstrap.ClientLine, error) {
 // checkResumed is §3.4's check of a credential minted for a resume: as at
 // the bootstrap, and for this session.
 func (s *spawner) checkResumed(line []byte) error {
-	if err := checkCredential(line, s.advertised, s.port, s.cfg.Version, s.name); err != nil {
+	if err := checkCredential(line, s.advertised, s.port, s.name); err != nil {
 		return err
 	}
 	cl, _ := bootstrap.ParseCredentialLine(line)
@@ -175,8 +174,8 @@ func (s *spawner) greeting() bootstrap.SessionLine {
 	s.greetMu.Lock()
 	defer s.greetMu.Unlock()
 	g := bootstrap.SessionLine{
-		SoftwareVersion: s.cfg.Version, AttachMin: bootstrap.AttachMin, AttachMax: bootstrap.AttachMax,
-		SessionID: s.sid, Name: s.name,
+		AttachProtocol: bootstrap.AttachProtocol,
+		SessionID:      s.sid, Name: s.name,
 		Started: s.started, State: s.state, Since: s.since, Peer: s.peer,
 		Holder: s.holder, HasHolder: s.hasHolder,
 	}

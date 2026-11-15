@@ -29,9 +29,8 @@ const T3 = 10 * time.Second
 // RunProto is the proto role's main (server.md §6.1): it wraps the socket
 // it was started with, receives the UDP socket and the pty master, enters
 // the sandbox, and only then talks to emu, mints the credential and serves
-// the Session. version is this binary's, which the credential line
-// carries.
-func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Logger) error {
+// the Session.
+func RunProto(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 	// First of all, before anything holds a key: with dumpable left at 1 a
 	// seccomp kill writes a core holding the keys (S4 §3.5), and the core
 	// rlimit goes to 0 as well (threat-model.md §4.10).
@@ -110,14 +109,13 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 			return fmt.Errorf("minting a credential: %w", err)
 		}
 		line := bootstrap.MarshalCredentialLine(bootstrap.CredentialLine{
-			SoftwareVersion: version,
-			Addr:            start.Addr,
-			Port:            start.Port,
-			CredentialID:    cred.ID,
-			SessionID:       cred.SessionID,
-			Name:            start.Name,
-			PSK:             cred.PSK,
-			Public:          cred.ServerPublic,
+			Addr:         start.Addr,
+			Port:         start.Port,
+			CredentialID: cred.ID,
+			SessionID:    cred.SessionID,
+			Name:         start.Name,
+			PSK:          cred.PSK,
+			Public:       cred.ServerPublic,
 		})
 		err = ctl.Send(ipc.Credential{Line: line})
 		// The store keeps what the handshake needs; these copies, the PSK

@@ -49,7 +49,9 @@ const (
 // optional fields are production's.
 type SpawnerConfig struct {
 	// Self is this binary, re-executed as proto and emu.
-	Self    string
+	Self string
+	// Version is this binary's, for the session log alone: nothing
+	// compares it (D8 V1).
 	Version string
 	// FirstPort and LastPort are the UDP port range; zero for both is
 	// the package's FirstPort and LastPort.
@@ -237,7 +239,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 		return fmt.Errorf("the launcher sent %T", m)
 	}
 	// The spawner trusts no other process's parse.
-	if err := checkClientLine(lineMsg.Line, s.cfg.Version); err != nil {
+	if err := checkClientLine(lineMsg.Line); err != nil {
 		return err
 	}
 	cl, _ := bootstrap.ParseClientLine(lineMsg.Line)
@@ -373,7 +375,7 @@ func (s *spawner) awaitCredential(ctx context.Context) ([]byte, error) {
 			}
 			switch m := ev.m.(type) {
 			case ipc.Credential:
-				if err := checkCredential(m.Line, s.advertised, s.port, s.cfg.Version, s.name); err != nil {
+				if err := checkCredential(m.Line, s.advertised, s.port, s.name); err != nil {
 					clear(m.Line)
 					s.violation(err)
 					return nil, errors.New("proto sent a bad credential")

@@ -40,8 +40,8 @@ const (
 	SessionIDSize    = 16
 	PSKSize          = 32
 
-	maxSoftwareVersion = 64
-	maxEnvValue        = 64
+	maxWord     = 64
+	maxEnvValue = 64
 )
 
 const (
@@ -110,12 +110,9 @@ var EnvNames = []string{
 }
 
 // ClientLine is what the client writes to ssh's stdin (§6.2). Marshal
-// always writes proto = Version.
+// always writes proto = Version. No line carries a software version (D8
+// V1): the line's version is the one thing the two ends must share.
 type ClientLine struct {
-	// SoftwareVersion is the client's build. Nothing compares it (D8
-	// V1): the probe uses it to find the client's own version on the
-	// host (§4.7.2), and the server's log records it (§6.2).
-	SoftwareVersion string
 	// Attach says which session (§6.2, §9.2); Name is AttachName's, or
 	// AttachNew's when the launcher has chosen it; SessionID is
 	// AttachResume's, and Holder, when HasHolder, the credential R3's
@@ -139,7 +136,6 @@ type ClientLine struct {
 // CredentialLine is what the server prints on ssh's stdout (§6.3).
 // Marshal always writes proto = Version.
 type CredentialLine struct {
-	SoftwareVersion string
 	// Addr is the server's address as SSH reached it, or the zero Addr for
 	// "-". The client checks it before using it (ChooseAddr).
 	Addr         netip.Addr
@@ -164,8 +160,14 @@ type ErrorLine struct {
 // The codes v1 defines (§6.4). A later server may send others, which a
 // client treats as CodeInternal.
 const (
-	CodeLine        = "line"
-	CodeVersion     = "version"
+	CodeLine = "line"
+	// CodeVersion is a ClientLine of another line version; the
+	// ErrorLine's Proto is the server's (§6.4).
+	CodeVersion = "version"
+	// CodeAttach answers name:NAME or resume:SID naming a session whose
+	// spawner speaks another attach protocol; its detail is that
+	// protocol (§9.2 step 5).
+	CodeAttach      = "attach"
 	CodeUnsupported = "unsupported"
 	CodeSession     = "session"
 	CodeInternal    = "internal"
@@ -181,8 +183,8 @@ var (
 	// ErrNoLine is stdout ending, or overflowing MaxPreamble, before a
 	// line of ours.
 	ErrNoLine = errors.New("bootstrap: no mosey line")
-	// ErrNoServer is no mosey of this version on the far host: either the
-	// probe said so (ReadCredential's *NoServerError, §4.7.2), or, with
+	// ErrNoServer is no mosey the client can use on the far host: either
+	// the probe said so (ReadCredential's *NoServerError, §4.7.2), or, with
 	// -remote, ssh exited 126 or 127 because the remote /bin/sh could not
 	// find or run the server (§4.2), and client.Run wraps the
 	// *NoLineError in it.
@@ -215,7 +217,6 @@ func MarshalClientLine(c ClientLine) []byte {
 	b := make([]byte, 0, 2048)
 	b = append(b, clientMagic...)
 	b = appendField(b, strconv.Itoa(Version))
-	b = appendField(b, c.SoftwareVersion)
 	b = appendField(b, c.attach())
 	b = appendField(b, yesNo(c.Agent))
 	b = appendField(b, strconv.Itoa(int(c.Cols)))
@@ -230,33 +231,30 @@ func MarshalClientLine(c ClientLine) []byte {
 // canonical (§6.1, §6.2). Its input comes from ssh's stdin, to the
 // unsandboxed spawner, so it is fuzzed.
 func ParseClientLine(line []byte) (ClientLine, error) {
-	fields, err := splitLine(line, MaxClientLine, clientMagic, 10)
+	fields, err := splitLine(line, MaxClientLine, clientMagic, 9)
 	if err != nil {
 		return ClientLine{}, err
 	}
 	var c ClientLine
-	if c.SoftwareVersion, err = parseSoftwareVersion(fields[2]); err != nil {
+	if err := c.parseAttach(fields[2]); err != nil {
 		return ClientLine{}, err
 	}
-	if err := c.parseAttach(fields[3]); err != nil {
+	if c.Agent, err = parseYesNo(fields[3], "agent"); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Agent, err = parseYesNo(fields[4], "agent"); err != nil {
+	if c.Cols, err = parseSize(fields[4], "cols"); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Cols, err = parseSize(fields[5], "cols"); err != nil {
+	if c.Rows, err = parseSize(fields[5], "rows"); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Rows, err = parseSize(fields[6], "rows"); err != nil {
+	if c.Env, err = parseEnv(fields[6]); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Env, err = parseEnv(fields[7]); err != nil {
+	if c.Public, err = decodeLen(fields[7], PublicKeySize, "public key"); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Public, err = decodeLen(fields[8], PublicKeySize, "public key"); err != nil {
-		return ClientLine{}, err
-	}
-	// fields[9] is the empty remainder after the LF, checked by splitLine.
+	// fields[8] is the empty remainder after the LF, checked by splitLine.
 	if !bytes.Equal(MarshalClientLine(c), line) {
 		return ClientLine{}, badLine("client line is not canonical")
 	}
@@ -328,7 +326,6 @@ func MarshalCredentialLine(c CredentialLine) []byte {
 	b := make([]byte, 0, MaxCredentialLine)
 	b = append(b, credentialMagic...)
 	b = appendField(b, strconv.Itoa(Version))
-	b = appendField(b, c.SoftwareVersion)
 	if c.Addr.IsValid() {
 		b = appendField(b, c.Addr.String())
 	} else {
@@ -349,34 +346,31 @@ func MarshalCredentialLine(c CredentialLine) []byte {
 // anything not canonical (§6.1, §6.3), and any address no server could
 // legitimately have been reached on (threat-model §4.9).
 func ParseCredentialLine(line []byte) (CredentialLine, error) {
-	fields, err := splitLine(line, MaxCredentialLine, credentialMagic, 11)
+	fields, err := splitLine(line, MaxCredentialLine, credentialMagic, 10)
 	if err != nil {
 		return CredentialLine{}, err
 	}
 	var c CredentialLine
-	if c.SoftwareVersion, err = parseSoftwareVersion(fields[2]); err != nil {
+	if c.Addr, err = parseLineAddr(fields[2]); err != nil {
 		return CredentialLine{}, err
 	}
-	if c.Addr, err = parseLineAddr(fields[3]); err != nil {
+	if c.Port, err = parseSize(fields[3], "port"); err != nil {
 		return CredentialLine{}, err
 	}
-	if c.Port, err = parseSize(fields[4], "port"); err != nil {
+	if err := decodeFixed(c.CredentialID[:], fields[4], "credential id"); err != nil {
 		return CredentialLine{}, err
 	}
-	if err := decodeFixed(c.CredentialID[:], fields[5], "credential id"); err != nil {
+	if err := decodeFixed(c.SessionID[:], fields[5], "session id"); err != nil {
 		return CredentialLine{}, err
 	}
-	if err := decodeFixed(c.SessionID[:], fields[6], "session id"); err != nil {
+	if !ValidSessionName(string(fields[6])) {
+		return CredentialLine{}, badLine("session name %q", fields[6])
+	}
+	c.Name = string(fields[6])
+	if err := decodeFixed(c.PSK[:], fields[7], "psk"); err != nil {
 		return CredentialLine{}, err
 	}
-	if !ValidSessionName(string(fields[7])) {
-		return CredentialLine{}, badLine("session name %q", fields[7])
-	}
-	c.Name = string(fields[7])
-	if err := decodeFixed(c.PSK[:], fields[8], "psk"); err != nil {
-		return CredentialLine{}, err
-	}
-	if c.Public, err = decodeLen(fields[9], PublicKeySize, "public key"); err != nil {
+	if c.Public, err = decodeLen(fields[8], PublicKeySize, "public key"); err != nil {
 		clear(c.PSK[:])
 		return CredentialLine{}, err
 	}
@@ -432,7 +426,7 @@ func ParseErrorLine(line []byte) (ErrorLine, error) {
 	}
 	e.Code = string(code)
 	if d := fields[3]; string(d) != "-" {
-		if e.Detail, err = parseSoftwareVersion(d); err != nil {
+		if e.Detail, err = parseWord(d); err != nil {
 			return ErrorLine{}, err
 		}
 	}
@@ -562,10 +556,10 @@ func parseSize(f []byte, what string) (uint16, error) {
 	return uint16(n), nil
 }
 
-// ValidSoftwareVersion says whether v is a swver (§6.1): what a build's
-// version may be if it is to travel on a line.
-func ValidSoftwareVersion(v string) bool {
-	if len(v) < 1 || len(v) > maxSoftwareVersion {
+// validWord says whether v is a word (§6.1): what an ErrorLine's detail
+// may be.
+func validWord(v string) bool {
+	if len(v) < 1 || len(v) > maxWord {
 		return false
 	}
 	for i := 0; i < len(v); i++ {
@@ -576,9 +570,9 @@ func ValidSoftwareVersion(v string) bool {
 	return true
 }
 
-func parseSoftwareVersion(f []byte) (string, error) {
-	if !ValidSoftwareVersion(string(f)) {
-		return "", badLine("software version %q", f)
+func parseWord(f []byte) (string, error) {
+	if !validWord(string(f)) {
+		return "", badLine("word %q", f)
 	}
 	return string(f), nil
 }

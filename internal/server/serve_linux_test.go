@@ -83,8 +83,7 @@ func serve(t *testing.T, bin string, env ...string) *served {
 		t.Fatal(err)
 	}
 	line := bootstrap.MarshalClientLine(bootstrap.ClientLine{
-		SoftwareVersion: serveVersion,
-		Cols:            80, Rows: 24,
+		Cols: 80, Rows: 24,
 		Env:    map[string]string{"LANG": "C.UTF-8", "TERM": "xterm-256color"},
 		Public: key.PublicKey(),
 	})

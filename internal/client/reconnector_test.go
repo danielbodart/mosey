@@ -45,7 +45,7 @@ func TestTheReconnectTryResumesItsOwnSessionByIDAndHolder(t *testing.T) {
 		stdin, _ := os.ReadFile(filepath.Join(dir, "stdin"))
 		cl, perr := bootstrap.ParseClientLine(stdin)
 		if perr != nil || cl.Attach != bootstrap.AttachResume || cl.SessionID != sid || !cl.HasHolder || cl.Holder != holder ||
-			cl.Cols != 100 || cl.Rows != 30 || cl.SoftwareVersion != "1.2.3" {
+			cl.Cols != 100 || cl.Rows != 30 {
 			t.Errorf("the server read %q: %v", stdin, perr)
 		}
 		return r, err
@@ -55,7 +55,7 @@ func TestTheReconnectTryResumesItsOwnSessionByIDAndHolder(t *testing.T) {
 	}
 	credential := func(of [16]byte) []byte {
 		return bootstrap.MarshalCredentialLine(bootstrap.CredentialLine{
-			SoftwareVersion: "1.2.3", Addr: netip.MustParseAddr("127.0.0.1"), Port: 60001,
+			Addr: netip.MustParseAddr("127.0.0.1"), Port: 60001,
 			CredentialID: [8]byte{9}, SessionID: of, Name: "work", Public: bytes.Repeat([]byte{6}, bootstrap.PublicKeySize),
 		})
 	}

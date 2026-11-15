@@ -64,20 +64,18 @@ func fakeServer(t *testing.T, dir string, stdout, stderr []byte, status string) 
 
 func testLine() bootstrap.ClientLine {
 	return bootstrap.ClientLine{
-		SoftwareVersion: "1.2.3",
-		Cols:            80,
-		Rows:            24,
-		Env:             map[string]string{"TERM": "xterm"},
-		Public:          bytes.Repeat([]byte{5}, bootstrap.PublicKeySize),
+		Cols:   80,
+		Rows:   24,
+		Env:    map[string]string{"TERM": "xterm"},
+		Public: bytes.Repeat([]byte{5}, bootstrap.PublicKeySize),
 	}
 }
 
 func credLine() []byte {
 	return bootstrap.MarshalCredentialLine(bootstrap.CredentialLine{
-		SoftwareVersion: "1.2.3",
-		Port:            60001,
-		Name:            "work",
-		Public:          bytes.Repeat([]byte{6}, bootstrap.PublicKeySize),
+		Port:   60001,
+		Name:   "work",
+		Public: bytes.Repeat([]byte{6}, bootstrap.PublicKeySize),
 	})
 }
 
@@ -113,7 +111,7 @@ func TestTheLinesAreExchangedThroughSSH(t *testing.T) {
 	if r.err != nil {
 		t.Fatal(r.err)
 	}
-	if r.line.Port != 60001 || r.line.SoftwareVersion != "1.2.3" {
+	if r.line.Port != 60001 {
 		t.Errorf("line %+v", r.line)
 	}
 	stdin, err := os.ReadFile(filepath.Join(r.dir, "stdin"))
@@ -146,13 +144,14 @@ func TestAMissingServerIsReportedAsSuch(t *testing.T) {
 
 func TestTheServersRefusalIsExplained(t *testing.T) {
 	for line, want := range map[string]string{
-		"MOSEY-ERROR 2 version 0.9.9\n":      "the remote mosey 0.9.9 cannot read this client's request (bootstrap protocol 1, it speaks 2)",
+		"MOSEY-ERROR 2 version -\n":          "far's mosey speaks protocol 2; this mosey speaks 1",
+		"MOSEY-ERROR 1 attach 2\n":           "the session on far was started by a mosey that speaks attach protocol 2, which far's mosey cannot attach (see above)",
 		"MOSEY-ERROR 1 line -\n":             "the server could not read this client's request: a bug, please report it",
 		"MOSEY-ERROR 1 unsupported attach\n": "the remote mosey can't do attach yet",
 		"MOSEY-ERROR 1 internal -\n":         "the server failed to start (see above)",
 		"MOSEY-ERROR 1 overloaded -\n":       "the server refused: overloaded (see above)",
 		"MOSEY-CONNECT 1 nope\n":             "far sent a malformed mosey line",
-		"MOSEY-CONNECT 9 later\n":            "far sent a mosey line of protocol 9; this mosey speaks 1: install 1.2.3 there or pass -remote",
+		"MOSEY-CONNECT 9 later\n":            "far's mosey speaks protocol 9; this mosey speaks 1",
 	} {
 		r := bootstrapWith(t, "hostname far\n", 0, "", []byte(line), nil, "1")
 		var f *Failure

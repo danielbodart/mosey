@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -41,9 +42,6 @@ type Launcher struct {
 	Stdout, Stderr io.Writer
 	// Self is this binary, started as `Self --serve=spawner`.
 	Self string
-	// Version is this binary's, which an error line names. The client's
-	// is never compared with it (D8 V1).
-	Version string
 	// Env is the spawner's environment: the launcher's own, unchanged.
 	Env []string
 	// Trigger opens sshd's forwarded agent to make the client's ssh send
@@ -90,7 +88,7 @@ func (l *Launcher) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cl, err := parseClientLine(line, l.Version)
+	cl, err := parseClientLine(line)
 	if err != nil {
 		return err
 	}
@@ -106,8 +104,11 @@ func (l *Launcher) run(ctx context.Context) error {
 	var sessions []bootstrap.SessionLine
 	var conns []liveSession
 	for _, s := range liveSessions(base) {
-		g, ok := attachable(s.greeting)
-		if !ok {
+		// Every session whose greeting parses, of any attach protocol:
+		// choose passes over the others for auto, and names them for
+		// name:NAME and resume:SID (bootstrap.md §9.2 step 5).
+		g, err := bootstrap.ParseSessionLine(s.greeting)
+		if err != nil {
 			s.f.Close()
 			continue
 		}
@@ -198,22 +199,27 @@ func (l *Launcher) start(ctx context.Context, line []byte, cl bootstrap.ClientLi
 	return fmt.Errorf("the server did not start")
 }
 
-// attachable is a session's greeting if this launcher can attach it: one
-// that parses (bootstrap.md §9.2.1) and whose attach protocol range meets
-// this build's (§9.2 step 5).
-func attachable(greeting []byte) (bootstrap.SessionLine, bool) {
-	g, err := bootstrap.ParseSessionLine(greeting)
-	if err != nil {
-		return g, false
+// attachable says whether this launcher can attach a session whose
+// greeting is g: the one attach protocol each speaks must be the same
+// (D8 V1, bootstrap.md §9.2 step 5, server.md §2.8).
+func attachable(g bootstrap.SessionLine) bool {
+	return g.AttachProtocol == bootstrap.AttachProtocol
+}
+
+// attachMismatch is the refusal of a session this launcher cannot attach:
+// its number on the line, both on stderr (bootstrap.md §6.4).
+func attachMismatch(g bootstrap.SessionLine) *LaunchError {
+	return &LaunchError{
+		Code:   bootstrap.CodeAttach,
+		Detail: strconv.Itoa(g.AttachProtocol),
+		Text:   fmt.Sprintf("session %s speaks attach protocol %d; this mosey speaks %d", g.Name, g.AttachProtocol, bootstrap.AttachProtocol),
 	}
-	_, ok := bootstrap.AttachVersion(g)
-	return g, ok
 }
 
 // resume is the launcher's part of taking a session (bootstrap.md §9.2
 // steps 2 and 5): hand the session's spawner the line (resume:SID), and
 // print the credential line it answers with. The session may be of any
-// version (D8 V1).
+// mosey version that speaks this attach protocol (D8 V1).
 func (l *Launcher) resume(ctx context.Context, f *os.File, greeting, line []byte, cl bootstrap.ClientLine) error {
 	conn, err := ipc.NewConn(f, ipc.Launcher, ipc.Spawner)
 	if err != nil {
@@ -337,16 +343,15 @@ func readClientLine(ctx context.Context, r io.Reader) ([]byte, error) {
 
 // parseClientLine is what the launcher checks of the client's line before
 // it chooses: that it parses, which checks its line version (bootstrap.md
-// §6.2, §6.4). Its software version is never compared with this one's
-// (D8 V1): any release's client is served. version, this launcher's, is
-// only what a refusal says the server is.
-func parseClientLine(line []byte, version string) (bootstrap.ClientLine, error) {
+// §6.2, §6.4). No software version is on it (D8 V1): any release's client
+// of this line version is served.
+func parseClientLine(line []byte) (bootstrap.ClientLine, error) {
 	cl, err := bootstrap.ParseClientLine(line)
 	if err != nil {
 		var ve *bootstrap.VersionError
 		if errors.As(err, &ve) {
-			return cl, &LaunchError{Code: bootstrap.CodeVersion, Detail: version,
-				Text: fmt.Sprintf("the client speaks bootstrap protocol %d, this server %d", ve.Got, bootstrap.Version)}
+			return cl, &LaunchError{Code: bootstrap.CodeVersion,
+				Text: fmt.Sprintf("the client speaks protocol %d; this mosey speaks %d", ve.Got, bootstrap.Version)}
 		}
 		return cl, &LaunchError{Code: bootstrap.CodeLine, Text: "the client's line is malformed"}
 	}
@@ -356,8 +361,8 @@ func parseClientLine(line []byte, version string) (bootstrap.ClientLine, error) 
 // checkClientLine is what a new session's spawner checks of the line its
 // launcher sends: as the launcher did, and that it starts a session with
 // a name the launcher chose (new:NAME, bootstrap.md §9.2 step 2).
-func checkClientLine(line []byte, version string) error {
-	cl, err := parseClientLine(line, version)
+func checkClientLine(line []byte) error {
+	cl, err := parseClientLine(line)
 	if err != nil {
 		return err
 	}

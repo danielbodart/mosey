@@ -17,9 +17,9 @@ import (
 // A refusal the user can meet says what it means (bootstrap.md §6.4).
 func TestARefusalIsExplained(t *testing.T) {
 	for line, want := range map[string]string{
-		"MOSEY-ERROR 2 version 0.9.9\n": "the remote mosey 0.9.9 cannot read this client's request (bootstrap protocol 1, it speaks 2)",
-		"MOSEY-ERROR 1 session -\n":     "no such session on far",
-		"MOSEY-ERROR 1 internal -\n":    "the server failed to start (see above)",
+		"MOSEY-ERROR 2 version -\n":  "far's mosey speaks protocol 2; this mosey speaks 1",
+		"MOSEY-ERROR 1 session -\n":  "no such session on far",
+		"MOSEY-ERROR 1 internal -\n": "the server failed to start (see above)",
 	} {
 		r := &run{dir: t.TempDir()}
 		ssh := fakeSSH(t, r.dir, "hostname far\n", 0)
@@ -72,9 +72,9 @@ func TestTheListIsLaidOutFromLinesThatParse(t *testing.T) {
 	server := filepath.Join(dir, "mosey")
 	script := "#!/bin/sh\n[ \"$1\" = --serve=list ] || exit 9\n" +
 		"printf 'welcome \\033[2J\\n'\n" +
-		"printf 'MOSEY-LIST 1 quiet-heron detached 1794651234 0.4.2\\n'\n" +
-		"printf 'MOSEY-LIST 1 evil\\033[2J attached 1 0.4.2\\n'\n" +
-		"printf 'MOSEY-LIST 1 old-work new 1794650000 0.3.9\\n'\n"
+		"printf 'MOSEY-LIST 1 quiet-heron detached 1794651234\\n'\n" +
+		"printf 'MOSEY-LIST 1 evil\\033[2J attached 1\\n'\n" +
+		"printf 'MOSEY-LIST 1 old-work new 1794650000\\n'\n"
 	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -88,12 +88,12 @@ func TestTheListIsLaidOutFromLinesThatParse(t *testing.T) {
 	}
 	got := out.String()
 	since := time.Unix(1794651234, 0).Local().Format(takenOverTime)
-	for _, want := range []string{"NAME", "STATE", "SINCE", "VERSION", "quiet-heron", "detached", since, "0.4.2", "0.3.9"} {
+	for _, want := range []string{"NAME", "STATE", "SINCE", "quiet-heron", "detached", since, "old-work"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the table lacks %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "\x1b") || strings.Contains(got, "evil") || strings.Contains(got, "welcome") {
+	if strings.Contains(got, "\x1b") || strings.Contains(got, "evil") || strings.Contains(got, "welcome") || strings.Contains(got, "VERSION") {
 		t.Errorf("the table shows what it should not:\n%q", got)
 	}
 	if !strings.Contains(errs.String(), "mosey -s NAME far") || !strings.Contains(errs.String(), "1 list lines") {
@@ -157,7 +157,7 @@ func TestTheListFindsTheCachedCopy(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cached), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\ncase \"$1\" in\n--serve=version) echo 0.4.2;;\n--serve=list) echo 'MOSEY-LIST 1 abcd detached 1 0.4.2';;\n*) exit 9;;\nesac\n"
+	script := "#!/bin/sh\ncase \"$1\" in\n--serve=version) echo 0.4.2;;\n--serve=list) echo 'MOSEY-LIST 1 abcd detached 1';;\n*) exit 9;;\nesac\n"
 	if err := os.WriteFile(cached, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

@@ -184,7 +184,7 @@ type launchResult struct {
 
 func (ss *stubSession) launch(sid [16]byte) (public []byte, result <-chan launchResult) {
 	ss.t.Helper()
-	return ss.launchLine(bootstrap.ClientLine{SoftwareVersion: stubVersion, Attach: bootstrap.AttachResume, SessionID: sid})
+	return ss.launchLine(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: sid})
 }
 
 // launchLine is launch with the client's line, to which it adds the size
@@ -198,7 +198,7 @@ func (ss *stubSession) launchLine(cl bootstrap.ClientLine) (public []byte, resul
 	go func() {
 		var stdout, stderr bytes.Buffer
 		l := &Launcher{Stdin: bytes.NewReader(line), Stdout: &stdout, Stderr: &stderr,
-			Version: stubVersion, Env: []string{"XDG_RUNTIME_DIR=" + ss.runtime}}
+			Env: []string{"XDG_RUNTIME_DIR=" + ss.runtime}}
 		err := l.Run(context.Background())
 		ch <- launchResult{public, stdout.String(), err}
 	}()
@@ -236,7 +236,7 @@ func (ss *stubSession) send(m ipc.Message) {
 // credential is a line §3.4 accepts for this session, told apart by id.
 func credential(t *testing.T, sid [16]byte, id byte) bootstrap.CredentialLine {
 	return bootstrap.CredentialLine{
-		SoftwareVersion: stubVersion, Addr: stubAddr, Port: stubPort,
+		Addr: stubAddr, Port: stubPort,
 		CredentialID: [bootstrap.CredentialIDSize]byte{id}, SessionID: sid,
 		Name: stubName, Public: oneShotKey(t),
 	}
@@ -283,12 +283,11 @@ func TestAResumeReachesProtoAndItsCredentialReachesTheLauncher(t *testing.T) {
 // A Credential that is not for this resume, of this session, from this
 // spawner, is a violation (server.md §3.4, §2.6): proto is killed, and the
 // launcher waiting on it is told the resume failed.
-func TestACredentialForAnotherSessionAddressPortOrVersionKillsProto(t *testing.T) {
+func TestACredentialForAnotherSessionAddressPortOrNameKillsProto(t *testing.T) {
 	for name, spoil := range map[string]func(*bootstrap.CredentialLine){
 		"sessionid": func(c *bootstrap.CredentialLine) { c.SessionID[15] ^= 1 },
 		"addr":      func(c *bootstrap.CredentialLine) { c.Addr = netip.MustParseAddr("127.0.0.2") },
 		"port":      func(c *bootstrap.CredentialLine) { c.Port++ },
-		"swver":     func(c *bootstrap.CredentialLine) { c.SoftwareVersion = "other" },
 		"name":      func(c *bootstrap.CredentialLine) { c.Name = "other" },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -330,7 +329,7 @@ func (ss *stubSession) direct(sid [16]byte) (public []byte, result <-chan launch
 	ss.t.Helper()
 	public = oneShotKey(ss.t)
 	line := bootstrap.MarshalClientLine(bootstrap.ClientLine{
-		SoftwareVersion: stubVersion, Attach: bootstrap.AttachResume, SessionID: sid,
+		Attach: bootstrap.AttachResume, SessionID: sid,
 		Cols: 80, Rows: 24, Public: public,
 	})
 	ch := make(chan launchResult, 1)
@@ -404,7 +403,7 @@ func (ss *stubSession) greetingOf() bootstrap.SessionLine {
 func TestTheGreetingFollowsAttachAndDetachAndAListerChangesNothing(t *testing.T) {
 	sid := [16]byte{0x5e, 5}
 	ss := startStubSession(t, sid)
-	if g := ss.greetingOf(); g.State != bootstrap.SessionNew || g.SessionID != sid || g.SoftwareVersion != stubVersion {
+	if g := ss.greetingOf(); g.State != bootstrap.SessionNew || g.SessionID != sid || g.AttachProtocol != bootstrap.AttachProtocol {
 		t.Errorf("a new session's greeting: %+v", g)
 	}
 	peer := netip.MustParseAddrPort("192.0.2.9:40000")
@@ -485,7 +484,7 @@ func TestAReconnectsHoldIsTheReconnectingClientsOwn(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	reconnect := func(holder [8]byte) <-chan launchResult {
-		_, done := ss.launchLine(bootstrap.ClientLine{SoftwareVersion: stubVersion, Attach: bootstrap.AttachResume,
+		_, done := ss.launchLine(bootstrap.ClientLine{Attach: bootstrap.AttachResume,
 			SessionID: sid, Holder: holder, HasHolder: true})
 		return done
 	}

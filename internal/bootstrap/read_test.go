@@ -80,9 +80,9 @@ func TestALineOfOursThatDoesNotParseIsNeverSkipped(t *testing.T) {
 }
 
 func TestAnErrorLineIsReturnedAsTheServersRefusal(t *testing.T) {
-	_, err := ReadCredential(strings.NewReader("rc noise\nMOSEY-ERROR 1 version 0.9.1\n"))
+	_, err := ReadCredential(strings.NewReader("rc noise\nMOSEY-ERROR 2 version -\n"))
 	var re *RemoteError
-	if !errors.As(err, &re) || re.Code != CodeVersion || re.Detail != "0.9.1" {
+	if !errors.As(err, &re) || re.Code != CodeVersion || re.Proto != 2 || re.Detail != "" {
 		t.Errorf("%v", err)
 	}
 }

@@ -85,11 +85,10 @@ func fakeProto(f *os.File) error {
 		return err
 	}
 	line := bootstrap.MarshalCredentialLine(bootstrap.CredentialLine{
-		SoftwareVersion: fakeVersion,
-		Addr:            start.Addr,
-		Port:            start.Port,
-		Name:            start.Name,
-		Public:          start.ClientPublic,
+		Addr:   start.Addr,
+		Port:   start.Port,
+		Name:   start.Name,
+		Public: start.ClientPublic,
 	})
 	if err := ctl.Send(ipc.Credential{Line: line}); err != nil {
 		return err
@@ -182,15 +181,14 @@ func TestTheSpawnerRunsASessionAndRebuildsEmu(t *testing.T) {
 	state := filepath.Join(home, "state")
 	t.Cleanup(func() { killSpawner(t, state) })
 	line := bootstrap.MarshalClientLine(bootstrap.ClientLine{
-		SoftwareVersion: fakeVersion,
-		Cols:            80, Rows: 24,
+		Cols: 80, Rows: 24,
 		Env:    map[string]string{"LANG": "C.UTF-8"},
 		Public: bytes.Repeat([]byte{0x11}, ipc.PublicKeySize),
 	})
 	var stdout, stderr bytes.Buffer
 	l := &Launcher{
 		Stdin: bytes.NewReader(line), Stdout: &stdout, Stderr: &stderr,
-		Self: self, Version: fakeVersion,
+		Self: self,
 		Env: []string{
 			"PATH=" + os.Getenv("PATH"),
 			"HOME=" + home,

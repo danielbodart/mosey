@@ -14,16 +14,17 @@ import (
 // later version reads all of it.
 const (
 	sessionMagic = "MOSEY-SESSION"
-	// MaxSessionLine bounds a greeting, LF included: at most 238 bytes
+	// MaxSessionLine bounds a greeting, LF included: at most 169 bytes
 	// are used (§9.2.1). Frozen, since every launcher reads the greeting
 	// into a buffer this size.
 	MaxSessionLine = 256
-	// AttachMin and AttachMax are the versions of the attach protocol
-	// (server.md §2.8) this build speaks: v1 is server.md as it stands.
-	AttachMin = 1
-	AttachMax = 1
-	// maxAttachVersion bounds an arange's numbers (§9.2.1).
-	maxAttachVersion = 255
+	// AttachProtocol is the one version of the attach protocol
+	// (server.md §2.8) this build speaks: v1 is server.md as it stands. A
+	// launcher attaches a session only if its greeting says the same
+	// number (D8 V1); there is no range.
+	AttachProtocol = 1
+	// maxAttachProtocol bounds a greeting's aproto (§9.2.1).
+	maxAttachProtocol = 255
 	// maxUnixDigits bounds the time fields: 12 digits reach the year
 	// 33658, and no int64 overflows on the way.
 	maxUnixDigits = 12
@@ -58,11 +59,11 @@ func (s SessionState) String() string {
 
 // SessionLine is a session's greeting (§9.2.1).
 type SessionLine struct {
-	SoftwareVersion string
-	// AttachMin and AttachMax are the attach protocol versions the
-	// session's spawner speaks (§9.2.1, server.md §2.8).
-	AttachMin, AttachMax int
-	SessionID            [SessionIDSize]byte
+	// AttachProtocol is the attach protocol the session's spawner speaks
+	// (§9.2.1, server.md §2.8), 1..255. No software version is in the
+	// greeting (D8 V1).
+	AttachProtocol int
+	SessionID      [SessionIDSize]byte
 	// Name is the session's (D8 R2), an sname.
 	Name string
 	// Started and Since are to the second: when the session started, and
@@ -82,8 +83,7 @@ type SessionLine struct {
 func MarshalSessionLine(s SessionLine) []byte {
 	b := make([]byte, 0, MaxSessionLine)
 	b = append(b, sessionMagic...)
-	b = appendField(b, s.SoftwareVersion)
-	b = appendField(b, strconv.Itoa(s.AttachMin)+"-"+strconv.Itoa(s.AttachMax))
+	b = appendField(b, strconv.Itoa(s.AttachProtocol))
 	b = b64.AppendEncode(append(b, ' '), s.SessionID[:])
 	b = appendField(b, s.Name)
 	b = appendField(b, strconv.FormatInt(s.Started.Unix(), 10))
@@ -110,18 +110,14 @@ func ParseSessionLine(line []byte) (SessionLine, error) {
 	if len(line) > MaxSessionLine {
 		return SessionLine{}, badLine("session line of %d bytes", len(line))
 	}
-	fields, err := splitFields(line, sessionMagic, 11)
+	fields, err := splitFields(line, sessionMagic, 10)
 	if err != nil {
 		return SessionLine{}, err
 	}
 	var s SessionLine
-	if s.SoftwareVersion, err = parseSoftwareVersion(fields[1]); err != nil {
+	if s.AttachProtocol, err = parseAttachProtocol(fields[1]); err != nil {
 		return SessionLine{}, err
 	}
-	if s.AttachMin, s.AttachMax, err = parseRange(fields[2]); err != nil {
-		return SessionLine{}, err
-	}
-	fields = append(fields[:2:2], fields[3:]...)
 	if err := decodeFixed(s.SessionID[:], fields[2], "session id"); err != nil {
 		return SessionLine{}, err
 	}
@@ -160,49 +156,24 @@ func ParseSessionLine(line []byte) (SessionLine, error) {
 	return s, nil
 }
 
-// parseRange reads an arange, MIN-MAX, each 1..255 with no leading zero,
-// MIN no more than MAX (§9.2.1).
-func parseRange(f []byte) (lo, hi int, err error) {
-	a, b, ok := bytes.Cut(f, []byte("-"))
-	if !ok {
-		return 0, 0, badLine("attach range %q", f)
-	}
-	if lo, err = parseSmall(a); err == nil {
-		hi, err = parseSmall(b)
-	}
-	if err != nil || lo > hi {
-		return 0, 0, badLine("attach range %q", f)
-	}
-	return lo, hi, nil
-}
-
-// parseSmall reads a decimal 1..maxAttachVersion with no leading zero.
-func parseSmall(f []byte) (int, error) {
+// parseAttachProtocol reads an aproto, a decimal 1..maxAttachProtocol
+// with no leading zero (§9.2.1). Any number is read: whether this
+// launcher can attach a session of it is the launcher's to decide.
+func parseAttachProtocol(f []byte) (int, error) {
 	if len(f) == 0 || len(f) > 3 || f[0] == '0' {
-		return 0, badLine("attach version %q", f)
+		return 0, badLine("attach protocol %q", f)
 	}
 	n := 0
 	for _, c := range f {
 		if c < '0' || c > '9' {
-			return 0, badLine("attach version %q", f)
+			return 0, badLine("attach protocol %q", f)
 		}
 		n = n*10 + int(c-'0')
 	}
-	if n > maxAttachVersion {
-		return 0, badLine("attach version %q", f)
+	if n > maxAttachProtocol {
+		return 0, badLine("attach protocol %q", f)
 	}
 	return n, nil
-}
-
-// AttachVersion is the attach protocol version a launcher of this build
-// and a session whose greeting is g use: the highest both speak, and ok
-// false when they have none in common (server.md §2.8).
-func AttachVersion(g SessionLine) (version int, ok bool) {
-	v := min(AttachMax, g.AttachMax)
-	if v < max(AttachMin, g.AttachMin) {
-		return 0, false
-	}
-	return v, true
 }
 
 // parseState reads a session state word.
@@ -242,7 +213,7 @@ const (
 	// listVersion is the list line's own version, frozen in position like
 	// every line's.
 	listVersion = 1
-	// MaxListLine bounds a list line, LF included: at most 133 bytes are
+	// MaxListLine bounds a list line, LF included: at most 68 bytes are
 	// used (§9.4).
 	MaxListLine = 160
 	// MaxListed is the most list lines the client shows [choice].
@@ -251,10 +222,9 @@ const (
 
 // ListLine is one session as --serve=list prints it (§9.4).
 type ListLine struct {
-	Name            string
-	State           SessionState
-	Since           time.Time
-	SoftwareVersion string
+	Name  string
+	State SessionState
+	Since time.Time
 }
 
 // MarshalListLine is l as one line, LF included.
@@ -265,7 +235,6 @@ func MarshalListLine(l ListLine) []byte {
 	b = appendField(b, l.Name)
 	b = appendField(b, l.State.String())
 	b = appendField(b, strconv.FormatInt(l.Since.Unix(), 10))
-	b = appendField(b, l.SoftwareVersion)
 	return append(b, '\n')
 }
 
@@ -276,7 +245,7 @@ func ParseListLine(line []byte) (ListLine, error) {
 	if len(line) > MaxListLine {
 		return ListLine{}, badLine("list line of %d bytes", len(line))
 	}
-	fields, err := splitFields(line, listMagic, 7)
+	fields, err := splitFields(line, listMagic, 6)
 	if err != nil {
 		return ListLine{}, err
 	}
@@ -292,9 +261,6 @@ func ParseListLine(line []byte) (ListLine, error) {
 		return ListLine{}, err
 	}
 	if l.Since, err = parseUnix(fields[4], "since"); err != nil {
-		return ListLine{}, err
-	}
-	if l.SoftwareVersion, err = parseSoftwareVersion(fields[5]); err != nil {
 		return ListLine{}, err
 	}
 	if !bytes.Equal(MarshalListLine(l), line) {

@@ -72,12 +72,11 @@ func runServer(role string) {
 	switch role {
 	case "":
 		err = (&server.Launcher{
-			Stdin:   os.Stdin,
-			Stdout:  os.Stdout,
-			Stderr:  os.Stderr,
-			Self:    self,
-			Version: version,
-			Env:     os.Environ(),
+			Stdin:  os.Stdin,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+			Self:   self,
+			Env:    os.Environ(),
 		}).Run(ctx)
 		if err != nil {
 			// Run has told the client and the user already.
@@ -90,7 +89,7 @@ func runServer(role string) {
 			Version: version,
 		})
 	case "proto":
-		err = server.RunProto(ctx, os.NewFile(ipcFD, "ipc"), version, log)
+		err = server.RunProto(ctx, os.NewFile(ipcFD, "ipc"), log)
 	case "emu":
 		err = server.RunEmu(ctx, os.NewFile(ipcFD, "ipc"), log)
 	case "list":

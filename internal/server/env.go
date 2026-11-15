@@ -110,17 +110,17 @@ func addresses(sshConnection string) (advertise, bind netip.Addr) {
 }
 
 // checkCredential is the spawner's check of proto's Credential (server.md
-// §3.4): the line must parse, carry exactly the address, port and version
+// §3.4): the line must parse, carry exactly the address, port and name
 // the spawner itself owns, and re-marshal to the same bytes, so what
 // reaches stdout is canonical printable ASCII and nothing a compromised
 // proto chose beyond the four fields only it knows.
-func checkCredential(line []byte, advertised netip.Addr, port uint16, version, name string) error {
+func checkCredential(line []byte, advertised netip.Addr, port uint16, name string) error {
 	cl, err := bootstrap.ParseCredentialLine(line)
 	if err != nil {
 		return err
 	}
 	defer clear(cl.PSK[:])
-	if cl.Addr != advertised || cl.Port != port || cl.SoftwareVersion != version || cl.Name != name {
+	if cl.Addr != advertised || cl.Port != port || cl.Name != name {
 		return errCredentialFields
 	}
 	canonical := bootstrap.MarshalCredentialLine(cl)
@@ -136,6 +136,6 @@ type credentialError string
 func (e credentialError) Error() string { return string(e) }
 
 const (
-	errCredentialFields    = credentialError("the credential line's address, port, version or name is not the spawner's")
+	errCredentialFields    = credentialError("the credential line's address, port or name is not the spawner's")
 	errCredentialCanonical = credentialError("the credential line is not canonical")
 )

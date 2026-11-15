@@ -30,7 +30,7 @@ const SumsName = "SHA256SUMS"
 // v must name a directory under ~/.cache/mosey, so it is a swver, every
 // byte of which is a pathchar, and neither "." nor "..".
 func CanUpload(v string) bool {
-	return ValidSoftwareVersion(v) && v != "." && v != ".."
+	return validWord(v) && v != "." && v != ".."
 }
 
 // CachePath is where D7 installs version v on the far host, as the remote

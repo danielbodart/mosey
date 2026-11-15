@@ -11,17 +11,14 @@ import (
 
 func sampleSessionLine() SessionLine {
 	return SessionLine{
-		SoftwareVersion: "0.214.20261114093012",
-		AttachMin:       1,
-		AttachMax:       1,
-		SessionID:       [16]byte{0x0f, 0x3a, 1, 2, 3},
-		Name:            "quiet-heron",
-		Started:         time.Unix(1794650000, 0),
-		State:           SessionDetached,
-		Since:           time.Unix(1794651234, 0),
-		Peer:            netip.MustParseAddrPort("[2001:db8::7]:50123"),
-		Holder:          [8]byte{1, 2, 3, 4, 5, 6, 7, 8},
-		HasHolder:       true,
+		AttachProtocol: 1, SessionID: [16]byte{0x0f, 0x3a, 1, 2, 3},
+		Name:      "quiet-heron",
+		Started:   time.Unix(1794650000, 0),
+		State:     SessionDetached,
+		Since:     time.Unix(1794651234, 0),
+		Peer:      netip.MustParseAddrPort("[2001:db8::7]:50123"),
+		Holder:    [8]byte{1, 2, 3, 4, 5, 6, 7, 8},
+		HasHolder: true,
 	}
 }
 
@@ -35,7 +32,7 @@ func TestASessionLineRoundTripsInEveryState(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%q: %v", line, err)
 			}
-			if got.SoftwareVersion != s.SoftwareVersion || got.AttachMin != 1 || got.AttachMax != 1 || got.SessionID != s.SessionID || !got.Started.Equal(s.Started) ||
+			if got.AttachProtocol != 1 || got.SessionID != s.SessionID || !got.Started.Equal(s.Started) ||
 				!got.Since.Equal(s.Since) || got.State != s.State || got.Peer != s.Peer ||
 				got.Name != s.Name || got.HasHolder != s.HasHolder || got.HasHolder && got.Holder != s.Holder {
 				t.Fatalf("%q parsed as %+v, not %+v", line, got, s)
@@ -46,15 +43,14 @@ func TestASessionLineRoundTripsInEveryState(t *testing.T) {
 
 func TestTheLongestSessionLineFitsItsBound(t *testing.T) {
 	s := sampleSessionLine()
-	s.SoftwareVersion = strings.Repeat("9", 64)
-	s.AttachMin, s.AttachMax = 255, 255
+	s.AttachProtocol = 255
 	s.Started, s.Since = time.Unix(999999999999, 0), time.Unix(999999999999, 0)
 	s.State = SessionDetached
 	s.Peer = netip.MustParseAddrPort("[ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe]:65535")
 	s.Name = strings.Repeat("n", MaxSessionName)
 	line := MarshalSessionLine(s)
-	if len(line) != 238 || len(line) > MaxSessionLine {
-		t.Fatalf("%d bytes, not the 238 §9.2.1 derives, or over %d", len(line), MaxSessionLine)
+	if len(line) != 169 || len(line) > MaxSessionLine {
+		t.Fatalf("%d bytes, not the 169 §9.2.1 derives, or over %d", len(line), MaxSessionLine)
 	}
 	if _, err := ParseSessionLine(line); err != nil {
 		t.Fatal(err)
@@ -78,12 +74,12 @@ func TestASessionLineThatBreaksARuleIsRefused(t *testing.T) {
 		"extra field":      strings.Replace(good, "\n", " x\n", 1),
 		"bad name":         strings.Replace(good, "quiet-heron", "-heron", 1),
 		"short holder":     strings.Replace(good, " AQIDBAUGBwg\n", " AQID\n", 1),
-		"no attach range":  strings.Replace(good, " 1-1 ", " ", 1),
-		"range backwards":  strings.Replace(good, " 1-1 ", " 2-1 ", 1),
-		"range from 0":     strings.Replace(good, " 1-1 ", " 0-1 ", 1),
-		"range over 255":   strings.Replace(good, " 1-1 ", " 1-256 ", 1),
-		"range zero-led":   strings.Replace(good, " 1-1 ", " 01-1 ", 1),
-		"range one number": strings.Replace(good, " 1-1 ", " 1 ", 1),
+		"no aproto":        strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION ", 1),
+		"aproto 0":         strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 0 ", 1),
+		"aproto over 255":  strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 256 ", 1),
+		"aproto zero-led":  strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 01 ", 1),
+		"an attach range":  strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 1-1 ", 1),
+		"a swver as well":  strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 0.1.2 1 ", 1),
 	}
 	for name, line := range cases {
 		if _, err := ParseSessionLine([]byte(line)); !errors.Is(err, ErrBadLine) {
@@ -92,21 +88,15 @@ func TestASessionLineThatBreaksARuleIsRefused(t *testing.T) {
 	}
 }
 
-// A launcher and a session use the highest attach version both speak, and
-// none when their ranges do not meet (server.md §2.8).
-func TestTheAttachVersionIsTheHighestBothSpeak(t *testing.T) {
-	for _, c := range []struct {
-		lo, hi, want int
-		ok           bool
-	}{
-		{1, 1, 1, true},
-		{1, 7, AttachMax, true}, // a newer session that still speaks v1
-		{2, 3, 0, false},        // one that dropped v1
-	} {
-		got, ok := AttachVersion(SessionLine{AttachMin: c.lo, AttachMax: c.hi})
-		if got != c.want || ok != c.ok {
-			t.Errorf("%d-%d: %d %v, want %d %v", c.lo, c.hi, got, ok, c.want, c.ok)
-		}
+// The greeting of a session of another attach protocol is read in full,
+// so a launcher can name it and refuse it with both numbers (§9.2 step 5);
+// whether it is attachable is the launcher's, not the parser's.
+func TestAGreetingOfAnotherAttachProtocolStillParses(t *testing.T) {
+	s := sampleSessionLine()
+	s.AttachProtocol = 2
+	got, err := ParseSessionLine(MarshalSessionLine(s))
+	if err != nil || got.AttachProtocol != 2 || got.Name != s.Name {
+		t.Fatalf("%+v %v", got, err)
 	}
 }
 
@@ -165,23 +155,23 @@ func TestOnlyABatchBootstrapRunsSSHInBatchMode(t *testing.T) {
 }
 
 func sampleListLine() ListLine {
-	return ListLine{Name: "quiet-heron", State: SessionDetached, Since: time.Unix(1794651234, 0), SoftwareVersion: "0.214.20261114"}
+	return ListLine{Name: "quiet-heron", State: SessionDetached, Since: time.Unix(1794651234, 0)}
 }
 
 // A list line round-trips, and its longest form fits its bound (§9.4).
 func TestAListLineRoundTripsAndFitsItsBound(t *testing.T) {
-	longest := ListLine{Name: strings.Repeat("n", 32), State: SessionDetached, Since: time.Unix(999999999999, 0), SoftwareVersion: strings.Repeat("9", 64)}
+	longest := ListLine{Name: strings.Repeat("n", 32), State: SessionDetached, Since: time.Unix(999999999999, 0)}
 	for _, l := range []ListLine{sampleListLine(), longest} {
 		line := MarshalListLine(l)
 		got, err := ParseListLine(line)
-		if err != nil || got.Name != l.Name || got.State != l.State || !got.Since.Equal(l.Since) || got.SoftwareVersion != l.SoftwareVersion {
+		if err != nil || got.Name != l.Name || got.State != l.State || !got.Since.Equal(l.Since) {
 			t.Errorf("%q: %+v, %v", line, got, err)
 		}
 	}
-	if n := len(MarshalListLine(longest)); n != 133 || n > MaxListLine {
-		t.Errorf("the longest list line is %d bytes, §9.4 says 133", n)
+	if n := len(MarshalListLine(longest)); n != 68 || n > MaxListLine {
+		t.Errorf("the longest list line is %d bytes, §9.4 says 68", n)
 	}
-	if got := string(MarshalListLine(sampleListLine())); got != "MOSEY-LIST 1 quiet-heron detached 1794651234 0.214.20261114\n" {
+	if got := string(MarshalListLine(sampleListLine())); got != "MOSEY-LIST 1 quiet-heron detached 1794651234\n" {
 		t.Errorf("%q", got)
 	}
 }
@@ -195,15 +185,16 @@ func TestAListLineThatBreaksARuleIsRefused(t *testing.T) {
 		"a name over 32":        strings.Replace(good, "quiet-heron", strings.Repeat("q", 33), 1),
 		"a bad state":           strings.Replace(good, "detached", "dead", 1),
 		"another version":       strings.Replace(good, "MOSEY-LIST 1", "MOSEY-LIST 2", 1),
-		"a bidi control":        strings.Replace(good, "0.214", "0.\u202e214", 1),
+		"a bidi control":        strings.Replace(good, "quiet-heron", "quiet\u202eheron", 1),
+		"a version as well":     strings.Replace(good, "\n", " 0.214.20261114\n", 1),
 		"a long line":           strings.TrimSuffix(good, "\n") + strings.Repeat("9", 200) + "\n",
 		"no LF":                 strings.TrimSuffix(good, "\n"),
-		"a leading zero":        strings.Replace(good, " 1794651234 ", " 01794651234 ", 1),
+		"a leading zero":        strings.Replace(good, " 1794651234\n", " 01794651234\n", 1),
 		"another magic":         strings.Replace(good, "MOSEY-LIST", "MOSEY-LISTS", 1),
 		"a missing field":       strings.Replace(good, " detached", "", 1),
 		"no name":               strings.Replace(good, "quiet-heron", "-", 1),
 		"no state":              strings.Replace(good, "detached", "-", 1),
-		"no since":              strings.Replace(good, " 1794651234 ", " - ", 1),
+		"no since":              strings.Replace(good, " 1794651234\n", " -\n", 1),
 	} {
 		if _, err := ParseListLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%s: %q gave %v", name, line, err)
@@ -225,7 +216,7 @@ func FuzzParseListLine(f *testing.F) {
 		if !bytes.Equal(MarshalListLine(l), line) || len(line) > MaxListLine {
 			t.Fatalf("accepted %q, which re-marshals differently", line)
 		}
-		for _, field := range []string{l.Name, l.SoftwareVersion} {
+		for _, field := range []string{l.Name} {
 			for i := 0; i < len(field); i++ {
 				if field[i] <= ' ' || field[i] > '~' {
 					t.Fatalf("accepted a field with byte 0x%02x: %q", field[i], line)
@@ -258,8 +249,8 @@ func FuzzParseSessionLine(f *testing.F) {
 		if s.Peer.IsValid() && (s.Peer.Port() == 0 || s.Peer.Addr().Zone() != "" || s.Peer.Addr().Is4In6()) {
 			t.Fatalf("accepted peer %s", s.Peer)
 		}
-		if s.AttachMin < 1 || s.AttachMin > s.AttachMax || s.AttachMax > 255 {
-			t.Fatalf("accepted attach range %d-%d", s.AttachMin, s.AttachMax)
+		if s.AttachProtocol < 1 || s.AttachProtocol > 255 {
+			t.Fatalf("accepted attach protocol %d", s.AttachProtocol)
 		}
 		if !ValidSessionName(s.Name) {
 			t.Fatalf("accepted name %q", s.Name)
@@ -273,9 +264,9 @@ func TestReadListKeepsOnlyListLinesThatParse(t *testing.T) {
 	good := MarshalListLine(sampleListLine())
 	out := append([]byte("motd\r\nwelcome \x1b[31mred\x1b[0m\n"), good...)
 	out = append(out, "MOSEY-LIST 1 bad\x1bname detached 1 v1\n"...)
-	out = append(out, MarshalListLine(ListLine{Name: "other", State: SessionNew, Since: time.Unix(1, 0), SoftwareVersion: "v9"})...)
+	out = append(out, MarshalListLine(ListLine{Name: "other", State: SessionNew, Since: time.Unix(1, 0)})...)
 	rows, dropped := ReadList(out)
-	if len(rows) != 2 || dropped != 1 || rows[0].Name != "quiet-heron" || rows[1].SoftwareVersion != "v9" {
+	if len(rows) != 2 || dropped != 1 || rows[0].Name != "quiet-heron" || rows[1].Name != "other" {
 		t.Fatalf("%+v, dropped %d", rows, dropped)
 	}
 	many := bytes.Repeat(good, MaxListed+3)
@@ -293,8 +284,8 @@ func FuzzReadList(f *testing.F) {
 			t.Fatalf("%d rows", len(rows))
 		}
 		for _, r := range rows {
-			if len(r.Name) > MaxSessionName || len(r.SoftwareVersion) > maxSoftwareVersion ||
-				r.Name != "" && !ValidSessionName(r.Name) || !ValidSoftwareVersion(r.SoftwareVersion) {
+			if len(r.Name) > MaxSessionName ||
+				r.Name != "" && !ValidSessionName(r.Name) {
 				t.Fatalf("row %+v", r)
 			}
 			if !bytes.Contains(out, MarshalListLine(r)) {

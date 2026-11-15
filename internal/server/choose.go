@@ -18,13 +18,16 @@ type choice struct {
 }
 
 // choose is §9.2's table, a pure function so every row is tested without
-// processes: sessions are the greetings of the sessions this launcher can
-// attach, and generate makes a name none of them has.
+// processes: sessions are the greetings of the user's sessions that
+// answered, and generate makes a name none of them has.
 //
-// Sessions of every version are chosen alike (D8 V1, §9.2 step 5): an
-// upgraded client's plain `mosey HOST` takes its detached session back,
-// and -s NAME finds NAME, whichever binary runs it, which goes on running
-// it.
+// Sessions of every mosey version are chosen alike (D8 V1, §9.2 step 5):
+// after the host's mosey is upgraded, a plain `mosey HOST` takes its
+// detached session back, and -s NAME finds NAME, whichever binary runs it,
+// which goes on running it. Only the attach protocol must be this
+// launcher's: auto passes over a session of another, and name:NAME or
+// resume:SID naming one is refused with both numbers. Its name stays
+// taken.
 func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate func(taken map[string]bool) string) choice {
 	fresh := func() choice {
 		taken := map[string]bool{}
@@ -37,7 +40,7 @@ func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate 
 	case bootstrap.AttachAuto:
 		// R1: the most recently detached session, never an attached one,
 		// so a second terminal gets a session of its own.
-		if i := newest(sessions, func(s bootstrap.SessionLine) bool { return s.State == bootstrap.SessionDetached }); i >= 0 {
+		if i := newest(sessions, func(s bootstrap.SessionLine) bool { return s.State == bootstrap.SessionDetached && attachable(s) }); i >= 0 {
 			return choice{take: i}
 		}
 		return fresh()
@@ -45,6 +48,9 @@ func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate 
 		// R2: NAME whatever its state, a takeover if attached (D26), or a
 		// new session of that name.
 		if i := newest(sessions, func(s bootstrap.SessionLine) bool { return s.Name == cl.Name }); i >= 0 {
+			if !attachable(sessions[i]) {
+				return choice{err: attachMismatch(sessions[i])}
+			}
 			return choice{take: i}
 		}
 		return choice{start: true, name: cl.Name}
@@ -52,6 +58,9 @@ func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate 
 		i := newest(sessions, func(s bootstrap.SessionLine) bool { return s.SessionID == cl.SessionID })
 		if i < 0 {
 			return choice{err: &LaunchError{Code: bootstrap.CodeSession, Text: "no such session"}}
+		}
+		if !attachable(sessions[i]) {
+			return choice{err: attachMismatch(sessions[i])}
 		}
 		if cl.HasHolder {
 			return reconnect(reconnectTakesBack, cl.Holder, sessions[i], i)

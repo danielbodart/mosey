@@ -32,7 +32,7 @@ func List(w io.Writer, getenv func(string) string) error {
 			continue
 		}
 		rows = append(rows, row{started: g.Started, line: bootstrap.ListLine{
-			Name: g.Name, State: g.State, Since: g.Since, SoftwareVersion: g.SoftwareVersion,
+			Name: g.Name, State: g.State, Since: g.Since,
 		}})
 	}
 	slices.SortStableFunc(rows, func(a, b row) int { return a.started.Compare(b.started) })
@@ -56,13 +56,26 @@ func Kill(w io.Writer, getenv func(string) string, name string) error {
 		return fmt.Errorf("%q is not a session name", printableASCII(name, 64))
 	}
 	var found *liveSession
+	var other *bootstrap.SessionLine
 	for _, s := range liveSessions(sessionsDir(getenv)) {
-		g, ok := attachable(s.greeting)
-		if !ok || g.Name != name || found != nil {
+		g, err := bootstrap.ParseSessionLine(s.greeting)
+		if err != nil || g.Name != name || found != nil {
 			s.f.Close()
 			continue
 		}
+		if !attachable(g) {
+			// Hangup is an attach protocol message: one of another
+			// protocol cannot be sent it (bootstrap.md §9.2 step 5).
+			s.f.Close()
+			other = &g
+			continue
+		}
 		found = &s
+	}
+	if found == nil && other != nil {
+		le := attachMismatch(*other)
+		w.Write(bootstrap.MarshalErrorLine(bootstrap.ErrorLine{Proto: bootstrap.Version, Code: le.Code, Detail: le.Detail}))
+		return le
 	}
 	if found == nil {
 		w.Write(bootstrap.MarshalErrorLine(bootstrap.ErrorLine{Proto: bootstrap.Version, Code: bootstrap.CodeSession}))

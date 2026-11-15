@@ -33,10 +33,10 @@ func oneShotKey(t *testing.T) []byte {
 	return k.PublicKey()
 }
 
-func resumeLine(t *testing.T, version string, sid [16]byte) []byte {
+func resumeLine(t *testing.T, sid [16]byte) []byte {
 	t.Helper()
 	return bootstrap.MarshalClientLine(bootstrap.ClientLine{
-		SoftwareVersion: version, Attach: bootstrap.AttachResume, SessionID: sid,
+		Attach: bootstrap.AttachResume, SessionID: sid,
 		Cols: 80, Rows: 24, Public: oneShotKey(t),
 	})
 }
@@ -110,11 +110,14 @@ func fakeSession(t *testing.T, base string, sid [16]byte, serve func(f *os.File)
 	}()
 }
 
-func greet(version string, sid [16]byte) func(f *os.File) {
+// greet is a session's greeting at this build's attach protocol.
+func greet(sid [16]byte) func(f *os.File) { return greetAt(bootstrap.AttachProtocol, sid) }
+
+// greetAt is a session's greeting at attach protocol aproto.
+func greetAt(aproto int, sid [16]byte) func(f *os.File) {
 	return func(f *os.File) {
 		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{
-			SoftwareVersion: version, AttachMin: 1, AttachMax: 1,
-			SessionID: sid, Name: fmt.Sprintf("s-%x", sid[0]), Started: time.Unix(1794650000, 0),
+			AttachProtocol: aproto, SessionID: sid, Name: fmt.Sprintf("s-%x", sid[0]), Started: time.Unix(1794650000, 0),
 			State: bootstrap.SessionDetached, Since: time.Unix(1794650100, 0),
 			Peer: netip.MustParseAddrPort("192.0.2.7:50000"),
 		}))
@@ -138,7 +141,7 @@ func TestTheAttachSocketGreetsAndLeavesNothingBehind(t *testing.T) {
 	go func() {
 		f, err := l.Accept()
 		if err == nil {
-			greet("v1", sid)(f)
+			greet(sid)(f)
 			f.Close()
 		}
 	}()
@@ -148,7 +151,7 @@ func TestTheAttachSocketGreetsAndLeavesNothingBehind(t *testing.T) {
 	}
 	f.Close()
 	g, err := bootstrap.ParseSessionLine(greeting)
-	if err != nil || g.SessionID != sid || g.SoftwareVersion != "v1" {
+	if err != nil || g.SessionID != sid || g.AttachProtocol != bootstrap.AttachProtocol {
 		t.Fatalf("greeting %q: %+v %v", greeting, g, err)
 	}
 	l.Close()
@@ -162,28 +165,22 @@ func TestTheAttachSocketGreetsAndLeavesNothingBehind(t *testing.T) {
 
 // The launcher's resume against a fake spawner: a plain client's line
 // (auto) finds the detached session, which gets the line as resume:SID,
-// and the credential line it answers with comes out on stdout; a session
-// of another version is attached all the same (D8 V1), and one whose
-// attach protocol range does not meet this build's is passed over
+// and the credential line it answers with comes out on stdout. A session
+// whose attach protocol is not this build's is passed over by auto, and
+// -s NAME or R3's resume naming it is refused with both numbers
 // (bootstrap.md §9.2 steps 2 and 5).
 func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	runtime := runtimeDir(t)
 	base := filepath.Join(runtime, "mosey")
 	sid := [16]byte{9}
 	answer := bootstrap.MarshalCredentialLine(bootstrap.CredentialLine{
-		SoftwareVersion: "v1", Port: 60001, SessionID: sid, Name: "work", Public: oneShotKey(t),
+		Port: 60001, SessionID: sid, Name: "work", Public: oneShotKey(t),
 	})
 	got := make(chan []byte, 1)
-	var sessionVersion atomic.Value
-	sessionVersion.Store("v1")
-	var dropsV1 atomic.Bool
+	var aproto atomic.Int32
+	aproto.Store(bootstrap.AttachProtocol)
 	fakeSession(t, base, sid, func(f *os.File) {
-		lo, hi := 1, 1
-		if dropsV1.Load() {
-			lo, hi = 2, 3
-		}
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: sessionVersion.Load().(string), AttachMin: lo, AttachMax: hi,
-			SessionID: sid, Name: "work", Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650000, 0)}))
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: int(aproto.Load()), SessionID: sid, Name: "work", Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650000, 0)}))
 		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
 		m, err := conn.Recv()
 		if err != nil {
@@ -194,41 +191,45 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	})
 	run := func(line []byte) (string, string, error) {
 		var stdout, stderr bytes.Buffer
-		l := &Launcher{Stdin: bytes.NewReader(line), Stdout: &stdout, Stderr: &stderr, Version: "v1",
+		l := &Launcher{Stdin: bytes.NewReader(line), Stdout: &stdout, Stderr: &stderr,
 			Env: []string{"XDG_RUNTIME_DIR=" + runtime}}
 		err := l.Run(t.Context())
 		return stdout.String(), stderr.String(), err
 	}
 	key := oneShotKey(t)
-	auto := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachAuto, Cols: 80, Rows: 24, Public: key})
+	auto := bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachAuto, Cols: 80, Rows: 24, Public: key})
 	out, errs, err := run(auto)
 	if err != nil || out != string(answer) {
 		t.Fatalf("resume: %v, stdout %q, stderr %q", err, out, errs)
 	}
-	want := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid, Cols: 80, Rows: 24, Public: key})
+	want := bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: sid, Cols: 80, Rows: 24, Public: key})
 	if sent := <-got; !bytes.Equal(sent, want) {
 		t.Errorf("the spawner got %q, not the line as resume:SID", sent)
 	}
-	// The session is v0, the client and the launcher v1: the session is
-	// attached as it is, run by its own binary, never refused for its
-	// version (D8 V1).
-	sessionVersion.Store("v0")
-	out, errs, err = run(auto)
-	if err != nil || out != string(answer) {
-		t.Fatalf("a session of another version: %v, stdout %q, stderr %q", err, out, errs)
-	}
-	<-got
-	// A session whose attach range this build does not speak is passed
-	// over: a plain client starts its own (here there is no spawner to
-	// start, Self being empty).
-	dropsV1.Store(true)
+	// A session of attach protocol 2 is passed over by auto: a plain
+	// client starts its own (here there is no spawner to start, Self
+	// being empty).
+	aproto.Store(2)
 	out, _, err = run(auto)
 	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeInternal ||
 		!strings.Contains(err.Error(), "starting the spawner") {
-		t.Errorf("a plain client with only a 2-3 session detached: %v, %q; want it to start a session", err, out)
+		t.Errorf("a plain client with only an attach-2 session detached: %v, %q; want it to start a session", err, out)
+	}
+	// Named, by -s or by R3, it is refused with both numbers: its number
+	// on the line, both on stderr.
+	byName := bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachName, Name: "work", Cols: 80, Rows: 24, Public: key})
+	byID := bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: sid,
+		Holder: [8]byte{1}, HasHolder: true, Cols: 80, Rows: 24, Public: key})
+	for name, line := range map[string][]byte{"-s work": byName, "R3's resume": byID} {
+		out, errs, err = run(line)
+		e, perr := bootstrap.ParseErrorLine([]byte(out))
+		if err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "2" ||
+			!strings.Contains(errs, "session work speaks attach protocol 2; this mosey speaks 1") {
+			t.Errorf("%s of an attach-2 session: %v, stdout %q, stderr %q", name, err, out, errs)
+		}
 	}
 	// R3's reconnect of a session that is not there.
-	gone := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume,
+	gone := bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachResume,
 		SessionID: [16]byte{0x77}, Holder: [8]byte{1}, HasHolder: true, Cols: 80, Rows: 24, Public: key})
 	out, _, err = run(gone)
 	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeSession {
@@ -245,29 +246,29 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 // of it (server.md §2.6).
 func TestTheSpawnerRefusesAResumeLineThatIsNotForIt(t *testing.T) {
 	sid := [16]byte{5}
-	good := resumeLine(t, "v1", sid)
+	good := resumeLine(t, sid)
 	if _, err := checkResumeLine(good, sid); err != nil {
 		t.Fatalf("a good line: %v", err)
 	}
 	// A resuming client may forward its agent: its own login triggered
 	// its own bind (bootstrap.md §9.2 step 2).
-	agent := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid, Agent: true,
+	agent := bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: sid, Agent: true,
 		Cols: 80, Rows: 24, Public: oneShotKey(t)})
 	if _, err := checkResumeLine(agent, sid); err != nil {
 		t.Errorf("agent=yes: %v", err)
 	}
 	// A reconnect's holder passes through as the hold's label (§9.2.2).
-	holder := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid,
+	holder := bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: sid,
 		Holder: [8]byte{1}, HasHolder: true, Cols: 80, Rows: 24, Public: oneShotKey(t)})
 	if cl, err := checkResumeLine(holder, sid); err != nil || !cl.HasHolder || cl.Holder != [8]byte{1} {
 		t.Errorf("a reconnect's line: %v", err)
 	}
-	badKey := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid,
+	badKey := bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: sid,
 		Cols: 80, Rows: 24, Public: bytes.Repeat([]byte{0xff}, bootstrap.PublicKeySize)})
-	newLine := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Cols: 80, Rows: 24, Public: oneShotKey(t)})
-	auto := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachAuto, Cols: 80, Rows: 24, Public: oneShotKey(t)})
+	newLine := bootstrap.MarshalClientLine(bootstrap.ClientLine{Cols: 80, Rows: 24, Public: oneShotKey(t)})
+	auto := bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachAuto, Cols: 80, Rows: 24, Public: oneShotKey(t)})
 	for name, line := range map[string][]byte{
-		"another session":      resumeLine(t, "v1", [16]byte{6}),
+		"another session":      resumeLine(t, [16]byte{6}),
 		"a new session":        newLine,
 		"an unresolved choice": auto,
 		"a bad key":            badKey,
@@ -276,10 +277,6 @@ func TestTheSpawnerRefusesAResumeLineThatIsNotForIt(t *testing.T) {
 		if _, err := checkResumeLine(line, sid); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
-	}
-	// A client of another version is served (D8 V1).
-	if _, err := checkResumeLine(resumeLine(t, "v2", sid), sid); err != nil {
-		t.Errorf("a client of another version: %v", err)
 	}
 }
 
@@ -297,14 +294,14 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 		t.Fatalf("%v %q", err, out.String())
 	}
 	sid := [16]byte{0xab, 0xcd}
-	fakeSession(t, base, sid, greet("v1", sid))
-	// A session of another version is listed like any other (D8 V1), and
-	// one whose greeting does not parse is not listed at all.
+	fakeSession(t, base, sid, greet(sid))
+	// A session of another attach protocol is listed like any other, so
+	// the user can see it (bootstrap.md §9.2 step 5), and one whose
+	// greeting does not parse is not listed at all.
 	other := [16]byte{0xef}
 	fakeSession(t, base, other, func(f *os.File) {
 		// Started after s-ab's, so it is listed second (oldest first).
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: "v9", AttachMin: 1, AttachMax: 1,
-			SessionID: other, Name: "s-ef", Started: time.Unix(1794650050, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650100, 0)}))
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 2, SessionID: other, Name: "s-ef", Started: time.Unix(1794650050, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650100, 0)}))
 	})
 	broken := [16]byte{0x01}
 	fakeSession(t, base, broken, func(f *os.File) { f.Write([]byte("MOSEY-SESSION v9 not a greeting\n")) })
@@ -312,7 +309,7 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 	if err := List(&out, getenv); err != nil {
 		t.Fatal(err)
 	}
-	want := "MOSEY-LIST 1 s-ab detached 1794650100 v1\nMOSEY-LIST 1 s-ef detached 1794650100 v9\n"
+	want := "MOSEY-LIST 1 s-ab detached 1794650100\nMOSEY-LIST 1 s-ef detached 1794650100\n"
 	if out.String() != want {
 		t.Errorf("the list is\n%s\nnot\n%s", out.String(), want)
 	}
@@ -341,14 +338,27 @@ func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
 	asked := make(chan [16]byte, 2)
 	for _, sid := range [][16]byte{{0x11}, {0x22}} {
 		fakeSession(t, base, sid, func(f *os.File) {
-			greet("v1", sid)(f)
+			greet(sid)(f)
 		})
 	}
+	// A session of another attach protocol cannot be sent Hangup, an
+	// attach protocol message: -kill says so with both numbers.
+	elder := [16]byte{0x44}
+	fakeSession(t, base, elder, func(f *os.File) {
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 2, SessionID: elder, Name: "elder",
+			Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650000, 0)}))
+		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
+		if m, err := conn.Recv(); err == nil {
+			if _, ok := m.(ipc.Hangup); ok {
+				asked <- elder
+			}
+		}
+	})
 	// The greeting above reads whatever comes next and returns; a real
 	// spawner hands Hangup on. This one records which session got it.
 	killed := [16]byte{0x33}
 	fakeSession(t, base, killed, func(f *os.File) {
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: "v1", AttachMin: 1, AttachMax: 1, SessionID: killed, Name: "doomed",
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 1, SessionID: killed, Name: "doomed",
 			Started: time.Unix(1794650000, 0), State: bootstrap.SessionAttached, Since: time.Unix(1794650000, 0)}))
 		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
 		if m, err := conn.Recv(); err == nil {
@@ -375,6 +385,17 @@ func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
 	}
 	if e, err := bootstrap.ParseErrorLine(out.Bytes()); err != nil || e.Code != bootstrap.CodeSession {
 		t.Errorf("kill of nothing printed %q", out.String())
+	}
+	out.Reset()
+	err := Kill(&out, getenv, "elder")
+	if e, perr := bootstrap.ParseErrorLine(out.Bytes()); err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "2" ||
+		!strings.Contains(err.Error(), "session elder speaks attach protocol 2; this mosey speaks 1") {
+		t.Errorf("kill of an attach-2 session: %v, %q", err, out.String())
+	}
+	select {
+	case sid := <-asked:
+		t.Errorf("%x was sent Hangup", sid)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -430,7 +451,7 @@ func TestASessionWhoseBacklogIsFullIsSkippedNotWaitedOn(t *testing.T) {
 func TestNoSessionInASessionsDirectoryOthersCanUseIsReached(t *testing.T) {
 	base := filepath.Join(runtimeDir(t), "mosey")
 	sid := [16]byte{0xf1}
-	fakeSession(t, base, sid, greet("v1", sid))
+	fakeSession(t, base, sid, greet(sid))
 	if err := os.Chmod(base, 0o755); err != nil {
 		t.Fatal(err)
 	}
