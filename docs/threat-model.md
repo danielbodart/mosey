@@ -845,8 +845,10 @@ disagrees.
   every grid invariant (`prediction.md` §11.3), so the renderer's
   defence in depth (§4.7) sees nothing new.
 - **Passwords (A2).** While the newest frame says the pty has echo off
-  (`!ECHO && ICANON`), the client predicts nothing and logs nothing, and
-  entering it drops every prediction. Only a typed glyph that changes its
+  (`!ECHO && ICANON` on mosey's own pty, so not for a prompt inside a
+  multiplexer or nested session; see the next point), the client
+  predicts nothing and logs nothing, and entering it drops every
+  prediction. Only a typed glyph that changes its
   cell confirms an epoch, never a backspace, so a masked prompt in raw
   mode (fish's `read -s`) doesn't reveal the next key either. Measured on
   S6's traces: 0 of 555 password keys drawn, against 3–11 when backspace
@@ -857,7 +859,12 @@ disagrees.
   a no-echo prompt from the server's side. The server does not advance
   its echo ack while echo is off, and the new `EchoApplied` field rides
   only on frames that were going anyway, so at a password prompt the
-  server sends nothing per key (`prediction.md` §3.1, §13.2; R2).
+  server sends nothing per key (`prediction.md` §3.1, §13.2; R2). Not
+  inside tmux, screen, or a nested ssh or mosey: those keep mosey's pty
+  in raw mode, so the bit is never set, the echo-ack frame goes out after
+  each password key as after any other, and the client logs those keys.
+  Chaff (§4.14) is the remaining defence for timing there, and the epoch
+  rules for display.
 - **A hostile server (T5).** It can make predictions wrong (they come
   down when refuted), keep them tentative (never drawn), or confirm an
   epoch by drawing what the user typed. It can't make the client draw

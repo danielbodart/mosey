@@ -76,7 +76,11 @@ emu (`screen.md` §7.3):
   would either flicker under jitter or leave mistakes up too long
   [P §3.2].
 - **`EchoApplied`** [D]: how many events the pty had taken when this
-  screen was taken. Called *R* below. It says which keys the screen can
+  screen was taken, read just after it, so it may count an event written
+  in between: an upper bound, like the program's own echo, which comes
+  some time after the write anyway. Called *R* below. Too high is the
+  safe side: the ack horizon drops what it can't judge, and rebase at
+  worst predicts one event too few, in a tentative epoch. It says which keys the screen can
   reflect at all, for the ack horizon (§7), the cursor judgement (§7) and
   rebase (§8). `EchoAck ≤ EchoApplied` always.
 - **`EchoOff`** [D12]: `!ECHO && ICANON` on the pty, read through the
@@ -461,7 +465,10 @@ Two protections, measured separately on 555 password keys [M S6 §5]:
    neither predicts nor logs input, and entering echo-off drops every
    prediction. It covers `read -s` in bash and zsh, `passwd`, `sudo` and
    ssh, which all run in canonical mode with echo off. It does not cover
-   fish's `read -s`, which runs in raw mode and draws `●`.
+   fish's `read -s`, which runs in raw mode and draws `●`, nor any prompt
+   behind a program that keeps mosey's pty in raw mode: tmux, screen, or
+   an ssh or mosey client inside the session. Their prompts set termios
+   on a pty of their own, which proto never sees.
 2. **The epoch rules.** Tentative epochs are never drawn, and only a
    typed glyph that changes its cell confirms one (§4).
 
@@ -489,6 +496,13 @@ echo-ack-only frame, sent about 50 ms after a key even when nothing was
 echoed, which at a no-echo prompt names each password key in the server's
 direction. §3.1 rule 4 removes it while echo is off; rule 5 makes sure
 `EchoApplied` does not bring it back.
+
+That holds only where the bit is set (§13.1). At a prompt inside tmux,
+screen, or a nested ssh or mosey, mosey's pty stays raw, so an
+echo-ack-only frame goes out about 50 ms after each password key as
+after any other, and the client logs the keys as it would any. There
+chaff (`ssp.md` §9.1.3) is the remaining defence for timing, and the
+epoch rules for display.
 
 ### 13.3 What prediction keeps in memory
 

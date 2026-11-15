@@ -150,7 +150,10 @@ as Mosh does, and takes back any guess the server's screen disagrees
 with. It guesses only what it can (letters, backspace, left and right),
 starts each run of guesses hidden until the server confirms one, and
 underlines guesses not yet confirmed once the round trip is long enough
-to notice. At a password prompt it guesses and keeps nothing.
+to notice. At a password prompt it guesses and keeps nothing, and the
+server sends nothing per key; that needs the prompt to turn echo off on
+mosey's own pty, so it does not hold inside tmux, screen, or a nested ssh
+or mosey session, where only chaff hides your typing rhythm.
 `-predict adaptive` (the default) shows guesses from a round trip of about
 40 ms, `-predict always` always, `-predict never` never. Details:
 [docs/spec/prediction.md](docs/spec/prediction.md).

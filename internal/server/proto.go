@@ -606,6 +606,9 @@ func (s *Session) publish() *screen.Grid {
 	s.mu.Lock()
 	g.InputConsumed = s.consumed
 	if s.ep == ep {
+		// EchoApplied is read after the snapshot, so it may count an
+		// event written in between: an upper bound, which is the safe
+		// side for the client's horizon (prediction.md §3).
 		s.echo.fields(g, s.published, time.Now())
 		s.published = g
 	}
