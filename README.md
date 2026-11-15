@@ -17,7 +17,9 @@ the server, and copies itself to a host that doesn't have it (see
 every session has a name you can attach to with `-s`, and a client that
 loses its server for a while logs in again by itself to get its session
 back (see [Using it](#using-it)), and your ssh-agent comes along when your ssh config
-forwards it (see [Agent forwarding](#agent-forwarding)). While you type,
+forwards it (see [Agent forwarding](#agent-forwarding)). Client and host
+need not run the same version, and a newer mosey takes a running session
+over in place, so upgrading never costs a session. While you type,
 both ends send cover traffic on a fixed tick, which hides the timing of
 keys within a run of typing (see [What it is](#what-it-is)). On a slow
 link your typing shows up at once, before the server echoes it (see
@@ -175,7 +177,8 @@ it, now served by the new code, so a security fix reaches sessions that
 were already running. Upgrades only go forward: an older client attaches
 a newer session as it is. (Sessions started before this release can't
 be handed over; they stay resumable by their own version until their
-shell exits.)
+shell exits, and a plain `mosey HOST` that passes over one says so,
+naming the session and the version that can resume or end it.)
 
 ### Agent forwarding
 
