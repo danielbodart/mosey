@@ -2,13 +2,13 @@
 # Every `uses:` in the workflows names a full commit SHA, with the release it
 # is as a comment (`@<40 hex> # vX.Y.Z`), never a tag or a branch.
 #
-# Why every job and not only the release job: the release job attests, with
-# the identity the client trusts (internal/provenance), whatever the build
-# job uploaded, and the weekly update rewrites the trusted root the client
-# embeds. A moved tag anywhere upstream of those (the toolchain mise-action
-# installs, the bytes upload-artifact carries) could get a binary of its
-# choosing attested, so the pin has to hold everywhere (S1). Bumping an
-# action is a reviewed change of its SHA.
+# Why every job and not only the release job: the release job attests, as
+# this repository's release workflow (what gh attestation verify --repo
+# danielbodart/mosey trusts), whatever the build job uploaded. A moved tag
+# anywhere upstream of that (the toolchain mise-action installs, the bytes
+# upload-artifact carries) could get a binary of its choosing attested, so
+# the pin has to hold everywhere (S1). Bumping an action is a reviewed
+# change of its SHA.
 set -euo pipefail
 
 cd "$(dirname "$0")/.." >/dev/null

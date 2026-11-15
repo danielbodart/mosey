@@ -12,34 +12,22 @@ import (
 	"time"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
-	"github.com/danielbodart/mosey/internal/provenance"
 )
 
 // releaseDeadline bounds the whole download of a release asset
-// (bootstrap.md §4.7.4): 21 MB at 300 kbit/s is 9.3 minutes. A release
-// doubled from about 10 MB when it took in sigstore-go (S1).
-const releaseDeadline = 10 * time.Minute
+// (bootstrap.md §4.7.4): 10 MB at 300 kbit/s.
+const releaseDeadline = 5 * time.Minute
 
 // errNoRelease is a 404 for a release asset: no release of that version,
 // or none for that platform.
 var errNoRelease = errors.New("no such release")
 
-// unprovenError is a release asset whose Sigstore bundle is missing or
-// does not verify (bootstrap.md §4.7.4): the release is there, but it is
-// not shown to be the release workflow's.
-type unprovenError struct{ err error }
-
-func (e *unprovenError) Error() string { return e.err.Error() }
-func (e *unprovenError) Unwrap() error { return e.err }
-
 // fetchRelease downloads mosey version v for goos/goarch from the release
-// at base (bootstrap.ReleaseBase, or a test's server), checks its SHA-256
-// against the release's SHA256SUMS and its Sigstore bundle with pv, which
-// must attest this asset by name (so this version and platform) as well
-// as by digest,
-// before anyone uses a byte of it (bootstrap.md §4.7.4). HTTPS only,
-// redirects included, every body bounded.
-func fetchRelease(ctx context.Context, hc *http.Client, base, v, goos, goarch string, pv *provenance.Verifier) ([]byte, [32]byte, error) {
+// at base (bootstrap.ReleaseBase, or a test's server) and checks its
+// SHA-256 against the release's SHA256SUMS, before anyone uses a byte of
+// it (bootstrap.md §4.7.4). HTTPS only, redirects included, every body
+// bounded.
+func fetchRelease(ctx context.Context, hc *http.Client, base, v, goos, goarch string) ([]byte, [32]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, releaseDeadline)
 	defer cancel()
 	dir := base + "/v" + v + "/"
@@ -61,19 +49,6 @@ func fetchRelease(ctx context.Context, hc *http.Client, base, v, goos, goarch st
 	}
 	if got := sha256.Sum256(bin); got != want {
 		return nil, [32]byte{}, fmt.Errorf("%s has SHA-256 %x, but %s says %x", name, got, bootstrap.SumsName, want)
-	}
-	// The bundle last, so a missing release or asset is still reported
-	// as that. A 404 here is a release with no bundle for this asset,
-	// which is refused (D7), not mistaken for no release at all.
-	bundle, err := get(ctx, hc, dir+bootstrap.BundleName(name), provenance.MaxBundle)
-	switch {
-	case errors.Is(err, errNoRelease):
-		return nil, [32]byte{}, &unprovenError{fmt.Errorf("%s: %w", bootstrap.BundleName(name), provenance.ErrMissing)}
-	case err != nil:
-		return nil, [32]byte{}, err
-	}
-	if err := pv.Verify(bundle, name, want); err != nil {
-		return nil, [32]byte{}, &unprovenError{fmt.Errorf("%s: %w", bootstrap.BundleName(name), err)}
 	}
 	return bin, want, nil
 }

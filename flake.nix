@@ -76,7 +76,7 @@
         # works it out again whenever the vendored set moves: when go.sum
         # does, and when code first imports another package of a module it
         # already requires. mise run check's vendor-hash-check catches both.
-        vendorHash = "sha256-YprUicE3wBzUveNQYD6IiZb8Wp9auHnj4V5EkF81SW0=";
+        vendorHash = "sha256-rCMdmdTtz5Gm9LnvHaF9SsojytfIvKaqvvK3FKWyEwQ=";
 
         subPackages = [ "cmd/mosey" ];
 

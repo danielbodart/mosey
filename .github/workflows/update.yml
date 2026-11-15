@@ -8,11 +8,7 @@
 # mise.toml tool to the latest patch of its pinned minor (a new minor moves
 # by hand, with the nixpkgs attribute flake.nix builds with); and every Go
 # dependency (go get -u) but the two D23 pins, with flake.nix's vendorHash
-# worked out again; and the Sigstore trusted root the client embeds
-# (scripts/trusted-root.sh, fetched through Sigstore's TUF repository), so
-# a key Sigstore rotates in reaches the next release (D7); a failed
-# refresh keeps the old root and holds back nothing else. mosey requires
-# none of Dan's own modules (D17), so there
+# worked out again. mosey requires none of Dan's own modules (D17), so there
 # is no scripts/pin.sh step.
 #
 # Held: tuios.dev/vt, the shipped emulator, which D23 pins, and
@@ -86,9 +82,6 @@ jobs:
 
       - name: Move everything
         id: update
-        env:
-          # For gh attestation trusted-root.
-          GH_TOKEN: ${{ github.token }}
         run: |
           moved=()
           gomods() { go mod edit -json | jq -r '.Require[] | "\(.Path) \(.Version)"' | sort; }
@@ -126,21 +119,7 @@ jobs:
           mapfile -t mods < <(comm -13 <(echo "$before") <(gomods) | cut -d' ' -f1)
           moved+=("${mods[@]}")
 
-          # 4. The Sigstore trusted root mosey embeds (D7). It is under
-          # internal/, so a week that moves it releases. It needs Sigstore's
-          # TUF CDN and refuses a root it does not recognise; if it fails,
-          # the old root stays and the rest of the week's updates, Go's
-          # security fixes among them, still go ahead. The old root keeps
-          # working until Sigstore rotates a key, and a warning says so.
-          if ! scripts/trusted-root.sh; then
-            echo "::warning::refreshing the Sigstore trusted root failed; the old one is kept and the other updates go ahead"
-            rm -f internal/provenance/trusted_root.json.tmp
-            git checkout -- internal/provenance/trusted_root.json
-          elif ! git diff --quiet internal/provenance/trusted_root.json; then
-            moved+=("Sigstore trusted root")
-          fi
-
-          # 5.
+          # 4.
           if git diff --quiet; then
             echo "Nothing moved."
             exit 0
@@ -148,7 +127,7 @@ jobs:
           list=$(printf '%s\n' "${moved[@]}" | { grep . || true; } | paste -sd, - | sed 's/,/, /g')
           echo "moved=${list:-dependencies}" >> "$GITHUB_OUTPUT"
 
-      # 6. The gate: what CI runs that a dependency can break.
+      # 5. The gate: what CI runs that a dependency can break.
       - name: mise run check
         if: steps.update.outputs.moved
         run: mise run check
@@ -178,7 +157,7 @@ jobs:
             .#devShells.x86_64-linux.default .#formatter.x86_64-linux
           scripts/nix-eval-systems.sh
 
-      # 7.
+      # 6.
       - name: Commit and push
         if: steps.update.outputs.moved
         env:
@@ -190,12 +169,12 @@ jobs:
           git pull -q --rebase origin trunk
           git push -q origin HEAD:trunk
 
-      # 8.
+      # 7.
       - name: Push mosey's package to Cachix
         if: steps.update.outputs.moved && env.CACHIX_AUTH_TOKEN != ''
         run: nix build --no-link --print-out-paths .#mosey | cachix push danielbodart
 
-      # 9. A release, if anything a release is built from moved (Go's pin
+      # 8. A release, if anything a release is built from moved (Go's pin
       # among them): CI checks the pushed commit and releases it. A week
       # that moved only flake.lock or the linters releases nothing.
       - name: Release, if anything it is built from moved

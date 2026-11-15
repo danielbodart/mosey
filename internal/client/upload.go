@@ -11,7 +11,6 @@ import (
 	"runtime"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
-	"github.com/danielbodart/mosey/internal/provenance"
 )
 
 // copier is D7's answer to a probe that found no mosey of this version
@@ -27,10 +26,7 @@ type copier struct {
 	getenv  func(string) string
 	release string       // bootstrap.ReleaseBase, or a test's
 	http    *http.Client // for the release
-	// provenance checks the release's Sigstore bundle; nil until a
-	// release is fetched, then provenance.Default unless a test set it.
-	provenance *provenance.Verifier
-	self       func() ([]byte, error)
+	self    func() ([]byte, error)
 	// goos and goarch are this client's platform.
 	goos, goarch string
 }
@@ -38,7 +34,7 @@ type copier struct {
 func newCopier(o Options, s bootstrap.SSH, cfg bootstrap.Config) *copier {
 	c := &copier{
 		ssh: s, cfg: cfg, mode: o.Upload, ask: o.Ask, stderr: o.Stderr, log: o.Log, getenv: o.Getenv,
-		release: o.Releases, http: o.HTTP, self: o.Self, provenance: o.Provenance,
+		release: o.Releases, http: o.HTTP, self: o.Self,
 		goos: runtime.GOOS, goarch: runtime.GOARCH,
 	}
 	if c.mode == "" {
@@ -99,19 +95,10 @@ func (c *copier) copy(ctx context.Context, p bootstrap.ProbeLine) error {
 	if ours {
 		sum = sha256.Sum256(bin)
 	} else {
-		if c.provenance == nil {
-			var err error
-			if c.provenance, err = provenance.Default(); err != nil {
-				return fail(err, "%v", err)
-			}
-		}
 		fmt.Fprintf(c.stderr, "mosey: fetching mosey %s for %s from GitHub\n", v, platform)
 		var err error
-		bin, sum, err = fetchRelease(ctx, c.http, c.release, v, goos, goarch, c.provenance)
-		var unproven *unprovenError
+		bin, sum, err = fetchRelease(ctx, c.http, c.release, v, goos, goarch)
 		switch {
-		case errors.As(err, &unproven):
-			return fail(err, "mosey %s for %s from GitHub is not shown to come from mosey's release workflow, so it is not copied: %v: %s", v, platform, unproven.err, c.byHand(platform))
 		case errors.Is(err, errNoRelease):
 			return fail(err, "there is no release v%s on GitHub to fetch mosey for %s from: %s", v, platform, c.byHand(platform))
 		case err != nil:

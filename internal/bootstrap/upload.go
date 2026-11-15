@@ -12,7 +12,7 @@ import (
 
 // MaxBinary bounds a mosey binary wherever one is read whole: the client's
 // own file, a download, and the installer's upload (§4.7.4). A release is
-// about 21 MB.
+// about 10 MB.
 const MaxBinary = 128 << 20
 
 // MaxSums bounds a release's SHA256SUMS (§4.7.4): four lines today.
@@ -83,10 +83,6 @@ func IsRelease(v string) bool {
 func AssetName(v, goos, goarch string) string {
 	return "mosey-" + v + "-" + goos + "-" + goarch
 }
-
-// BundleName is the release asset holding asset's Sigstore bundle
-// (§4.6): the asset's name with Sigstore's conventional suffix.
-func BundleName(asset string) string { return asset + ".sigstore.json" }
 
 // ParseSums finds name's SHA-256 in a SHA256SUMS file (§4.6, §4.7.4),
 // which it reads strictly: every line 64 lower-case hex digits, two

@@ -51,66 +51,6 @@ interface so it can be replaced or forked.
   ./cmd/...` does not list it). It is a direct requirement in `go.mod`
   only because that test imports it.
 
-### `github.com/sigstore/sigstore-go` v1.4.0 (Apache-2.0)
-
-Verifies a downloaded release binary's Sigstore bundle before the client
-copies it to a host of another platform (D7 as amended 2026-11-15, S1;
-`bootstrap.md` §4.6, §4.7.4), in `internal/provenance`, and only there.
-
-- **Why it, and not our own:** checking a Sigstore bundle means X.509
-  chains to Fulcio, embedded SCTs against CT log keys, Rekor entries,
-  inclusion proofs and signed checkpoints, RFC 3161 timestamps, DSSE and
-  in-toto statements. Writing that would be our own crypto (D19). Dan
-  chose Sigstore over an SSH-signed `SHA256SUMS` so that there is no
-  long-lived key to guard; sigstore-go is Sigstore's own Go verifier, and
-  what `gh attestation verify` uses, so the release job's check of every
-  bundle (`scripts/release-bundles.sh`) and the client's agree.
-- **Pure Go:** every binary still builds with `CGO_ENABLED=0` (D1) for
-  linux and darwin on amd64 and arm64.
-- **Cost, measured 2026-11-15** (`-trimpath -ldflags "-s -w"`, with
-  `Verify` reachable from `main`): linux/amd64 9,883,808 → 20,775,072
-  bytes (+10.9 MB, +110%); darwin/arm64 9,147,314 → 19,868,082 (+10.7 MB,
-  +117%). Every auto-upload copies the larger file, so the release fetch
-  deadline went from 5 to 10 minutes (`bootstrap.md` §11). This is the
-  heaviest dependency mosey has. **Open, Dan's call:** whether a binary
-  twice the size, with these modules linked into every server role too
-  (proto and emu included), is acceptable, or whether the verifier
-  should live where only the client links it (see **Risk** below). The
-  S1 slice went ahead without that decision; it is not taken as made.
-- **What it brings:** about 65 modules on the client's path, every one
-  named in `internal/client`'s import test (`provenanceModules`), so a
-  module a later sigstore-go adds fails that test until someone has
-  looked at it. The large ones: `google.golang.org/protobuf` and
-  `github.com/sigstore/protobuf-specs` (the bundle format);
-  `github.com/sigstore/sigstore`, `rekor`, `rekor-tiles` and
-  `timestamp-authority` (log entries and timestamps);
-  `github.com/google/certificate-transparency-go` (SCTs);
-  `github.com/in-toto/*` and `github.com/secure-systems-lab/go-securesystemslib`
-  (statements, DSSE); `github.com/theupdateframework/go-tuf/v2`; and, only
-  because Rekor's generated client and the Rekor v2 protobufs import them,
-  `github.com/go-openapi/*`, `google.golang.org/grpc`,
-  `go.opentelemetry.io/otel` and `k8s.io/klog/v2`. None parses an escape
-  sequence (D9). mosey calls none of the network clients among them: the
-  bundle and the trusted root are bytes it already has.
-- **In the server roles:** the code is in the one binary, so every role
-  carries it, but no role calls it. Their `init` functions run before the
-  sandbox is entered and start no goroutine (checked 2026-11-15); the
-  end-to-end tests run the built binary's roles under seccomp Kill. CI's
-  KILL soak runs `internal/server`'s test binary, which does not link it.
-- **Test only:** `provenancetest` signs bundles with sigstore-go's own test
-  CA (`pkg/testing/ca`), so no test needs the network.
-- **The trusted root** is not a Go dependency but data:
-  `internal/provenance/trusted_root.json`, the public-good instance's, as
-  `gh attestation trusted-root` fetched it through Sigstore's TUF
-  repository (`scripts/trusted-root.sh`). The weekly update refreshes it.
-- **Risk:** a large and fast-moving tree; the weekly `go get -u` moves it
-  all, gated by the whole of CI. If its size or reach becomes a problem,
-  the verifier could move to a separate helper binary that the client
-  runs only for a cross-platform copy, at the cost of a second file to
-  ship; or the server roles could be built without it, at the cost of
-  mosey no longer being one file that is both (D7's auto-upload copies
-  the client's own file). Neither is taken: see **Cost** above.
-
 ### `golang.org/x/crypto` v0.59.0
 
 ChaCha20-Poly1305, the packet AEAD (D20). The standard library has it only
@@ -157,9 +97,9 @@ Raw mode and window size for the client's own terminal, on Linux and macOS.
 Only `golang.org/x/text/width`: Unicode's East Asian Width property, which
 prediction needs to know how many cells a typed character takes before
 the server says (D12, `docs/spec/prediction.md` §10). The client path may
-depend on nothing that `internal/client`'s import test does not name
-(D9): the standard library, `golang.org/x/*` and, for S1 only,
-sigstore-go's modules. So tuios' own width code is out of reach there, and writing a Unicode table ourselves would be a table to
+depend on nothing outside the standard library and `golang.org/x/*`
+(D9, `internal/client`'s import test), so tuios' own width code is out of
+reach there, and writing a Unicode table ourselves would be a table to
 keep in step by hand. `internal/emu`'s
 `TestPredictionWidthsAgreeWithTheEmulator` checks every code point the
 client predicts against the server's emulator: they agree on all 152,580.
