@@ -21,48 +21,88 @@ on:
 permissions:
   contents: read
 
+# One run per ref at a time: a newer push to trunk (or a dispatch on it)
+# cancels the older trunk run that is still testing, and a pull request's
+# newer push cancels its older run, each pull request in a group of its own.
+# Commits reach trunk one push at a time, and every run starts every job, so
+# without this a burst of pushes queued a dozen runs' jobs behind each
+# other for the runner limit, each to test a commit the next one replaces.
+# Nothing is lost: the newer run releases everything since the last tag
+# (scripts/release-due.sh diffs against the tag, not the previous commit,
+# and the notes list every commit since it), so the green tip of trunk is
+# what gets released.
+#
+# The cancellation must never stop a release half-way: a release whose
+# tag exists without all its binaries, or whose binaries are not all
+# attested, is a broken release that clients compute URLs for. GitHub
+# cancels a run by re-evaluating each running job's and step's `if:` and
+# stopping those that come out false; a bare `if:` means success(), which
+# is false once the run is cancelled. So the release job's `if:` starts
+# with always(), and each of its steps' with !failure(): once the release
+# job has started, the cancellation evaluates them true and the job runs to
+# the end, while any failure of its own still stops it. A run cancelled
+# before its release job started skips it, because a job it needs was
+# cancelled. Its own concurrency group, which never cancels, queues one
+# run's release behind another's, so the second sees the first's tag.
+# (A separate workflow on workflow_run would also escape the cancellation,
+# but would attest, as itself, binaries another run built, and would need
+# that run's version and inputs passed across; this keeps the build, the
+# attestation and the release in one run.)
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 # A run shell is bash -eo pipefail: a failure inside a pipe fails the step.
 defaults:
   run:
     shell: bash
 
+# Every Go job restores Go's build and module caches (GOCACHE, GOMODCACHE),
+# keyed on the Go version and go.sum, with one key per kind of job, because
+# each builds differently (-race, fuzz instrumentation, cross-compiles) and
+# would otherwise overwrite another's. A miss falls back to the newest cache
+# of the same kind, then of any kind. Where the key already exists nothing
+# is saved, so the cache holds the modules and what they compile to, and
+# whatever of mosey's own packages the first run of that go.sum built;
+# go's own hashing decides what is still valid, as it does on a laptop.
+# mise-action caches only mise's tools, so this is actions/cache.
+
 jobs:
   # gofmt, vet for every platform a release ships for, the tests, vet and
   # the key-holding packages' tests again as linux releases are built (with
   # GOEXPERIMENT=runtimesecret), and shellcheck, through mise, the dev
-  # loop's toolchain. The tests that need
-  # an sshd (the end-to-end bootstrap) start a throwaway one on loopback,
-  # and skip if the runner has none.
+  # loop's toolchain. The tests that need an sshd (the end-to-end
+  # bootstrap) start a throwaway one on loopback, and skip if the runner has
+  # none.
+  #
+  # Then the tests that wait in real time, kept out of mise run check so the
+  # dev loop stays quick: an abandoned session's real processes ending once
+  # its credential expires (30 s of wall clock; the same path runs in
+  # virtual time in check). They are here rather than on a runner of their
+  # own, which spent longer starting than testing.
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      - id: go
+        run: |
+          {
+            echo "version=$(mise exec -- go env GOVERSION)"
+            echo "build=$(mise exec -- go env GOCACHE)"
+            echo "mod=$(mise exec -- go env GOMODCACHE)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.build }}
+            ${{ steps.go.outputs.mod }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-check-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-check-
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
       - run: mise run check
-
-  # The tests that wait in real time, kept out of check so the dev loop
-  # stays quick: an abandoned session's real processes ending once its
-  # credential expires (30 s of wall clock; the same path runs in virtual
-  # time in check).
-  slow:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
       - run: mise run test-slow
-
-  # Every fuzz target for a few seconds: enough to catch a parser that
-  # panics on its own seed corpus or on the first mutations. Real campaigns
-  # run locally for minutes per target before a parser lands (CLAUDE.md),
-  # and continuously before 1.0 (PLAN §6.5).
-  fuzz-smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
-      - run: mise run fuzz-smoke
-        env:
-          FUZZTIME: 10s
 
   # The tests again under the race detector. Its runtime is C, so this job
   # alone builds with cgo (mise run race sets CGO_ENABLED=1 for itself; the
@@ -77,7 +117,117 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      - id: go
+        run: |
+          {
+            echo "version=$(mise exec -- go env GOVERSION)"
+            echo "build=$(mise exec -- go env GOCACHE)"
+            echo "mod=$(mise exec -- go env GOMODCACHE)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.build }}
+            ${{ steps.go.outputs.mod }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-race-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-race-
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
       - run: mise run race
+
+  # Every fuzz target for 10 s: enough to catch a parser that panics on its
+  # own seed corpus or on the first mutations. Real campaigns run locally for
+  # minutes per target before a parser lands (CLAUDE.md), and every night
+  # for 5 minutes each (fuzz-nightly.yml).
+  #
+  # One after another the targets took nine minutes, the longest job by
+  # far, with go test -fuzz rebuilding the package for each. So this job
+  # lists them (scripts/fuzz-targets.sh, which scripts/fuzz.sh uses too) and
+  # deals them into four shards, balanced by an estimate of each shard's
+  # time, and the fuzz job runs one shard per runner, each building a
+  # package's instrumented test binary once for all of that package's
+  # targets in the shard (scripts/fuzz.sh). Listing compiles the packages'
+  # tests, which is what check's cache holds, so it restores that and saves
+  # nothing.
+  fuzz-targets:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.list.outputs.shards }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      - id: go
+        run: |
+          {
+            echo "version=$(mise exec -- go env GOVERSION)"
+            echo "build=$(mise exec -- go env GOCACHE)"
+            echo "mod=$(mise exec -- go env GOMODCACHE)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.build }}
+            ${{ steps.go.outputs.mod }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-check-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-check-
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
+      - id: list
+        run: |
+          shards=$(mise exec -- scripts/fuzz-targets.sh --shards 4)
+          echo "$shards" | jq .
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    needs: fuzz-targets
+    name: fuzz (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.fuzz-targets.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      - id: go
+        run: |
+          {
+            echo "version=$(mise exec -- go env GOVERSION)"
+            echo "build=$(mise exec -- go env GOCACHE)"
+            echo "mod=$(mise exec -- go env GOMODCACHE)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.build }}
+            ${{ steps.go.outputs.mod }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-fuzz-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-fuzz-
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
+      - name: Fuzz this shard's targets
+        env:
+          FUZZTIME: 10s
+          TARGETS: ${{ matrix.targets }}
+        run: |
+          read -ra targets <<<"$TARGETS"
+          [ ${#targets[@]} -gt 0 ] || { echo "an empty shard would fuzz everything" >&2; exit 1; }
+          mise exec -- scripts/fuzz.sh "${targets[@]}"
+      # A crasher is written to the package's testdata/fuzz/<Target>/, the
+      # path it is committed at as a regression seed: unzip it at the root.
+      - name: Collect any crasher
+        if: failure()
+        run: |
+          mkdir -p crashers
+          git ls-files -z --others --exclude-standard -- cmd internal \
+            | { grep -z '/testdata/fuzz/' || true; } \
+            | xargs -0r cp --parents -t crashers/
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashers-shard-${{ matrix.shard }}
+          path: crashers/
+          if-no-files-found: ignore
 
   # The KILL soak of D22 and server.md §9: the real server with its roles
   # under seccomp Kill, carrying a busy session for 150 s inside a scope
@@ -85,26 +235,47 @@ jobs:
   # and on arm64 hardware, so every Go upgrade, dependency bump and policy
   # change is soaked on both before it can release. The binaries run Kill
   # on both architectures (sandbox/action.go); this job is what keeps that
-  # safe, so a release waits on it.
+  # safe, so a release waits on it. Each of the two soaks, the whole
+  # server's and emu's alone, has a runner of its own, so both take 150 s
+  # side by side rather than 300 s one after the other.
   kill-soak:
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
+        test: [TestKillSoak, TestEmuKillSoak]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
-      - run: mise exec -- scripts/soak.sh --scope 150s
+      - id: go
+        run: |
+          {
+            echo "version=$(mise exec -- go env GOVERSION)"
+            echo "build=$(mise exec -- go env GOCACHE)"
+            echo "mod=$(mise exec -- go env GOMODCACHE)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.build }}
+            ${{ steps.go.outputs.mod }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-soak-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-soak-
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
+      - env:
+          TEST: ${{ matrix.test }}
+        run: mise exec -- scripts/soak.sh --scope --test "$TEST" 150s
 
   # Static binaries for every platform a release ships for (D1, D10), kept
-  # as the run's artifacts whether or not the commit is released.
+  # as the run's artifacts whether or not the commit is released: one job
+  # cross-compiles all four (each took longer to start than to build), and
+  # uploads each as the artifact it was when each had a job of its own,
+  # mosey-<os>-<arch> holding <os>-<arch>/mosey, which is what the release
+  # job and scripts/release-assets.sh look for.
   build:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [linux/amd64, linux/arm64, darwin/amd64, darwin/arm64]
     steps:
       # The whole history, because the version's minor is the commit count;
       # scripts/version.sh refuses a shallow clone rather than stamp a wrong
@@ -113,17 +284,48 @@ jobs:
         with:
           fetch-depth: 0
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
-      - name: Build ${{ matrix.target }}
-        run: scripts/build.sh "${{ matrix.target }}"
-      - name: Name the artifact
-        id: name
-        env:
-          TARGET: ${{ matrix.target }}
-        run: echo "value=mosey-${TARGET/\//-}" >> "$GITHUB_OUTPUT"
+      - id: go
+        run: |
+          {
+            echo "version=$(mise exec -- go env GOVERSION)"
+            echo "build=$(mise exec -- go env GOCACHE)"
+            echo "mod=$(mise exec -- go env GOMODCACHE)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.build }}
+            ${{ steps.go.outputs.mod }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-build-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-build-
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
+      - name: Build all four
+        run: |
+          mise exec -- scripts/build.sh
+          for p in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            mkdir -p "upload/mosey-$p"
+            mv "dist/$p" "upload/mosey-$p/"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ steps.name.outputs.value }}
-          path: dist/
+          name: mosey-linux-amd64
+          path: upload/mosey-linux-amd64/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mosey-linux-arm64
+          path: upload/mosey-linux-arm64/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mosey-darwin-amd64
+          path: upload/mosey-darwin-amd64/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mosey-darwin-arm64
+          path: upload/mosey-darwin-arm64/
           if-no-files-found: error
 
   # What `nix flake check` checks, split across runners as in chase and
@@ -200,7 +402,11 @@ jobs:
   # published, with no manual step and no tag cut by hand, as in quoin,
   # frisket and chase. Gated on a push or a dispatch on trunk (never
   # a pull request) and on every job having succeeded, so a red commit
-  # never ships.
+  # never ships: always() is there only so that a cancellation cannot stop
+  # it once it has started (see concurrency, at the top), and the rest of
+  # the condition is the success() it replaces, spelled out. A newer push
+  # cancels this run's testing, not a release in progress; the newer run
+  # then releases this run's commits with its own.
   #
   # Unlike those, which ship through Nix and release only a tag, a mosey
   # release carries its binaries, because D7 copies them onto hosts that
@@ -226,9 +432,22 @@ jobs:
   # re-running one whose release was already made fails at gh release
   # create, which never overwrites a release.
   release:
-    needs: [check, slow, fuzz-smoke, race, kill-soak, build, nix]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
+    needs: [check, race, fuzz-targets, fuzz, kill-soak, build, nix]
+    if: >-
+      always()
+      && github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+      && !contains(needs.*.result, 'skipped')
     runs-on: ubuntu-latest
+    # One release at a time, never cancelled: a second run's release waits
+    # for the first's, so it sees the first's tag (release-due, the notes).
+    # A third waiting would replace the second, whose commits it includes.
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    # A job that a cancellation cannot stop still has to end.
+    timeout-minutes: 30
     permissions:
       contents: write
       # To start CI on trunk's head, where this commit cannot be tagged.
@@ -251,20 +470,27 @@ jobs:
     # release it is. The tools
     # mise-action installs (mise.toml: Go, shellcheck, actionlint, pinned
     # by exact version) run here too and are trusted the same way.
+    #
+    # Every step's if: starts with !failure(), never the implicit
+    # success(), so a cancellation of the run lets it go on (see
+    # concurrency, at the top) while a failure here still stops the rest.
     steps:
       # fetch-depth: 0 because the minor is the commit count, which
       # scripts/version.sh REFUSES to count in a shallow clone; fetch-tags so
       # the previous tag resolves, for release-due and the notes below.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !failure() }}
         with:
           fetch-depth: 0
           fetch-tags: true
 
       # For mise run release-due.
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+        if: ${{ !failure() }}
 
       # The build job's four binaries, one directory per artifact.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ !failure() }}
         with:
           path: artifacts
           pattern: mosey-*
@@ -280,6 +506,7 @@ jobs:
       # has none (a [skip ci] push, a push made with GITHUB_TOKEN), one
       # started here.
       - name: Decide, and lay out the assets
+        if: ${{ !failure() }}
         id: due
         env:
           GH_TOKEN: ${{ github.token }}
@@ -313,22 +540,22 @@ jobs:
       # fails the job, so nothing below runs and no unattested binary is
       # published.
       - name: Attest linux/amd64
-        if: steps.due.outputs.version
+        if: ${{ !failure() && steps.due.outputs.version != '' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/mosey-${{ steps.due.outputs.version }}-linux-amd64
       - name: Attest linux/arm64
-        if: steps.due.outputs.version
+        if: ${{ !failure() && steps.due.outputs.version != '' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/mosey-${{ steps.due.outputs.version }}-linux-arm64
       - name: Attest darwin/amd64
-        if: steps.due.outputs.version
+        if: ${{ !failure() && steps.due.outputs.version != '' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/mosey-${{ steps.due.outputs.version }}-darwin-amd64
       - name: Attest darwin/arm64
-        if: steps.due.outputs.version
+        if: ${{ !failure() && steps.due.outputs.version != '' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/mosey-${{ steps.due.outputs.version }}-darwin-arm64
@@ -339,7 +566,7 @@ jobs:
       # no prior tag, so fall back to the head commit rather than dumping the
       # whole history.
       - name: Create GitHub Release
-        if: steps.due.outputs.version
+        if: ${{ !failure() && steps.due.outputs.version != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           V: ${{ steps.due.outputs.version }}

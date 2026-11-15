@@ -257,12 +257,17 @@ mise run build    # the static mosey binary for linux and darwin, amd64 and arm6
 mise run race     # the tests under the race detector (needs a C compiler)
 ```
 
-or with Nix: `nix build` for the package, `nix flake check` for the tests,
-the VM test and the lint, and `nix develop` for a shell with the tools.
+or with Nix: `nix build` for the package, `nix flake check` for the
+package and the VM test of the install path, and `nix develop` for a shell
+with the tools (the tests and the lint are `mise run check`'s).
 
-CI runs all of that on every push, plus a fuzz smoke test of every parser,
-the slow tests, and a 150-second soak of the server under its seccomp
-`KILL` policy on amd64 and arm64. A release needs every job green.
+CI runs all of that on every push, plus 10 seconds of every fuzz target
+(in four shards), the slow tests, and 150-second soaks of the server
+under its seccomp `KILL` policy on amd64 and arm64. A release needs every
+job green. A newer push to trunk cancels the older run's testing, never a
+release in progress, and releases its commits with its own. Every night,
+each fuzz target runs for 5 minutes on a runner of its own, and a crash
+is kept as an artifact to commit as a regression seed.
 
 ## License
 

@@ -1,0 +1,126 @@
+# The nightly fuzz campaign: every fuzz target for 5 minutes (or the
+# dispatch's fuzztime), each on a runner of its own, where CI gives each
+# 10 s on every push. CLAUDE.md asks for minutes per target before a parser
+# lands; this keeps every parser being fuzzed after, against the code as it
+# is now, as PLAN §6.5 wants before 1.0.
+#
+# The targets are listed as CI lists them (scripts/fuzz-targets.sh, whose
+# --json gives one matrix entry per target) and each is run by
+# scripts/fuzz.sh, as on a laptop. max-parallel leaves most of the
+# account's concurrent runners to CI: at 8, forty-odd targets take about
+# half an hour.
+#
+# A failure keeps what go test -fuzz wrote, the failing input in the
+# package's testdata/fuzz/<Target>/, as the run's artifact
+# fuzz-crasher-<id>, laid out from the repository's root: unzip it there,
+# fix the bug, and commit the file as the regression seed it then is.
+name: Nightly fuzz
+
+on:
+  schedule:
+    - cron: "37 2 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: How long each target is fuzzed, as a Go duration
+        type: string
+        default: 5m
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
+# A dispatch while the night's run is going waits for it rather than
+# cancelling it.
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+# A run shell is bash -eo pipefail: a failure inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Go's caches are CI's (ci.yml says how they are keyed), restored and
+  # never saved: CI's are the ones kept fresh.
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      - id: go
+        run: |
+          {
+            echo "version=$(mise exec -- go env GOVERSION)"
+            echo "build=$(mise exec -- go env GOCACHE)"
+            echo "mod=$(mise exec -- go env GOMODCACHE)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.build }}
+            ${{ steps.go.outputs.mod }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-check-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-check-
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
+      - id: list
+        run: |
+          targets=$(mise exec -- scripts/fuzz-targets.sh --json)
+          echo "$targets" | jq -c '.[]'
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    needs: targets
+    name: fuzz (${{ matrix.id }})
+    runs-on: ubuntu-latest
+    # The fuzzing itself plus a build; raise it with a longer fuzztime.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        include: ${{ fromJSON(needs.targets.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      - id: go
+        run: |
+          {
+            echo "version=$(mise exec -- go env GOVERSION)"
+            echo "build=$(mise exec -- go env GOCACHE)"
+            echo "mod=$(mise exec -- go env GOMODCACHE)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.build }}
+            ${{ steps.go.outputs.mod }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-fuzz-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-fuzz-
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
+      - name: Fuzz ${{ matrix.pkg }} ${{ matrix.target }}
+        env:
+          FUZZTIME: ${{ inputs.fuzztime || '5m' }}
+          PKG: ${{ matrix.pkg }}
+          TARGET: ${{ matrix.target }}
+        run: mise exec -- scripts/fuzz.sh "$PKG:$TARGET"
+      - name: Collect the crasher
+        if: failure()
+        env:
+          PKG: ${{ matrix.pkg }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p crashers
+          git ls-files -z --others --exclude-standard -- "$PKG/testdata/fuzz/$TARGET" \
+            | xargs -0r cp --parents -t crashers/
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crasher-${{ matrix.id }}
+          path: crashers/
+          if-no-files-found: warn

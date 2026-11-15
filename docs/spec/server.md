@@ -1606,7 +1606,8 @@ enough, under the conditions that trigger the rare paths, can.
 
 **What runs.** `scripts/soak.sh --scope DURATION`, as the CI job
 `kill-soak` (as built, the test binary is `internal/server`'s, running
-`TestKillSoak` and `TestEmuKillSoak`, and the scope uses the runner's
+`TestKillSoak` and `TestEmuKillSoak`, which CI runs on a runner each per
+architecture with `--test NAME`, and the scope uses the runner's
 user through `setpriv`; without `--scope` it runs as it is, for a
 workstation):
 

@@ -500,7 +500,10 @@ signs as this repository's release workflow, the identity `gh attestation
 verify --repo danielbodart/mosey` trusts, and attests what the build job
 made; `scripts/actions-pinned.sh` refuses a tag). Only then is the
 release created. A failure at any of these steps fails the job, so no
-release is ever published with an unattested binary.
+release is ever published with an unattested binary. Nor is one left
+half-made by a newer push: that cancels the older run's testing, but
+once its release job has started, the cancellation lets it finish
+(`ci.yml`'s concurrency), and releases queue behind one another.
 
 Why bare files: the hash in `SHA256SUMS` is then the hash of the very
 bytes the client sends and the remote installs at

@@ -456,7 +456,8 @@ when the server ends the session, and otherwise tells the server with
 - **Every parser of attacker-reachable input has a `go test -fuzz` target**,
   run locally for at least a few minutes before it lands, with the
   duration and exec count recorded in the commit message. CI runs each for
-  10 s (`mise run fuzz-smoke`), and runs every test under `-race`
+  10 s on every push (`scripts/fuzz.sh`, in shards), and for 5 minutes
+  every night (`fuzz-nightly.yml`), and runs every test under `-race`
   (`mise run race`). The targets slice 1 needs at least:
   `handshake` (msg1, msg2, hello, rekey parts), `transport` (data packet
   open: a rejected packet changes neither the window nor the peer),
