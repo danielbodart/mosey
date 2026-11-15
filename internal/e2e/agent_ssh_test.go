@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -313,4 +315,64 @@ func TestAResumedSessionForwardsTheResumingClientsAgent(t *testing.T) {
 	if st := b.exits(); st != 0 {
 		t.Errorf("exit status %d; log:\n%s", st, b.log())
 	}
+}
+
+// Resume, agent forwarding and prediction together, with the real binaries
+// through a real sshd: both devices predict on every key (`-predict
+// always`; over loopback the default, adaptive, draws nothing), type
+// before and after the `-r`, and the second device's screen shows what it
+// typed, its own agent's key, and nothing of the first's predictions
+// (prediction.md §3.1: the echo ack restarts with each attach, so the
+// second device's predictions are judged against its own keystrokes).
+func TestPredictionAndTheAgentBothCarryOverAResume(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	first, second := startAgent(t), startAgent(t)
+	first.add(first.key)
+	secondKey := filepath.Join(t.TempDir(), "secondkey")
+	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "second-device-key", "-f", secondKey).CombinedOutput(); err != nil {
+		t.Fatalf("ssh-keygen: %v %s", err, out)
+	}
+	second.add(secondKey)
+	s := startSSHDWith(t, sshdOptions{allowAgent: true, clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"})
+	mosey := buildMosey(t, "e2e")
+
+	a := startAgentClient(t, "the first device", mosey, s, first, "-predict", "always")
+	a.shows("$")
+	a.typeLine("echo before-$((40+2))")
+	a.shows("before-42")
+	a.typeLine("ssh-add -l")
+	a.shows(agentKeyComment)
+	a.cmd.Process.Signal(syscall.SIGHUP)
+	if st := a.exits(); st != 0 {
+		t.Fatalf("the first device exited %d", st)
+	}
+	if n := predictedIn(t, a.log()); n == 0 {
+		t.Errorf("the first device predicted nothing; log:\n%s", a.log())
+	}
+
+	b := startAgentClient(t, "the second device", mosey, s, second, "-predict", "always", "-r")
+	b.shows("before-42") // the screen as the first device left it
+	b.typeLine("echo after-$((50+3))")
+	b.shows("after-53")
+	b.typeLine("ssh-add -l")
+	b.shows("second-device-key")
+	b.typeLine("exit")
+	if st := b.exits(); st != 0 {
+		t.Errorf("exit status %d; log:\n%s", st, b.log())
+	}
+	if n := predictedIn(t, b.log()); n == 0 {
+		t.Errorf("the second device predicted nothing; log:\n%s", b.log())
+	}
+}
+
+// predictedIn is the Predicted count of the last prediction stats a
+// client logged as it left (internal/client's session).
+func predictedIn(t *testing.T, log string) int {
+	t.Helper()
+	all := regexp.MustCompile(`Predicted:(\d+)`).FindAllStringSubmatch(log, -1)
+	if all == nil {
+		t.Fatalf("no prediction stats logged:\n%s", log)
+	}
+	n, _ := strconv.Atoi(all[len(all)-1][1])
+	return n
 }
