@@ -430,7 +430,7 @@ can send any grid that passes `Apply`. Bounds:
 | Bracketed paste | everything from `ESC [ 200 ~` to `ESC [ 201 ~` bumps, across any number of events | Pastes are not keystrokes [S6 §9] |
 | `MaxPending` | 1024 cell predictions; past it, the next key bumps | memory and CPU while the server is stalled [S6 §9] |
 | cursor predictions | at most 1024; the oldest 512 are dropped past it | they are judged only at `n == R`, so old ones are dead anyway |
-| bumps remembered | at most 1024; the oldest half dropped past it | the horizon and rebase look only at recent ones |
+| bumps remembered | at most 1024; the oldest half dropped past it, and with them every prediction made at or before the newest bump dropped, unjudged | the horizon and rebase look only at recent ones; a prediction whose horizon is forgotten can't be judged |
 | `LogSize` | the last 512 events, copied (never the caller's buffer), zeroed when evicted, and all of it when a frame turns echo off; nothing logged while echo is off, and no event over `MaxEventBytes` | bounded replay; no password bytes held [S6 §9] |
 | `EchoAck`, `EchoApplied` | clamped to the client's own `last`, and `A ≤ R` | a server can't make the engine judge keys it never had, nor rebase from a future it invents |
 | frame size | whatever `Apply` admits (D23: 1000 × 500) | the engine's work per frame is bounded below, not by the size |

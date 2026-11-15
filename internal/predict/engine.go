@@ -276,7 +276,20 @@ func (e *Engine) bump(n uint64) {
 		e.bumps = append(e.bumps, n)
 	}
 	if len(e.bumps) > maxBumps {
-		e.bumps = append(e.bumps[:0], e.bumps[len(e.bumps)-maxBumps/2:]...)
+		cut := len(e.bumps) - maxBumps/2
+		gone := e.bumps[cut-1]
+		e.bumps = append(e.bumps[:0], e.bumps[cut:]...)
+		// A prediction at or before a forgotten bump would find a later
+		// bump as its horizon, and be judged against a screen that
+		// already shows the forgotten one's response. It can't be judged
+		// any more, so it goes, unjudged (prediction.md §7, §12).
+		for at, p := range e.cells {
+			if p.n <= gone {
+				delete(e.cells, at)
+				e.stats.Dropped++
+			}
+		}
+		e.cursors = slices.DeleteFunc(e.cursors, func(c cursorPred) bool { return c.n <= gone })
 	}
 }
 

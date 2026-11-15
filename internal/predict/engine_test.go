@@ -279,6 +279,24 @@ func TestPredictionsBeforeEnterInTheSameEventAreBeyondTheHorizon(t *testing.T) {
 	}
 }
 
+// Past maxBumps the oldest bumps are forgotten, and with them the horizon
+// of any prediction made before them: such a prediction goes unjudged
+// rather than be judged against a screen that shows a later key's work.
+func TestPredictionsOlderThanTheBumpsKeptAreNotJudged(t *testing.T) {
+	ty := confirmed(t)
+	s := ty.key("s")
+	for range maxBumps + 1 {
+		ty.n++
+		ty.e.Skip(ty.n) // resizes, while the server is stalled
+	}
+	// The server has had "s" and the resize after it, and the program
+	// redrew the line for the resize.
+	ty.e.Frame(frame(20, "$ l", 3, s, s+1))
+	if st := ty.e.Stats(); st.Refuted != 0 {
+		t.Fatalf("a prediction past its forgotten horizon was judged: %+v", st)
+	}
+}
+
 func TestRebasePredictsTheKeysTheServerHasNotSeenOnTheNewFrame(t *testing.T) {
 	ty := confirmed(t)
 	ty.key("\r") // 2
