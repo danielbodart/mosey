@@ -269,11 +269,12 @@ func TestARealSessionOverLoopbackThroughSSH(t *testing.T) {
 
 // The client against the real server through a fake ssh (bootstrap.md
 // §12): a server that prints rc noise first, and a server of another
-// version, which refuses before starting anything.
+// version, which serves the client all the same (D8 V1: nothing refuses
+// another mosey version; the handshake agrees on a protocol version).
 func TestTheRealServerAnswersThroughAFakeSSH(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
-	mosey := buildMosey(t, "1.0.0")
-	other := buildMosey(t, "2.0.0")
+	mosey := buildMosey(t, "1.0.1")
+	other := buildMosey(t, "2.0.1")
 	dir := t.TempDir()
 	ssh := filepath.Join(dir, "ssh")
 	if err := os.WriteFile(ssh, []byte(`#!/bin/sh
@@ -284,28 +285,54 @@ SSH_CONNECTION='127.0.0.1 40000 127.0.0.1 22' exec /bin/sh -c "$last"
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	run := func(remote string) (string, int) {
+	type run struct {
+		master *os.File
+		screen *screenLog
+		exited chan error
+	}
+	start := func(remote string) *run {
 		master, slave := openPTY(t)
 		cmd := exec.Command(mosey, "-ssh", ssh, "-remote", remote, "localhost")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+t.TempDir(), "XDG_RUNTIME_DIR="+runtimeDir(t))
+		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+t.TempDir(), "XDG_RUNTIME_DIR="+runtimeDir(t), "TERM=xterm-256color")
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
 		slave.Close()
-		var screen screenLog
-		go screen.collect(master)
-		err := cmd.Wait()
-		return screen.String(), bootstrap.ExitStatus(err)
+		r := &run{master: master, screen: &screenLog{}, exited: make(chan error, 1)}
+		go r.screen.collect(master)
+		go func() { r.exited <- cmd.Wait() }()
+		t.Cleanup(func() { cmd.Process.Kill() })
+		return r
 	}
-	out, status := run(other)
-	if status != 1 || !strings.Contains(out, "the remote mosey is version 2.0.0, this is 1.0.0") {
-		t.Errorf("another version: %d %q", status, out)
+	status := func(r *run) int {
+		var err error
+		waitFor(t, "the client to exit", func() bool {
+			select {
+			case err = <-r.exited:
+				r.exited <- err
+				return true
+			default:
+				return false
+			}
+		})
+		return bootstrap.ExitStatus(err)
 	}
-	out, status = run(filepath.Join(dir, "nothing-here"))
-	if status != 1 || !strings.Contains(out, "no mosey at") {
-		t.Errorf("no server: %d %q", status, out)
+
+	r := start(other)
+	r.master.Write([]byte("echo across-$((40+2))\r"))
+	waitFor(t, "a session with a server of another version", func() bool {
+		return strings.Contains(screenOf([]byte(r.screen.String()), 100, 30), "across-42")
+	})
+	r.master.Write([]byte("exit\r"))
+	if s := status(r); s != 0 {
+		t.Errorf("a server of another version: exit %d %q", s, r.screen.String())
+	}
+
+	r = start(filepath.Join(dir, "nothing-here"))
+	if s := status(r); s != 1 || !strings.Contains(r.screen.String(), "no mosey at") {
+		t.Errorf("no server: %d %q", s, r.screen.String())
 	}
 }
 

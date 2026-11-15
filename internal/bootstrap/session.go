@@ -9,14 +9,22 @@ import (
 
 // The attach socket's greeting (bootstrap.md §9.2.1): the first message a
 // session's spawner sends to whoever connects to it, a launcher resuming
-// the session or a lister. It is not an IPC message: its first two fields
-// are frozen forever, so a launcher of any version can read any session's
-// version and refuse a resume across versions before it sends anything.
+// the session or a lister. It is not an IPC message. Its first two fields
+// were always frozen, so a launcher of any version reads any session's
+// version; since the stable attach protocol (D8 V1, server.md §2.8) the
+// whole line is, so a launcher of any later version reads all of it.
 const (
 	sessionMagic = "MOSEY-SESSION"
-	// MaxSessionLine bounds a greeting, LF included: at most 230 bytes
-	// are used (§9.2.1).
+	// MaxSessionLine bounds a greeting, LF included: at most 238 bytes
+	// are used (§9.2.1). Frozen, since every launcher reads the greeting
+	// into a buffer this size.
 	MaxSessionLine = 256
+	// AttachMin and AttachMax are the versions of the attach protocol
+	// (server.md §2.8) this build speaks: v1 is server.md as it stands.
+	AttachMin = 1
+	AttachMax = 1
+	// maxAttachVersion bounds an arange's numbers (§9.2.1).
+	maxAttachVersion = 255
 	// maxUnixDigits bounds the time fields: 12 digits reach the year
 	// 33658, and no int64 overflows on the way.
 	maxUnixDigits = 12
@@ -52,7 +60,10 @@ func (s SessionState) String() string {
 // SessionLine is a session's greeting (§9.2.1).
 type SessionLine struct {
 	SoftwareVersion string
-	SessionID       [SessionIDSize]byte
+	// AttachMin and AttachMax are the attach protocol versions the
+	// session's spawner speaks (§9.2.1, server.md §2.8).
+	AttachMin, AttachMax int
+	SessionID            [SessionIDSize]byte
 	// Name is the session's (D8 R2), an sname.
 	Name string
 	// Started and Since are to the second: when the session started, and
@@ -73,6 +84,7 @@ func MarshalSessionLine(s SessionLine) []byte {
 	b := make([]byte, 0, MaxSessionLine)
 	b = append(b, sessionMagic...)
 	b = appendField(b, s.SoftwareVersion)
+	b = appendField(b, strconv.Itoa(s.AttachMin)+"-"+strconv.Itoa(s.AttachMax))
 	b = b64.AppendEncode(append(b, ' '), s.SessionID[:])
 	b = appendField(b, s.Name)
 	b = appendField(b, strconv.FormatInt(s.Started.Unix(), 10))
@@ -91,15 +103,17 @@ func MarshalSessionLine(s SessionLine) []byte {
 	return append(b, '\n')
 }
 
-// ParseSessionLine reads a greeting of this version, LF included, refusing
-// anything not canonical. A launcher reads it from a socket only the user
-// can reach, but it is a parser of another process's bytes, so it is
-// fuzzed like the rest.
+// ParseSessionLine reads a greeting in the stable form, of any version
+// from the stable attach protocol on, LF included, refusing anything not
+// canonical. A greeting from a build before it (no attach range) is
+// refused; SessionLineVersion still reads its version. A launcher reads it
+// from a socket only the user can reach, but it is a parser of another
+// process's bytes, so it is fuzzed like the rest.
 func ParseSessionLine(line []byte) (SessionLine, error) {
 	if len(line) > MaxSessionLine {
 		return SessionLine{}, badLine("session line of %d bytes", len(line))
 	}
-	fields, err := splitFields(line, sessionMagic, 10)
+	fields, err := splitFields(line, sessionMagic, 11)
 	if err != nil {
 		return SessionLine{}, err
 	}
@@ -107,6 +121,10 @@ func ParseSessionLine(line []byte) (SessionLine, error) {
 	if s.SoftwareVersion, err = parseSoftwareVersion(fields[1]); err != nil {
 		return SessionLine{}, err
 	}
+	if s.AttachMin, s.AttachMax, err = parseRange(fields[2]); err != nil {
+		return SessionLine{}, err
+	}
+	fields = append(fields[:2:2], fields[3:]...)
 	if err := decodeFixed(s.SessionID[:], fields[2], "session id"); err != nil {
 		return SessionLine{}, err
 	}
@@ -166,6 +184,51 @@ func SessionLineVersion(line []byte) (string, error) {
 	}
 	v, _, _ := bytes.Cut(rest, []byte(" "))
 	return parseSoftwareVersion(v)
+}
+
+// parseRange reads an arange, MIN-MAX, each 1..255 with no leading zero,
+// MIN no more than MAX (§9.2.1).
+func parseRange(f []byte) (lo, hi int, err error) {
+	a, b, ok := bytes.Cut(f, []byte("-"))
+	if !ok {
+		return 0, 0, badLine("attach range %q", f)
+	}
+	if lo, err = parseSmall(a); err == nil {
+		hi, err = parseSmall(b)
+	}
+	if err != nil || lo > hi {
+		return 0, 0, badLine("attach range %q", f)
+	}
+	return lo, hi, nil
+}
+
+// parseSmall reads a decimal 1..maxAttachVersion with no leading zero.
+func parseSmall(f []byte) (int, error) {
+	if len(f) == 0 || len(f) > 3 || f[0] == '0' {
+		return 0, badLine("attach version %q", f)
+	}
+	n := 0
+	for _, c := range f {
+		if c < '0' || c > '9' {
+			return 0, badLine("attach version %q", f)
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n > maxAttachVersion {
+		return 0, badLine("attach version %q", f)
+	}
+	return n, nil
+}
+
+// AttachVersion is the attach protocol version a launcher of this build
+// and a session whose greeting is g use: the highest both speak, and ok
+// false when they have none in common (server.md §2.8).
+func AttachVersion(g SessionLine) (version int, ok bool) {
+	v := min(AttachMax, g.AttachMax)
+	if v < max(AttachMin, g.AttachMin) {
+		return 0, false
+	}
+	return v, true
 }
 
 // parseState reads a session state word.

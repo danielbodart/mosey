@@ -41,7 +41,9 @@ type Launcher struct {
 	Stdout, Stderr io.Writer
 	// Self is this binary, started as `Self --serve=spawner`.
 	Self string
-	// Version is this binary's, which the client's must equal (D7).
+	// Version is this binary's: what a session's is compared with to
+	// decide on a live upgrade (D8 V2). The client's is never compared
+	// with it (D8 V1).
 	Version string
 	// Env is the spawner's environment: the launcher's own, unchanged.
 	Env []string
@@ -105,10 +107,8 @@ func (l *Launcher) run(ctx context.Context) error {
 	var sessions []bootstrap.SessionLine
 	var conns []liveSession
 	for _, s := range liveSessions(base) {
-		g, err := bootstrap.ParseSessionLine(s.greeting)
-		if err != nil {
-			// Another version's session: only its own version reads its
-			// name and state, so it is not chosen (§9.2 step 5).
+		g, ok := attachable(s.greeting)
+		if !ok {
 			s.f.Close()
 			continue
 		}
@@ -199,21 +199,25 @@ func (l *Launcher) start(ctx context.Context, line []byte, cl bootstrap.ClientLi
 	return fmt.Errorf("the server did not start")
 }
 
-// resume is the launcher's part of taking a session (bootstrap.md §9.2
-// steps 2 and 5): compare versions with the session's own, not this
-// launcher's, hand the session's spawner the line (resume:SID), and print
-// the credential line it answers with.
-func (l *Launcher) resume(ctx context.Context, f *os.File, greeting, line []byte, cl bootstrap.ClientLine) error {
-	theirs, err := bootstrap.SessionLineVersion(greeting)
+// attachable is a session's greeting if this launcher can attach it: one
+// in the stable form (bootstrap.md §9.2.1) whose attach protocol range
+// meets this build's. A session of a build before the stable attach
+// protocol still compares versions for equality, so it is passed over
+// (§9.2 step 5): only a client of its own version resumes it.
+func attachable(greeting []byte) (bootstrap.SessionLine, bool) {
+	g, err := bootstrap.ParseSessionLine(greeting)
 	if err != nil {
-		return fmt.Errorf("the session's greeting: %w", err)
+		return g, false
 	}
-	if theirs != cl.SoftwareVersion {
-		// The client asked for a resume, so it will not upload: its own
-		// version would not match the session either (§6.4).
-		return &LaunchError{Code: bootstrap.CodeVersion, Detail: theirs,
-			Text: fmt.Sprintf("the session runs version %s, the client is %s", theirs, printableASCII(cl.SoftwareVersion, 64))}
-	}
+	_, ok := bootstrap.AttachVersion(g)
+	return g, ok
+}
+
+// resume is the launcher's part of taking a session (bootstrap.md §9.2
+// steps 2 and 5): hand the session's spawner the line (resume:SID), and
+// print the credential line it answers with. The session may be of any
+// version (D8 V1).
+func (l *Launcher) resume(ctx context.Context, f *os.File, greeting, line []byte, cl bootstrap.ClientLine) error {
 	conn, err := ipc.NewConn(f, ipc.Launcher, ipc.Spawner)
 	if err != nil {
 		return err
@@ -335,10 +339,10 @@ func readClientLine(ctx context.Context, r io.Reader) ([]byte, error) {
 }
 
 // parseClientLine is what the launcher checks of the client's line before
-// it chooses: that it parses, then its protocol version and its software
-// version (bootstrap.md §6.2, §6.4). The version is this launcher's: the
-// greetings it can read, and so the sessions it can choose, are its own
-// version's (§9.2 step 5).
+// it chooses: that it parses, which checks its line version (bootstrap.md
+// §6.2, §6.4). Its software version is never compared with this one's
+// (D8 V1): any release's client is served. version, this launcher's, is
+// only what a refusal says the server is.
 func parseClientLine(line []byte, version string) (bootstrap.ClientLine, error) {
 	cl, err := bootstrap.ParseClientLine(line)
 	if err != nil {
@@ -348,10 +352,6 @@ func parseClientLine(line []byte, version string) (bootstrap.ClientLine, error) 
 				Text: fmt.Sprintf("the client speaks bootstrap protocol %d, this server %d", ve.Got, bootstrap.Version)}
 		}
 		return cl, &LaunchError{Code: bootstrap.CodeLine, Text: "the client's line is malformed"}
-	}
-	if cl.SoftwareVersion != version {
-		return cl, &LaunchError{Code: bootstrap.CodeVersion, Detail: version,
-			Text: fmt.Sprintf("the client is version %s, this server %s", printableASCII(cl.SoftwareVersion, 64), version)}
 	}
 	return cl, nil
 }

@@ -53,23 +53,21 @@ func TestAPlainClientTakesTheNewestDetachedSessionAndNeverAnAttachedOne(t *testi
 	}
 }
 
-// A session of another version is never chosen for a plain client or for
-// -s NAME (bootstrap.md §9.2 step 5): its spawner would refuse the line,
-// and after a client upgrade a plain `mosey HOST` must still start a
-// session rather than fail (D8 R1, V1). Its name is still not generated.
-func TestAPlainOrNamedClientPassesOverAnotherVersionsSession(t *testing.T) {
+// Sessions of every version are chosen alike (D8 V1, bootstrap.md §9.2
+// step 5): after a client upgrade, a plain `mosey HOST` takes its older
+// detached session back, and -s NAME finds the older NAME, rather than
+// start a new one beside it.
+func TestSessionsOfEveryVersionAreChosenAlike(t *testing.T) {
 	older := of("v0", session("work", 1, bootstrap.SessionDetached, 900))
-	var taken map[string]bool
-	c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{older}, func(t map[string]bool) string { taken = t; return "fresh" })
-	if !c.start || c.err != nil || c.name != "fresh" || !taken["work"] {
-		t.Errorf("a plain client with only a v0 session detached: %+v, avoiding %v; want a new session", c, taken)
+	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{older}, fixedName); c.start || c.err != nil || c.take != 0 {
+		t.Errorf("a plain client with only a v0 session detached: %+v; want it taken", c)
 	}
 	ours := session("play", 2, bootstrap.SessionDetached, 100)
-	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{older, ours}, fixedName); c.start || c.err != nil || c.take != 1 {
-		t.Errorf("a plain client: %+v, not the older-dated session of its own version", c)
+	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{older, ours}, fixedName); c.start || c.err != nil || c.take != 0 {
+		t.Errorf("a plain client: %+v, not the most recently detached, whatever its version", c)
 	}
-	if c := choose(line(bootstrap.AttachName, "work"), []bootstrap.SessionLine{older}, fixedName); !c.start || c.err != nil || c.name != "work" {
-		t.Errorf("-s work with only a v0 work: %+v, not a new session called work", c)
+	if c := choose(line(bootstrap.AttachName, "work"), []bootstrap.SessionLine{older}, fixedName); c.start || c.err != nil || c.take != 0 {
+		t.Errorf("-s work with only a v0 work: %+v, not the v0 work", c)
 	}
 }
 

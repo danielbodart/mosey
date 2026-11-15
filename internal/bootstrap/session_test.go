@@ -12,6 +12,8 @@ import (
 func sampleSessionLine() SessionLine {
 	return SessionLine{
 		SoftwareVersion: "0.214.20261114093012",
+		AttachMin:       1,
+		AttachMax:       1,
 		SessionID:       [16]byte{0x0f, 0x3a, 1, 2, 3},
 		Name:            "quiet-heron",
 		Started:         time.Unix(1794650000, 0),
@@ -33,7 +35,7 @@ func TestASessionLineRoundTripsInEveryState(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%q: %v", line, err)
 			}
-			if got.SoftwareVersion != s.SoftwareVersion || got.SessionID != s.SessionID || !got.Started.Equal(s.Started) ||
+			if got.SoftwareVersion != s.SoftwareVersion || got.AttachMin != 1 || got.AttachMax != 1 || got.SessionID != s.SessionID || !got.Started.Equal(s.Started) ||
 				!got.Since.Equal(s.Since) || got.State != s.State || got.Peer != s.Peer ||
 				got.Name != s.Name || got.HasHolder != s.HasHolder || got.HasHolder && got.Holder != s.Holder {
 				t.Fatalf("%q parsed as %+v, not %+v", line, got, s)
@@ -48,13 +50,14 @@ func TestASessionLineRoundTripsInEveryState(t *testing.T) {
 func TestTheLongestSessionLineFitsItsBound(t *testing.T) {
 	s := sampleSessionLine()
 	s.SoftwareVersion = strings.Repeat("9", 64)
+	s.AttachMin, s.AttachMax = 255, 255
 	s.Started, s.Since = time.Unix(999999999999, 0), time.Unix(999999999999, 0)
 	s.State = SessionDetached
 	s.Peer = netip.MustParseAddrPort("[ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe]:65535")
 	s.Name = strings.Repeat("n", MaxSessionName)
 	line := MarshalSessionLine(s)
-	if len(line) != 230 || len(line) > MaxSessionLine {
-		t.Fatalf("%d bytes, not the 230 §9.2.1 derives, or over %d", len(line), MaxSessionLine)
+	if len(line) != 238 || len(line) > MaxSessionLine {
+		t.Fatalf("%d bytes, not the 238 §9.2.1 derives, or over %d", len(line), MaxSessionLine)
 	}
 	if _, err := ParseSessionLine(line); err != nil {
 		t.Fatal(err)
@@ -78,10 +81,49 @@ func TestASessionLineThatBreaksARuleIsRefused(t *testing.T) {
 		"extra field":      strings.Replace(good, "\n", " x\n", 1),
 		"bad name":         strings.Replace(good, "quiet-heron", "-heron", 1),
 		"short holder":     strings.Replace(good, " AQIDBAUGBwg\n", " AQID\n", 1),
+		"no attach range":  strings.Replace(good, " 1-1 ", " ", 1),
+		"range backwards":  strings.Replace(good, " 1-1 ", " 2-1 ", 1),
+		"range from 0":     strings.Replace(good, " 1-1 ", " 0-1 ", 1),
+		"range over 255":   strings.Replace(good, " 1-1 ", " 1-256 ", 1),
+		"range zero-led":   strings.Replace(good, " 1-1 ", " 01-1 ", 1),
+		"range one number": strings.Replace(good, " 1-1 ", " 1 ", 1),
 	}
 	for name, line := range cases {
 		if _, err := ParseSessionLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%s: %q gave %v", name, line, err)
+		}
+	}
+}
+
+// A greeting from a build before the stable attach protocol has a session
+// id where the attach range now is: ParseSessionLine refuses it, so the
+// launcher passes the session over (§9.2 step 5), and SessionLineVersion
+// still reads its version for -list.
+func TestAGreetingFromBeforeTheStableAttachProtocolGivesOnlyItsVersion(t *testing.T) {
+	stable := string(MarshalSessionLine(sampleSessionLine()))
+	old := strings.Replace(stable, " 1-1 ", " ", 1)
+	if _, err := ParseSessionLine([]byte(old)); !errors.Is(err, ErrBadLine) {
+		t.Errorf("an old greeting parsed: %v", err)
+	}
+	if v, err := SessionLineVersion([]byte(old)); err != nil || v != "0.214.20261114093012" {
+		t.Errorf("an old greeting's version: %q, %v", v, err)
+	}
+}
+
+// A launcher and a session use the highest attach version both speak, and
+// none when their ranges do not meet (server.md §2.8).
+func TestTheAttachVersionIsTheHighestBothSpeak(t *testing.T) {
+	for _, c := range []struct {
+		lo, hi, want int
+		ok           bool
+	}{
+		{1, 1, 1, true},
+		{1, 7, AttachMax, true}, // a newer session that still speaks v1
+		{2, 3, 0, false},        // one that dropped v1
+	} {
+		got, ok := AttachVersion(SessionLine{AttachMin: c.lo, AttachMax: c.hi})
+		if got != c.want || ok != c.ok {
+			t.Errorf("%d-%d: %d %v, want %d %v", c.lo, c.hi, got, ok, c.want, c.ok)
 		}
 	}
 }
@@ -237,6 +279,8 @@ func FuzzParseSessionLine(f *testing.F) {
 	n.State, n.Peer, n.HasHolder = SessionNew, netip.AddrPort{}, false
 	f.Add(MarshalSessionLine(n))
 	f.Add([]byte("MOSEY-SESSION 1.2.3 and more\n"))
+	old := MarshalSessionLine(sampleSessionLine())
+	f.Add(bytes.Replace(old, []byte(" 1-1 "), []byte(" "), 1)) // a pre-stable greeting
 	f.Fuzz(func(t *testing.T, line []byte) {
 		v, verr := SessionLineVersion(line)
 		s, err := ParseSessionLine(line)
@@ -254,6 +298,9 @@ func FuzzParseSessionLine(f *testing.F) {
 		}
 		if s.Peer.IsValid() && (s.Peer.Port() == 0 || s.Peer.Addr().Zone() != "" || s.Peer.Addr().Is4In6()) {
 			t.Fatalf("accepted peer %s", s.Peer)
+		}
+		if s.AttachMin < 1 || s.AttachMin > s.AttachMax || s.AttachMax > 255 {
+			t.Fatalf("accepted attach range %d-%d", s.AttachMin, s.AttachMax)
 		}
 		if !ValidSessionName(s.Name) {
 			t.Fatalf("accepted name %q", s.Name)

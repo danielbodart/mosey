@@ -245,23 +245,18 @@ func (b *spawn) explain(err error, status int) error {
 }
 
 // refused is the user's message for a server's ErrorLine (bootstrap.md
-// §6.4). The D7 slice answers a version refusal with an upload instead.
+// §6.4).
 func (b *spawn) refused(e *bootstrap.RemoteError) error {
 	switch e.Code {
 	case bootstrap.CodeLine:
 		return fail(e, "the server could not read this client's request: a bug, please report it")
 	case bootstrap.CodeVersion:
-		if b.line.Attach == bootstrap.AttachResume {
-			// A session the client named by its id runs another version
-			// (bootstrap.md §9.2 step 5): no upload, which would install
-			// this version, not the session's.
-			return fail(e, "the session runs version %s; this is %s", e.Detail, b.line.SoftwareVersion)
-		}
-		theirs := e.Detail
-		if e.Proto != bootstrap.Version {
-			theirs = fmt.Sprintf("%s (bootstrap protocol %d; this is %d)", theirs, e.Proto, bootstrap.Version)
-		}
-		return fail(e, "the remote mosey is version %s, this is %s: install %s there or pass -remote", theirs, b.line.SoftwareVersion, b.line.SoftwareVersion)
+		// Only a line version the server cannot read: the software
+		// version is never refused (D8 V1). With one line version there
+		// is none older to send again at (§6.1), so this is a server from
+		// before the stable protocol, or a bug.
+		return fail(e, "the remote mosey %s cannot read this client's request (bootstrap protocol %d, it speaks %d)",
+			e.Detail, bootstrap.Version, e.Proto)
 	case bootstrap.CodeUnsupported:
 		return fail(e, "the remote mosey can't do %s yet", e.Detail)
 	case bootstrap.CodeSession:

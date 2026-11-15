@@ -93,7 +93,7 @@ func (s *spawner) serveResume(f *os.File) error {
 	if !ok {
 		return refuse(fmt.Errorf("the launcher sent %T", m))
 	}
-	cl, err := checkResumeLine(msg.Line, s.cfg.Version, s.sid)
+	cl, err := checkResumeLine(msg.Line, s.sid)
 	if err != nil {
 		return refuse(err)
 	}
@@ -131,10 +131,12 @@ func (s *spawner) serveResume(f *os.File) error {
 // checkResumeLine is what the spawner checks of a resuming client's line
 // before proto hears of it (server.md §2.6): the whole canonical parse, a
 // resume of this session (the launcher chose it, and checked any holder,
-// under its lock), this version, and a key proto can mint for. A holder
-// is only a label for the hold (§9.2.2): the launcher has already said
-// whose the session is.
-func checkResumeLine(line []byte, version string, sid [16]byte) (bootstrap.ClientLine, error) {
+// under its lock), and a key proto can mint for. A holder is only a label
+// for the hold (§9.2.2): the launcher has already said whose the session
+// is. The client's software version is never compared with the session's
+// (D8 V1): any release's client attaches, and the handshake negotiates
+// what the two speak.
+func checkResumeLine(line []byte, sid [16]byte) (bootstrap.ClientLine, error) {
 	cl, err := bootstrap.ParseClientLine(line)
 	switch {
 	case err != nil:
@@ -143,8 +145,6 @@ func checkResumeLine(line []byte, version string, sid [16]byte) (bootstrap.Clien
 		return cl, errors.New("a new session asked of a running one")
 	case cl.SessionID != sid:
 		return cl, errors.New("a resume of another session")
-	case cl.SoftwareVersion != version:
-		return cl, fmt.Errorf("the client is version %s, the session %s", printableASCII(cl.SoftwareVersion, 64), version)
 	}
 	if err := handshake.CheckPublicKey(cl.Public); err != nil {
 		return cl, err
@@ -173,7 +173,8 @@ func (s *spawner) greeting() bootstrap.SessionLine {
 	s.greetMu.Lock()
 	defer s.greetMu.Unlock()
 	g := bootstrap.SessionLine{
-		SoftwareVersion: s.cfg.Version, SessionID: s.sid, Name: s.name,
+		SoftwareVersion: s.cfg.Version, AttachMin: bootstrap.AttachMin, AttachMax: bootstrap.AttachMax,
+		SessionID: s.sid, Name: s.name,
 		Started: s.started, State: s.state, Since: s.since, Peer: s.peer,
 		Holder: s.holder, HasHolder: s.hasHolder,
 	}

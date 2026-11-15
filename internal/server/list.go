@@ -29,8 +29,8 @@ func List(w io.Writer, getenv func(string) string) error {
 		s.f.Close()
 		g, err := bootstrap.ParseSessionLine(s.greeting)
 		if err != nil {
-			// Another version's session: its version is all that can be
-			// read of it (§9.2 step 5).
+			// A session of a build before the stable attach protocol:
+			// its version is all that can be read of it (§9.2 step 5).
 			v, verr := bootstrap.SessionLineVersion(s.greeting)
 			if verr != nil {
 				continue
@@ -64,8 +64,8 @@ func Kill(w io.Writer, getenv func(string) string, name string) error {
 	}
 	var found *liveSession
 	for _, s := range liveSessions(sessionsDir(getenv)) {
-		g, err := bootstrap.ParseSessionLine(s.greeting)
-		if err != nil || g.Name != name || found != nil {
+		g, ok := attachable(s.greeting)
+		if !ok || g.Name != name || found != nil {
 			s.f.Close()
 			continue
 		}

@@ -113,7 +113,8 @@ func fakeSession(t *testing.T, base string, sid [16]byte, serve func(f *os.File)
 func greet(version string, sid [16]byte) func(f *os.File) {
 	return func(f *os.File) {
 		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{
-			SoftwareVersion: version, SessionID: sid, Name: fmt.Sprintf("s-%x", sid[0]), Started: time.Unix(1794650000, 0),
+			SoftwareVersion: version, AttachMin: 1, AttachMax: 1,
+			SessionID: sid, Name: fmt.Sprintf("s-%x", sid[0]), Started: time.Unix(1794650000, 0),
 			State: bootstrap.SessionDetached, Since: time.Unix(1794650100, 0),
 			Peer: netip.MustParseAddrPort("192.0.2.7:50000"),
 		}))
@@ -162,8 +163,9 @@ func TestTheAttachSocketGreetsAndLeavesNothingBehind(t *testing.T) {
 // The launcher's resume against a fake spawner: a plain client's line
 // (auto) finds the detached session, which gets the line as resume:SID,
 // and the credential line it answers with comes out on stdout; a session
-// whose version is not the client's is refused before anything is sent
-// (bootstrap.md §9.2 steps 2 and 5).
+// of another version is attached all the same (D8 V1), and one from a
+// build before the stable attach protocol is passed over (bootstrap.md
+// §9.2 steps 2 and 5).
 func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	runtime := runtimeDir(t)
 	base := filepath.Join(runtime, "mosey")
@@ -174,9 +176,16 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	got := make(chan []byte, 1)
 	var sessionVersion atomic.Value
 	sessionVersion.Store("v1")
+	var legacy atomic.Bool
 	fakeSession(t, base, sid, func(f *os.File) {
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: sessionVersion.Load().(string), SessionID: sid, Name: "work",
-			Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650000, 0)}))
+		g := bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: sessionVersion.Load().(string), AttachMin: 1, AttachMax: 1,
+			SessionID: sid, Name: "work", Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650000, 0)})
+		if legacy.Load() {
+			// A greeting as builds before the stable attach protocol
+			// wrote it: no attach range.
+			g = bytes.Replace(g, []byte(" 1-1 "), []byte(" "), 1)
+		}
+		f.Write(g)
 		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
 		m, err := conn.Recv()
 		if err != nil {
@@ -202,16 +211,19 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	if sent := <-got; !bytes.Equal(sent, want) {
 		t.Errorf("the spawner got %q, not the line as resume:SID", sent)
 	}
-	// The session is v0, the client and the launcher v1: the session's
-	// version decides.
+	// The session is v0, the client and the launcher v1, and neither is
+	// a release version, so there is no order and no upgrade: the
+	// session is attached as it is, never refused for its version (D8 V1).
 	sessionVersion.Store("v0")
-	out, _, err = run(resumeLine(t, "v1", sid))
-	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeVersion || e.Detail != "v0" {
-		t.Errorf("a client of another version than the session's: %v, %q", err, out)
+	out, errs, err = run(auto)
+	if err != nil || out != string(answer) {
+		t.Fatalf("a session of another version: %v, stdout %q, stderr %q", err, out, errs)
 	}
-	// A plain client passes the v0 session over and starts its own (here
-	// there is no spawner to start, Self being empty): never a refusal
-	// for the version (D8 R1, V1).
+	<-got
+	// A session from before the stable attach protocol is passed over: a
+	// plain client starts its own (here there is no spawner to start, Self
+	// being empty), never a refusal for the version (D8 R1, V1).
+	legacy.Store(true)
 	out, _, err = run(auto)
 	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeInternal ||
 		!strings.Contains(err.Error(), "starting the spawner") {
@@ -236,20 +248,20 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 func TestTheSpawnerRefusesAResumeLineThatIsNotForIt(t *testing.T) {
 	sid := [16]byte{5}
 	good := resumeLine(t, "v1", sid)
-	if _, err := checkResumeLine(good, "v1", sid); err != nil {
+	if _, err := checkResumeLine(good, sid); err != nil {
 		t.Fatalf("a good line: %v", err)
 	}
 	// A resuming client may forward its agent: its own login triggered
 	// its own bind (bootstrap.md §9.2 step 2).
 	agent := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid, Agent: true,
 		Cols: 80, Rows: 24, Public: oneShotKey(t)})
-	if _, err := checkResumeLine(agent, "v1", sid); err != nil {
+	if _, err := checkResumeLine(agent, sid); err != nil {
 		t.Errorf("agent=yes: %v", err)
 	}
 	// A reconnect's holder passes through as the hold's label (§9.2.2).
 	holder := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid,
 		Holder: [8]byte{1}, HasHolder: true, Cols: 80, Rows: 24, Public: oneShotKey(t)})
-	if cl, err := checkResumeLine(holder, "v1", sid); err != nil || !cl.HasHolder || cl.Holder != [8]byte{1} {
+	if cl, err := checkResumeLine(holder, sid); err != nil || !cl.HasHolder || cl.Holder != [8]byte{1} {
 		t.Errorf("a reconnect's line: %v", err)
 	}
 	badKey := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid,
@@ -258,15 +270,18 @@ func TestTheSpawnerRefusesAResumeLineThatIsNotForIt(t *testing.T) {
 	auto := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachAuto, Cols: 80, Rows: 24, Public: oneShotKey(t)})
 	for name, line := range map[string][]byte{
 		"another session":      resumeLine(t, "v1", [16]byte{6}),
-		"another version":      resumeLine(t, "v2", sid),
 		"a new session":        newLine,
 		"an unresolved choice": auto,
 		"a bad key":            badKey,
 		"malformed":            append(bytes.Clone(good[:len(good)-1]), ' ', '\n'),
 	} {
-		if _, err := checkResumeLine(line, "v1", sid); err == nil {
+		if _, err := checkResumeLine(line, sid); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	// A client of another version is served (D8 V1).
+	if _, err := checkResumeLine(resumeLine(t, "v2", sid), sid); err != nil {
+		t.Errorf("a client of another version: %v", err)
 	}
 }
 
@@ -328,7 +343,7 @@ func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
 	// spawner hands Hangup on. This one records which session got it.
 	killed := [16]byte{0x33}
 	fakeSession(t, base, killed, func(f *os.File) {
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: "v1", SessionID: killed, Name: "doomed",
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: "v1", AttachMin: 1, AttachMax: 1, SessionID: killed, Name: "doomed",
 			Started: time.Unix(1794650000, 0), State: bootstrap.SessionAttached, Since: time.Unix(1794650000, 0)}))
 		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
 		if m, err := conn.Recv(); err == nil {

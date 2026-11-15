@@ -17,7 +17,7 @@ import (
 // A refusal the user can meet says what it means (bootstrap.md §6.4).
 func TestARefusalIsExplained(t *testing.T) {
 	for line, want := range map[string]string{
-		"MOSEY-ERROR 1 version 0.9.9\n": "the session runs version 0.9.9; this is 1.2.3",
+		"MOSEY-ERROR 1 version 0.9.9\n": "the remote mosey 0.9.9 cannot read this client's request (bootstrap protocol 1, it speaks 1)",
 		"MOSEY-ERROR 1 session -\n":     "no such session on far",
 		"MOSEY-ERROR 1 internal -\n":    "the server failed to start (see above)",
 	} {
