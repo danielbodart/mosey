@@ -1580,7 +1580,12 @@ The steps:
    equality: it is listed with its version alone (§9.4) and passed over,
    so a plain `mosey DEST` starts a new session beside it rather than
    fail, and the old session is resumable by a client of its own version
-   until its shell exits. A generated name still avoids the names of
+   until its shell exits. The launcher says so on stderr, once per such
+   session: `session NAME runs mosey V, which predates the stable
+   protocol and live upgrade: resume it with mosey V, or end it` (NAME
+   from the old greeting's fourth field when it is an `sname`). A
+   session whose attach range this build does not meet is passed over
+   the same way, with its range named. A generated name still avoids the names of
    every session that answered.
 6. **The size** in the ClientLine is not applied by the spawner (an
    unconfirmed attach must change nothing). The client sends its size as

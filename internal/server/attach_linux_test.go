@@ -224,10 +224,14 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	// plain client starts its own (here there is no spawner to start, Self
 	// being empty), never a refusal for the version (D8 R1, V1).
 	legacy.Store(true)
-	out, _, err = run(auto)
+	out, errs, err = run(auto)
 	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeInternal ||
 		!strings.Contains(err.Error(), "starting the spawner") {
 		t.Errorf("a plain client with only a v0 session detached: %v, %q; want it to start a session", err, out)
+	}
+	// The user is told it is there, and which release resumes it.
+	if want := "session work runs mosey v0, which predates the stable protocol and live upgrade: resume it with mosey v0, or end it"; !strings.Contains(errs, want) {
+		t.Errorf("stderr %q does not say %q", errs, want)
 	}
 	// R3's reconnect of a session that is not there.
 	gone := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume,
