@@ -1,18 +1,16 @@
-# Architecture: slice 1
+# Architecture
 
-Slice 1 is the walking skeleton that joins the spikes: `mosey host` gives
-an interactive login shell end to end. It has no prediction, resume, agent
-forwarding or auto-upload; those are later slices, and the hooks for them
-are reserved here so that adding them changes no wire format and no
-interface below.
+The map of mosey as built: which package does what, who owns it, how data
+moves between them, and where the interfaces are. Slice 1 was the walking
+skeleton that joined the spikes (`mosey host` gives an interactive login
+shell end to end); resume and exclusive attach (D8, D26), agent
+forwarding (D15, D25), predictive echo (D12), chaff (D11) and auto-upload
+(D7) have landed on it since, each through hooks slice 1 reserved, so
+none changed a wire format or an interface below it (§7).
 
-This document is the map six people work from at once. It says which
-package does what, who owns it, how data moves between them, and where
-the interfaces are. The interfaces themselves are Go: every package below
-exists under `internal/` as compiling stubs with doc comments, and an
-implementer replaces the `panic("TODO slice 1")` bodies. Changing an
-exported signature another owner calls means agreeing it with them first
-and updating this document in the same commit.
+The interfaces themselves are Go, with doc comments, under `internal/`.
+Changing an exported signature another owner calls means agreeing it with
+them first and updating this document in the same commit.
 
 PLAN.md §2 (D1–D28) is locked. Where this document cites a decision, the
 decision wins.
@@ -103,9 +101,14 @@ line to ssh's stdout and exits, which lets ssh exit.
    │       stdin: ClientLine                   │   binds UDP, opens pty, forks login shell
    │      stdout: CredentialLine               │   re-execs itself as proto and emu
    │                                           │   SCM_RIGHTS: UDP socket + pty master → proto
+   │                                           │   accepts on R/mosey/SID-HEX/attach.sock
+   │                                           │     (a resume's launcher: ClientLine → Resume)
+   │                                           │   accepts on R/mosey/SID-HEX/agent.sock
+   │                                           │     (the shell's SSH_AUTH_SOCK) → AgentConn fd
    │                                           ▼
-   │        UDP (B3, then sealed frames)   proto (Landlock + seccomp)
-   └──────────────────────────────────────►  keys, transport, SSP, pty master,
+   │        UDP (B3, then sealed frames:   proto (Landlock + seccomp)
+   └──────── SSP, agent channels, chaff) ►  keys, transport, SSP, channel mux,
+                                             pty master, echo ack,
                                              every protocol parser, reply grammar
                                                │  seqpacket
                                                ▼
@@ -202,6 +205,63 @@ addresses.
 Inside the transport, every `RekeyAfter` (120 s) or N packets, never on
 idleness: two `REKEY_INIT` frames, `REKEY_RESP`, then keepalive confirm and
 ack, all under the current epoch's keys. SSP is unaware.
+
+### 3.6 Resume and attach (D8, D26)
+
+`mosey -r` bootstraps through ssh as in §3.1, but its `ClientLine` is a
+resume: the launcher finds the session's `attach.sock` (`server.md` §2.6),
+reads the spawner's greeting, and sends the line. The spawner checks it
+and sends proto `ipc.Resume`; proto mints a new credential for the new
+client's one-shot key and the line goes back up ssh as usual. The new
+client's handshake carries `Hello.Attach`; when `Listener.Accept` returns
+its connection, the listener revokes the old one (`KindRevoked`, the
+`Revoked` event, D26), and `server.Session` makes the new connection the
+one the screen goes to and keystrokes come from. SSP starts from scratch
+on every connection (`ssp.md` §1.3), so the first diff is the whole screen,
+and every per-connection count (`InputConsumed`, the echo ack and applied
+count, §3.8) starts at 0. A client that leaves sends `End(EndDetached)`;
+the session runs on until its shell exits. `mosey -list` reads the
+greetings of the user's sessions and attaches to none.
+
+### 3.7 The agent channel (D15, D25)
+
+At the bootstrap the client captures the session-bind ssh sends its agent
+(`agent.md` §2) and pins it to `known_hosts`, and offers `ChannelAgent` in
+its hello. On the server the shell's `SSH_AUTH_SOCK` is the spawner's
+`agent.sock` (`server.md` §2.7, `agent.md` §4.1); each connection a program
+makes there is checked (`SO_PEERCRED`) and handed to proto as an
+`ipc.AgentConn` fd. proto opens a reliable stream on the attached
+connection's `channel.Mux` (`KindChannel` frames, `agent.md` §5) and
+relays the fd's bytes into it, opaque. The client, for each channel,
+dials its own local agent, replays the captured bind, then relays
+(`agent.md` §3), so the agent judges destination constraints as under
+`ssh -A`. Any agent works, OpenSSH's or quoin's; the client never parses
+what passes. A resume brings the resuming client's own agent: the socket
+path is fixed for the shell's life, and each connection goes to whichever
+client is attached then.
+
+### 3.8 Prediction (D12)
+
+Each screen proto publishes carries `EchoAck` (the newest input event the
+pty has had for 50 ms), `EchoApplied` (how many it had when the screen was
+taken) and `EchoOff` (`prediction.md` §3, §3.1). proto keeps a small write
+log per attached client and publishes once more 50 ms after each write,
+so a confirmation reaches the client even when nothing else changed; it
+sends no such frame while echo is off. The client's `predict.Engine` sees
+each key event as the loop sends it and each new screen as it arrives,
+and judges its guesses only against screens whose `EchoAck` covers them;
+`render` draws `Overlay()`, the server's screen with the surviving
+predictions on top. Nothing the server sends is parsed to predict (D9).
+
+### 3.9 Chaff (D11)
+
+While the user types, the client's SSP endpoint sends only on a fixed tick,
+one datagram each 20 ms tick, a CHAFF frame (`Conn.SendChaff`) when it has nothing
+else, and keeps on for a random 1–2 s after the last key; the server
+chaffs on a tick grid of its own for a second after each CHAFF it gets
+(`ChaffArrived`). Every SSP datagram is padded (§4, `ssp.md` §9.2), so an
+on-path observer cannot tell which ticks carried keys. `ssp.md` §9.1 says
+what it hides and what it does not.
 
 ## 4. Sizes on the wire (D5)
 
