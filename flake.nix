@@ -22,36 +22,19 @@
       forAllSystems = lib.genAttrs systems;
       forLinux = lib.genAttrs linuxSystems;
 
-      # A build of a clean commit is MAJOR.COMMITS.STAMP, the shape
-      # scripts/version.sh gives a local build: the commit count, as a
-      # release's minor, and the commit's time (YYYYMMDDHHMMSS) as the
-      # patch. So bootstrap.CompareVersions orders it against releases and
-      # other builds (D8 V2, bootstrap.md §9.2 step 5): a Nix-built server
-      # resuming a session of an older commit's binary live-upgrades it, as
-      # a release does, and a security fix reaches a running session on a
-      # host built from this flake. Its 14-digit patch is not a run number,
-      # so it is never taken for a release (bootstrap.IsRelease) and the
-      # same commit's Nix build sorts after its release, as a local one
-      # does.
-      #
-      # Nix knows the commit count only when it fetched a git repository
-      # (git+https://github.com/danielbodart/mosey, git+file, a local
-      # checkout); a github: input is a tarball with no history. That, and
-      # an uncommitted tree, gets MAJOR-unstable-DATE+REV instead: still a
-      # valid swver (bootstrap.md §6.1) that names its commit, but with no
-      # order, so a server built that way attaches plainly and never
-      # upgrades or is upgraded to (D8 V2 only goes forward when it is
-      # sure). Hosts that should take upgrades fetch this flake as git+https.
+      # A build from a commit rather than a release: MAJOR-unstable-DATE+REV.
+      # A release is a tag named by scripts/version.sh, which needs the
+      # repository to count, and a build from a store path has none. The
+      # commit is in it, unlike the siblings' 0-unstable-DATE, because the
+      # server a client installs is kept under its version (D7, bootstrap.md
+      # §4.7): two builds of different commits must never claim to be the
+      # same mosey. It fits swver's grammar (bootstrap.md §6.1).
       version =
         let
-          major = lib.fileContents ./VERSION;
-          d = self.lastModifiedDate or "19700101000000";
+          d = self.lastModifiedDate or "19700101";
           rev = self.shortRev or self.dirtyShortRev or "dirty";
         in
-        if self ? rev && self ? revCount then
-          "${major}.${toString self.revCount}.${d}"
-        else
-          "${major}-unstable-${builtins.substring 0 4 d}-${builtins.substring 4 2 d}-${builtins.substring 6 2 d}+${rev}";
+        "${lib.fileContents ./VERSION}-unstable-${builtins.substring 0 4 d}-${builtins.substring 4 2 d}-${builtins.substring 6 2 d}+${rev}";
 
       # Go's major.minor, the one mise.toml pins: both channels compile with
       # the same language version.
