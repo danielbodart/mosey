@@ -205,6 +205,9 @@ jobs:
   #   binary   mosey-<V>-<os>-<arch>, os in linux/darwin, arch in amd64/arm64
   #            (Go's names), the bare static executable the build job made
   #   sums     SHA256SUMS, sha256sum(1) format, one line per binary
+  #   bundle   mosey-<V>-<os>-<arch>.sigstore.json, the binary's Sigstore
+  #            bundle: SLSA provenance from this workflow on trunk, which
+  #            the client verifies before copying a downloaded binary (S1)
   #
   # i.e. https://github.com/danielbodart/mosey/releases/download/v<V>/mosey-<V>-<os>-<arch>.
   # scripts/release-assets.sh lays them out and refuses to go on unless the
@@ -224,6 +227,11 @@ jobs:
       contents: write
       # To start CI on trunk's head, where this commit cannot be tagged.
       actions: write
+      # To attest every asset (D7, S1): an OIDC token, which Fulcio turns
+      # into a certificate naming this workflow on trunk, and the right to
+      # store the attestations with the repository's.
+      id-token: write
+      attestations: write
     steps:
       # fetch-depth: 0 because the minor is the commit count, which
       # scripts/version.sh REFUSES to count in a shallow clone; fetch-tags so
@@ -242,11 +250,7 @@ jobs:
           path: artifacts
           pattern: mosey-*
 
-      # Notes from the COMMITS since the last release. Trunk-based means
-      # direct pushes and no pull requests, so GitHub's PR-based
-      # --generate-notes would come out empty. On the first release there is
-      # no prior tag, so fall back to the head commit rather than dumping the
-      # whole history.
+      # Whether to release, and if so the assets, laid out and checked.
       #
       # GitHub refuses GITHUB_TOKEN, which can never hold the workflows
       # permission, a new ref whose .github/workflows differ from trunk's
@@ -256,7 +260,8 @@ jobs:
       # its commits including this one's: its own run makes it, or, where it
       # has none (a [skip ci] push, a push made with GITHUB_TOKEN), one
       # started here.
-      - name: Create GitHub Release
+      - name: Decide, and lay out the assets
+        id: due
         env:
           GH_TOKEN: ${{ github.token }}
           FORCE: ${{ inputs.release || false }}
@@ -276,11 +281,78 @@ jobs:
           fi
           V="$(./scripts/version.sh)"
           scripts/release-assets.sh "$V" release artifacts
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      # SLSA build provenance for each binary (D7, S1, bootstrap.md §4.6),
+      # one attestation per binary so each bundle names exactly the file it
+      # sits next to. Signed by the public-good Sigstore (the repository is
+      # public): a Fulcio certificate for this workflow on refs/heads/trunk,
+      # logged in Rekor. Pinned by commit, as a third-party action that
+      # holds an OIDC token should be. A failure here fails the job, so
+      # nothing below runs and no unattested asset is published.
+      - name: Attest linux/amd64
+        id: attest-linux-amd64
+        if: steps.due.outputs.version
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/mosey-${{ steps.due.outputs.version }}-linux-amd64
+      - name: Attest linux/arm64
+        id: attest-linux-arm64
+        if: steps.due.outputs.version
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/mosey-${{ steps.due.outputs.version }}-linux-arm64
+      - name: Attest darwin/amd64
+        id: attest-darwin-amd64
+        if: steps.due.outputs.version
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/mosey-${{ steps.due.outputs.version }}-darwin-amd64
+      - name: Attest darwin/arm64
+        id: attest-darwin-arm64
+        if: steps.due.outputs.version
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/mosey-${{ steps.due.outputs.version }}-darwin-arm64
+
+      # Each bundle next to its binary as mosey-<V>-<os>-<arch>.sigstore.json,
+      # each checked as the client will check it, against the trusted root
+      # this commit embeds: a release its own clients would refuse is not
+      # made.
+      - name: Bundles next to their binaries, checked
+        if: steps.due.outputs.version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.due.outputs.version }}
+          LINUX_AMD64: ${{ steps.attest-linux-amd64.outputs.bundle-path }}
+          LINUX_ARM64: ${{ steps.attest-linux-arm64.outputs.bundle-path }}
+          DARWIN_AMD64: ${{ steps.attest-darwin-amd64.outputs.bundle-path }}
+          DARWIN_ARM64: ${{ steps.attest-darwin-arm64.outputs.bundle-path }}
+        run: |
+          scripts/release-bundles.sh "$V" release \
+            "linux-amd64=$LINUX_AMD64" "linux-arm64=$LINUX_ARM64" \
+            "darwin-amd64=$DARWIN_AMD64" "darwin-arm64=$DARWIN_ARM64"
+
+      # Notes from the COMMITS since the last release. Trunk-based means
+      # direct pushes and no pull requests, so GitHub's PR-based
+      # --generate-notes would come out empty. On the first release there is
+      # no prior tag, so fall back to the head commit rather than dumping the
+      # whole history.
+      - name: Create GitHub Release
+        if: steps.due.outputs.version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.due.outputs.version }}
+        run: |
           PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
           if [ -n "$PREV" ]; then
             git log "$PREV..HEAD" --pretty='- %s (%h)' > notes.md
           else
             { echo 'First automated release.'; echo; git log -1 --pretty='- %s (%h)'; } > notes.md
           fi
-          printf '\n%s\n' "Static binaries for linux and darwin on amd64 and arm64. To check what you downloaded: sha256sum --ignore-missing -c SHA256SUMS" >> notes.md
+          {
+            echo
+            echo "Static binaries for linux and darwin on amd64 and arm64, each with its Sigstore build provenance (.sigstore.json)."
+            echo "To check what you downloaded: sha256sum --ignore-missing -c SHA256SUMS, and gh attestation verify FILE --repo danielbodart/mosey"
+          } >> notes.md
           gh release create "v$V" --title "v$V" --notes-file notes.md --target "$GITHUB_SHA" release/*
