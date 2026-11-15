@@ -25,8 +25,8 @@ type choice struct {
 //
 // Sessions of every version are chosen alike (D8 V1, §9.2 step 5): an
 // upgraded client's plain `mosey HOST` takes its detached session back,
-// and -s NAME finds NAME, whichever binary runs it. Whether taking it is
-// a live upgrade is the launcher's next step, not this choice.
+// and -s NAME finds NAME, whichever binary runs it, which goes on running
+// it.
 func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, passed map[string]string, generate func(taken map[string]bool) string) choice {
 	fresh := func() choice {
 		// A passed-over session still has its name: a new one must not

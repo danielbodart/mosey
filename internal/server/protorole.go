@@ -92,20 +92,12 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 	if err := em.attach(link); err != nil {
 		return fmt.Errorf("starting emu: %w", err)
 	}
-	if start.Adopted {
-		// A live upgrade (server.md §2.8 step 7): the old session's screen,
-		// read and decoded only now, inside the sandbox, then painted into
-		// the new emu so the client sees what the shell left there.
-		if err := seedScreen(ctl, em, cols, rows); err != nil {
-			return fmt.Errorf("the adopted session's screen: %w", err)
-		}
-	}
 
 	creds := handshake.NewCredentials(log)
 	// crypto/rand never fails: the runtime crashes instead (Go 1.24). The
 	// all-zero id is refused in a resume line, so no session may have it
-	// (bootstrap.md §6.2). An adopted session keeps its own (§2.8).
-	session := start.SessionID
+	// (bootstrap.md §6.2).
+	var session [16]byte
 	for session == ([16]byte{}) {
 		rand.Read(session[:])
 	}
@@ -148,7 +140,6 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 		Terminal: ptyTerminal{master},
 		Emulator: em,
 		Log:      log,
-		Adopted:  start.Adopted,
 		Attached: func(peer netip.AddrPort, credential [8]byte) {
 			// The dual-stack socket reports an IPv4 client as mapped, and a
 			// zone means nothing to the spawner: the address as a person
@@ -276,87 +267,12 @@ func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, resume func([]by
 			// session even if a job the shell left holds the slave open.
 			log.Info("the shell exited", "status", m.Status)
 			sess.ShellExited()
-		case ipc.Freeze:
-			// A live upgrade (server.md §2.8 step 4). A session that
-			// cannot freeze within T3 says nothing, and the spawner gives
-			// the hand-off up.
-			g, err := sess.Freeze()
-			if err != nil {
-				log.Warn("freezing for a hand-off", "err", err)
-				continue
-			}
-			if err := sendSnapshot(ctl, g); err != nil {
-				log.Warn("sending the hand-off's snapshot", "err", err)
-				sess.Thaw()
-			}
-		case ipc.Thaw:
-			sess.Thaw()
-		case ipc.Revoke:
-			// The session is a newer binary's now (server.md §2.8 step
-			// 9): the client is told at once, as on any takeover (D26).
-			log.Info("the session was handed to a newer binary; revoking the client")
-			sess.Revoke()
 		default:
 			log.Error("unexpected control message", "type", fmt.Sprintf("%T", m))
 			cancel(fmt.Errorf("unexpected %T from the spawner", m))
 			return
 		}
 	}
-}
-
-// sendSnapshot sends g, the frozen screen, to the spawner as a diff from a
-// 0x0 grid in Snapshot fragments (server.md §2.8 step 4, §3.3).
-func sendSnapshot(ctl *ipc.Conn, g *screen.Grid) error {
-	diff := g.Diff(screen.NewGrid(0, 0))
-	if len(diff) == 0 || len(diff) > ipc.MaxSnapshot {
-		return fmt.Errorf("a snapshot of %d bytes", len(diff))
-	}
-	for len(diff) > 0 {
-		n := min(len(diff), ipc.MaxFragment-1)
-		if err := ctl.Send(ipc.Snapshot{More: n < len(diff), Fragment: diff[:n]}); err != nil {
-			return err
-		}
-		diff = diff[n:]
-	}
-	return nil
-}
-
-// seedScreen reads an adopted session's screen from the spawner's Seed
-// fragments, decodes it with the screen's validating decoder (the one the
-// client uses, fuzzed), and paints it into em (server.md §2.8 step 7).
-func seedScreen(ctl *ipc.Conn, em emu.Emulator, cols, rows int) error {
-	ctl.File().SetReadDeadline(time.Now().Add(T3))
-	defer ctl.File().SetReadDeadline(time.Time{})
-	var diff []byte
-	for {
-		m, err := ctl.Recv()
-		if err != nil {
-			return fmt.Errorf("waiting for Seed: %w", err)
-		}
-		seed, ok := m.(ipc.Seed)
-		if !ok {
-			return fmt.Errorf("the spawner sent %T, not Seed", m)
-		}
-		if len(diff)+len(seed.Fragment) > screen.MaxDiff {
-			return fmt.Errorf("a seed over %d bytes", screen.MaxDiff)
-		}
-		diff = append(diff, seed.Fragment...)
-		if !seed.More {
-			break
-		}
-	}
-	g := screen.NewGrid(0, 0)
-	if err := g.Apply(diff); err != nil {
-		return err
-	}
-	if c, r := g.Size(); c != cols || r != rows {
-		return fmt.Errorf("a seed of %dx%d for a %dx%d session", c, r, cols, rows)
-	}
-	em.Write(paint(g))
-	// The paint asks nothing, so there is nothing to answer; whatever the
-	// emulator says goes nowhere near the pty.
-	em.TakeReplies()
-	return nil
 }
 
 // defaultInit is Init's colours and budget: slice 1's ClientLine carries no
@@ -372,11 +288,7 @@ type ptyTerminal struct{ master *os.File }
 func (t ptyTerminal) Read(p []byte) (int, error)  { return t.master.Read(p) }
 func (t ptyTerminal) Write(p []byte) (int, error) { return t.master.Write(p) }
 func (t ptyTerminal) Close() error                { return t.master.Close() }
-
-// SetReadDeadline wakes a blocked Read: Freeze's (server.md §2.8). The
-// master is the poller's, so this is a timer, not a system call.
-func (t ptyTerminal) SetReadDeadline(d time.Time) error { return t.master.SetReadDeadline(d) }
-func (t ptyTerminal) EchoOff() (bool, error)            { return pty.EchoOff(t.master) }
+func (t ptyTerminal) EchoOff() (bool, error)      { return pty.EchoOff(t.master) }
 func (t ptyTerminal) Resize(cols, rows int) error {
 	return pty.SetSize(t.master, pty.Size{Cols: cols, Rows: rows})
 }
@@ -400,4 +312,3 @@ func printableASCII(s string, max int) string {
 var _ = [1]struct{}{}[ipc.MaxCols-screen.MaxCols]
 var _ = [1]struct{}{}[ipc.MaxRows-screen.MaxRows]
 var _ = [1]struct{}{}[ipc.MaxScrollbackCells/10-emu.DefaultScrollbackCells]
-var _ = [1]struct{}{}[ipc.MaxSnapshot-screen.MaxDiff]

@@ -48,7 +48,6 @@ func TestASessionSaysItIsEndingBeforeItClosesTheEmulator(t *testing.T) {
 		Listener: transport.Listen(udp, handshake.NewCredentials(nil), nil),
 		Terminal: ptyTerminal{master},
 		Emulator: em,
-		Adopted:  true, // no wait for a first client
 		Ending: func(err error) {
 			calls.Add(1)
 			closedWhenEnding.Store(em.closed.Load())

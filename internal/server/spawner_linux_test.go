@@ -43,8 +43,6 @@ func fakeServe(role string) int {
 		err = RunEmu(ctx, os.NewFile(3, "ipc"), log)
 	case "proto":
 		err = fakeProto(os.NewFile(3, "ipc"))
-	case "adopter-dies":
-		err = adopterDies(os.NewFile(3, "ipc"))
 	default:
 		err = fmt.Errorf("unknown role %q", role)
 	}

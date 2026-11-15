@@ -36,9 +36,7 @@ func NewConn(f *os.File, self, peer Peer) (*Conn, error) {
 	}
 	return &Conn{
 		f: f, raw: raw, self: self, peer: peer,
-		// The end that connected to an attach socket (Launcher) may be
-		// sent HandoffState's fds (server.md §2.8).
-		recvmsg: self == Spawner || self == Launcher || (self == Proto && peer == Spawner),
+		recvmsg: self == Spawner || (self == Proto && peer == Spawner),
 		// One more than the largest message, so one that fills the buffer
 		// is known to be too long rather than cut.
 		buf: make([]byte, MaxMessage+1),
@@ -82,8 +80,8 @@ func CheckSeqpacket(fd int) error {
 }
 
 // Send sends m, with its fds attached if it carries any. Only the spawner
-// and the launcher (Adopt) send fds, and with sendmsg; everything else is
-// one write(2), which is all proto's and emu's policies allow.
+// sends fds, and with sendmsg; everything else is one write(2), which is
+// all proto's and emu's policies allow.
 func (c *Conn) Send(m Message) error {
 	r := routes[m.typ()]
 	if r.from != c.self || r.to != c.peer {

@@ -211,9 +211,9 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	if sent := <-got; !bytes.Equal(sent, want) {
 		t.Errorf("the spawner got %q, not the line as resume:SID", sent)
 	}
-	// The session is v0, the client and the launcher v1, and neither is
-	// a release version, so there is no order and no upgrade: the
-	// session is attached as it is, never refused for its version (D8 V1).
+	// The session is v0, the client and the launcher v1: the session is
+	// attached as it is, run by its own binary, never refused for its
+	// version (D8 V1).
 	sessionVersion.Store("v0")
 	out, errs, err = run(auto)
 	if err != nil || out != string(answer) {

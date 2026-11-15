@@ -86,18 +86,13 @@ func (s *spawner) serveResume(f *os.File) error {
 		}
 		return nil
 	}
-	if req, ok := m.(ipc.HandoffRequest); ok {
-		// A newer binary asks for the session (server.md §2.8).
-		f.SetReadDeadline(time.Time{})
-		return s.serveHandoff(conn, f, req)
-	}
 	refuse := func(err error) error {
 		conn.Send(ipc.Failed{Text: printableASCII(err.Error(), ipc.MaxFailed)})
 		return err
 	}
 	msg, ok := m.(ipc.ClientLine)
 	if !ok {
-		ipc.CloseFiles(m) // an Adopt, which only a new spawner's B carries
+		ipc.CloseFiles(m) // whatever fds it carried (server.md §3.1)
 		return refuse(fmt.Errorf("the launcher sent %T", m))
 	}
 	cl, err := checkResumeLine(msg.Line, s.sid)
@@ -237,26 +232,13 @@ func (s *spawner) holdFor(cred, requester [8]byte, hasRequester bool) {
 // serveAgent accepts on the agent socket until it closes, and passes each
 // connection from this user to the supervision loop for proto, which relays
 // it as an opaque byte stream, as ssh -A does (D28). Only a closed socket
-// ends it. A deadline is pauseAgent's: it parks until the loop says to
-// carry on, accepting nothing meanwhile.
+// ends it.
 func (s *spawner) serveAgent() {
 	for {
 		f, err := s.agent.Accept()
 		switch {
 		case errors.Is(err, os.ErrClosed):
 			return
-		case errors.Is(err, os.ErrDeadlineExceeded):
-			select {
-			case s.agentParked <- struct{}{}:
-			case <-s.agentDone:
-				return
-			}
-			select {
-			case <-s.agentGo:
-			case <-s.agentDone:
-				return
-			}
-			continue
 		case errors.Is(err, errForeignPeer):
 			s.log.Warn("refused an agent-socket connection", "err", err)
 			continue
@@ -282,45 +264,4 @@ func (s *spawner) passAgentConn(f *os.File) {
 	if err != nil {
 		s.log.Warn("handing proto an agent connection", "err", err)
 	}
-}
-
-// pauseAgent stops the agent socket's accepting for a live upgrade, from
-// before proto is frozen (server.md §2.8 step 3). A connection made from
-// then on waits in the listen backlog, which the socket keeps as it
-// passes to the newer spawner, and that spawner accepts it once it has
-// the session (step 10); if the hand-off fails, resumeAgent accepts it
-// here. Otherwise a connection accepted during the freeze would go to
-// a proto that is about to go, or be closed with the old spawner's part,
-// and an ssh-add the shell ran meanwhile would fail. A connection
-// serveAgent had already accepted is proto's as before. It returns once
-// serveAgent has stopped, so nothing is accepted after it.
-func (s *spawner) pauseAgent() {
-	if s.agent == nil || s.agentPaused {
-		return
-	}
-	// The deadline is this process's alone: it wakes serveAgent's Accept
-	// and leaves the shared listening socket as it is.
-	if err := s.agent.f.SetReadDeadline(time.Unix(1, 0)); err != nil {
-		s.log.Warn("pausing the agent socket for the hand-off", "err", err)
-		return
-	}
-	s.agentPaused = true
-	for {
-		select {
-		case <-s.agentParked:
-			return
-		case f := <-s.agentConns:
-			s.passAgentConn(f)
-		}
-	}
-}
-
-// resumeAgent undoes pauseAgent when the hand-off is not taken.
-func (s *spawner) resumeAgent() {
-	if !s.agentPaused {
-		return
-	}
-	s.agentPaused = false
-	s.agent.f.SetReadDeadline(time.Time{})
-	s.agentGo <- struct{}{}
 }

@@ -279,44 +279,6 @@ func TestARevocationWhileDiallingIsTheReconnectsOwnUnlessItFails(t *testing.T) {
 	}
 }
 
-// A live upgrade revokes the old link while the try that brought it about
-// is still in its ssh login, before it dials (server.md §2.8 step 9): that
-// is the try's own doing too, so the try goes on and its new link is used,
-// even though the old link was heard after the try began. Had the try
-// failed, it would be a takeover, with nobody named.
-func TestARevocationDuringTheTrysLoginIsALiveUpgradeUnlessTheTryFails(t *testing.T) {
-	for _, succeed := range []bool{true, false} {
-		synctest.Test(t, func(t *testing.T) {
-			first, next := newFakeLink(), newFakeLink()
-			h := startReconnectingFrom(t, first, func(dial func() bool) (link[*fakeInput, *fakeScreen], error) {
-				first.hear() // heard once more before the revocation
-				first.events <- transport.Revoked{By: transport.UnknownTaker, At: time.Now()}
-				synctest.Wait()
-				if !dial() {
-					return link[*fakeInput, *fakeScreen]{}, errAbandoned
-				}
-				if !succeed {
-					return link[*fakeInput, *fakeScreen]{}, errors.New("no reply over UDP")
-				}
-				return next.link(2), nil
-			})
-			time.Sleep(ReconnectAfter + time.Second)
-			synctest.Wait()
-			var taken *TakenOverError
-			select {
-			case err := <-h.done:
-				if succeed || !errors.As(err, &taken) || taken.By.IsValid() {
-					t.Errorf("succeed %v: ended with %v", succeed, err)
-				}
-			default:
-				if !succeed {
-					t.Error("a revocation and a failed try left the loop running")
-				}
-			}
-		})
-	}
-}
-
 // While R3 tries and fails, the screen says so, with how long the server
 // has been silent and why the last try failed, and says nothing again
 // once the server is heard: a reconnect that cannot succeed (a host that

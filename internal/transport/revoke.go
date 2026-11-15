@@ -18,10 +18,9 @@ type tombstone struct {
 
 // revoke cuts the connection off because by took the session over at at
 // (D26): it seals revokedCopies REVOKED frames, sends the first, erases
-// every key, and leaves a tombstone holding the rest; with burst, it sends
-// every copy at once, for a listener about to close that will keep no
-// tombstone. The caller holds the lock.
-func (c *Conn) revoke(l *Listener, by netip.AddrPort, at time.Time, burst bool) {
+// every key, and leaves a tombstone holding the rest. The caller holds the
+// lock.
+func (c *Conn) revoke(l *Listener, by netip.AddrPort, at time.Time) {
 	if c.closed || c.cur == nil {
 		return
 	}
@@ -34,14 +33,10 @@ func (c *Conn) revoke(l *Listener, by netip.AddrPort, at time.Time, burst bool) 
 		}
 		ts.copies = append(ts.copies, pkt)
 	}
-	sent := min(len(ts.copies), 1)
-	if burst {
-		sent = len(ts.copies)
+	if len(ts.copies) > 0 {
+		c.route(ts.copies[0])
+		ts.copies = ts.copies[1:]
 	}
-	for _, pkt := range ts.copies[:sent] {
-		c.route(pkt)
-	}
-	ts.copies = ts.copies[sent:]
 	for _, ks := range []*keyset{c.cur, c.next, c.prev} {
 		if ks != nil {
 			ts.indices = append(ts.indices, ks.local)
@@ -54,24 +49,6 @@ func (c *Conn) revoke(l *Listener, by netip.AddrPort, at time.Time, burst bool) 
 	l.tombs[ts] = struct{}{}
 	l.wakeHousekeeping()
 	l.e.log.Info("revoked a connection: another client took the session over", "by", by)
-}
-
-// UnknownTaker is REVOKED's address when the server does not know who took
-// the session over (transport.md §8.3): a live upgrade hands the session to
-// another process before the new client has connected (server.md §2.8).
-var UnknownTaker = netip.AddrPortFrom(netip.IPv4Unspecified(), 0)
-
-// RevokeAll revokes every connection, by an UnknownTaker now: the session
-// has gone to another process (server.md §2.8). The listener is about to
-// close, so every sealed copy goes at once rather than wait in a
-// tombstone nobody will keep.
-func (l *Listener) RevokeAll() {
-	l.e.lock()
-	defer l.e.unlock()
-	now := time.Now()
-	for c := range l.conns {
-		c.revoke(l, UnknownTaker, now, true)
-	}
 }
 
 // answer sends the next sealed copy to the source of a packet that arrived
