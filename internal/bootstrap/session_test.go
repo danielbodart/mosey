@@ -151,6 +151,10 @@ func TestOnlyABatchBootstrapRunsSSHInBatchMode(t *testing.T) {
 		if has != batch {
 			t.Errorf("batch %v: argv %q", batch, cmd.Args)
 		}
+		detached := cmd.SysProcAttr != nil && cmd.SysProcAttr.Setsid
+		if detached != batch {
+			t.Errorf("batch %v: in a session of its own: %v", batch, detached)
+		}
 	}
 }
 

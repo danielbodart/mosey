@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -315,6 +317,18 @@ func (s SSH) command(ctx context.Context, c Config, remote string) *exec.Cmd {
 	args = append(args, "--", s.Destination, remote)
 	cmd := exec.CommandContext(ctx, s.program(), args...)
 	cmd.WaitDelay = time.Second
+	if s.Batch {
+		// BatchMode stops ssh's own questions but not those of what ssh
+		// starts: a ProxyCommand, a ProxyJump's inner ssh (which does not
+		// inherit -o BatchMode) or a KnownHostsCommand could open
+		// /dev/tty and draw over the screen or read keystrokes (§9.2.2).
+		// In a session of its own ssh has no controlling terminal, so
+		// nothing it starts can find one; and SSH_ASKPASS_REQUIRE=never
+		// (ssh(1)) stops any of them asking through a graphical askpass
+		// instead.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		cmd.Env = append(os.Environ(), "SSH_ASKPASS_REQUIRE=never")
+	}
 	return cmd
 }
 

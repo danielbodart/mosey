@@ -1611,7 +1611,12 @@ own session, in the background, and never asks the user anything:
   `attach = resume:SID:CREDID`: SID the session's, CREDID the credential
   its current transport was made with. Its ssh runs with `-o
   BatchMode=yes` (ssh_config(5): no passphrase, password or host-key
-  question is put; a login that would need one fails), its stderr goes to
+  question is put; a login that would need one fails), in a session of its
+  own (`setsid`), so neither it nor anything it starts (a `ProxyCommand`,
+  a `ProxyJump`'s inner ssh, which does not inherit `-o BatchMode`, a
+  `KnownHostsCommand`) has the user's terminal to open as `/dev/tty`, and
+  with `SSH_ASKPASS_REQUIRE=never` (ssh(1)), so none asks through a
+  graphical askpass instead; its stderr goes to
   the client's log and never to the screen, nothing is copied over
   (§4.7.1), and the agent's bind is captured afresh, so the new transport
   forwards this login's agent. A try that has not dialled within
