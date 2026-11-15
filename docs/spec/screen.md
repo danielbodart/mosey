@@ -77,7 +77,8 @@ fuzzed decoder protects both boundaries.
 | `Title` | the window title (OSC 0/2), allow-listed | TITLE |
 | `Modes` | input modes the client mirrors (§8.5) | MODES |
 | `EchoOff` | `!ECHO && ICANON` on the pty [D12] | ECHO |
-| `EchoAck` | newest keystroke the program has had for 50 ms [paper §3.2]; used by prediction, a later slice | ECHO |
+| `EchoAck` | newest input event the program has had for 50 ms [paper §3.2]; prediction's judgement (`prediction.md` §3) | ECHO |
+| `EchoApplied` | how many input events the pty had taken when the screen was taken; prediction's *R* (`prediction.md` §3) | ECHO |
 | `Clipboard` | latest OSC 52 write, `{Seq, Data}` [D27] | CLIP |
 | `Bell` | count of bells | BELL |
 | `Rebuilt` (§11 item 1) | `{Seq, Reason}`: the emulator was rebuilt [D23] | REBUILT |
@@ -149,7 +150,7 @@ the change.
 
 - **`Equal`** compares everything listed in §2.1:
   - the size and every cell's `Text`, `Width` and `Style`;
-  - `Cursor`, `Title`, `Modes`, `EchoOff` and `EchoAck`;
+  - `Cursor`, `Title`, `Modes`, `EchoOff`, `EchoAck` and `EchoApplied`;
   - `Clipboard.Seq` together with `Clipboard.Data` (byte-equal);
   - `Bell`, `Rebuilt` and `InputConsumed`.
 
@@ -446,7 +447,7 @@ State during a diff:
 | `0x52` | CURSTYLE | `byte` | 2, once |
 | `0x53` | TITLE | string (0..`MaxTitle`) | 2, once |
 | `0x54` | MODES | 4 bytes | 2, once |
-| `0x55` | ECHO | `byte flags`, `varint ack` | 2, once |
+| `0x55` | ECHO | `byte flags`, `varint ack`, `varint ahead` | 2, once |
 | `0x56` | BELL | `varint count` | 2, once |
 | `0x57` | CLIP | `varint seq`, string (0..`MaxClipboard`) | 2, once |
 | `0x58` | REBUILT | `varint seq`, `byte reason` | 2, once |
@@ -661,10 +662,14 @@ HERE.
 - `m3` = `KittyKeyboard` (0–31).
 - Replaces `Modes` whole.
 
-**ECHO `flags ack`.**
+**ECHO `flags ack ahead`.**
 
 - `flags` bit 0 is `EchoOff`. Bits 1–7 must be 0.
-- Sets `EchoOff` and `EchoAck = ack`.
+- `ack + ahead` must not overflow a `uint64`.
+- Sets `EchoOff`, `EchoAck = ack` and `EchoApplied = ack + ahead`. Sending
+  the difference keeps the usual case to one byte and makes
+  `EchoAck ≤ EchoApplied` hold by construction (`prediction.md` §3). The
+  encoder emits ECHO when any of the three differs from `from`.
 
 **BELL `count`.** Sets `Bell = count`. It is absolute, so it is idempotent
 under SSP's resends. The client rings when the count goes up (§8.4).
@@ -1054,7 +1059,7 @@ creates it at the clamped size and sets it up as follows. Each item is
     representation and give `MouseX10` (§11 item 10).
 - **Clipboard and bell.** `Clipboard` and `Bell` are emu's own counters
   (§4.4). proto renumbers them (§7.3).
-- **Left zero.** `EchoOff`, `EchoAck`, `Rebuilt` and `InputConsumed` are
+- **Left zero.** `EchoOff`, `EchoAck`, `EchoApplied`, `Rebuilt` and `InputConsumed` are
   always zero in emu's grid. They are proto's.
 
 ### 6.3 Behaviour
@@ -1112,7 +1117,8 @@ creates it at the clamped size and sets it up as follows. Each item is
 3. proto applies each `Update` with `Grid.Apply` to its mirror of emu's
    grid. This is the same validating decoder the client uses.
 4. proto copies the mirror into the Grid it gives SSP, with proto's own
-   fields set: `EchoOff` from `pty.EchoOff`, `EchoAck`, the renumbered
+   fields set: `EchoOff` from `pty.EchoOff`, `EchoAck` and `EchoApplied`
+   (`prediction.md` §3.1), the renumbered
    counters and `Rebuilt`.
 5. SSP diffs that Grid from the client's acknowledged version [paper
    §2.3, D11].
@@ -1311,8 +1317,8 @@ later slice may draw a banner. The first grid only records it.
 **Defence in depth.** Before writing a title, link, cluster or clipboard,
 the renderer checks it again with the `Valid*` functions. It drops
 anything that fails, and never writes it. `Apply` already guarantees
-this, but a Grid can also be built by client code (prediction, in a later
-slice), not only by `Apply`.
+this, but a Grid can also be built by client code (prediction's overlay,
+`prediction.md` §11.3), not only by `Apply`.
 
 ### 8.5 Mirroring input modes
 

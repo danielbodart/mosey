@@ -3,13 +3,14 @@
 What mosey protects, from whom, where the trust boundaries are, what each
 mechanism defends, and which risks are accepted. It grows with the slices
 (PLAN §6.2). This version covers **slice 1**, **resume**, **auto-upload**,
-**chaff** and **agent forwarding**: `mosey host` gives an interactive login
+**chaff**, **agent forwarding** and **prediction**: `mosey host` gives an interactive login
 shell end to end, copying mosey to the host first if it has none (D7,
 §4.13), with the user's ssh-agent forwarded over a typed channel and
 OpenSSH's bind replayed when their ssh config forwards it (D25, §4.15), and
 `mosey -r host` takes a running session over from wherever the user can SSH
 from (§4.5); while the user types, both ends send cover traffic on a fixed
-tick (§4.14). There is no prediction yet. Items marked **[later]** describe the
+tick (§4.14); and the client draws its guess at the echo of easy keys at
+once, judged against the server's cells (§4.16). Items marked **[later]** describe the
 slice that brings them, so slice 1 reserves the right hooks and claims
 nothing it doesn't do.
 
@@ -830,6 +831,45 @@ same evidence they would under `ssh -A`.
   implements the hand-off (`agent.md` §4.3): fail closed, never a silent
   plain forward past an attester the host relies on.
 
+
+### 4.16 Prediction (D12) — A2, T2, T5
+
+`prediction.md`. The client draws its guess at the echo of easy keys
+before the server answers, and takes it back when the server's screen
+disagrees.
+
+- **It keeps D9.** Every predicted cell comes from bytes the local user
+  typed, and is judged against structured cells; the client parses no
+  remote output to predict. A predicted cell is a printable code point
+  that passed `screen.ValidCluster`, or a blank, and the overlay keeps
+  every grid invariant (`prediction.md` §11.3), so the renderer's
+  defence in depth (§4.7) sees nothing new.
+- **Passwords (A2).** While the newest frame says the pty has echo off
+  (`!ECHO && ICANON`), the client predicts nothing and logs nothing, and
+  entering it drops every prediction. Only a typed glyph that changes its
+  cell confirms an epoch, never a backspace, so a masked prompt in raw
+  mode (fish's `read -s`) doesn't reveal the next key either. Measured on
+  S6's traces: 0 of 555 password keys drawn, against 3–11 when backspace
+  could confirm [M S6 §5]. A password field a raw-mode TUI draws itself
+  without a mask is protected only by the epoch rules, statistically.
+- **Keystroke timing (T2).** The paper's echo-ack-only frame, sent about
+  50 ms after a key that changed nothing on screen, would name each key at
+  a no-echo prompt from the server's side. The server does not advance
+  its echo ack while echo is off, and the new `EchoApplied` field rides
+  only on frames that were going anyway, so at a password prompt the
+  server sends nothing per key (`prediction.md` §3.1, §13.2; R2).
+- **A hostile server (T5).** It can make predictions wrong (they come
+  down when refuted), keep them tentative (never drawn), or confirm an
+  epoch by drawing what the user typed. It can't make the client draw
+  anything the user did not type: the echo ack and applied count are
+  clamped to what the client sent, and every structure the engine keeps
+  is bounded (`prediction.md` §12). `FuzzEngine` checks the bounds, the
+  grid invariants of every overlay, and that nothing unconfirmed or typed
+  under echo-off is drawn.
+- **Memory.** The input log keeps at most the last 512 key events of up
+  to 64 bytes each, never those typed while echo was off, and zeroes each
+  entry as it leaves.
+
 ## 5. Accepted residual risks
 
 Each is a deliberate trade, with the reason and the evidence. Revisit only
@@ -955,12 +995,14 @@ target (architecture §6).
 | No agent channel without a negotiated agent | `transport`, `e2e` | CHANNEL frames on a terminal-only connection never reach `RecvChannel`; `-a` and `ForwardAgent no` give the shell no `SSH_AUTH_SOCK` |
 | The agent sees what `ssh -A` shows it | `e2e` | through a throwaway sshd: remote `ssh-add -l`; an onward ssh signed through the forwarded agent; `ssh-add -h A -h 'A>B'` allows the hop and a key for another hop does not; an extension message passes byte for byte |
 | Agent streams stay within their bounds | `channel` | `FuzzParseFrame`, `FuzzMux`; streams under seeded loss, duplication and reordering in virtual time; windows and limits |
+| Prediction draws nothing unconfirmed, nothing under echo-off, and stays bounded against any server | `predict` | `FuzzEngine`; `TestEchoOffStopsPredictionEvenWhenTheScreenMatches`; `TestBackspaceNeverConfirmsAnEpoch`; the replay of S6's traces shows 0 password keys drawn |
+| No echo-ack-only frame while echo is off | `server` | `TestNoEchoAckFramesWhileEchoIsOff`: keys at an echo-off pty change neither `EchoAck` nor `EchoApplied` |
 
 ## 9. Later slices
 
 | Slice | What it adds to this model |
 |---|---|
-| Prediction (D12) | Passwords: the echo-off bit and informative-keystroke confirmation showed 0 of 555 password keys [M S6 §5]; no echo-ack-only frames while echo is off. The input log is zeroed on eviction and nothing is logged while echo is off [S6 §9] |
+| Prediction (D12) | Landed: §4.16 |
 | Chaff (D11, O10) | Landed: §4.14, R2 |
 | Auto-upload (D7) | Landed: §4.13. Still to come: signed releases (`bootstrap.md` §14 C) |
 | Provenance (D28) | `Conn.HandshakeHash` exposed for quoin-attest; the hand-off to the attester in the spawner (today: refused while an attester is present, §4.15); mosey never signs |

@@ -641,8 +641,8 @@ proto, per E:                            emu:
 - proto treats as a **violation** (§5.3): an emu message while Idle, a
   second `Replies`, `Replies` after an `Update` fragment, a diff over
   `screen.MaxDiff`, a diff `Grid.Apply` refuses, a complete diff after
-  which the mirror has a non-zero `EchoOff`, `EchoAck` or `Rebuilt`
-  (fields that are proto's alone, `screen.md` §7.3; the check runs on a
+  which the mirror has a non-zero `EchoOff`, `EchoAck`, `EchoApplied`
+  or `Rebuilt` (fields that are proto's alone, `screen.md` §7.3; the check runs on a
   copy, so the mirror is unchanged when it fails), a `Replies` whose
   bytes do not split under §4.1, or any malformed message. Tokens over
   the request's reply allowance (§4.1) are not a violation: they are
@@ -1278,7 +1278,10 @@ is its threads of control and the ordering rules the IPC imposes:
   `Emulator.Write`, then reads `Terminal.EchoOff` (`TCGETS`) and hands
   `Emulator.Snapshot` plus the echo-off bit to SSP. It never writes the
   pty (§4.3). EIO on the read means every slave fd has closed.
-- **pty writer**: keystrokes first, then replies (§4.3).
+- **pty writer**: keystrokes first, then replies (§4.3). It keeps the
+  echo ack's write log, reads the echo-off bit before each key event and
+  publishes if it changed, and arms the 50 ms echo-ack publish
+  (`prediction.md` §3.1).
 - **resize**: a resize from the client is clamped (`screen.ClampSize`),
   given to `Emulator.Resize` **first**, then to the pty with
   `TIOCSWINSZ`. The kernel's SIGWINCH makes the program repaint at the
@@ -1548,7 +1551,8 @@ it lands, with the duration and exec count in the commit message.
   the reply queue; a silent emu produces `KillEmu{deadline}` after T4
   (synctest).
 - §3.5's proto-owned fields: a fake emu whose complete diff sets
-  `EchoOff`, `EchoAck` or `Rebuilt` gets `KillEmu{violation}`, and the
+  `EchoOff`, `EchoAck`, `EchoApplied` or `Rebuilt` gets
+  `KillEmu{violation}`, and the
   mirror is unchanged.
 - Restart: a fake spawner sends a new `EmuLink`; the mirror is reset
   to a blank grid at the current size and the new emu's first diff

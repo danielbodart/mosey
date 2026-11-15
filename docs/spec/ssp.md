@@ -1134,10 +1134,11 @@ What SSP needs from it:
 - **Latest state only.** `Diff(from)` turns `from` into the receiver
   directly, whatever happened in between [P §2.3].
 - **Echo ack** (`Grid.EchoAck`, for prediction, D12): the newest
-  keystroke the program has had for at least **50 ms** [P §3.2]. A change
-  to it is a state change and costs a frame about 50 ms after typing
-  stops [P §3.2]. Slice 1 has no prediction and may leave it at 0; the
-  field travels from slice 1 so the format does not change.
+  input event the program has had for at least **50 ms** [P §3.2]. A
+  change to it is a state change and costs a frame about 50 ms after
+  typing stops [P §3.2]. With it, `Grid.EchoApplied`: how many events the
+  pty had taken when the screen was taken, which never causes a frame of
+  its own. `prediction.md` §3.1 has the server's rules for both.
 - **Input consumed** (`Grid.InputConsumed`, a `uint64` stream index):
   the input flow control of §10.1. Unlike the echo ack it is maintained
   from slice 1, because the client's reading depends on it. `screen.md`

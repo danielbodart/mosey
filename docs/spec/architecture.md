@@ -32,6 +32,7 @@ decision wins.
 | `internal/userinput` | The client's SSP object: keystrokes and resizes | proto, client | **ssp** | `userinput.go` |
 | `internal/screen` | The server's SSP object: `Grid`, the diff format (O11), the D9/D27 allow-list, the D23 bounds | proto, emu, client | **screen** | `doc.go`, `grid.go`, `diff.go`, `allow.go` |
 | `internal/render` | Draws a `Grid` on the local terminal with escape sequences it writes itself | client | **screen** | `render.go` |
+| `internal/predict` | Predictive local echo (D12, `prediction.md`): epochs over the user's own keystrokes, judged against the server's cells, drawn as an overlay on the client's copy of the screen | client | **prediction** | `doc.go`, `engine.go`, `keys.go`, `width.go`, `overlay.go` |
 | `internal/emu` | The `Emulator` interface and the tuios.dev/vt implementation (D23) | emu (tests: in process) | **screen** | `emu.go`, `tuios.go` |
 | `internal/pty` | Open ptys, set their size, read the echo-off bit, start the login shell (D14) | spawner, proto | **server-proc** | `pty.go`, `pty_linux.go`, `pty_other.go` |
 | `internal/sandbox` | Landlock deny-all, seccomp cBPF compiler and per-role policies, `DUMPABLE=0` (D22) | proto, emu | **server-proc** | `doc.go`, `sandbox.go`, `bpf.go`, `sandbox_linux.go`, `sandbox_other.go` |
@@ -71,6 +72,7 @@ agent                           (channel, handshake) -- the bind, capture, pin, 
 userinput                       ()              -- satisfies ssp.State structurally
 screen                          ()              -- satisfies ssp.State structurally
 render                          (screen)
+predict                         (screen)        -- never parses remote output (D9)
 emu                             (screen)
 bootstrap                       ()              -- raw bytes; never handshake
 pty, sandbox, ipc, nocore       ()
@@ -277,13 +279,18 @@ Transport adds `DialOffering`, `Conn.Channels`, `Conn.Carries`,
 throttles on (`ssp.md` §10.1).
 
 **screen.** `*Grid` is an `ssp.State[*Grid]`: cells (`Cell`: cluster,
-width, `Style`), `Cursor`, `Title`, `Modes`, and the reserved `EchoOff`
-(D12), `EchoAck` (prediction), `Clipboard` (OSC 52 write, D27) and `Bell`,
+width, `Style`), `Cursor`, `Title`, `Modes`, and prediction's `EchoOff`
+(D12), `EchoAck` and `EchoApplied` (`prediction.md` §3), `Clipboard` (OSC 52 write, D27) and `Bell`,
 plus `InputConsumed` (the client's input flow control, `ssp.md` §10.1)
 and `Rebuilt` (D23's rebuild notice). `allow.go` is the allow-list and the
 bounds. `render.Renderer` (`Render`, `Invalidate`, `Enter`, `Leave`,
 `Resize` for the local size it clips to) draws a Grid, with the
 `Capabilities` from `render.FromEnv`, the locale's UTF-8 among them.
+
+**predict.** `New(Config{Mode})`, then `Key(n, bytes)` for each key event
+(n is the stream's `Len()` after it), `Skip(n)` for a resize, `Frame(g)`
+for each new screen, `SetRTT(srtt)`, and `Overlay(g)`, the grid the
+renderer draws (`prediction.md` §16).
 
 **emu.** `Emulator` (`Write`, `Resize`, `Snapshot(*screen.Grid)`,
 `TakeReplies`, `Close`), and `Holder` (`Held`) for one that holds its
@@ -365,7 +372,7 @@ Errors are `*Failure`,
 | Exclusive attach (D26) | **built** (resume slice) on `Hello.Attach`, `transport.KindRevoked`, the `Revoked` event |
 | Agent channel (D15, D25) | **built** (agent slice): `agent.md`, `internal/channel`, `internal/agent`, `Conn.SendChannel`/`RecvChannel`, `ipc.AgentConn`, `server.md` §2.7 |
 | Provenance (D28) | `Conn.HandshakeHash` |
-| Prediction (D12) | `Grid.EchoOff`, `Grid.EchoAck`, `userinput.Stream.Len` |
+| Prediction (D12) | **built** (prediction slice): `prediction.md`, `internal/predict`, `Grid.EchoApplied`, the server's echo ack (`prediction.md` §3.1), `mosey -predict` |
 | Chaff (D11, O10) | **built** (chaff slice): `ssp.Chaffer`, `transport.Conn.SendChaff` and `ChaffArrived`, `ssp.md` §9.1 |
 | Auto-upload (D7) | Landed: `bootstrap.md` §4.7, `internal/install` |
 | NAT traversal (O6) | packet type `0x05` |
