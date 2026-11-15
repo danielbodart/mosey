@@ -356,7 +356,8 @@ socket. `agent.md` §4 is its full rule; in short:
   `ClientLine` says `agent=yes`; `SOCK_STREAM`, bound at
   `agent.sock.tmp`, listening, mode 0600, renamed to `agent.sock`;
 - the shell's `SSH_AUTH_SOCK` (§2.5) is its path;
-- each accepted connection's `SO_PEERCRED` uid must be the spawner's own;
+- each accepted connection's `SO_PEERCRED` uid must be the spawner's own
+  or root's, as sshd's forwarded socket admits root (`agent.md` §4.1);
   then, unless the host has an attester (`agent.md` §4.3, which refuses
   the connection until the hand-off exists), the spawner sends it to
   proto as `AgentConn` (§3.3) and closes its own copy;

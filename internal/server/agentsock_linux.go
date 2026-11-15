@@ -48,9 +48,18 @@ func listenAgent(dir string) (*agentListener, error) {
 	return l, nil
 }
 
-// Accept returns the next connection from a process of this user, in
+// agentPeers are the uids whose processes may use the agent socket: this
+// user's, and root's (agent.md §4.1). sshd's forwarded socket is guarded
+// by its file mode alone, which root passes, so `sudo -E ssh-add -l`
+// works under ssh -A; root can reach this user's processes and files
+// anyway, so refusing it would protect nothing. The attach socket stays
+// this user's alone (samePeer): a resume is not something root does on
+// the user's behalf.
+func agentPeers() []int { return []int{os.Getuid(), 0} }
+
+// Accept returns the next connection from a process of this user or root, in
 // non-blocking mode so proto can wrap it inside its sandbox (ipc.AgentConn).
-// One from another uid is closed unanswered and reported as
+// One from any other uid is closed unanswered and reported as
 // errForeignPeer. Once closed it returns an error that is os.ErrClosed.
 func (l *agentListener) Accept() (*os.File, error) {
 	raw, err := l.f.SyscallConn()
@@ -72,7 +81,7 @@ func (l *agentListener) Accept() (*os.File, error) {
 		}
 		return nil, err
 	}
-	if err := samePeer(nfd); err != nil {
+	if err := peerIs(nfd, agentPeers()...); err != nil {
 		unix.Close(nfd)
 		return nil, err
 	}

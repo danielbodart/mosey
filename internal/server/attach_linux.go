@@ -125,16 +125,19 @@ func (l *attachListener) Close() error {
 // runs as this user [S1 resume.go].
 func samePeer(fd int) error { return peerIs(fd, os.Getuid()) }
 
-// peerIs is samePeer for a given uid, so a test can play another user.
-func peerIs(fd, uid int) error {
+// peerIs is samePeer for a given set of uids, so a test can play another
+// user.
+func peerIs(fd int, uids ...int) error {
 	cred, err := unix.GetsockoptUcred(fd, unix.SOL_SOCKET, unix.SO_PEERCRED)
 	if err != nil {
 		return fmt.Errorf("reading the peer's credentials: %w", err)
 	}
-	if int(cred.Uid) != uid {
-		return fmt.Errorf("%w (uid %d)", errForeignPeer, cred.Uid)
+	for _, uid := range uids {
+		if int(cred.Uid) == uid {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("%w (uid %d)", errForeignPeer, cred.Uid)
 }
 
 // connectRetry is how often dialAttach tries again to connect to a

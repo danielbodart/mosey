@@ -96,3 +96,29 @@ func TestTeardownRemovesTheDirectoryOfASessionWithTheAgent(t *testing.T) {
 		t.Errorf("the session's directory outlived teardown: %v", err)
 	}
 }
+
+// The agent socket admits this user and root, as sshd's forwarded socket
+// does under ssh -A (its file mode is all that guards it, and root passes
+// that), so `sudo -E ssh-add -l` works; anyone else is refused
+// (agent.md §4.1, threat model R19).
+func TestTheAgentSocketAdmitsThisUserAndRootAndNoOneElse(t *testing.T) {
+	admits := map[int]bool{}
+	for _, uid := range agentPeers() {
+		admits[uid] = true
+	}
+	if !admits[os.Getuid()] || !admits[0] || len(admits) != 2 {
+		t.Errorf("the agent socket admits %v", agentPeers())
+	}
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fds[0])
+	defer unix.Close(fds[1])
+	if err := peerIs(fds[0], os.Getuid()+1, os.Getuid()); err != nil {
+		t.Errorf("any uid of the set is enough: %v", err)
+	}
+	if err := peerIs(fds[0], os.Getuid()+1, os.Getuid()+2); !errors.Is(err, errForeignPeer) {
+		t.Errorf("a uid outside the set: %v", err)
+	}
+}

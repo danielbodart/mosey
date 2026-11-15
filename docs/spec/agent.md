@@ -217,8 +217,12 @@ policy is unchanged.
   starts with no `SSH_AUTH_SOCK`, which is what `ssh` without `-A` gives.
 - `SOCK_STREAM`, mode 0600, in the 0700 directory; bound at
   `agent.sock.tmp`, listening, then renamed, as `attach.sock` is.
-- Every accepted connection's `SO_PEERCRED` uid must be the spawner's own,
-  or it is closed unanswered.
+- Every accepted connection's `SO_PEERCRED` uid must be the spawner's own
+  or root's (0), or it is closed unanswered. Root is let in because
+  sshd's forwarded socket admits it too (its file mode is all that guards
+  it), so `sudo -E ssh-add -l` works as under `ssh -A`; root can reach the
+  user's processes and files anyway [ssh]. The attach socket stays the
+  user's alone (`server.md` §2.6).
 - The spawner keeps nothing per connection: it accepts, checks the peer,
   sends the fd to proto and closes its own copy. The bound on live
   connections is proto's (§4.2); a connection proto refuses is closed by
