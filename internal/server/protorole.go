@@ -174,24 +174,54 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 		sess.Minted()
 		return nil
 	}
-	go readControl(ctl, em, sess, resume, cancel, log)
+	ctlDone := make(chan struct{})
+	go func() {
+		defer close(ctlDone)
+		readControl(ctl, em, sess, resume, cancel, log)
+	}()
+	// The session's end goes to the spawner while emu's socket is still
+	// open, and proto waits for the spawner to close C, the first step of
+	// its teardown, before letting emu go: otherwise emu, seeing its
+	// socket close, could exit before the spawner has read Exit, and the
+	// spawner would take that for a death and restart it (server.md
+	// §2.4: nothing emu does ends a session). Waiting for EOF also means
+	// the C reader is done before C closes here, so it never reads from a
+	// socket closed under it. T3 bounds the wait; the spawner kills proto
+	// T7 after closing C in any case.
+	sess.Ending = func(err error) {
+		exit, ok := exitFor(ctx, err)
+		if !ok {
+			return
+		}
+		if serr := ctl.Send(exit); serr != nil {
+			log.Warn("telling the spawner the session ended", "err", serr)
+			return
+		}
+		select {
+		case <-ctlDone:
+		case <-time.After(T3):
+			log.Warn("the spawner did not close the control socket after Exit")
+		}
+	}
 
-	err = sess.Run(ctx)
+	sess.Run(ctx)
 	sess.Listener.Close()
-	exit := ipc.Exit{Code: ipc.ShellExited}
+	return nil
+}
+
+// exitFor is the Exit that tells the spawner why the session ended, given
+// what Session.Run returned. There is none when the spawner itself ended
+// the session by closing C (server.md §7).
+func exitFor(ctx context.Context, err error) (ipc.Exit, bool) {
 	switch {
 	case err == nil:
+		return ipc.Exit{Code: ipc.ShellExited}, true
 	case errors.Is(err, ErrNoClient):
-		exit = ipc.Exit{Code: ipc.NoClient}
+		return ipc.Exit{Code: ipc.NoClient}, true
 	case errors.Is(context.Cause(ctx), errSpawnerGone):
-		return nil
-	default:
-		exit = ipc.Exit{Code: ipc.ExitError, Reason: printableASCII(err.Error(), ipc.MaxExitReason)}
+		return ipc.Exit{}, false
 	}
-	if serr := ctl.Send(exit); serr != nil {
-		log.Warn("telling the spawner the session ended", "err", serr)
-	}
-	return nil
+	return ipc.Exit{Code: ipc.ExitError, Reason: printableASCII(err.Error(), ipc.MaxExitReason)}, true
 }
 
 // errSpawnerGone is EOF on C: the spawner ends the session, so proto ends

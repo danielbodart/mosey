@@ -194,6 +194,14 @@ func (c *Conn) read() (n int, fds []int, err error) {
 		n, oobn, flags, _, rerr = unix.Recvmsg(int(fd), c.buf, oob, recvFlags)
 		return rerr != unix.EAGAIN
 	})
+	if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
+		// RawConn.Read fails on its own only for a deadline or a file
+		// closed under it, and reports the second as the poller's "use of
+		// closed file", which os.File.Read would have called os.ErrClosed.
+		// It is os.ErrClosed here too, so a reader whose Conn is closed
+		// by its own process sees IsEOF, not a fault.
+		return 0, nil, fmt.Errorf("ipc: receiving from %s: %w (%v)", c.peer, os.ErrClosed, err)
+	}
 	if err == nil {
 		err = rerr
 	}

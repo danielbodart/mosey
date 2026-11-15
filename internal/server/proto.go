@@ -105,6 +105,15 @@ type Session struct {
 	// upgrade (server.md §2.8): it has had clients, so it never ends for
 	// want of one (§2.4), only when its shell does.
 	Adopted bool
+	// Ending, if set, is called once with what Run will return, after the
+	// client has been told and before the session lets go of the
+	// emulator and the terminal. proto tells the spawner the session is
+	// over here and waits for its answer, so that emu's socket closing
+	// (which ends emu) never reaches the spawner before the session's
+	// end does: emu exiting is never a reason to end a session, and a
+	// spawner that heard it first would log a death and restart emu
+	// (server.md §2.4, §5.2).
+	Ending func(err error)
 
 	once      sync.Once
 	em        emu.Emulator
@@ -576,6 +585,10 @@ func (s *Session) Run(ctx context.Context) error {
 	if cur != nil {
 		s.drop(cur)
 	}
+	err := runResult(cause, parent)
+	if s.Ending != nil {
+		s.Ending(err)
+	}
 	// Release whatever is parked: the emulator (a Write waiting for emu),
 	// and the pty reader and writer (closing the master wakes the poller).
 	s.closeAll()
@@ -585,6 +598,11 @@ func (s *Session) Run(ctx context.Context) error {
 		s.echoTimer.Stop()
 	}
 	s.mu.Unlock()
+	return err
+}
+
+// runResult is what Run returns for why its context ended.
+func runResult(cause error, parent context.Context) error {
 	switch {
 	case errors.Is(cause, errShellExited):
 		return nil

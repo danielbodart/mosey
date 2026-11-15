@@ -211,6 +211,23 @@ func TestEOFWhenThePeerCloses(t *testing.T) {
 	}
 }
 
+// A Conn its own process closes is gone, not faulty, whichever way it
+// reads: proto closes C on its way out while its C reader may still be in
+// Recv (server.md §2.4).
+func TestRecvOnAConnClosedHereIsEOF(t *testing.T) {
+	for _, self := range []Peer{Proto, Emu} {
+		peer := Spawner
+		if self == Emu {
+			peer = Proto
+		}
+		_, c := pairOf(t, peer, self)
+		c.Close()
+		if _, err := c.Recv(); !errors.Is(err, os.ErrClosed) || !IsEOF(err) {
+			t.Errorf("%s from %s (recvmsg %v): %v", self, peer, c.recvmsg, err)
+		}
+	}
+}
+
 func TestADeadlineEndsAWaitingRecv(t *testing.T) {
 	_, emu := pairOf(t, Proto, Emu)
 	emu.File().SetReadDeadline(time.Now().Add(20 * time.Millisecond))
