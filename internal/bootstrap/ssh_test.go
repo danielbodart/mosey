@@ -107,7 +107,7 @@ func TestTheRemoteCommandExitsAsShSaysUnderEveryShell(t *testing.T) {
 			{"~/mosey", 0, "served --serve\n"},
 		} {
 			cmd := exec.Command(path, "-c", SSH{Server: c.server}.RemoteCommand())
-			cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin:/run/current-system/sw/bin"}
+			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath()}
 			cmd.Dir = home
 			out, err := cmd.Output()
 			if got := ExitStatus(err); got != c.status || string(out) != c.out {

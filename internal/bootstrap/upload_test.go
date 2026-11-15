@@ -214,6 +214,28 @@ func shells(t *testing.T) []string {
 	return found
 }
 
+// remotePath is the PATH the remote-command tests give their shells: the
+// usual system directories, as an ssh login would have, then this
+// process's own PATH. Nix's build sandbox has no /usr/bin or /bin
+// coreutils, only those on its PATH, so without that tail uname and mkdir
+// are missing there and the probe reads "unknown unknown".
+func remotePath(dirs ...string) string {
+	return strings.Join(append(dirs, "/usr/bin", "/bin", "/run/current-system/sw/bin", os.Getenv("PATH")), ":")
+}
+
+// needTools skips the test when the shell cannot find a command the
+// script under test runs, as the e2e tests skip without sshd.
+func needTools(t *testing.T, path string, tools ...string) {
+	t.Helper()
+	for _, tool := range tools {
+		cmd := exec.Command("/bin/sh", "-c", "command -v "+tool)
+		cmd.Env = []string{"PATH=" + path}
+		if cmd.Run() != nil {
+			t.Skipf("%s is not on %s", tool, path)
+		}
+	}
+}
+
 // writeMosey is a stand-in mosey that says it is version and, as the
 // launcher, says which it is and what it read on stdin.
 func writeMosey(t *testing.T, path, version, name string) {
@@ -232,6 +254,7 @@ func writeMosey(t *testing.T, path, version, name string) {
 // prints a ProbeLine that parses and exits 0 (§4.7.2).
 func TestTheProbeFindsThisVersionOrSaysWhatTheHostIs(t *testing.T) {
 	const v = "0.9.1+e2e"
+	needTools(t, remotePath(), "uname", "cat")
 	for _, shell := range shells(t) {
 		for _, c := range []struct {
 			name   string
@@ -285,7 +308,7 @@ func TestTheProbeFindsThisVersionOrSaysWhatTheHostIs(t *testing.T) {
 				continue
 			}
 			cmd := exec.Command(shell, "-c", SSH{Version: v}.RemoteCommand())
-			cmd.Env = []string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin:/run/current-system/sw/bin"}
+			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath(bin)}
 			cmd.Dir = home
 			cmd.Stdin = strings.NewReader("THE-LINE\n")
 			out, err := cmd.Output()
@@ -325,6 +348,7 @@ func keepsPath(shell, bin string) bool {
 // on its status, and removes the temporary file whatever happened
 // (§4.7.6).
 func TestTheUploadScriptRunsTheCopyAsItsInstaller(t *testing.T) {
+	needTools(t, remotePath(), "mkdir", "mktemp", "cat", "chmod", "rm")
 	for _, shell := range shells(t) {
 		for _, status := range []string{"0", "1"} {
 			home := t.TempDir()
@@ -332,7 +356,7 @@ func TestTheUploadScriptRunsTheCopyAsItsInstaller(t *testing.T) {
 			sum := sha256.Sum256(copy)
 			s := SSH{Version: "0.1.2", Destination: "far"}
 			cmd := exec.Command(shell, "-c", uploadCommand(s.Version, sum, int64(len(copy))))
-			cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin:/run/current-system/sw/bin"}
+			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath()}
 			cmd.Dir = home
 			cmd.Stdin = bytes.NewReader(copy)
 			out, err := cmd.CombinedOutput()
@@ -349,8 +373,10 @@ func TestTheUploadScriptRunsTheCopyAsItsInstaller(t *testing.T) {
 			if entries, _ := os.ReadDir(filepath.Join(home, ".cache", "mosey")); len(entries) != 0 {
 				t.Errorf("%s: left %v", filepath.Base(shell), entries)
 			}
-			if st, err := os.Stat(filepath.Join(home, ".cache", "mosey")); err != nil || st.Mode().Perm() != 0o700 {
-				t.Errorf("%s: ~/.cache/mosey is %v %v", filepath.Base(shell), st.Mode(), err)
+			if st, err := os.Stat(filepath.Join(home, ".cache", "mosey")); err != nil {
+				t.Errorf("%s: ~/.cache/mosey: %v", filepath.Base(shell), err)
+			} else if st.Mode().Perm() != 0o700 {
+				t.Errorf("%s: ~/.cache/mosey is %v", filepath.Base(shell), st.Mode())
 			}
 		}
 	}

@@ -57,7 +57,7 @@
         # Pinned rather than null, because there are dependencies
         # (DEPENDENCIES.md says why each is there). scripts/vendor-hash.sh
         # works it out again when go.sum moves.
-        vendorHash = "sha256-pPrEtMu/Rdfa4KhoOqoHna+qJ4jZvMCCpmAjdpPWys4=";
+        vendorHash = "sha256-rCMdmdTtz5Gm9LnvHaF9SsojytfIvKaqvvK3FKWyEwQ=";
 
         subPackages = [ "cmd/mosey" ];
 
