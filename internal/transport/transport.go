@@ -234,6 +234,12 @@ func (c *Conn) Recv(ctx context.Context) ([]byte, error) {
 // oldest.
 func (c *Conn) Events() <-chan Event { return c.events }
 
+// CredentialID is the id of the credential this connection was made
+// with, which the session's greeting names as its holder and R3's
+// reconnect names as its own (bootstrap.md §9.2). It is not secret: it is
+// in the clear in msg1 (transport.md §3.4).
+func (c *Conn) CredentialID() [8]byte { return c.cred }
+
 // Peer is the validated address packets go to: on the client, the
 // server's; on the server, the client's, or the zero AddrPort while none is
 // validated.

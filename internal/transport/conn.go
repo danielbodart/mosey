@@ -21,6 +21,10 @@ type Conn struct {
 
 	epoch uint64
 	sid   [16]byte
+	// cred is the id of the credential the connection was made with: on
+	// the server, the greeting's holder (bootstrap.md §9.2.1); on the
+	// client, what R3's reconnect names (§9.2.2).
+	cred [8]byte
 
 	// The key sets of transport.md §6.1, and the current epoch's root.
 	cur, next, prev *keyset

@@ -29,6 +29,11 @@ func TestAClientAndServerHandshakeAndExchangePayloads(t *testing.T) {
 		if s.creds.Live() != 0 {
 			t.Error("confirmation left the credential live")
 		}
+		// Both ends name the credential they were made with, which the
+		// greeting's holder and R3's reconnect compare (bootstrap.md §9.2).
+		if client.CredentialID() != server.CredentialID() || client.CredentialID() == ([8]byte{}) {
+			t.Errorf("credential ids %x and %x", client.CredentialID(), server.CredentialID())
+		}
 	})
 }
 

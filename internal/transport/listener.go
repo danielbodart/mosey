@@ -316,7 +316,7 @@ func (l *Listener) confirm(pc *pending, pkt []byte, from netip.AddrPort) {
 	l.collectErased()
 
 	c := newConn(l.e, true, pc.ks, &pc.root)
-	c.listener, c.sid = l, pc.p.SessionID
+	c.listener, c.sid, c.cred = l, pc.p.SessionID, pc.p.CredentialID
 	// What both offered: the server's answer in msg2 (transport.md §3.6).
 	for _, ch := range pc.p.Hello.Channels {
 		if serverHello.Supports(ch) {

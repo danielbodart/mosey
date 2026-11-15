@@ -66,6 +66,7 @@ func DialOffering(ctx context.Context, pc net.PacketConn, addr netip.AddrPort, c
 	e := newEngine(pc, log)
 	c := newConn(e, false, nil, &[32]byte{})
 	c.serverAddr = unmap(addr)
+	c.cred = cred.ID
 
 	e.lock()
 	idxC := e.table.reserve()
