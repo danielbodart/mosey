@@ -21,8 +21,9 @@ to the code.
 | [D] | decided here, with the reason beside it |
 | Dn | PLAN.md §2 decision |
 
-Where this spec differs from S6's draft (`docs/spikes/s6-prediction/
-prediction-spec.md`), §15 says how and why.
+Where this spec differs from S6's draft
+([`docs/spikes/s6-prediction/prediction-spec.md`](../spikes/s6-prediction/prediction-spec.md)),
+[§15](#15-where-this-differs-from-s6s-draft) says how and why.
 
 ## 1. What it is for, and the rule it keeps
 
