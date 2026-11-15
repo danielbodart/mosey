@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"log/slog"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -46,17 +48,28 @@ func validVar(v string) bool {
 // spawner's own, which is sshd's, so SSH_CONNECTION, USER, PATH and the
 // rest are as an ssh login has them, except that SSH_TTY names no tty of
 // this session, sshd's SSH_AUTH_SOCK dies with the bootstrap connection,
-// TERM is the emulator's, and COLORTERM and the locale come from the
-// client.
-func shellEnv(base []string, from map[string]string, agentSock string, log *slog.Logger) []string {
+// TERM is the emulator's, COLORTERM and the locale come from the client,
+// and hop, if not "", goes first on PATH (hopDir).
+func shellEnv(base []string, from map[string]string, agentSock, hop string, log *slog.Logger) []string {
 	var env []string
+	path, hasPath := "", false
 	for _, kv := range base {
-		name, _, _ := strings.Cut(kv, "=")
+		name, value, _ := strings.Cut(kv, "=")
 		switch {
 		case name == "SSH_TTY", name == "SSH_AUTH_SOCK", clientVars[name]:
 			continue
+		case name == "PATH" && hop != "":
+			// The last PATH wins, as getenv would read it.
+			path, hasPath = value, true
+			continue
 		}
 		env = append(env, kv)
+	}
+	if hop != "" {
+		if hasPath && path != "" {
+			hop += ":" + path
+		}
+		env = append(env, "PATH="+hop)
 	}
 	env = append(env, "TERM="+shellTERM)
 	if agentSock != "" {
@@ -81,6 +94,48 @@ func shellEnv(base []string, from map[string]string, agentSock string, log *slog
 		env = append(env, name+"="+value)
 	}
 	return env
+}
+
+// hopDir is the directory to put first on the session shell's PATH, or ""
+// (D7, bootstrap.md §4.7.9, server.md §2.5): ~/.cache/mosey when this
+// server is the cached copy D7 installed, the same file as exe (the
+// running binary: /proc/self/exe), and env's PATH has no mosey of its own,
+// so `mosey otherhost` in the session finds the copy. A server Nix, a
+// package or -remote put anywhere else, or a host whose PATH already has a
+// mosey, changes nothing.
+func hopDir(env []string, exe string) string {
+	home, path := lookup(env, "HOME"), lookup(env, "PATH")
+	if !filepath.IsAbs(home) {
+		return ""
+	}
+	dir := filepath.Join(home, ".cache", "mosey")
+	cached, err := os.Stat(filepath.Join(dir, "mosey"))
+	if err != nil {
+		return ""
+	}
+	self, err := os.Stat(exe)
+	if err != nil || !os.SameFile(self, cached) {
+		return ""
+	}
+	for _, d := range filepath.SplitList(path) {
+		if d == "" || !filepath.IsAbs(d) {
+			continue
+		}
+		if st, err := os.Stat(filepath.Join(d, "mosey")); err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o111 != 0 {
+			return ""
+		}
+	}
+	return dir
+}
+
+// lookup is name's value in env, the last one if it is there twice.
+func lookup(env []string, name string) string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if k, v, ok := strings.Cut(env[i], "="); ok && k == name {
+			return v
+		}
+	}
+	return ""
 }
 
 // addresses decides, from SSH_CONNECTION ("client port server port"), the

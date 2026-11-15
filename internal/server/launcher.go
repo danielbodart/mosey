@@ -151,7 +151,9 @@ func (l *Launcher) start(ctx context.Context, line []byte, cl bootstrap.ClientLi
 	}
 	defer conn.Close()
 	cmd := &exec.Cmd{
-		Path: l.Self,
+		// This very image, not whatever is at l.Self's path by now
+		// (server.md §2.3).
+		Path: execPath(l.Self),
 		Args: []string{l.Self, "--serve=spawner"},
 		Env:  l.Env,
 		// No copy of ssh's pipes, or ssh would wait for the spawner: stdio

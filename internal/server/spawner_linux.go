@@ -75,6 +75,19 @@ type SpawnerConfig struct {
 	prlimit func(pid int) error
 }
 
+// execPath is the file a role is started from (server.md §2.3): the
+// spawner's own image, /proc/self/exe, never self's path, which D7 may
+// have replaced since with a build of another protocol
+// (bootstrap.md §4.7.7). self stays argv[0], so ps and the tests still
+// see which file it came from. An empty self, a test's way of saying
+// there is nothing to start, stays empty.
+func execPath(self string) string {
+	if self == "" {
+		return ""
+	}
+	return "/proc/self/exe"
+}
+
 // RunSpawner is `mosey --serve=spawner`: the unsandboxed role that binds
 // UDP, opens the pty, starts the login shell and the sandboxed roles, and
 // supervises them for the life of the session (server.md §2). ipcFD is
@@ -442,7 +455,7 @@ func (s *spawner) startRole(role string, sock *os.File, gen uint32) (*child, err
 	}
 	defer w.Close()
 	cmd := &exec.Cmd{
-		Path: s.cfg.Self,
+		Path: execPath(s.cfg.Self),
 		Args: []string{s.cfg.Self, "--serve=" + role},
 		// Nothing a confused role could follow: no HOME, no SSH_AUTH_SOCK,
 		// no bus address (S4).
@@ -600,7 +613,11 @@ func (s *spawner) startShell(env map[string]string, agentSock string, slave *os.
 	if passwd != nil {
 		passwd.Close()
 	}
-	proc, err := pty.Shell{Path: path, Dir: home, Env: shellEnv(s.cfg.Environ, env, agentSock, s.log)}.Start(slave)
+	hop := hopDir(s.cfg.Environ, "/proc/self/exe")
+	if hop != "" {
+		s.log.Info("the server is the cached copy: putting it on the shell's PATH", "dir", hop)
+	}
+	proc, err := pty.Shell{Path: path, Dir: home, Env: shellEnv(s.cfg.Environ, env, agentSock, hop, s.log)}.Start(slave)
 	if err != nil {
 		return fmt.Errorf("starting the shell %s: %w", path, err)
 	}

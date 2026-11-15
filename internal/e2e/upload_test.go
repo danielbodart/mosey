@@ -233,14 +233,18 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 	t.Cleanup(func() { killExe(s.cached()) })
 	state := t.TempDir()
 
-	t.Run("a host with no mosey asks, copies, and the session runs from the copy", func(t *testing.T) {
+	t.Run("a host with no mosey asks, copies, and the session hops on from the copy", func(t *testing.T) {
 		c := startUploadClient(t, s, a, state)
 		waitFor(t, "the question", func() bool { return strings.Contains(c.screen.String(), "[y/N]") })
 		if !strings.Contains(c.screen.String(), "mosey-e2e has no mosey. Copy this one (linux/") {
 			t.Errorf("asked %q", c.screen.String())
 		}
 		c.master.Write([]byte("y\r"))
-		c.session(t, state)
+		c.up(t)
+		// D7: the session's shell finds the copy first on its PATH, so
+		// `mosey otherhost` works in it (bootstrap.md §4.7.9).
+		c.answers(t, `[ "$(command -v mosey)" = "$HOME/.cache/mosey/mosey" ] && echo hop-$((40+2))`, "hop-42")
+		c.end(t, state)
 		if !sameFile(t, s.cached(), a) {
 			t.Fatal("the cache does not hold the client's own file")
 		}

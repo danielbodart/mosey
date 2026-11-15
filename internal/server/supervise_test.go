@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -218,7 +220,7 @@ func TestTheShellGetsSSHDsEnvironmentWithTheClientsLocale(t *testing.T) {
 		"TERM": "alacritty", "COLORTERM": "truecolor", "LANG": "en_GB.UTF-8",
 		"LC_ALL": "bad value with spaces", "EVIL": "x",
 	}
-	env := shellEnv(base, from, "", discardLog())
+	env := shellEnv(base, from, "", "", discardLog())
 	got := map[string]string{}
 	for _, kv := range env {
 		k, v, _ := strings.Cut(kv, "=")
@@ -281,7 +283,7 @@ func s(a netip.Addr) string {
 // §2.5, §2.7).
 func TestTheShellsAgentIsMoseysSocketWhenTheAgentIsForwarded(t *testing.T) {
 	base := []string{"PATH=/bin", "SSH_AUTH_SOCK=/tmp/ssh-x/agent.1"}
-	env := shellEnv(base, nil, "/run/user/1/mosey/abc/agent.sock", discardLog())
+	env := shellEnv(base, nil, "/run/user/1/mosey/abc/agent.sock", "", discardLog())
 	var socks []string
 	for _, kv := range env {
 		if v, ok := strings.CutPrefix(kv, "SSH_AUTH_SOCK="); ok {
@@ -290,5 +292,59 @@ func TestTheShellsAgentIsMoseysSocketWhenTheAgentIsForwarded(t *testing.T) {
 	}
 	if len(socks) != 1 || socks[0] != "/run/user/1/mosey/abc/agent.sock" {
 		t.Errorf("SSH_AUTH_SOCK %q", socks)
+	}
+}
+
+// A session served from D7's cached copy, on a host with no mosey on
+// PATH, gets ~/.cache/mosey first on its shell's PATH, so `mosey
+// otherhost` in it finds the copy (bootstrap.md §4.7.9, server.md §2.5);
+// any other server, or a PATH with a mosey of its own, leaves PATH alone.
+func TestTheCachedCopyGoesFirstOnTheShellsPathOnlyWhenNeeded(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".cache", "mosey")
+	cached := filepath.Join(dir, "mosey")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cached, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := filepath.Join(t.TempDir(), "mosey")
+	if err := os.WriteFile(elsewhere, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bare, withMosey := t.TempDir(), filepath.Dir(elsewhere)
+	env := func(path string) []string { return []string{"HOME=" + home, "PATH=" + path} }
+
+	if got := hopDir(env(bare+":/nonexistent"), cached); got != dir {
+		t.Errorf("the cached copy on a bare PATH: %q, want %q", got, dir)
+	}
+	if got := hopDir(env(withMosey+":"+bare), cached); got != "" {
+		t.Errorf("a PATH with a mosey of its own: %q", got)
+	}
+	if got := hopDir(env(bare), elsewhere); got != "" {
+		t.Errorf("a server that is not the cached copy: %q", got)
+	}
+	if got := hopDir([]string{"PATH=" + bare}, cached); got != "" {
+		t.Errorf("no HOME: %q", got)
+	}
+
+	for _, c := range []struct {
+		base []string
+		want string
+	}{
+		{[]string{"PATH=/usr/bin:/bin", "HOME=" + home}, dir + ":/usr/bin:/bin"},
+		{[]string{"PATH=/old", "PATH=/usr/bin", "HOME=" + home}, dir + ":/usr/bin"},
+		{[]string{"HOME=" + home}, dir},
+	} {
+		var paths []string
+		for _, kv := range shellEnv(c.base, nil, "", dir, discardLog()) {
+			if p, ok := strings.CutPrefix(kv, "PATH="); ok {
+				paths = append(paths, p)
+			}
+		}
+		if len(paths) != 1 || paths[0] != c.want {
+			t.Errorf("%q: PATH %q, want %q", c.base, paths, c.want)
+		}
 	}
 }

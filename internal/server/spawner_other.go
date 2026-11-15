@@ -25,3 +25,7 @@ type SpawnerConfig struct {
 func RunSpawner(context.Context, *os.File, SpawnerConfig) error {
 	return errors.ErrUnsupported
 }
+
+// execPath is self: there is no server here yet (D22), and no
+// /proc/self/exe to start roles from.
+func execPath(self string) string { return self }
