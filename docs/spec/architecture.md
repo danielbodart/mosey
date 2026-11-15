@@ -259,8 +259,9 @@ While the user types, the client's SSP endpoint sends only on a fixed tick,
 one datagram each 20 ms tick, a CHAFF frame (`Conn.SendChaff`) when it has nothing
 else, and keeps on for a random 1–2 s after the last key; the server
 chaffs on a tick grid of its own for a second after each CHAFF it gets
-(`ChaffArrived`). Every SSP datagram is padded (§4, `ssp.md` §9.2), so an
-on-path observer cannot tell which ticks carried keys. `ssp.md` §9.1 says
+(`ChaffArrived`). Every SSP datagram is padded (§4, `ssp.md` §9.2), and
+while chaffing both ends pad every datagram, chaff included, to 64 bytes
+of sealed plaintext (`ssp.md` §9.1.5), so an on-path observer cannot tell which ticks carried keys. `ssp.md` §9.1 says
 what it hides and what it does not.
 
 ## 4. Sizes on the wire (D5)

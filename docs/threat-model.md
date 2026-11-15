@@ -754,9 +754,11 @@ and Tian, USENIX Security 2001).
   until a random 1–2 s after the last; the server while the client's
   CHAFF frames arrive, and 1 s after. A chaffing end sends exactly one
   datagram per 20 ms tick of its own grid: SSP data if due, an owed ack
-  early, else a CHAFF frame of its padding floor (40 B client, 64 B
-  server), so keys, echoes, echo acks, acks and chaff are one size on one
-  grid. The server's half is not optional: with the client alone
+  early, else a CHAFF frame of its chaff size (64 B at both ends), and
+  every datagram is padded to at least that size while chaffing, so keys,
+  echoes, echo acks, acks and chaff are one size on one grid. The client's
+  64 B while chaffing is Dan's decision of 2026-11-15 (`ssp.md` §9.1.5);
+  when not typing its floor is 40 B (§9.2). The server's half is not optional: with the client alone
   chaffing, the server's echoes named every key [M `ssp.md` §9.1.5].
 - **What it hides, measured** [M `ssp.md` §9.1.5]: an observer at both
   ends, knowing the tick and the floors, picks out 2.0% of keys on the
@@ -767,10 +769,13 @@ and Tian, USENIX Security 2001).
   over the floor (10.3% on the LTE driving trace, whose outages hold keys
   for seconds). On those paths hiding was the same at every tick from 10
   to 50 ms. **With netsim's per-packet delay spikes left in** it is much
-  worse and depends on the tick: at 20 ms, 9% of keys exposed on the
-  hotel, 50% on the train and 33% on HSR, nearly all by size; at 50 ms,
-  6%, 25% and 17%. Whether real paths behave like the spiky or the calm
-  profiles is not settled, so the tick is provisional (O10).
+  worse and depends on the tick: at 20 ms with a 40 B client chaff size,
+  9% of keys exposed on the hotel, 50% on the train and 33% on HSR,
+  nearly all by size; at 50 ms, 6%, 25% and 17%. With the 64 B client
+  chaff size in force since 2026-11-15 the same 20 ms runs exposed 2.2%,
+  6.8% and 4.0% (8.3% on the LTE trace), for 35% more client bytes while
+  typing [M `ssp.md` §9.1.5]. Whether real paths behave like the spiky or
+  the calm profiles is not settled; Dan closed O10 at 20 ms regardless.
 - **What an active attacker adds** (T3). By dropping or delaying the
   client's packets for a while, a T3 can hold keys unacknowledged so they
   pile up into datagrams over the floor, which stand out by size: it can
@@ -895,8 +900,8 @@ with Dan.
 
 | # | Risk | Who | Why it is accepted | Mitigation in place / planned |
 |---|---|---|---|---|
-| **R1** | **Compression length side channel** (CRIME/BREACH class). AEAD hides content, not length. Output the attacker influences (a log line, chat, a web page in a terminal browser) compressed in the same frame as a secret on screen lets an on-path observer test guesses by datagram size | T2 + T4 together | D24: compression is always on. Mosh 1.4.0 compresses every update with no padding [M S5 mosh-compression]. Flate cuts screen bytes to 0.35x [M S5 §8] | Per frame, never across frames. **The acknowledged screen is never a preset dictionary**: it puts the whole screen in the compressor's window, so the secret need not even be in the changed cells, and it is the leakiest variant [S5 §8]. Padding and dictionary (O12) are decided in `ssp.md` §9.2: no dictionary ever, and every SSP datagram padded on its whole sealed plaintext to at least 64 bytes from the server and 40 from the client (`ssp.md` §9.2), with Padmé (PURBs, PoPETs 2019) above and the D5 limit as a cap. That keeps 88% of flate's saving and makes every keystroke echo, ack and heartbeat from the server one size [M S5 padding.md]. Padding blunts the leak and does not close it: an attacker can still add filler to push a frame across a Padmé boundary and count samples, at most 8 bits per frame up to 64 KiB [M S5 padding.md]. That residual leak is accepted, owned by **ssp**; timing is chaff's (O10). A frame under 32 B never compressed smaller, so small frames go raw [M S5 §8] |
-| **R2** | **Keystroke timing, what chaff leaves.** Chaff (§4.14) hides which ticks carry keys within a run of typing; an on-path observer still sees when a run starts, when it ends to within 1–2 s, gaps longer than that, and keys whose datagram grows past the floor because earlier keys are unacknowledged (2.0–5.0% of keys on the LAN and spike-free profiles, 12.3% on the LTE trace, 9–50% on the hotel, train and HSR profiles with netsim's per-packet spikes; a T3 can cause pile-ups at will by stalling the path) | T2, T3 | Making every client datagram as big as the largest pile-up costs on every tick; 40 B is the §9.2 floor (O12), and a 64 B floor while chaffing cut the LTE trace's 10.3% by size to 6.2% for 35% more client bytes [M `ssp.md` §9.1.5] | 20 ms tick both ways, random linger, server chaff, early acks on the tick so keys are acknowledged sooner; no echo-ack-only server frames while the pty has echo off (D11; prediction slice), so the end of a run does not name the last key of a password |
+| **R1** | **Compression length side channel** (CRIME/BREACH class). AEAD hides content, not length. Output the attacker influences (a log line, chat, a web page in a terminal browser) compressed in the same frame as a secret on screen lets an on-path observer test guesses by datagram size | T2 + T4 together | D24: compression is always on. Mosh 1.4.0 compresses every update with no padding [M S5 mosh-compression]. Flate cuts screen bytes to 0.35x [M S5 §8] | Per frame, never across frames. **The acknowledged screen is never a preset dictionary**: it puts the whole screen in the compressor's window, so the secret need not even be in the changed cells, and it is the leakiest variant [S5 §8]. Padding and dictionary (O12) are decided in `ssp.md` §9.2: no dictionary ever, and every SSP datagram padded on its whole sealed plaintext to at least 64 bytes from the server and 40 from the client, 64 while it chaffs (`ssp.md` §9.2), with Padmé (PURBs, PoPETs 2019) above and the D5 limit as a cap. That keeps 88% of flate's saving and makes every keystroke echo, ack and heartbeat from the server one size [M S5 padding.md]. Padding blunts the leak and does not close it: an attacker can still add filler to push a frame across a Padmé boundary and count samples, at most 8 bits per frame up to 64 KiB [M S5 padding.md]. That residual leak is accepted, owned by **ssp**; timing is chaff's (O10). A frame under 32 B never compressed smaller, so small frames go raw [M S5 §8] |
+| **R2** | **Keystroke timing, what chaff leaves.** Chaff (§4.14) hides which ticks carry keys within a run of typing; an on-path observer still sees when a run starts, when it ends to within 1–2 s, gaps longer than that, and keys whose datagram grows past the floor because earlier keys are unacknowledged (2.0–5.0% of keys on the LAN and spike-free profiles as measured with a 40 B client chaff size; with the 64 B now in force, 8.3% on the LTE trace and 2–7% on the hotel, train and HSR profiles with netsim's per-packet spikes, which exposed 9–50% at 40 B; a T3 can cause pile-ups at will by stalling the path) | T2, T3 | Making every client datagram as big as the largest pile-up costs on every tick. The client pads to 64 B while chaffing (Dan, 2026-11-15; 40 B otherwise, §9.2), which cut the train profile's exposure from 50% to 7% and the LTE trace's 10.3% by size to 6.2%, for 35% more client bytes while typing [M `ssp.md` §9.1.5]; a larger size costs more on every tick for pile-ups that are rarer still | 20 ms tick both ways, random linger, server chaff, early acks on the tick so keys are acknowledged sooner; no echo-ack-only server frames while the pty has echo off (D11; prediction slice), so the end of a run does not name the last key of a password |
 | **R3** | **No rekey on idleness** (D20). The keys in memory after a burst of typing protected that burst until the next 120 s rekey | T8 | Decided in D20 | Exposure is bounded by `RekeyAfter` + `KeepPrevFor` (≤ 130 s) **provided the 120 s timer runs on epoch age and fires on any send, SSP heartbeats included** (`transport.md` §6.2 does this); and, whatever an on-path attacker does to rekey frames, by `RejectAfterTime` + `KeepPrevFor` (≤ 190 s), because no data is sealed under keys older than 180 s (§4.3) |
 | **R4** | **A compromised proto is the user.** It holds the pty master and the keys | T7 | Inherent: whatever reads the network and writes the pty can type into the shell (S4 red team: every layout with a key holder) | proto's pre-auth surface is a fixed header, a map lookup and the standard library's AEAD; everything else needs the keys. Every parser is fuzzed. Landlock + seccomp stop the likely Go bug class (confused deputy) from reaching files, sockets or other processes directly. It can still `sendto` anywhere from its socket: seccomp cannot filter `sockaddr` |
 | **R5** | **A stolen client keeps the session until the user resumes it** from somewhere else, and a detached session lives until its shell exits: there is no idle timeout | T8 | A session is resumable for as long as its shell runs (`bootstrap.md` §9.3), as Mosh's server and tmux are | Rekey bounds what stolen keys reveal of the past (§4.3). Any resume revokes the stolen client and wipes its keys (§4.5, D26) |
@@ -962,8 +967,8 @@ Y = can, . = cannot, given the mechanisms above.
 | Largest input diff (the server's `MaxRemoteBytes`) | 128 KiB | [`ssp.md` §10.1] |
 | Fragments per instruction / instructions in reassembly / bytes held | `ceil(MaxInstruction / Chunk)` (≤ 65535) / 4 / `MaxPartialBytes = 2 × MaxFragments × Chunk` | [`ssp.md` §5, derived] |
 | Compression | always attempted; sent stored when DEFLATE is not shorter (in practice every frame under 32 B) | [`ssp.md` §4.1, M S5 §8] |
-| Chaff tick / linger / size | 20 ms both ways / client 1–2 s random, server 1 s / 40 B client, 64 B server | [M `ssp.md` §9.1.5, O10] / [D] / [D, the §9.2 floors] |
-| Length padding | every SSP datagram: sealed plaintext at least 64 B (server) / 40 B (client), Padmé above, capped at the D5 limit | [`ssp.md` §9.2, D (O12), M S5 padding.md] |
+| Chaff tick / linger / size | 20 ms both ways / client 1–2 s random, server 1 s / 64 B both ways | [D (O10, Dan 2026-11-15), M `ssp.md` §9.1.5] / [D] / [D, Dan 2026-11-15, from the train profile, `ssp.md` §9.1.5] |
+| Length padding | every SSP datagram: sealed plaintext at least 64 B (server) / 40 B (client; 64 B while it chaffs), Padmé above, capped at the D5 limit | [`ssp.md` §9.2, D (O12), M S5 padding.md] |
 | Window clamp | 1000 × 500 | [D23, S2] |
 | Scrollback | min(10000, 1e6 / cols) lines | [D23, M S2 memworst] |
 | emu memory | 512 MiB `MemoryMax`, `MemorySwapMax` 0 (cgroup, where available); 1 GiB `RLIMIT_DATA` (always) | [D23, S2; `server.md` §6.3] |
@@ -1006,7 +1011,7 @@ target (architecture §6).
 | emu under its sandbox cannot open, connect, exec, create sockets or signal another process | `sandbox` (linux) | a red-team battery run inside the sandboxed role, as S4's, plus `tgkill` at a sibling and `fcntl(F_SETOWN)` + `O_ASYNC`, with Landlock's signal scope off |
 | A resume revokes the old client and erases its keys; the old client exits saying who took over; nothing secret is reused | `e2e`, `server` | netsim: a client vanishes and another attaches with a new credential for the same SID; the first gets `Revoked`; real sshd: `mosey -r` takes over and the first exits 3 |
 | Only the user reaches the attach socket | `server` | the directory checks refuse group/other bits, a foreign owner and a symlink; a foreign uid is closed unanswered |
-| Chaff hides keys within a run, in both directions, and idle costs nothing | `ssp` | one client datagram per 20 ms tick, all 40 B, ending 1–2 s after the last key; the server on its own grid at 64 B; an idle session sends no chaff; on every netsim profile the server's datagrams name at most 5% of keys and the LAN's wire at most 5% (`TestChaffHidesKeysOnEveryProfile`) |
+| Chaff hides keys within a run, in both directions, and idle costs nothing | `ssp` | one client datagram per 20 ms tick, all 64 B, ending 1–2 s after the last key; the server on its own grid at 64 B; an idle session sends no chaff; on every netsim profile the server's datagrams name at most 5% of keys and the LAN's wire at most 5% (`TestChaffHidesKeysOnEveryProfile`) |
 | End to end under every netsim profile | `e2e` | client and server sessions in process; real binaries over loopback through a throwaway sshd |
 | Only ssh's own bind is captured | `agent` | `FuzzCapture`; the unit list of `agent.md` §7: another pid, a bind as frame 2, no forwarding flag, a bad signature, a second connection, a byte after the answer, the deadline |
 | The bind is pinned to known_hosts | `agent` | plain, hashed, `[host]:port`, alias, `@revoked` and CA-only entries |

@@ -6,8 +6,8 @@ amended by PLAN D11 and D24 and by what spike S5 measured, and it fixes
 our own wire format. Nothing here comes from Mosh's source code, which no
 one working on mosey reads (PLAN §4).
 
-Owner: **ssp**. Status: slice 1, plus chaff (§9.1; its tick, O10, is
-provisional, §9.1.5). A
+Owner: **ssp**. Status: slice 1, plus chaff (§9.1; its tick and sizes,
+O10, are Dan's decision of 2026-11-15, §9.1.5). A
 change to anything marked as a wire format or a constant is a change to
 this file first, then to the code.
 
@@ -685,7 +685,7 @@ one due (a burst of fragments, §5).
 |---|---|---|
 | Starts or extends | on every `Set` that changes `pending` (a key or a resize; §10.1) | on every CHAFF frame from the client |
 | Until | at least `now + L`, `L` drawn afresh, uniformly from [1 s, 2 s), on each input | at least `now + 1 s` |
-| Chaff size (sealed plaintext) | 40, its floor `F` (§9.2) | 64, its floor `F` |
+| Chaff size (sealed plaintext) | 64, above its floor `F` of 40 (§9.2) [D, Dan 2026-11-15] | 64, its floor `F` |
 
 - **Starting.** An endpoint that was not chaffing starts its grid at
   `now`: the input that starts the mode goes at once, as the first key
@@ -695,7 +695,11 @@ one due (a burst of fragments, §5).
   ack is owed (`ackDue` set, even if not yet reached), the ack goes now:
   the delayed ack exists to save a datagram, and one goes this tick
   regardless [D]. If still nothing is queued, one CHAFF frame goes, of the
-  side's chaff size. Every SSP datagram is padded by §9.2 as always.
+  side's chaff size. Every SSP datagram is padded by §9.2 as always, and
+  while chaffing to at least the side's chaff size, so a keystroke, an ack
+  and a chaff frame from the client are all 64 bytes on the tick grid, as
+  the server's echoes, acks and chaff are. When the mode ends the client
+  goes back to its floor of 40.
 - **Between ticks** the endpoint receives as usual and sends nothing. A
   key typed, a screen change, an ack or retransmission falling due between
   ticks waits for the next tick, which is at most `T` away.
@@ -794,8 +798,8 @@ minute of the typing session (the keys plus 3 s), not of idle time, which
 costs nothing.
 
 *The observer* sits at both ends, so sees exact send times and sizes, and
-knows `T` and both floors. It marks a datagram as standing out unless it
-is its side's floor in size and both its neighbours in its direction are
+knows `T` and both chaff sizes. It marks a datagram as standing out unless
+it is its side's chaff size and both its neighbours in its direction are
 exactly `T` away. A key is **exposed** if the client datagram that first
 carried it stands out, or the server datagram that first carried its echo
 does. Without chaff every key is exposed both ways, which is the leak
@@ -870,7 +874,7 @@ table above already is the profile as defined:
   `T` to the median echo, a little more on paths where SSP's frame
   interval also binds.
 
-*Why 20 ms, provisionally.* On the calm profiles hiding is the same at
+*Why 20 ms.* On the calm profiles hiding is the same at
 every candidate, so there the choice is latency against bytes. 20 ms is SSP's own minimum frame interval, the
 50 Hz cap [P §2.3 fn. 1], so a chaffing end never sends faster than SSP is
 already allowed to send data, and it is OpenSSH's default. It adds about
@@ -883,7 +887,10 @@ datagrams and 410 kB a minute both ways while typing (7 kB/s, 55 kbit/s),
 is paid only while typing: an idle session sends no chaff
 (`TestAnIdleSessionSendsNoChaff`). If netsim's spike model is right, this
 reasoning is wrong for spiky paths, where 50 ms dominates 20 ms on both
-hiding and latency; O10 stays open until that is settled.
+hiding and latency. Dan closed O10 on 2026-11-15 at 20 ms all the same:
+whether the spike model is right is a measurement still to make, not a
+reason to hold the decision, and the 64-byte client chaff size (below)
+takes away most of what the spiky profiles exposed by size.
 
 *What the measurement does not settle.*
 
@@ -899,17 +906,23 @@ hiding and latency; O10 stays open until that is settled.
   it: a time-based spike model in netsim (a spike delays whatever is in
   the queue while it lasts, not a share of packets), and a black-box
   check on a real lossy path (listed in Review notes). Until one has, the
-  tick is provisional (O10 open).
-- **The client's chaff size** stays at its §9.2 floor, 40 [D]. Raising the
-  client's floor to 64 while chaffing exposed fewer keys by size (train
-  calm 1.9 → 1.3%, lte 10.3 → 6.2%) for 35% more client bytes; it is not
-  done, since O12 fixed 40 and most of the gain is on paths whose outages
-  hold keys for seconds. On the spiky profiles as defined, where nearly
-  all exposure is by size, a 64-byte client floor cut it far more (train
-  50 → 7%, hsr 33 → 4%) at the same latency, so if the spike model holds,
-  the client's chaff size matters more than the tick. The knob is
-  `chaffing.size`, and the measurement keeps the rows (`client 48 B`,
-  `client 64 B`).
+  per-packet model is unconfirmed; the tick stays 20 ms regardless (O10,
+  closed by Dan on 2026-11-15).
+- **The client's chaff size is 64** [D: Dan's decision of 2026-11-15,
+  made from the measured train profile]. While chaffing, every client
+  datagram, chaff and keystroke alike, is padded to at least 64 bytes of
+  sealed plaintext, as the server's already are. On the `train` profile as
+  defined, where nearly all exposure is by size, it cut the keys exposed
+  by size from 50% to 7% (hsr 33 → 4%) at the same latency, for 35% more
+  client bytes while typing; on the calm profiles it cut less (train calm
+  1.9 → 1.3%, lte 10.3 → 6.2%). It costs nothing when idle, since an idle
+  client does not chaff. When not chaffing the client's floor stays 40
+  (§9.2). The tick stays 20 ms, and whether the per-packet spike model
+  holds is still a measurement to make (above), not a reason to hold the
+  size. The knob is `chaffing.size` (`clientChaffSize`), and the
+  measurement now keeps rows at the smaller sizes for comparison
+  (`client 40 B`, `client 48 B`); the 64 B row in the table above was
+  measured as `client 64 B` before the default changed.
 
 ### 9.2 Compression padding and dictionary (D24, O12)
 
@@ -945,7 +958,9 @@ evidence is [M S5 padding.md]):
   ```
 
   So nothing smaller than F goes out, and everything above F is rounded
-  up by Padmé.
+  up by Padmé. While an endpoint chaffs (§9.1), F is its chaff size
+  instead: 64 at both ends, so the client's 40 applies only when it is
+  idle or not typing [D, Dan 2026-11-15; O12 as amended].
 - **Padmé** [PURBs]: for a length L ≥ 2, E = ⌊log₂ L⌋, S = ⌊log₂ E⌋ + 1,
   z = E − S, mask = 2^z − 1, and Padmé(L) = (L + mask) with the low z bits
   cleared; Padmé(1) = 1. The padded length's mantissa is then no longer
@@ -1016,10 +1031,13 @@ on the sealed plaintext therefore bound only acks and heartbeats, and a
 simulated session of 300 keystrokes sent them at three sizes (26, 30 and
 36). Dan chose 40, S5's 16 plus that framing, so that a keystroke goes out
 at one size, as S5 intended [D]. The same session
-(`TestEverySentDatagramFollowsThePaddingRuleInBothDirections`) now sends
-every client datagram, keystroke, ack and heartbeat alike, at exactly 40,
-and every server echo, ack and heartbeat at exactly 64. What exceeds 40
-(keys piling up while unacknowledged, pastes) is rounded by Padmé.
+(`TestEverySentDatagramFollowsThePaddingRuleInBothDirections`, over a
+path that does not chaff) sends every client datagram, keystroke, ack and
+heartbeat alike, at exactly 40, and every server echo, ack and heartbeat
+at exactly 64. What exceeds 40 (keys piling up while unacknowledged,
+pastes) is rounded by Padmé. While typing the client chaffs, and then its
+floor is 64 (§9.1.5): one size on the tick grid, chaff included, at the
+cost of 35% more client bytes while typing and nothing when idle.
 
 ### 9.3 Other hooks
 
@@ -1179,11 +1197,11 @@ What SSP needs from it:
 | Timestamp | u32 µs | [D], §3 |
 | Compression | raw DEFLATE, level 6, per instruction, stored when not smaller; no dictionary | D24, RFC 1951, [S5 §8], [M]; §9.2 |
 | Padding | every datagram; sealed plaintext `min(max(F, Padmé(U)), FrameOverhead + MaxPayload)` | [D] (O12), [PURBs], [M S5 padding.md]; §9.2 |
-| Padding floor `F`, server / client | 64 / 40 bytes of sealed plaintext | [D] (O12), [M S5 padding.md §5]; 40 is S5's 16 plus a keystroke's framing (§9.2) |
+| Padding floor `F`, server / client | 64 / 40 bytes of sealed plaintext; while chaffing, each side's chaff size (64 / 64) | [D] (O12), [M S5 padding.md §5]; 40 is S5's 16 plus a keystroke's framing (§9.2); 64 while chaffing [D, Dan 2026-11-15] (§9.1.5) |
 | `FrameOverhead` | 1 (the transport's frame kind) | transport.md, §9.2 |
-| Chaff tick `T` | 20 ms, both ends (provisional) | [M] §9.1.5 (O10, open), equal to the 50 Hz cap [P §2.3 fn. 1] |
+| Chaff tick `T` | 20 ms, both ends | [D, Dan 2026-11-15, O10 closed], [M] §9.1.5, equal to the 50 Hz cap [P §2.3 fn. 1] |
 | Chaff linger, client / server | uniform 1–2 s after each input / 1 s after each CHAFF frame | [D] §9.1.1, §9.1.2 |
-| Chaff size, client / server | 40 / 64 bytes of sealed plaintext, the §9.2 floors | [D] §9.1.1, [M] §9.1.5 |
+| Chaff size, client / server | 64 / 64 bytes of sealed plaintext | [D, Dan 2026-11-15, from the train profile: by-size exposure 50% → 7% for +35% client bytes while typing] §9.1.1, [M] §9.1.5 |
 | `Window` (versions outstanding) | 16 | [D], §6.1 |
 | Versions kept, sender / receiver | at most 17 / at most 17, neither evicts | [derived], §6.1, §7.3 |
 | Fragment burst | 16 datagrams per frame interval | [D, provisional], §5 |
@@ -1257,8 +1275,10 @@ in the commit message):
   end `Run` with `ErrProtocol`, or are ignored, as the table says;
 - every datagram SSP sends is at most `MaxPayload` bytes;
 - **chaff** (§9.1): while the user types, every client datagram, SSP or
-  CHAFF, leaves on the client's tick grid, one per tick, at 40 bytes of
-  sealed plaintext for a single key or chaff; the server, once chaff
+  CHAFF, leaves on the client's tick grid, one per tick, at 64 bytes of
+  sealed plaintext for a single key or chaff, and before the first key and
+  after the mode ends its acks and heartbeats go at its floor of 40
+  (`TestTheClientPadsTo64WhileItChaffsAnd40WhenNotTyping`); the server, once chaff
   arrives, sends one datagram per tick on its own grid, at 64; a key
   waits at most one tick; the mode ends between 1 and 2 s after the last
   key on the client and 1 s after the last chaff on the server; an idle
