@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
@@ -100,6 +101,10 @@ type Session struct {
 	// SilentAfter is how long the attached client may go unheard before
 	// it counts as detached; zero is the package's SilentAfter.
 	SilentAfter time.Duration
+	// Adopted is a session taken over from an older binary by a live
+	// upgrade (server.md §2.8): it has had clients, so it never ends for
+	// want of one (§2.4), only when its shell does.
+	Adopted bool
 
 	once      sync.Once
 	em        emu.Emulator
@@ -147,6 +152,14 @@ type Session struct {
 	// firstAttach closes when the first client attaches, so serveAgents
 	// can stop holding connections made before it (agent.md §4.2).
 	firstAttach chan struct{}
+
+	// frozen is non-nil while Freeze holds the pty reader and writer off
+	// the pty, for a live upgrade (server.md §2.8 step 4), and closes on
+	// Thaw; readerParked and writerParked say each has stopped.
+	fzMu         sync.Mutex
+	frozen       chan struct{}
+	readerParked chan struct{}
+	writerParked chan struct{}
 }
 
 // SilentAfter is how long proto hears nothing authentic from the attached
@@ -192,7 +205,102 @@ func (s *Session) init() {
 		s.done = make(chan struct{})
 		s.agentIn = make(chan io.ReadWriteCloser, channel.MaxStreams)
 		s.firstAttach = make(chan struct{})
+		s.readerParked = make(chan struct{}, 1)
+		s.writerParked = make(chan struct{}, 1)
 	})
+}
+
+// deadliner is a Terminal whose reads can be woken by a deadline: the pty
+// master, which the poller holds, so Freeze needs no new system call in
+// proto's sandbox (server.md §2.8, "Sandboxes").
+type deadliner interface{ SetReadDeadline(time.Time) error }
+
+// errNotFrozen is Freeze giving up: the pty reader or writer did not
+// stop within T3, a writer blocked on a program that does not read its
+// input most likely, so the session refuses the hand-off rather than
+// vouch for a screen it may not have finished.
+var errNotFrozen = errors.New("server: the pty did not quiesce for a hand-off")
+
+// Freeze stops the session touching the pty, for a live upgrade
+// (server.md §2.8 step 4): the reader parks once what it has read has
+// reached the emulator, the writer once its current write is done, and
+// whatever the shell writes from then on stays in the pty for the next
+// reader. It returns the screen as the emulator then has it. The session
+// keeps its client and its keys; Thaw lets it carry on.
+func (s *Session) Freeze() (*screen.Grid, error) {
+	s.init()
+	s.fzMu.Lock()
+	if s.frozen != nil {
+		s.fzMu.Unlock()
+		return nil, errors.New("server: already frozen")
+	}
+	for _, c := range []chan struct{}{s.readerParked, s.writerParked} {
+		select {
+		case <-c:
+		default:
+		}
+	}
+	s.frozen = make(chan struct{})
+	s.fzMu.Unlock()
+	// The reader may be blocked in a read: a deadline in the past wakes
+	// it, and it parks before reading again.
+	if d, ok := s.Terminal.(deadliner); ok {
+		d.SetReadDeadline(time.Unix(1, 0))
+	}
+	s.wake(s.switched)
+	timeout := time.NewTimer(T3)
+	defer timeout.Stop()
+	for _, c := range []chan struct{}{s.readerParked, s.writerParked} {
+		select {
+		case <-c:
+		case <-timeout.C:
+			s.Thaw()
+			return nil, errNotFrozen
+		case <-s.done:
+			return nil, os.ErrClosed
+		}
+	}
+	g := screen.NewGrid(0, 0)
+	snapshot(s.em, g)
+	return g, nil
+}
+
+// Thaw lets a frozen session read and write the pty again: the hand-off
+// was abandoned (server.md §2.8, "Aborts"). It does nothing to a session
+// that is not frozen.
+func (s *Session) Thaw() {
+	s.init()
+	s.fzMu.Lock()
+	defer s.fzMu.Unlock()
+	if s.frozen == nil {
+		return
+	}
+	if d, ok := s.Terminal.(deadliner); ok {
+		d.SetReadDeadline(time.Time{})
+	}
+	close(s.frozen)
+	s.frozen = nil
+}
+
+// park holds a pty goroutine while the session is frozen, after saying it
+// has stopped on parked. It returns false once ctx is done.
+func (s *Session) park(ctx context.Context, parked chan struct{}) (wasFrozen, alive bool) {
+	s.fzMu.Lock()
+	thaw := s.frozen
+	s.fzMu.Unlock()
+	if thaw == nil {
+		return false, true
+	}
+	select {
+	case parked <- struct{}{}:
+	default:
+	}
+	select {
+	case <-thaw:
+		return true, true
+	case <-ctx.Done():
+		return true, false
+	}
 }
 
 // AgentConn hands the session a connection to its agent socket (server.md
@@ -349,10 +457,11 @@ func (s *Session) Run(ctx context.Context) error {
 	run(func(ctx context.Context) error { return s.accept(ctx, conns) })
 
 	// Until a client attaches, the session lives as long as a credential
-	// minted for it could still be confirmed (server.md §2.4).
+	// minted for it could still be confirmed (server.md §2.4); an adopted
+	// session has had clients already (§2.8).
 	noClient := time.NewTimer(handshake.CredentialTTL)
 	defer noClient.Stop()
-	attachedOnce := false
+	attachedOnce := s.Adopted
 	var cur *attachment
 	var gone <-chan error
 	// The attached client's silence (bootstrap.md §9.2): check fires when
@@ -728,6 +837,11 @@ func (s *Session) release() {
 func (s *Session) readPTY(ctx context.Context) error {
 	buf := make([]byte, ptyReadChunk)
 	for {
+		if frozen, alive := s.park(ctx, s.readerParked); !alive {
+			return nil
+		} else if frozen {
+			continue
+		}
 		n, err := s.Terminal.Read(buf)
 		if n > 0 {
 			s.em.Write(buf[:n])
@@ -737,6 +851,10 @@ func (s *Session) readPTY(ctx context.Context) error {
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
+			}
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				// Freeze's wake-up; only Freeze sets a deadline.
+				continue
 			}
 			return errShellExited
 		}
@@ -787,6 +905,11 @@ func (s *Session) writePTY(ctx context.Context) error {
 		unpublished int
 	)
 	for {
+		if frozen, alive := s.park(ctx, s.writerParked); !alive {
+			return nil
+		} else if frozen {
+			continue
+		}
 		if cur := s.endpoint(); cur != ep {
 			ep, applied, unpublished = cur, 0, 0
 		}
