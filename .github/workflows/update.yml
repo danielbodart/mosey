@@ -17,9 +17,10 @@
 # corpus and the oracle run against it.
 #
 # The gate is everything CI runs that can fail on a dependency: check, the
-# race detector, the KILL soak and every Nix check, on this one runner,
-# slower than CI's legs, but nobody is waiting on it. Only if it passes is
-# anything committed, straight to trunk, never as a pull request.
+# slow tests, the fuzz smoke test, the race detector, the KILL soak and
+# every Nix check, on this one runner, slower than CI's legs, but nobody is
+# waiting on it. Only if it passes is anything committed, straight to
+# trunk, never as a pull request.
 #
 # A push made with GITHUB_TOKEN starts no workflow, so the last step
 # dispatches CI on trunk with `release`, which checks the commit and
@@ -111,7 +112,10 @@ jobs:
           go get -u ./...
           go get "${held[@]}"
           go mod tidy
-          if ! git diff --quiet go.sum; then scripts/vendor-hash.sh; fi
+          # Always, not only when go.sum moved: an upgraded module can bring
+          # in packages the old one did not, with the vendored set changing
+          # under an unchanged hash line. Unchanged, it rewrites the same hash.
+          scripts/vendor-hash.sh
           mapfile -t mods < <(comm -13 <(echo "$before") <(gomods) | cut -d' ' -f1)
           moved+=("${mods[@]}")
 
@@ -127,6 +131,14 @@ jobs:
       - name: mise run check
         if: steps.update.outputs.moved
         run: mise run check
+
+      - name: mise run test-slow
+        if: steps.update.outputs.moved
+        run: mise run test-slow
+
+      - name: mise run fuzz-smoke
+        if: steps.update.outputs.moved
+        run: mise run fuzz-smoke
 
       - name: mise run race
         if: steps.update.outputs.moved
