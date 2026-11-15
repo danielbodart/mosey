@@ -137,8 +137,8 @@ request). The decisions are in §2. Gaps they left:
    code, D28, Sigstore-signed releases with verified cross-platform
    copies, D7, and automatic and named resume with background reconnect,
    `-list`, `-kill` and the detached idle timeout, D8 R1–R4, O13 and
-   O14. Next, from the same amendments: the stable protocol and live
-   upgrade (D8 V1, V2), and Dan's call on O15.)
+   O14, and the stable protocol and live upgrade, D8 V1 and V2. Next:
+   Dan's calls on O15 and O16.)
 2. `docs/threat-model.md` grows with the slices.
 3. Release pipeline (D10) from the first commit. Then use it daily, on
    trains. (Done: CI releases every green trunk commit to GitHub Releases,

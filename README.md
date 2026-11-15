@@ -165,6 +165,18 @@ the session back by itself. Nothing secret is ever saved to disk: each
 resume is a fresh SSH login and a fresh handshake
 ([docs/spec/bootstrap.md §9](docs/spec/bootstrap.md)).
 
+**Upgrading mosey never costs you a session.** A client and a host of
+different mosey versions work together: they agree on a protocol version
+both speak, and nothing refuses another version. When a newer mosey
+resumes a session that an older one started, it takes the session over
+in place: the old server hands the newer one its terminal and screen and
+exits, and your shell keeps running, the same process with everything in
+it, now served by the new code, so a security fix reaches sessions that
+were already running. Upgrades only go forward: an older client attaches
+a newer session as it is. (Sessions started before this release can't
+be handed over; they stay resumable by their own version until their
+shell exits.)
+
 ### Agent forwarding
 
 mosey forwards your ssh-agent exactly when `ssh` would: when your
@@ -202,8 +214,8 @@ or mosey session, where only chaff hides your typing rhythm.
 
 ## Zero install
 
-The server is the same `mosey` binary, at exactly the client's version. On
-each connection `mosey HOST` looks on the host for
+The server is the same `mosey` binary. On each connection `mosey HOST`
+looks on the host for
 `~/.cache/mosey/<version>/mosey`, then `mosey` on its `PATH`, in the same
 ssh login that starts the session. If neither is this version, it asks
 once per host:
@@ -221,7 +233,9 @@ no other network is needed) before sending it; it refuses a binary
 without that. On the host the copy installs itself: it
 checks its own length and SHA-256, refuses to follow a symlink below
 `~/.cache` or to replace a file that isn't yours, and renames itself into
-place. Then the session starts.
+place. Then the session starts. Copying its own version over is how a
+newer client brings its fixes to a host; a server of another version
+would also work (see above), and `-remote` uses whatever it is given.
 
 - `-upload=yes` copies without asking; `-upload=no` never copies.
 - `-remote PATH` runs that binary on the host instead, and copies nothing.

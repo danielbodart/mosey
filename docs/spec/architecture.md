@@ -6,7 +6,10 @@ skeleton that joined the spikes (`mosey host` gives an interactive login
 shell end to end); resume and exclusive attach (D8, D26), agent
 forwarding (D15, D25), predictive echo (D12), chaff (D11) and auto-upload
 (D7) have landed on it since, each through hooks slice 1 reserved, so
-none changed a wire format or an interface below it (§7).
+none changed a wire format or an interface below it (§7). The versioning
+slice (D8 V1, V2) then made the wire and the attach socket stable across
+releases: the hello carries a version range, and a newer server takes an
+older session over in place.
 
 The interfaces themselves are Go, with doc comments, under `internal/`.
 Changing an exported signature another owner calls means agreeing it with
