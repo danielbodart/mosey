@@ -80,3 +80,68 @@ func FuzzReadMsg2(f *testing.F) {
 		}
 	})
 }
+
+// FuzzReadMsg1Hello reaches what FuzzReadMsg1 cannot: the hello inside
+// the AEAD. Each input is sealed into a genuine msg1, as a client holding
+// the credential could send, so every hello reaches the server's check
+// of the protocol byte and, for this protocol, ParseHello (transport.md
+// §3.6, D8 V1). The invariants: a refused msg1 changes nothing and draws
+// no index; a hello of another protocol is answered with the server's own
+// hello, whatever its rest, by a pending that can never be confirmed; and
+// one of this protocol is answered only if it parses and is acceptable,
+// by a pending of this protocol.
+func FuzzReadMsg1Hello(f *testing.F) {
+	f.Add(MarshalHello(terminalOnly))
+	f.Add(MarshalHello(terminalyAgent))
+	f.Add(MarshalHello(Hello{Protocol: 2, Channels: []ChannelType{ChannelTerminal}}))
+	f.Add([]byte{2, 0xff, 0xff, 0xff})
+	f.Add([]byte{ProtocolVersion, 0xff, 0xff, 0xff})
+	f.Add([]byte{0, 0, 1, 0})
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, hello []byte) {
+		synctest.Test(t, func(t *testing.T) {
+			w := newWorld(t)
+			msg1, st, err := buildMsg1(&w.cred, w.key.PublicKey(), hello, 1)
+			st.wipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.drawn = nil
+			before := w.snapshot()
+			msg2, p, err := w.resp.ReadMsg1(msg1)
+			parsed, perr := ParseHello(hello)
+			if perr == nil {
+				perr = parsed.acceptable()
+			}
+			other, isOther := otherProtocol(hello, ProtocolVersion)
+			if err != nil {
+				if !w.snapshot().equal(before) || len(w.drawn) != 0 {
+					t.Fatalf("a refused msg1 (%v) changed the store", err)
+				}
+				if isOther && len(msg1) <= Msg1Size(MaxChannels) && len(msg1) >= Msg1Size(1) {
+					t.Fatalf("a genuine client of protocol %d was refused: %v", other, err)
+				}
+				if !isOther && perr == nil {
+					t.Fatalf("a good hello %x was refused: %v", hello, err)
+				}
+				return
+			}
+			if len(w.drawn) != 1 {
+				t.Fatalf("an answered msg1 drew %d indices", len(w.drawn))
+			}
+			switch {
+			case isOther:
+				if p.Version != 0 || p.Hello.Protocol != other || len(msg2) != Msg2Size(len(terminalOnly.Channels)) {
+					t.Fatalf("a hello of protocol %d made a pending of version %d for protocol %d, msg2 of %d bytes",
+						other, p.Version, p.Hello.Protocol, len(msg2))
+				}
+			case perr != nil:
+				t.Fatalf("a hello %x that does not parse (%v) was answered", hello, perr)
+			default:
+				if p.Version != ProtocolVersion || p.Hello.Protocol != ProtocolVersion {
+					t.Fatalf("a hello of this protocol made a pending of version %d", p.Version)
+				}
+			}
+		})
+	})
+}
