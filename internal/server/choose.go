@@ -20,7 +20,15 @@ type choice struct {
 // choose is §9.2's table, a pure function so every row is tested without
 // processes: sessions are the greetings this version could read, and
 // generate makes a name none of them has.
+//
+// A plain client and -s NAME choose only among sessions of the client's
+// own version (§9.2 step 5): the session's spawner would refuse a line of
+// another version, and a plain `mosey HOST` that a client upgrade had
+// pointed at an older session would then fail outright, where R1 says it
+// starts a new session and V1 says nothing locks the user out. Another
+// version's session still keeps its name from a generated one.
 func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate func(taken map[string]bool) string) choice {
+	ours := func(s bootstrap.SessionLine) bool { return s.SoftwareVersion == cl.SoftwareVersion }
 	fresh := func() choice {
 		taken := map[string]bool{}
 		for _, s := range sessions {
@@ -32,14 +40,14 @@ func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate 
 	case bootstrap.AttachAuto:
 		// R1: the most recently detached session, never an attached one,
 		// so a second terminal gets a session of its own.
-		if i := newest(sessions, func(s bootstrap.SessionLine) bool { return s.State == bootstrap.SessionDetached }); i >= 0 {
+		if i := newest(sessions, func(s bootstrap.SessionLine) bool { return ours(s) && s.State == bootstrap.SessionDetached }); i >= 0 {
 			return choice{take: i}
 		}
 		return fresh()
 	case bootstrap.AttachName:
 		// R2: NAME whatever its state, a takeover if attached (D26), or a
 		// new session of that name.
-		if i := newest(sessions, func(s bootstrap.SessionLine) bool { return s.Name == cl.Name }); i >= 0 {
+		if i := newest(sessions, func(s bootstrap.SessionLine) bool { return ours(s) && s.Name == cl.Name }); i >= 0 {
 			return choice{take: i}
 		}
 		return choice{start: true, name: cl.Name}

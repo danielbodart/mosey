@@ -23,7 +23,13 @@ func held(s bootstrap.SessionLine, cred byte) bootstrap.SessionLine {
 func fixedName(map[string]bool) string { return "made-up" }
 
 func line(a bootstrap.Attach, name string) bootstrap.ClientLine {
-	return bootstrap.ClientLine{Attach: a, Name: name}
+	return bootstrap.ClientLine{SoftwareVersion: "v1", Attach: a, Name: name}
+}
+
+// of is s as a session of another version would greet.
+func of(version string, s bootstrap.SessionLine) bootstrap.SessionLine {
+	s.SoftwareVersion = version
+	return s
 }
 
 // A plain mosey DEST takes the most recently detached session and never
@@ -44,6 +50,26 @@ func TestAPlainClientTakesTheNewestDetachedSessionAndNeverAnAttachedOne(t *testi
 	}
 	if c := choose(line(bootstrap.AttachAuto, ""), nil, fixedName); !c.start || c.name != "made-up" {
 		t.Errorf("with no session: %+v", c)
+	}
+}
+
+// A session of another version is never chosen for a plain client or for
+// -s NAME (bootstrap.md §9.2 step 5): its spawner would refuse the line,
+// and after a client upgrade a plain `mosey HOST` must still start a
+// session rather than fail (D8 R1, V1). Its name is still not generated.
+func TestAPlainOrNamedClientPassesOverAnotherVersionsSession(t *testing.T) {
+	older := of("v0", session("work", 1, bootstrap.SessionDetached, 900))
+	var taken map[string]bool
+	c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{older}, func(t map[string]bool) string { taken = t; return "fresh" })
+	if !c.start || c.err != nil || c.name != "fresh" || !taken["work"] {
+		t.Errorf("a plain client with only a v0 session detached: %+v, avoiding %v; want a new session", c, taken)
+	}
+	ours := session("play", 2, bootstrap.SessionDetached, 100)
+	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{older, ours}, fixedName); c.start || c.err != nil || c.take != 1 {
+		t.Errorf("a plain client: %+v, not the older-dated session of its own version", c)
+	}
+	if c := choose(line(bootstrap.AttachName, "work"), []bootstrap.SessionLine{older}, fixedName); !c.start || c.err != nil || c.name != "work" {
+		t.Errorf("-s work with only a v0 work: %+v, not a new session called work", c)
 	}
 }
 
@@ -78,7 +104,7 @@ func TestNamedAndNewSessionsAreChosenAsTheSpecSays(t *testing.T) {
 // (bootstrap.md §9.2.2, PLAN O15's interim).
 func TestReconnectTakesItsOwnSessionAndNeverAnothers(t *testing.T) {
 	mine := [8]byte{7}
-	reconnecting := bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: [16]byte{1}, Holder: mine, HasHolder: true}
+	reconnecting := bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: [16]byte{1}, Holder: mine, HasHolder: true}
 	for name, c := range map[string]struct {
 		s    bootstrap.SessionLine
 		want string

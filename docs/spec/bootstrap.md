@@ -1464,8 +1464,8 @@ the CredentialLine (§6.3), so the client can say it, and in the greeting
 
 | Command | ClientLine `attach` | What the launcher does, holding the lock |
 |---|---|---|
-| `mosey DEST` | `auto` | of the sessions that are `detached` (below), the one with the newest `since`, taken with `resume:SID`; if none is detached, a new session with a generated name, `new:NAME`. It never takes a session that is `new` or `attached` |
-| `mosey -s NAME DEST` | `name:NAME` | session NAME whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
+| `mosey DEST` | `auto` | of the sessions of the client's own version (step 5) that are `detached` (below), the one with the newest `since`, taken with `resume:SID`; if none is detached, a new session with a generated name, `new:NAME`. It never takes a session that is `new` or `attached` |
+| `mosey -s NAME DEST` | `name:NAME` | session NAME of the client's own version (step 5), whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
 | `mosey -new DEST` | `new` | a new session with a generated name, `new:NAME` |
 | R3's reconnect | `resume:SID:CREDID` | §9.2.2 |
 | `mosey -list DEST` | none: `--serve=list` (§9.4) | |
@@ -1535,7 +1535,10 @@ The steps:
    first two are read only by its own version (§9.2.1), so a launcher
    chooses only among sessions of the client's own version: one of
    another version is not taken by `mosey DEST`, not found by `-s NAME`,
-   and listed with its version alone (§9.4). The stable-protocol and
+   and listed with its version alone (§9.4); so after a client upgrade a
+   plain `mosey DEST` starts a new session rather than fail, and `-s NAME`
+   starts a new NAME beside the older one. A generated name still avoids
+   the names of every session that answered. The stable-protocol and
    live-upgrade decisions (D8 V1, V2) replace this, and with it the
    version check on a taken session's greeting, which can no longer
    refuse anything a launcher chose.

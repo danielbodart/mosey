@@ -209,6 +209,14 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeVersion || e.Detail != "v0" {
 		t.Errorf("a client of another version than the session's: %v, %q", err, out)
 	}
+	// A plain client passes the v0 session over and starts its own (here
+	// there is no spawner to start, Self being empty): never a refusal
+	// for the version (D8 R1, V1).
+	out, _, err = run(auto)
+	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeInternal ||
+		!strings.Contains(err.Error(), "starting the spawner") {
+		t.Errorf("a plain client with only a v0 session detached: %v, %q; want it to start a session", err, out)
+	}
 	// R3's reconnect of a session that is not there.
 	gone := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume,
 		SessionID: [16]byte{0x77}, Holder: [8]byte{1}, HasHolder: true, Cols: 80, Rows: 24, Public: key})
