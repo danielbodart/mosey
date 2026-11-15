@@ -22,7 +22,7 @@ decision wins.
 | Package | Job | Runs in | Owner | Interface file |
 |---|---|---|---|---|
 | `internal/netsim` | Simulated `net.PacketConn` network under `testing/synctest`: loss, delay, jitter, reordering, MTU, outages, Mahimahi traces, adversary tap (D18) | tests only | **netsim** | `netsim.go`, `link.go`, `trace.go`, `profile.go` |
-| `internal/wire` | The size limits every layer is built to (D5) | everywhere | **crypto-transport** | `wire.go` |
+| `internal/wire` | The size limits every layer is built to (D5), and the padding rule SSP and channel frames share (O12: `PadFloor`, `Padme`, `PaddedLen`) | everywhere | **crypto-transport** | `wire.go`, `pad.go` |
 | `internal/replay` | RFC 6479 anti-replay window, check and commit separate | proto, client | **crypto-transport** | `replay.go` |
 | `internal/handshake` | B3 handshake, one-shot X-Wing keys, credential store, hello, hybrid rekey (D20) | proto, client | **crypto-transport** | `doc.go`, `key.go`, `credential.go`, `hello.go`, `handshake.go`, `rekey.go` |
 | `internal/transport` | Sealed frames over UDP: handshake driving, AEAD, replay, rekey with split INIT, path validation and anti-amplification (D21), exclusive attach (D26) | proto, client | **crypto-transport** | `doc.go`, `frame.go`, `transport.go` (`End` and the END frame added at integration) |

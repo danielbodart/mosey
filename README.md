@@ -133,7 +133,13 @@ added with destination constraints (`ssh-add -h`) work for exactly the
 hops you allowed. If that bind can't be had (the host has
 `AllowAgentForwarding no`, or its host key isn't in your `known_hosts`),
 mosey says so once and carries on without the agent. After a resume the
-agent is the resuming device's. Details: [docs/spec/agent.md](docs/spec/agent.md).
+agent is the resuming device's.
+
+quoin's TPM-backed agent works as any other agent does, with nothing new
+needed from quoin. The one exception is a host running quoin's attester
+(`/run/agent-attest/handoff.sock`): mosey doesn't hand connections to it
+yet, so on such a host it refuses every agent connection rather than
+forward past the attester. Details: [docs/spec/agent.md](docs/spec/agent.md).
 
 ## Zero install
 
