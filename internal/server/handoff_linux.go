@@ -36,9 +36,12 @@ type handoffJob struct {
 	snapshot []byte
 	pidfd    *os.File
 	shellPID int
-	// gone closes once the loop has torn the session down after
-	// HandoffTaken, so the connection closes only then.
-	gone chan struct{}
+	// released closes once the loop has committed to the hand-off: it
+	// has stopped accepting and told proto to go, so it will never thaw,
+	// and HandoffReleased may be sent. gone closes once it has torn its
+	// part down, so the connection closes only then.
+	released chan struct{}
+	gone     chan struct{}
 }
 
 // snapshotWait bounds the loop's wait for proto's Snapshot: proto gives
@@ -81,7 +84,7 @@ func (s *spawner) serveHandoff(conn *ipc.Conn, f *os.File, req ipc.HandoffReques
 	if int(req.Version) < bootstrap.AttachMin || int(req.Version) > bootstrap.AttachMax {
 		return refuse(fmt.Errorf("attach protocol %d", req.Version))
 	}
-	j := &handoffJob{ready: make(chan error, 1), gone: make(chan struct{})}
+	j := &handoffJob{ready: make(chan error, 1), released: make(chan struct{}), gone: make(chan struct{})}
 	select {
 	case s.handoffs <- j:
 	case <-time.After(T3):
@@ -90,11 +93,12 @@ func (s *spawner) serveHandoff(conn *ipc.Conn, f *os.File, req ipc.HandoffReques
 	if err := <-j.ready; err != nil {
 		return refuse(err)
 	}
-	taken := false
+	// Until the loop has the commit, any return drops the hand-off, and
+	// the loop thaws proto.
+	committed := false
 	defer func() {
-		s.handoffOutcome <- taken
-		if taken {
-			<-j.gone
+		if !committed {
+			s.handoffDropped <- struct{}{}
 		}
 	}()
 	// The size is the snapshot's, which is the emulator's and so the
@@ -127,13 +131,30 @@ func (s *spawner) serveHandoff(conn *ipc.Conn, f *os.File, req ipc.HandoffReques
 		}
 		rest = rest[n:]
 	}
-	f.SetReadDeadline(time.Now().Add(T2))
+	f.SetReadDeadline(time.Now().Add(s.takenWait))
 	m, err := conn.Recv()
 	if _, ok := m.(ipc.HandoffTaken); err != nil || !ok {
 		return fmt.Errorf("the newer spawner did not take the session (%v): carrying on", err)
 	}
-	taken = true
+	// The commit is two-phase (server.md §2.8 steps 8 and 9): the adopter
+	// keeps nothing until HandoffReleased, which goes only once the loop
+	// has committed. A loop that has ended the session meanwhile (the
+	// shell exited) never takes the commit, and the adopter, hearing no
+	// HandoffReleased, gives the session up too.
+	select {
+	case s.handoffCommit <- struct{}{}:
+	case <-time.After(T3):
+		return errors.New("the session did not let go in time: carrying on")
+	}
+	committed = true
+	<-j.released
 	s.log.Info("handing the session to a newer binary", "version", req.SoftwareVersion)
+	if err := conn.Send(ipc.HandoffReleased{}); err != nil {
+		// Committed all the same: the adopter, hearing nothing, ends
+		// what it started, and the shell hangs up with the last master.
+		s.log.Warn("telling the newer spawner the session is released", "err", err)
+	}
+	<-j.gone
 	return nil
 }
 
@@ -252,10 +273,16 @@ func (s *spawner) handedOff() {
 	if s.attach != nil {
 		s.attach.release()
 	}
-	if s.proto != nil {
-		if s.ctl != nil {
-			s.ctl.Close()
+	// proto cuts its client off with REVOKED, as a takeover does (D26),
+	// so a client attached here hears now that another has the session.
+	if s.ctl != nil {
+		if err := s.ctl.Send(ipc.Revoke{}); err != nil {
+			s.log.Warn("asking proto to revoke its client", "err", err)
 		}
+		s.ctl.Close()
+	}
+	close(s.job.released)
+	if s.proto != nil {
 		waitOrKill(s.proto, T7)
 	}
 	if s.master != nil {
@@ -493,10 +520,49 @@ func adoptShell(pidfd *os.File, pid int) *child {
 	return c
 }
 
+// commitAdoption is the adopter's half of the two-phase commit (server.md
+// §2.8 steps 8 and 9): HandoffTaken, then HandoffReleased within T2. The
+// old side sends that only once it has stopped accepting and will never
+// thaw; anything else (it closed the connection, it gave up waiting for
+// HandoffTaken, it sent something else) means it carries on, and so this
+// spawner must not.
+func (s *spawner) commitAdoption(attach *ipc.Conn) error {
+	if err := attach.Send(ipc.HandoffTaken{}); err != nil {
+		return fmt.Errorf("taking the session: %w", err)
+	}
+	attach.File().SetReadDeadline(time.Now().Add(T2))
+	defer attach.File().SetReadDeadline(time.Time{})
+	m, err := attach.Recv()
+	if err != nil {
+		return fmt.Errorf("waiting for the session to let go: %w", err)
+	}
+	if _, ok := m.(ipc.HandoffReleased); !ok {
+		return fmt.Errorf("the session sent %T, not HandoffReleased", m)
+	}
+	return nil
+}
+
+// stopStarted ends the proto and emu a failed adoption started, before
+// the old session thaws.
+func (s *spawner) stopStarted() {
+	if s.ctl != nil {
+		s.ctl.Close()
+	}
+	if s.proto != nil {
+		waitOrKill(s.proto, T7)
+		s.proto = nil
+	}
+	if s.emu != nil {
+		waitOrKill(s.emu, T9)
+		s.emu = nil
+	}
+	s.master = nil // a.close closes it
+}
+
 // adopt is the newer spawner's whole part of a live upgrade (server.md
 // §2.8 steps 2 and 5 to 10), in place of bootstrap's: it takes the session
 // at the other end of m.Conn for the client whose line is m.Line. Until
-// HandoffTaken, any failure leaves the old session whole (it thaws when
+// HandoffReleased, any failure leaves the old session whole (it thaws when
 // the connection closes) and nothing of it is touched here but this
 // spawner's own copies of its fds.
 func (s *spawner) adopt(ctx context.Context, m ipc.Adopt) error {
@@ -531,10 +597,13 @@ func (s *spawner) adopt(ctx context.Context, m ipc.Adopt) error {
 	if err != nil {
 		return fmt.Errorf("the hand-off: %w", err)
 	}
-	// From here until HandoffTaken an error closes a's fds (this
-	// spawner's copies) and the connection, and the old session thaws.
+	// From here until HandoffReleased an error ends proto-N and emu-N,
+	// then closes a's fds (this spawner's copies), and only then the
+	// connection, which thaws the old session: so no two protos ever read
+	// the pty at once.
 	defer func() {
 		if !taken {
+			s.stopStarted()
 			a.close()
 		}
 	}()
@@ -604,9 +673,11 @@ func (s *spawner) adopt(ctx context.Context, m ipc.Adopt) error {
 		return errors.New("proto sent a bad credential")
 	}
 
-	// Step 8: the session is this spawner's from here.
-	if err := attach.Send(ipc.HandoffTaken{}); err != nil {
-		return fmt.Errorf("taking the session: %w", err)
+	// Steps 8 and 9: the session is this spawner's only once the old one
+	// says it has let go. Without that, the old one may yet thaw, so this
+	// one keeps nothing.
+	if err := s.commitAdoption(attach); err != nil {
+		return err
 	}
 	taken = true
 	dir := sessionDir(sessionsDir(s.getenv), s.sid)
@@ -626,8 +697,8 @@ func (s *spawner) adopt(ctx context.Context, m ipc.Adopt) error {
 	s.state, s.since, s.peer = bootstrap.SessionDetached, time.Now(), st.Peer
 	s.holdFor(cred.CredentialID, cl.Holder, cl.HasHolder)
 	// The old spawner closes the connection once its proto and emu are
-	// gone (step 9); nothing waits on that, since it no longer touches
-	// the pty, but the log says when.
+	// gone (step 9); nothing waits on that, since it has let go, but the
+	// log says when.
 	go func() {
 		defer attach.Close()
 		attach.File().SetReadDeadline(time.Now().Add(T2))

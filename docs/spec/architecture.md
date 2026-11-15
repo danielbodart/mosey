@@ -239,8 +239,10 @@ it starts a spawner of its own binary and hands it the attach connection
 listeners and a screen snapshot (`HandoffState`, `HandoffAgent`,
 `HandoffScreen`; the old proto is `Freeze`d for it and answers with a
 `Snapshot`), starts its own proto (`Start` adopted, then `Seed`) and emu,
-and says `HandoffTaken` once its proto has minted; the old spawner,
-proto and emu exit and the shell runs on. An equal, older or
+and says `HandoffTaken` once its proto has minted; the old spawner stops
+accepting, has its proto revoke its client (`Revoke`), answers
+`HandoffReleased` (the commit is two-phase), and it, its proto and its
+emu exit while the shell runs on. An equal, older or
 incomparable launcher attaches plainly, so a session is never
 downgraded. The client and the session's proto negotiate the protocol
 version in the handshake (each hello carries a range; `Conn.Protocol`).
@@ -406,13 +408,13 @@ which keeps a never-attached session waiting.
 **ipc.** `Pair()`, `Conn.Send(Message)`, `Conn.Recv()`; messages, with
 fixed layouts and a fuzzed `Parse` (`server.md` §3): launcher↔spawner
 `ClientLine`, `Ready`, `Failed`; spawner→proto `Start`, `EmuLink`,
-`ShellExit`, `EmuPaused`, `Resume`, `Freeze`, `Thaw`, `Seed`;
+`ShellExit`, `EmuPaused`, `Resume`, `Freeze`, `Thaw`, `Seed`, `Revoke`;
 proto→spawner `Credential`, `Attached{Peer}`, `Detached`, `KillEmu`,
 `Exit`, `Snapshot`; proto→emu `Init`, `Output`, `Resize`, `Flush`;
 emu→proto `Update`, `Replies`; launcher→spawner `Adopt`; and the stable
 attach protocol (`server.md` §2.8) `ClientLine`, `Ready`, `Failed`,
 `Hangup`, `HandoffRequest`, `HandoffState`, `HandoffAgent`,
-`HandoffScreen`, `HandoffTaken`. `Start` gains `Adopted` and
+`HandoffScreen`, `HandoffTaken`, `HandoffReleased`. `Start` gains `Adopted` and
 `SessionID`.
 
 **bootstrap.** As `bootstrap.md` §10.1: `ClientLine`, `CredentialLine`,

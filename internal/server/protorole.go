@@ -261,6 +261,11 @@ func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, resume func([]by
 			}
 		case ipc.Thaw:
 			sess.Thaw()
+		case ipc.Revoke:
+			// The session is a newer binary's now (server.md §2.8 step
+			// 9): the client is told at once, as on any takeover (D26).
+			log.Info("the session was handed to a newer binary; revoking the client")
+			sess.Revoke()
 		default:
 			log.Error("unexpected control message", "type", fmt.Sprintf("%T", m))
 			cancel(fmt.Errorf("unexpected %T from the spawner", m))

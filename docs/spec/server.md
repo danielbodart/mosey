@@ -399,7 +399,7 @@ from the stable-protocol slice on.
 **The stability promise.** The attach protocol is the greeting
 (`bootstrap.md` §9.2.1) and the messages that follow it on an attach
 socket: `ClientLine` (0x40), `Ready` (0x41), `Failed` (0x42), `Hangup`
-(0x43) and the hand-off, 0x44 to 0x48 (§3.3), with §3.1's framing (one
+(0x43) and the hand-off, 0x44 to 0x49 (§3.3), with §3.1's framing (one
 seqpacket message each, type byte first, `SCM_RIGHTS` for fds). This is
 **attach protocol v1**; the greeting's `arange` says which versions a
 session speaks (`1-1` now), and both sides use the highest version in
@@ -430,16 +430,19 @@ downgraded, whichever side has a bug.
 | 5 | spawner-O | sends `HandoffState` with three fds (a reference to the pty master, the pidfd, the attach listener), `HandoffAgent` with the agent listener if there is one, then `HandoffScreen` fragments holding the snapshot | both spawners hold the master, the pidfd and the listeners; only spawner-O can wait for the shell |
 | 6 | spawner-N | validates all of it (below), binds a UDP socket of its own (§2.2), starts emu-N and proto-N exactly as for a new session (§2.3, the same sandboxes), and sends proto-N `Start` with the adopted flag, the session id, the resuming client's key, the size and the master, `EmuLink`, then `Seed` fragments holding the snapshot | spawner-N as step 5; proto-N: the new keys, the new UDP socket, the pty master |
 | 7 | proto-N | decodes the seed with the screen's validating decoder (the one the client uses, fuzzed), paints it into emu-N (escape sequences written by mosey's own renderer from the validated grid, so emu-N parses only what mosey wrote), and mints the credential for the client's key under the **same** session id | as step 6 |
-| 8 | spawner-N | checks the `Credential` as §3.4 does, and its session id; sends `HandoffTaken` | as step 6 |
-| 9 | spawner-O | on `HandoffTaken`: closes C, so proto-O exits and its keys go with it, waits for proto-O and emu-O (T7, T9, then SIGKILL), closes its copies of the master, the pidfd and the listeners **without** removing the sockets, closes the attach connection and exits. It never signals the shell. The kernel gives the shell, no longer anyone's child, to the nearest subreaper or init, which reaps it when it exits | spawner-O, proto-O, emu-O: gone |
-| 10 | spawner-N | sees the attach connection close (at most T2), takes over the listeners (accepting on them only now), watches the shell through the pidfd (`poll`: readable once it has exited) and signals it through it (`pidfd_send_signal`: a hangup, or the teardown's SIGKILL), holds the session for the new credential (§2.6) and sends `Ready` to launcher-N, which prints the credential line | spawner-N: the session, as spawner-O held it, with a pidfd for the shell in place of being its parent |
+| 8 | spawner-N | checks the `Credential` as §3.4 does, and its session id; sends `HandoffTaken` and waits up to T2 for `HandoffReleased`. Until that comes it keeps nothing: the connection closing, any other message or the wait running out is an abort (below) | as step 6 |
+| 9 | spawner-O | on `HandoffTaken` within T2 of its last fragment, and only while its supervision loop still runs the session (it hands the loop the commit and waits at most T3): stops accepting (closes its copies of the listeners **without** removing the sockets), sends proto-O `Revoke` (0x0A) and closes C, and only then sends `HandoffReleased`: from here it can never thaw. Then it waits for proto-O and emu-O (T7, T9, then SIGKILL), closes its copies of the master and the pidfd, closes the attach connection and exits. It never signals the shell. proto-O, on `Revoke`, sends its client every sealed REVOKED copy at once (`transport.md` §8.3, naming nobody), and on C's EOF exits with its keys. The kernel gives the shell, no longer anyone's child, to the nearest subreaper or init, which reaps it when it exits | spawner-O, proto-O, emu-O: gone |
+| 10 | spawner-N | on `HandoffReleased`, takes over the listeners (accepting on them only now), watches the shell through the pidfd (`poll`: readable once it has exited) and signals it through it (`pidfd_send_signal`: a hangup, or the teardown's SIGKILL), holds the session for the new credential (§2.6) and sends `Ready` to launcher-N, which prints the credential line | spawner-N: the session, as spawner-O held it, with a pidfd for the shell in place of being its parent |
 
 The shell is the same process throughout, with the same pid, pty and
 environment; nothing it runs notices except a client that reattaches.
-Proto-O's client, if one was attached (a `-s NAME` takeover), is not
-sent REVOKED, since proto-O never learns who took over: it hears nothing
-more, and its reconnect (`bootstrap.md` §9.2.2) finds the session held
-by another credential and exits with `taken`, as D26 says. `SessionID`,
+Proto-O's client, if one was attached (a `-s NAME` takeover), is sent
+REVOKED at step 9, as on any takeover (D26), and exits saying the
+session was taken over; proto-O never learns who took over, so the
+REVOKED names nobody (`0.0.0.0:0`, `transport.md` §8.3). If that client
+was itself the one reconnecting (R3), the REVOKED arrives while its try
+is in flight, and it waits for the try as it does for its own
+handshake's REVOKED (`bootstrap.md` §9.2.2). `SessionID`,
 the name, the start time and the state (`state`, `since`, `peer`) travel
 in `HandoffState`, so the greeting reads the same before and after.
 
@@ -455,22 +458,37 @@ agent listener, if sent, a listening `SOCK_STREAM` socket at `agent.sock`
 beside it. Anything else is
 an abort.
 
-**Aborts.** Until `HandoffTaken` the old session is whole. If spawner-N
-finds anything wrong, or fails to start proto-N or emu-N, or proto-N
-mints nothing within T3, it closes the attach connection, kills what it
-started, closes its copies of the fds (never removing a socket) and tells
-launcher-N `Failed`. Spawner-O, seeing the connection close, or no
-`HandoffTaken` within T2 of its last fragment, sends proto-O `Thaw`,
-closes its pidfd and carries on as before. Launcher-N, told `Failed` by
+**The commit is two-phase**, so the two spawners never disagree about
+who has the session: spawner-O commits only on a `HandoffTaken` it
+reads in time, and spawner-N only on the `HandoffReleased` spawner-O
+sends once committed. Neither deadline has to outlast the other's work:
+a `HandoffTaken` that comes too late finds the connection closed and
+draws no `HandoffReleased`, so spawner-N aborts too. The one gap left is
+spawner-N dying (or its wait running out) after spawner-O has sent
+`HandoffReleased`: then nobody serves the session, and the shell hangs
+up with the last master, as when any spawner dies.
+
+**Aborts.** Until `HandoffReleased` the old session is whole. If
+spawner-N finds anything wrong, or fails to start proto-N or emu-N, or
+proto-N mints nothing within T3, or no `HandoffReleased` comes, it first
+ends what it started (closes C-N and waits for proto-N, T7, and emu-N,
+T9, then SIGKILL), then closes its copies of the fds (never removing a
+socket), and only then the attach connection, and tells launcher-N
+`Failed`. Spawner-O, seeing the connection close, or no `HandoffTaken`
+within T2 of its last fragment, sends proto-O `Thaw`, closes its pidfd
+and carries on as before; proto-N is gone by then, so the pty never has
+two readers. Launcher-N, told `Failed` by
 the spawner it adopted with, dials the session again and attaches it
 plainly (§2.6), so a failed upgrade costs the user nothing but the
 upgrade [D: V1's "never a lockout"]. A refusal by spawner-O (not newer,
 no pidfd, a hand-off under way, a frozen proto that does not answer
 within T3) is a `Failed` on the attach connection and ends the same way.
 One cost is accepted: if proto-N had read pty output before an abort,
-that output never reaches proto-O's screen [choice: an abort is a bug or
-a resource failure, and holding proto-N off the pty until `HandoffTaken`
-would let the shell block on a full pty for that long].
+that output never reaches proto-O's screen: the user gets the session
+back whole, but its screen may miss what the shell wrote during the
+attempt, until the next repaint [choice: an abort is a bug or a resource
+failure, and holding proto-N off the pty until `HandoffReleased` would
+let the shell block on a full pty for that long].
 
 **Bounds.** At most one hand-off per session at a time. The snapshot is
 at most `screen.MaxDiff` (48 MiB), in fragments of at most
@@ -550,6 +568,7 @@ does and does not give a process of the user.
 | 0x07 | Freeze | spawner → proto | 0 |
 | 0x08 | Thaw | spawner → proto | 0 |
 | 0x09 | Seed | spawner → proto | 0 |
+| 0x0A | Revoke | spawner → proto | 0 |
 | 0x10 | Init | proto → emu | 0 |
 | 0x11 | Output | proto → emu | 0 |
 | 0x12 | Resize | proto → emu | 0 |
@@ -571,10 +590,11 @@ does and does not give a process of the user.
 | 0x46 | HandoffAgent | session spawner → attacher | 1 |
 | 0x47 | HandoffScreen | session spawner → attacher | 0 |
 | 0x48 | HandoffTaken | attacher → session spawner | 0 |
-| 0x49 | Adopt | launcher → spawner (B only) | 1 |
+| 0x49 | HandoffReleased | session spawner → attacher | 0 |
+| 0x4F | Adopt | launcher → spawner (B only) | 1 |
 
 The high nibble names the direction, so a stray message is easy to spot
-in a trace. Unlisted types are refused. **0x40 to 0x48 are the attach
+in a trace. Unlisted types are refused. **0x40 to 0x49 are the attach
 protocol** and are frozen as §2.8 says; on an attach socket the
 "launcher" end is whoever connected (a launcher, a lister, or a spawner
 adopting the session) and the "spawner" end the session. Everything else
@@ -752,7 +772,7 @@ as `Credential`.
 only. Length 1. `mosey -kill` (`bootstrap.md` §9.5): the spawner hangs the
 shell up as for the idle timeout (§2.4) and closes the connection.
 
-**The live upgrade's messages** (§2.8). 0x44 to 0x48 are attach protocol
+**The live upgrade's messages** (§2.8). 0x44 to 0x49 are attach protocol
 v1 and frozen; the rest are private.
 
 **0x07 Freeze**, **0x08 Thaw** (spawner → proto): type only. Length 1.
@@ -802,9 +822,17 @@ agent listener.
 carry exactly the length `HandoffState` gave; the last has MORE clear.
 
 **0x48 HandoffTaken** (attacher → session): type only. The session's
-answer is to go (§2.8 step 9) and close the connection.
+answer, if it commits, is `HandoffReleased`; otherwise it closes the
+connection (§2.8 steps 8 and 9).
 
-**0x49 Adopt** (launcher → spawner, on B, never on an attach socket),
+**0x49 HandoffReleased** (session → attacher): type only. The session has
+stopped accepting and will never thaw; it closes the connection once its
+proto and emu are gone (§2.8 step 9).
+
+**0x0A Revoke** (spawner → proto): type only. Proto revokes its client
+(`transport.Listener.RevokeAll`) before C closes (§2.8 step 9).
+
+**0x4F Adopt** (launcher → spawner, on B, never on an attach socket),
 one fd, the attach connection to the session being upgraded: type, then
 the client's line rewritten as `resume:SID` or `resume:SID:CREDID`, as
 `ClientLine`.
@@ -1760,6 +1788,11 @@ it lands, with the duration and exec count in the commit message.
 - An abort before `HandoffTaken` (the adopting spawner closes the
   connection) thaws proto-O, and the session goes on serving; the
   launcher then attaches plainly.
+- The two-phase commit: `HandoffTaken` is answered with
+  `HandoffReleased` and proto-O is told `Revoke`; a `HandoffTaken` after
+  the old side's wait draws no `HandoffReleased` and the session goes
+  on; the adopter keeps the session only on `HandoffReleased`, not on a
+  closed connection or any other answer.
 - `Session.Freeze` parks the pty reader and writer and returns the
   screen; output written meanwhile is read after `Thaw`, none lost.
 - The paint: a grid painted into a fresh emulator reads back as the same

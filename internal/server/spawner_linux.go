@@ -109,7 +109,8 @@ func RunSpawner(ctx context.Context, ipcFD *os.File, cfg SpawnerConfig) error {
 func newSpawner(cfg SpawnerConfig) *spawner {
 	return &spawner{
 		cfg: cfg, start: newStarter(), log: slog.New(slog.DiscardHandler),
-		handoffs: make(chan *handoffJob), handoffOutcome: make(chan bool, 1),
+		handoffs: make(chan *handoffJob), handoffDropped: make(chan struct{}, 1),
+		handoffCommit: make(chan struct{}), takenWait: T2,
 	}
 }
 
@@ -219,15 +220,20 @@ type spawner struct {
 	holdTTL time.Duration
 
 	// A live upgrade (server.md §2.8). handoffs carries a checked
-	// HandoffRequest from the attach socket to the supervision loop, and
-	// handoffOutcome whether the newer spawner took the session; job is
-	// the hand-off under way, snapping whether its snapshot is still
-	// coming from proto, and lateSnapshot whether the rest of one the
-	// loop gave up on is to be dropped. adopted is a session this
-	// spawner took from an older one. peerCheck, if set, is the uid check
-	// on a hand-off's connection in place of samePeer: a test hook.
+	// HandoffRequest from the attach socket to the supervision loop;
+	// handoffDropped says the newer spawner did not take the session, and
+	// handoffCommit, which only the loop receives and only while it still
+	// runs the session, that it did. job is the hand-off under way,
+	// snapping whether its snapshot is still coming from proto, and
+	// lateSnapshot whether the rest of one the loop gave up on is to be
+	// dropped. takenWait is how long the old side waits for HandoffTaken
+	// (T2; tests shorten it). adopted is a session this spawner took from
+	// an older one. peerCheck, if set, is the uid check on a hand-off's
+	// connection in place of samePeer: a test hook.
 	handoffs       chan *handoffJob
-	handoffOutcome chan bool
+	handoffDropped chan struct{}
+	handoffCommit  chan struct{}
+	takenWait      time.Duration
 	job            *handoffJob
 	snapping       bool
 	lateSnapshot   bool
@@ -814,11 +820,10 @@ func (s *spawner) supervise(ctx context.Context) error {
 			snapDue = nil
 			s.log.Warn("proto did not freeze for a hand-off in time")
 			s.snapshotLate()
-		case taken := <-s.handoffOutcome:
-			if taken {
-				s.handedOff()
-				return nil
-			}
+		case <-s.handoffCommit:
+			s.handedOff()
+			return nil
+		case <-s.handoffDropped:
 			s.abandonHandoff()
 		case r := <-s.resumes:
 			if err := s.ctl.Send(ipc.Resume{ClientPublic: r.public}); err != nil {

@@ -442,10 +442,16 @@ exit. What this does and does not change:
   (`server.md` §6.3); the new system calls (`pidfd_open`,
   `pidfd_send_signal`, `poll` on a pidfd) are the spawner's, which is
   unsandboxed and already owned the shell.
-- **A failed upgrade loses nothing.** Until the newer spawner has a
-  credential from its own proto, the old session is whole and resumes
-  serving; the launcher then attaches plainly (`server.md` §2.8,
-  "Aborts").
+- **A failed upgrade keeps the session.** The commit is two-phase: the
+  newer spawner keeps nothing until the old one says it has let go, and
+  the old one says so only once it can no longer thaw. Until then the
+  old session is whole: an abort ends the newer proto and emu before the
+  old proto thaws, so the pty never has two readers, and the launcher
+  then attaches plainly (`server.md` §2.8, "Aborts"). What an abort can
+  cost is output the shell wrote during the attempt, read by the newer
+  proto and missing from the screen until the next repaint. If the newer
+  spawner dies just after the old one let go, the session ends with it,
+  as it would if any spawner died.
 
 ### 4.6 SSP bounds and compression (D11, D24) — T5, A9
 

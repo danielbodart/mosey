@@ -381,6 +381,11 @@ func (s *Session) serveAgents(ctx context.Context) error {
 	}
 }
 
+// Revoke cuts the client off with REVOKED (D26), naming nobody: the
+// session has gone to a newer binary, whose proto the client that took it
+// over is about to reach (server.md §2.8 step 9).
+func (s *Session) Revoke() { s.Listener.RevokeAll() }
+
 // ShellExited tells the session the spawner saw the login shell exit. The
 // pty reader normally sees EIO first; if a job the shell left behind holds
 // the slave open, the session ends T5 later all the same.

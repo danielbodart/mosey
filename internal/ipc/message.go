@@ -96,6 +96,7 @@ const (
 	typeFreeze     = 0x07
 	typeThaw       = 0x08
 	typeSeed       = 0x09
+	typeRevoke     = 0x0A
 	typeInit       = 0x10
 	typeOutput     = 0x11
 	typeResize     = 0x12
@@ -112,14 +113,15 @@ const (
 	typeReady      = 0x41
 	typeFailed     = 0x42
 	typeHangup     = 0x43
-	// 0x40 to 0x48 are the attach protocol, frozen across releases
+	// 0x40 to 0x49 are the attach protocol, frozen across releases
 	// (server.md §2.8); everything else is private to one build.
-	typeHandoffRequest = 0x44
-	typeHandoffState   = 0x45
-	typeHandoffAgent   = 0x46
-	typeHandoffScreen  = 0x47
-	typeHandoffTaken   = 0x48
-	typeAdopt          = 0x49
+	typeHandoffRequest  = 0x44
+	typeHandoffState    = 0x45
+	typeHandoffAgent    = 0x46
+	typeHandoffScreen   = 0x47
+	typeHandoffTaken    = 0x48
+	typeHandoffReleased = 0x49
+	typeAdopt           = 0x4F
 )
 
 // Message is one IPC message.
@@ -362,8 +364,18 @@ type HandoffScreen struct {
 }
 
 // HandoffTaken tells the session the asker has its state and a
-// credential from its own proto: the session goes (server.md §2.8 step 9).
+// credential from its own proto, and asks it to let go (server.md §2.8
+// step 8).
 type HandoffTaken struct{}
+
+// HandoffReleased is the session's answer to HandoffTaken: it has stopped
+// accepting and will never thaw, so the session is the asker's (server.md
+// §2.8 step 9). Without it the asker keeps nothing.
+type HandoffReleased struct{}
+
+// Revoke tells a proto whose session was handed to a newer binary to cut
+// its client off with REVOKED (D26), as a takeover does, before it goes.
+type Revoke struct{}
 
 // Adopt is the launcher's word to a spawner of its own binary: upgrade the
 // session at the other end of Conn, an attach connection already greeted,
@@ -373,37 +385,39 @@ type Adopt struct {
 	Conn *os.File
 }
 
-func (Start) typ() byte          { return typeStart }
-func (EmuLink) typ() byte        { return typeEmuLink }
-func (ShellExit) typ() byte      { return typeShellExit }
-func (AgentConn) typ() byte      { return typeAgentConn }
-func (Resume) typ() byte         { return typeResume }
-func (EmuPaused) typ() byte      { return typeEmuPaused }
-func (Init) typ() byte           { return typeInit }
-func (Output) typ() byte         { return typeOutput }
-func (Resize) typ() byte         { return typeResize }
-func (Flush) typ() byte          { return typeFlush }
-func (Update) typ() byte         { return typeUpdate }
-func (Replies) typ() byte        { return typeReplies }
-func (Credential) typ() byte     { return typeCredential }
-func (Exit) typ() byte           { return typeExit }
-func (KillEmu) typ() byte        { return typeKillEmu }
-func (Attached) typ() byte       { return typeAttached }
-func (Detached) typ() byte       { return typeDetached }
-func (ClientLine) typ() byte     { return typeClientLine }
-func (Ready) typ() byte          { return typeReady }
-func (Failed) typ() byte         { return typeFailed }
-func (Hangup) typ() byte         { return typeHangup }
-func (Freeze) typ() byte         { return typeFreeze }
-func (Thaw) typ() byte           { return typeThaw }
-func (Seed) typ() byte           { return typeSeed }
-func (Snapshot) typ() byte       { return typeSnapshot }
-func (HandoffRequest) typ() byte { return typeHandoffRequest }
-func (HandoffState) typ() byte   { return typeHandoffState }
-func (HandoffAgent) typ() byte   { return typeHandoffAgent }
-func (HandoffScreen) typ() byte  { return typeHandoffScreen }
-func (HandoffTaken) typ() byte   { return typeHandoffTaken }
-func (Adopt) typ() byte          { return typeAdopt }
+func (Start) typ() byte           { return typeStart }
+func (EmuLink) typ() byte         { return typeEmuLink }
+func (ShellExit) typ() byte       { return typeShellExit }
+func (AgentConn) typ() byte       { return typeAgentConn }
+func (Resume) typ() byte          { return typeResume }
+func (EmuPaused) typ() byte       { return typeEmuPaused }
+func (Init) typ() byte            { return typeInit }
+func (Output) typ() byte          { return typeOutput }
+func (Resize) typ() byte          { return typeResize }
+func (Flush) typ() byte           { return typeFlush }
+func (Update) typ() byte          { return typeUpdate }
+func (Replies) typ() byte         { return typeReplies }
+func (Credential) typ() byte      { return typeCredential }
+func (Exit) typ() byte            { return typeExit }
+func (KillEmu) typ() byte         { return typeKillEmu }
+func (Attached) typ() byte        { return typeAttached }
+func (Detached) typ() byte        { return typeDetached }
+func (ClientLine) typ() byte      { return typeClientLine }
+func (Ready) typ() byte           { return typeReady }
+func (Failed) typ() byte          { return typeFailed }
+func (Hangup) typ() byte          { return typeHangup }
+func (Freeze) typ() byte          { return typeFreeze }
+func (Thaw) typ() byte            { return typeThaw }
+func (Seed) typ() byte            { return typeSeed }
+func (Snapshot) typ() byte        { return typeSnapshot }
+func (HandoffRequest) typ() byte  { return typeHandoffRequest }
+func (HandoffState) typ() byte    { return typeHandoffState }
+func (HandoffAgent) typ() byte    { return typeHandoffAgent }
+func (HandoffScreen) typ() byte   { return typeHandoffScreen }
+func (HandoffTaken) typ() byte    { return typeHandoffTaken }
+func (HandoffReleased) typ() byte { return typeHandoffReleased }
+func (Revoke) typ() byte          { return typeRevoke }
+func (Adopt) typ() byte           { return typeAdopt }
 
 // route is who may send a type to whom, and how many fds it carries.
 type route struct {
@@ -436,15 +450,17 @@ var routes = map[byte]route{
 	typeFreeze:     {Spawner, Proto, 0},
 	typeThaw:       {Spawner, Proto, 0},
 	typeSeed:       {Spawner, Proto, 0},
+	typeRevoke:     {Spawner, Proto, 0},
 	typeSnapshot:   {Proto, Spawner, 0},
 	// On an attach socket the end that connected (a launcher, a lister
 	// or a spawner adopting the session) is Launcher, the session Spawner.
-	typeHandoffRequest: {Launcher, Spawner, 0},
-	typeHandoffState:   {Spawner, Launcher, 3},
-	typeHandoffAgent:   {Spawner, Launcher, 1},
-	typeHandoffScreen:  {Spawner, Launcher, 0},
-	typeHandoffTaken:   {Launcher, Spawner, 0},
-	typeAdopt:          {Launcher, Spawner, 1},
+	typeHandoffRequest:  {Launcher, Spawner, 0},
+	typeHandoffState:    {Spawner, Launcher, 3},
+	typeHandoffAgent:    {Spawner, Launcher, 1},
+	typeHandoffScreen:   {Spawner, Launcher, 0},
+	typeHandoffTaken:    {Launcher, Spawner, 0},
+	typeHandoffReleased: {Spawner, Launcher, 0},
+	typeAdopt:           {Launcher, Spawner, 1},
 }
 
 // ErrMalformed is wrapped by every refusal of a message: a violation by the
@@ -550,7 +566,7 @@ func Marshal(m Message) ([]byte, error) {
 		if m.Peer.Addr().IsValid() {
 			b = binary.BigEndian.AppendUint16(b, m.Peer.Port())
 		}
-	case Flush, Detached, AgentConn, Hangup, Freeze, Thaw, HandoffAgent, HandoffTaken:
+	case Flush, Detached, AgentConn, Hangup, Freeze, Thaw, Revoke, HandoffAgent, HandoffTaken, HandoffReleased:
 	case Snapshot:
 		b = appendFragment(b, m.More, m.Fragment)
 	case Seed:
@@ -881,6 +897,10 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		return Thaw{}, fixed(0)
 	case typeHandoffTaken:
 		return HandoffTaken{}, fixed(0)
+	case typeHandoffReleased:
+		return HandoffReleased{}, fixed(0)
+	case typeRevoke:
+		return Revoke{}, fixed(0)
 	case typeHandoffAgent:
 		return HandoffAgent{}, fixed(0)
 	case typeSnapshot, typeSeed, typeHandoffScreen:

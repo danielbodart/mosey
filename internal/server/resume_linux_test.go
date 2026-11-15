@@ -156,7 +156,8 @@ func startStubSessionSetUp(t *testing.T, sid [16]byte, cfg SpawnerConfig, hold t
 		proto: proto, shell: shell, ready: true,
 		sid: sid, name: stubName, started: now, state: bootstrap.SessionNew, since: now,
 		resumes: make(chan resumeRequest), hangups: make(chan struct{}, 1), holdTTL: hold,
-		handoffs: make(chan *handoffJob), handoffOutcome: make(chan bool, 1),
+		handoffs: make(chan *handoffJob), handoffDropped: make(chan struct{}, 1),
+		handoffCommit: make(chan struct{}), takenWait: T2,
 	}
 	if s.attach, err = listenAttach(filepath.Join(runtime, "mosey"), sid); err != nil {
 		t.Fatal(err)

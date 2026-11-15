@@ -69,7 +69,7 @@ func examples() []Message {
 			m.Peer, m.ShellPID, m.ScreenLen, m.State = netip.AddrPort{}, 2, 1, 1
 			return m
 		}(),
-		HandoffAgent{}, HandoffTaken{},
+		HandoffAgent{}, HandoffTaken{}, HandoffReleased{}, Revoke{},
 		Adopt{Line: line(1)}, Adopt{Line: line(MaxClientLine)},
 	}
 }
@@ -308,7 +308,7 @@ func TestATypeFromTheWrongPeerIsRefused(t *testing.T) {
 }
 
 func TestUnknownTypesAndTheRetiredExitCodeAreRefused(t *testing.T) {
-	for _, typ := range []byte{0x00, 0x0a, 0x14, 0x22, 0x36, 0x43, 0x4a, 0xff} {
+	for _, typ := range []byte{0x00, 0x0b, 0x14, 0x22, 0x36, 0x43, 0x4a, 0xff} {
 		for _, from := range []Peer{Launcher, Spawner, Proto, Emu} {
 			for _, to := range []Peer{Launcher, Spawner, Proto, Emu} {
 				if _, err := Parse(from, to, []byte{typ, 0, 0, 0, 0}); err == nil {
@@ -363,7 +363,7 @@ func FuzzParse(f *testing.F) {
 func FuzzHandoff(f *testing.F) {
 	for _, m := range examples() {
 		switch m.(type) {
-		case HandoffRequest, HandoffState, HandoffAgent, HandoffScreen, HandoffTaken, Adopt:
+		case HandoffRequest, HandoffState, HandoffAgent, HandoffScreen, HandoffTaken, HandoffReleased, Adopt:
 			b, _ := Marshal(m)
 			if len(b) < 4096 {
 				f.Add(b)

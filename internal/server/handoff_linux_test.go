@@ -160,8 +160,9 @@ func TestAHandoffThatIsNotTakenThawsProtoAndTheSessionGoesOn(t *testing.T) {
 	}
 }
 
-// Once the newer spawner says it took the session, the old one goes:
-// proto is told (EOF on its control socket), the spawner exits, the
+// Once the newer spawner says it took the session, the old one lets go
+// and says so (HandoffReleased), then goes: proto is told to revoke its
+// client and then EOF on its control socket, the spawner exits, the
 // connection closes only then, and neither the shell nor the attach
 // socket is touched: they are the newer spawner's.
 func TestATakenHandoffLeavesTheShellAndTheSocketToTheNewerSpawner(t *testing.T) {
@@ -179,6 +180,12 @@ func TestATakenHandoffLeavesTheShellAndTheSocketToTheNewerSpawner(t *testing.T) 
 	recvFrom(t, conn) // the screen
 	if err := conn.Send(ipc.HandoffTaken{}); err != nil {
 		t.Fatal(err)
+	}
+	if m := recvFrom(t, conn); m != (ipc.HandoffReleased{}) {
+		t.Fatalf("the answer to HandoffTaken: %#v", m)
+	}
+	if m := ss.recv(); m != (ipc.Revoke{}) {
+		t.Errorf("proto got %T, not Revoke", m)
 	}
 	select {
 	case <-ss.ended:
@@ -242,5 +249,76 @@ func TestTheLauncherUpgradesOnlyASessionOfAnOlderVersion(t *testing.T) {
 		if got := l.upgrades(bootstrap.SessionLine{SoftwareVersion: c.session}); got != c.want {
 			t.Errorf("a %s launcher and a %s session: upgrade %v", c.launcher, c.session, got)
 		}
+	}
+}
+
+// The commit is two-phase (server.md §2.8 steps 8 and 9): a HandoffTaken
+// that comes after the old side stopped waiting for it is never answered
+// with HandoffReleased, so the slow adopter keeps nothing, while the old
+// session thaws and goes on: never two spawners serving one pty.
+func TestAHandoffTakenTooLateIsNeverReleasedAndTheSessionGoesOn(t *testing.T) {
+	sid := [16]byte{0x4a, 5}
+	ss := startStubSessionSetUp(t, sid, SpawnerConfig{Version: handoffSessionVersion}, 0,
+		func(s *spawner) { s.takenWait = 100 * time.Millisecond })
+	conn := ss.ask("0.2.1")
+	ss.freezeAndAnswer(snapshotOf("slow"))
+	st := recvFrom(t, conn).(ipc.HandoffState)
+	defer st.PTY.Close()
+	defer st.Pidfd.Close()
+	defer st.Listener.Close()
+	recvFrom(t, conn) // the screen
+	if m := ss.recv(); m != (ipc.Thaw{}) {
+		t.Fatalf("proto got %T, not Thaw", m)
+	}
+	conn.Send(ipc.HandoffTaken{}) // too late; it may or may not be read
+	conn.File().SetReadDeadline(time.Now().Add(10 * time.Second))
+	if m, err := conn.Recv(); !ipc.IsEOF(err) {
+		t.Fatalf("a late HandoffTaken drew %#v %v, not the connection closing", m, err)
+	}
+	public, done := ss.launch(sid)
+	if r := ss.recvResume(); string(r.ClientPublic) != string(public) {
+		t.Error("the resume after the late HandoffTaken went astray")
+	}
+	cred := credential(t, sid, 9)
+	cred.SoftwareVersion = handoffSessionVersion
+	ss.send(ipc.Credential{Line: bootstrap.MarshalCredentialLine(cred)})
+	if r := wait(t, done); r.err != nil {
+		t.Fatalf("a resume after a late HandoffTaken: %v\nlog:\n%s", r.err, ss.log.String())
+	}
+}
+
+// The adopter's half of the commit: the session is its only once the old
+// side answers HandoffTaken with HandoffReleased. A connection that
+// closes, or any other answer, is a hand-off not taken.
+func TestAnAdopterTakesTheSessionOnlyOnceTheOldSideLetsGo(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		answer func(*ipc.Conn)
+		ok     bool
+	}{
+		{"released", func(c *ipc.Conn) { c.Send(ipc.HandoffReleased{}) }, true},
+		{"closed", func(c *ipc.Conn) { c.Close() }, false},
+		{"refused", func(c *ipc.Conn) { c.Send(ipc.Failed{Text: "no"}) }, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ours, theirs, err := ipc.Pair()
+			if err != nil {
+				t.Fatal(err)
+			}
+			attach, _ := ipc.NewConn(ours, ipc.Launcher, ipc.Spawner)
+			defer attach.Close()
+			session, _ := ipc.NewConn(theirs, ipc.Spawner, ipc.Launcher)
+			defer session.Close()
+			s := newSpawner(SpawnerConfig{Version: "0.2.1"})
+			done := make(chan error, 1)
+			go func() { done <- s.commitAdoption(attach) }()
+			if m := recvFrom(t, session); m != (ipc.HandoffTaken{}) {
+				t.Fatalf("the adopter sent %#v, not HandoffTaken", m)
+			}
+			c.answer(session)
+			if err := <-done; (err == nil) != c.ok {
+				t.Errorf("commit: %v", err)
+			}
+		})
 	}
 }
