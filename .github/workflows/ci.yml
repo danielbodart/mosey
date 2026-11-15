@@ -456,8 +456,12 @@ jobs:
   # child; trunk never gets the commit. Agents and a push loop commit to
   # local trunk all the time, and a bot commit on origin/trunk would make
   # every local trunk diverge on every release; a tag on no branch does
-  # not, needs no [skip ci], since a tag push starts no run here, and cannot
-  # race anyone's push to trunk. So the last release is the tag's parent,
+  # not, needs no skip-CI marker in its message, since a tag push starts no
+  # run here, and cannot race anyone's push to trunk. (Never write that
+  # marker, the words skip and ci in square brackets, in a commit message,
+  # even to say it is not needed: GitHub starts no workflow at all for a
+  # push whose head commit's message contains it anywhere, and a green
+  # trunk commit then goes untested and unreleased until the next push.) So the last release is the tag's parent,
   # not an ancestor tag (scripts/last-release.sh, which release-due and the
   # notes ask). The child's workflows are its parent's, so the GITHUB_TOKEN
   # rule below about workflows applies to it as it would to the parent.
