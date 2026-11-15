@@ -431,7 +431,7 @@ can send any grid that passes `Apply`. Bounds:
 | `MaxPending` | 1024 cell predictions; past it, the next key bumps | memory and CPU while the server is stalled [S6 §9] |
 | cursor predictions | at most 1024; the oldest 512 are dropped past it | they are judged only at `n == R`, so old ones are dead anyway |
 | bumps remembered | at most 1024; the oldest half dropped past it | the horizon and rebase look only at recent ones |
-| `LogSize` | the last 512 events, copied (never the caller's buffer), zeroed when evicted or dropped; nothing logged while echo is off, and no event over `MaxEventBytes` | bounded replay; no password bytes held [S6 §9] |
+| `LogSize` | the last 512 events, copied (never the caller's buffer), zeroed when evicted, and all of it when a frame turns echo off; nothing logged while echo is off, and no event over `MaxEventBytes` | bounded replay; no password bytes held [S6 §9] |
 | `EchoAck`, `EchoApplied` | clamped to the client's own `last`, and `A ≤ R` | a server can't make the engine judge keys it never had, nor rebase from a future it invents |
 | frame size | whatever `Apply` admits (D23: 1000 × 500) | the engine's work per frame is bounded below, not by the size |
 | work | per frame O(P log P) for P ≤ 1024 predictions, O(W) per predicted key, and a rebase of at most 512 events | no quadratic behaviour on a long row [S6 §9] |
@@ -493,9 +493,12 @@ direction. §3.1 rule 4 removes it while echo is off; rule 5 makes sure
 ### 13.3 What prediction keeps in memory
 
 The input log (§12) holds the bytes of at most the last 512 events, never
-those typed while echo was off, and zeroes each entry when it leaves. A
-password typed before the echo-off frame arrived may sit in it until
-evicted; it is zeroed then, or when the engine drops it.
+those typed while echo was off, and zeroes each entry when it leaves. The
+start of a password typed before the echo-off frame arrived is logged
+like any key, so the frame that turns echo off zeroes the whole log.
+Rebase does not run while echo is off, and if echo comes back on before
+the server has every key, the missing entries are a hole and rebase
+waits for the server (§8), which costs one round trip of prediction.
 
 ## 14. Measurements [M]
 

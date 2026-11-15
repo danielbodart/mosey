@@ -183,6 +183,29 @@ func TestEnteringEchoOffDropsEveryPrediction(t *testing.T) {
 	}
 }
 
+// The first keys of a password can be typed before the frame that says
+// echo is off arrives, and so be logged; that frame wipes them.
+func TestEnteringEchoOffZeroesKeysAlreadyLogged(t *testing.T) {
+	ty := confirmed(t)
+	ty.key("\r") // Enter at "sudo ...": the prompt is on its way
+	n := ty.key("h")
+	kept := ty.e.log[n%LogSize].b
+	if string(kept) != "h" {
+		t.Fatalf("the key typed ahead of the prompt was not logged: %q", kept)
+	}
+	off := frame(20, "Password: ", 10, 1, 1)
+	off.EchoOff = true
+	ty.e.Frame(off)
+	if kept[0] != 0 {
+		t.Fatalf("a key typed before echo went off is still held: %q", kept)
+	}
+	for _, l := range ty.e.log {
+		if l.b != nil || l.n != 0 {
+			t.Fatalf("event %d is still logged after echo went off", l.n)
+		}
+	}
+}
+
 func TestTheShiftStopsAtAnAutosuggestion(t *testing.T) {
 	g := frame(30, "$ ec", 4, 1, 1)
 	put(g, 4, 0, "ho hello", grey)

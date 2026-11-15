@@ -868,7 +868,8 @@ disagrees.
   under echo-off is drawn.
 - **Memory.** The input log keeps at most the last 512 key events of up
   to 64 bytes each, never those typed while echo was off, and zeroes each
-  entry as it leaves.
+  entry as it leaves; the frame that turns echo off zeroes all of it, so
+  a password typed ahead of the prompt is not kept either.
 
 ## 5. Accepted residual risks
 

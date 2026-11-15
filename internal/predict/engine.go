@@ -252,7 +252,11 @@ func (e *Engine) advance(n uint64) bool {
 // event LogSize or more before it: it may be a password typed before the
 // echo-off frame arrived (prediction.md §13.3).
 func (e *Engine) forget(n uint64) {
-	s := &e.log[n%LogSize]
+	e.forgetSlot(&e.log[n%LogSize])
+}
+
+// forgetSlot zeroes a log entry's bytes, then the entry.
+func (e *Engine) forgetSlot(s *logEntry) {
 	clear(s.b)
 	*s = logEntry{}
 }
@@ -528,6 +532,13 @@ func (e *Engine) Frame(g *screen.Grid) {
 	a := min(g.EchoAck, r)
 	if g.EchoOff && !e.echoOff {
 		e.dropAll()
+		// Keys typed before this frame arrived may be the start of the
+		// password. Rebase does not run while echo is off, and once it is
+		// back on a missing entry is only a hole it waits out, so nothing
+		// is lost by forgetting them all (prediction.md §13.3).
+		for n := range e.log {
+			e.forgetSlot(&e.log[n])
+		}
 	}
 	e.echoOff = g.EchoOff
 
