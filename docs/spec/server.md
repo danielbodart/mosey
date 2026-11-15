@@ -427,7 +427,7 @@ line, and prints the credential line the session's own proto mints.
 Nothing compares software versions. A session whose greeting does not
 parse is not chosen. One whose `aproto` is another number is not taken by
 `auto`; `name:NAME` or `resume:SID` naming it fails with `MOSEY-ERROR 1
-attach P` and, on stderr, `session NAME speaks attach protocol P; this
+attach P-N` and, on stderr, `session NAME speaks attach protocol P; this
 mosey speaks N`.
 
 ---

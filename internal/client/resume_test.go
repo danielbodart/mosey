@@ -127,6 +127,31 @@ func TestKillRunsServeKillWithTheName(t *testing.T) {
 	}
 }
 
+// An attach refusal names both attach protocols in the client's own
+// line, from the ErrorLine's detail, so it says so even where the
+// launcher's stderr is not shown, as in R3's reconnect (bootstrap.md
+// §6.4).
+func TestAnAttachRefusalNamesBothProtocolsInTheClientsOwnLine(t *testing.T) {
+	refusal := &bootstrap.RemoteError{ErrorLine: bootstrap.ErrorLine{Proto: 1, Code: bootstrap.CodeAttach, Detail: "2-1"}}
+	b := &spawn{ssh: bootstrap.SSH{Destination: "far"}, line: bootstrap.ClientLine{Name: "work"}}
+	var f *Failure
+	if err := b.refused(refusal); !errors.As(err, &f) || f.Msg != "session work on far speaks attach protocol 2; far's mosey speaks 1" {
+		t.Errorf("attach: %v", err)
+	}
+
+	dir := t.TempDir()
+	ssh := fakeSSH(t, dir, "hostname far\n", 0)
+	server := filepath.Join(dir, "mosey")
+	if err := os.WriteFile(server, []byte("#!/bin/sh\necho 'MOSEY-ERROR 1 attach 2-1'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	o := KillOptions{SSH: bootstrap.SSH{Program: ssh, Destination: "far", Server: server}, Name: "elder", Stdout: &out, Stderr: &errs}
+	if err := Kill(context.Background(), o); !errors.As(err, &f) || f.Msg != "session elder on far speaks attach protocol 2; far's mosey speaks 1" {
+		t.Errorf("kill: %v", err)
+	}
+}
+
 // listHost is a far host for -list and -kill with no -remote: ssh runs the
 // probe under /bin/sh with HOME the test's, and PATH holds no mosey.
 func listHost(t *testing.T) (ssh, home, ran string) {

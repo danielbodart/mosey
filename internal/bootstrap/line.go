@@ -166,7 +166,7 @@ const (
 	CodeVersion = "version"
 	// CodeAttach answers name:NAME or resume:SID naming a session whose
 	// spawner speaks another attach protocol; its detail is that
-	// protocol (§9.2 step 5).
+	// protocol and the launcher's, "P-N" (§9.2 step 5).
 	CodeAttach      = "attach"
 	CodeUnsupported = "unsupported"
 	CodeSession     = "session"

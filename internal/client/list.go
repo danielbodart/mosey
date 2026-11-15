@@ -89,8 +89,7 @@ func Kill(ctx context.Context, o KillOptions) error {
 	if err != nil && errors.As(err, &remote) && remote.Code == bootstrap.CodeAttach {
 		// Its spawner speaks another attach protocol, so this host's mosey
 		// cannot ask it to end (bootstrap.md §9.2 step 5).
-		return fail(err, "session %s on %s was started by a mosey that speaks attach protocol %s, which %s's mosey cannot reach (see above)",
-			o.Name, o.SSH.Destination, remote.Detail, o.SSH.Destination)
+		return attachRefused(remote, "session "+o.Name, o.SSH.Destination)
 	}
 	if err != nil {
 		return err

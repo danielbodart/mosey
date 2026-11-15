@@ -209,11 +209,14 @@ func attachable(g bootstrap.SessionLine) bool {
 }
 
 // attachMismatch is the refusal of a session this launcher cannot attach:
-// its number on the line, both on stderr (bootstrap.md §6.4).
+// both numbers on the line, the session's then this launcher's, so the
+// client's own message can name both even where it shows none of the
+// launcher's stderr (R3's reconnect logs it), and both on stderr
+// (bootstrap.md §6.4).
 func attachMismatch(g bootstrap.SessionLine) *LaunchError {
 	return &LaunchError{
 		Code:   bootstrap.CodeAttach,
-		Detail: strconv.Itoa(g.AttachProtocol),
+		Detail: strconv.Itoa(g.AttachProtocol) + "-" + strconv.Itoa(bootstrap.AttachProtocol),
 		Text:   fmt.Sprintf("session %s speaks attach protocol %d; this mosey speaks %d", g.Name, g.AttachProtocol, bootstrap.AttachProtocol),
 	}
 }

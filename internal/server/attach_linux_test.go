@@ -223,7 +223,7 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	for name, line := range map[string][]byte{"-s work": byName, "R3's resume": byID} {
 		out, errs, err = run(line)
 		e, perr := bootstrap.ParseErrorLine([]byte(out))
-		if err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "2" ||
+		if err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "2-1" ||
 			!strings.Contains(errs, "session work speaks attach protocol 2; this mosey speaks 1") {
 			t.Errorf("%s of an attach-2 session: %v, stdout %q, stderr %q", name, err, out, errs)
 		}
@@ -388,7 +388,7 @@ func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
 	}
 	out.Reset()
 	err := Kill(&out, getenv, "elder")
-	if e, perr := bootstrap.ParseErrorLine(out.Bytes()); err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "2" ||
+	if e, perr := bootstrap.ParseErrorLine(out.Bytes()); err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "2-1" ||
 		!strings.Contains(err.Error(), "session elder speaks attach protocol 2; this mosey speaks 1") {
 		t.Errorf("kill of an attach-2 session: %v, %q", err, out.String())
 	}

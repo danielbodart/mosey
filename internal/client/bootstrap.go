@@ -262,14 +262,13 @@ func (b *spawn) refused(e *bootstrap.RemoteError) error {
 		// and no fallback (D8 V1, §6.4).
 		return fail(e, "%s's mosey speaks protocol %d; this mosey speaks %d", b.ssh.Destination, e.Proto, bootstrap.Version)
 	case bootstrap.CodeAttach:
-		// The session's spawner is of another attach protocol; the
-		// launcher's stderr, shown above, names both numbers (§9.2 step 5).
+		// The session's spawner is of another attach protocol (§9.2 step
+		// 5).
 		session := "the session"
 		if b.line.Name != "" {
 			session = "session " + b.line.Name
 		}
-		return fail(e, "%s on %s was started by a mosey that speaks attach protocol %s, which %s's mosey cannot attach (see above)",
-			session, b.ssh.Destination, e.Detail, b.ssh.Destination)
+		return attachRefused(e, session, b.ssh.Destination)
 	case bootstrap.CodeUnsupported:
 		return fail(e, "the remote mosey can't do %s yet", e.Detail)
 	case bootstrap.CodeSession:
@@ -280,6 +279,19 @@ func (b *spawn) refused(e *bootstrap.RemoteError) error {
 		return fail(e, "the server failed to start (see above)")
 	}
 	return fail(e, "the server refused: %s (see above)", e.Code)
+}
+
+// attachRefused is the user's line for an attach refusal (bootstrap.md
+// §6.4): its detail is the session's attach protocol and the launcher's,
+// "P-N", so the line names both whether or not the launcher's stderr is
+// shown. The detail is the far side's, but a word (§6.4: letters, digits
+// and ._+-), so nothing in it can drive the terminal.
+func attachRefused(e *bootstrap.RemoteError, session, dest string) error {
+	theirs, ours, ok := strings.Cut(e.Detail, "-")
+	if !ok || theirs == "" || ours == "" {
+		return fail(e, "%s on %s speaks attach protocol %s, which %s's mosey cannot attach", session, dest, e.Detail, dest)
+	}
+	return fail(e, "%s on %s speaks attach protocol %s; %s's mosey speaks %s", session, dest, theirs, dest, ours)
 }
 
 // show writes what the far side said to stderr, filtered.

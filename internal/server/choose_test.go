@@ -73,7 +73,7 @@ func TestASessionOfAnotherAttachProtocolIsPassedOverOrRefused(t *testing.T) {
 	byID := choose(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: [16]byte{1}, Holder: [8]byte{7}, HasHolder: true},
 		[]bootstrap.SessionLine{elder}, fixedName)
 	for name, c := range map[string]choice{"-s work": byName, "R3's resume": byID} {
-		if c.err == nil || c.err.Code != bootstrap.CodeAttach || c.err.Detail != "2" ||
+		if c.err == nil || c.err.Code != bootstrap.CodeAttach || c.err.Detail != "2-1" ||
 			!strings.Contains(c.err.Text, "speaks attach protocol 2; this mosey speaks 1") {
 			t.Errorf("%s of an attach-2 session: %+v", name, c)
 		}

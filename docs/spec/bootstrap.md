@@ -1118,7 +1118,7 @@ generic message below, with the code shown in it). The codes v1 defines:
 |---|---|---|---|
 | `line` | the stdin line is malformed or not alone | `-` | `mosey: the server could not read this client's request: a bug, please report it` |
 | `version` | the ClientLine's `proto` is not the server's line version (§6.1) | `-` | `mosey: DEST's mosey speaks protocol P; this mosey speaks N`, P being the line's `eproto`. A CredentialLine or ProbeLine of another version (`*VersionError`) gets the same message |
-| `attach` | `name:NAME` or `resume:SID…` names a session whose spawner speaks another attach protocol (§9.2.1), which this launcher cannot attach | that spawner's attach version | `mosey: session NAME on DEST was started by a mosey that speaks attach protocol P, which DEST's mosey cannot attach (see above)`; the launcher's stderr line names both numbers |
+| `attach` | `name:NAME` or `resume:SID…` names a session whose spawner speaks another attach protocol (§9.2.1), which this launcher cannot attach | `P-N`: that spawner's attach protocol, then the launcher's | `mosey: session NAME on DEST speaks attach protocol P; DEST's mosey speaks N`, from the detail alone, so it names both numbers even where the launcher's stderr is not shown (R3's reconnect logs it); `-kill` says the same |
 | `unsupported` | a reserved value the server does not yet accept (slice 1 sent it for `agent=yes`; no v1 value is reserved now) | the field's name | `mosey: the remote mosey can't do F yet` |
 | `session` | `resume:SID…` names no session of this user that answers (§9.2) | `-` | R3's reconnect (§9.2.2): `mosey: session NAME on DEST has ended: its shell exited, or the host restarted` |
 | `taken` | R3's `resume:SID:CREDID` finds its session held by another credential than CREDID: another client has taken it over (§9.2.2, D26) | when that client attached, in unix seconds | `mosey: session NAME taken over by another client at TIME` (exit 3, as §9.1) |
@@ -1464,7 +1464,7 @@ the CredentialLine (§6.3), so the client can say it, and in the greeting
 | Command | ClientLine `attach` | What the launcher does, holding the lock |
 |---|---|---|
 | `mosey DEST` | `auto` | of the sessions the launcher can attach (step 5: any version's, if their attach protocol is this launcher's) that are `detached` (below), the one with the newest `since`, taken with `resume:SID`; if none is detached, a new session with a generated name, `new:NAME`. It never takes a session that is `new` or `attached` |
-| `mosey -s NAME DEST` | `name:NAME` | session NAME (step 5: of any version; one of another attach protocol is `MOSEY-ERROR 1 attach P`), whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
+| `mosey -s NAME DEST` | `name:NAME` | session NAME (step 5: of any version; one of another attach protocol is `MOSEY-ERROR 1 attach P-N`), whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
 | `mosey -new DEST` | `new` | a new session with a generated name, `new:NAME` |
 | R3's reconnect | `resume:SID:CREDID` | §9.2.2 |
 | `mosey -list DEST` | none: `--serve=list` (§9.4) | |
@@ -1544,8 +1544,8 @@ The steps:
    not parse is not chosen. One whose attach protocol is not this
    launcher's is never taken by `auto` (it is listed by `-list`, so the
    user can see it); `name:NAME` or `resume:SID` naming it is refused with
-   `MOSEY-ERROR 1 attach P`, P its spawner's number, and the launcher's
-   stderr says `session NAME speaks attach protocol P; this mosey speaks
+   `MOSEY-ERROR 1 attach P-N`, P its spawner's number and N the
+   launcher's, and the launcher's stderr says `session NAME speaks attach protocol P; this mosey speaks
    N`. Its name stays taken: a new session is never given it.
 6. **The size** in the ClientLine is not applied by the spawner (an
    unconfirmed attach must change nothing). The client sends its size as
