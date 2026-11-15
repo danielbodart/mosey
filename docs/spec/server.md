@@ -303,7 +303,7 @@ triggers above (nothing emu does is one of them):
     `ClientLine`, replacing any of the same name.
   - **Hopping** (D7, `bootstrap.md` §4.7.9): if the spawner's binary is
     the cached copy, `$HOME/.cache/mosey/mosey` (the same file, by device
-    and inode, as `os.Executable()` at the spawner's start), and no
+    and inode, as `/proc/self/exe` when the shell starts), and no
     `mosey` is on the environment's `PATH`, `PATH` gets
     `$HOME/.cache/mosey` put first, so `mosey otherhost` in the session
     finds it. A `PATH` that already has a `mosey`, or a server that is

@@ -79,7 +79,7 @@ predict                         (screen; golang.org/x/text/width) -- never parse
 emu                             (screen)
 bootstrap                       ()              -- raw bytes; never handshake
 pty, sandbox, ipc, nocore       ()
-install                         (bootstrap)     -- the size bound only
+install                         (bootstrap)     -- the size bound and CachePath only
 terminal                        ()
 server                          (all of the above but client, terminal, render)
 client                          (all of the above but server, pty, sandbox, ipc, emu)
