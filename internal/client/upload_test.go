@@ -220,10 +220,10 @@ func newRelease(t *testing.T, files map[string][]byte) *release {
 	return r
 }
 
-// attested is the bundle the release workflow publishes for content,
-// unless a says otherwise.
-func (r *release) attested(t *testing.T, content []byte, a provenancetest.Attestation) []byte {
-	return r.sig.Bundle(t, sha256.Sum256(content), a)
+// attested is the bundle the release workflow publishes for the asset
+// called name holding content, unless a says otherwise.
+func (r *release) attested(t *testing.T, name string, content []byte, a provenancetest.Attestation) []byte {
+	return r.sig.Bundle(t, name, sha256.Sum256(content), a)
 }
 
 func sums(lines map[string][]byte) []byte {
@@ -252,7 +252,7 @@ func TestAnotherPlatformGetsItsReleaseCheckedAgainstSHA256SUMSAndItsProvenance(t
 		"/v0.4.2/mosey-0.4.2-linux-amd64": asset,
 		"/v0.4.2/SHA256SUMS":              sums(map[string][]byte{"mosey-0.4.2-linux-amd64": asset, "mosey-0.4.2-darwin-arm64": []byte("x")}),
 	})
-	r.files["/v0.4.2/mosey-0.4.2-linux-amd64.sigstore.json"] = r.attested(t, asset, provenancetest.Attestation{})
+	r.files["/v0.4.2/mosey-0.4.2-linux-amd64.sigstore.json"] = r.attested(t, "mosey-0.4.2-linux-amd64", asset, provenancetest.Attestation{})
 	if err := h.foreignCopier(r, "").copy(context.Background(), linux); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestABadReleaseIsRefusedBeforeAnythingIsSent(t *testing.T) {
 			h := newUploadHost(t)
 			r := newRelease(t, c.files)
 			if _, ok := r.files["/v0.4.2/mosey-0.4.2-linux-amd64"]; ok {
-				r.files["/v0.4.2/mosey-0.4.2-linux-amd64.sigstore.json"] = r.attested(t, asset, provenancetest.Attestation{})
+				r.files["/v0.4.2/mosey-0.4.2-linux-amd64.sigstore.json"] = r.attested(t, "mosey-0.4.2-linux-amd64", asset, provenancetest.Attestation{})
 			}
 			err := h.foreignCopier(r, c.base).copy(context.Background(), linux)
 			if err == nil || !strings.Contains(err.Error(), c.says) {
@@ -307,17 +307,26 @@ func TestAReleaseWithoutTheWorkflowsProvenanceIsRefused(t *testing.T) {
 	}{
 		{"missing bundle", nil, "mosey-0.4.2-linux-amd64.sigstore.json: no Sigstore bundle"},
 		{"wrong identity", func(r *release) []byte {
-			return r.attested(t, asset, provenancetest.Attestation{Identity: "https://github.com/someone/mosey/.github/workflows/ci.yml@refs/heads/trunk"})
+			return r.attested(t, "mosey-0.4.2-linux-amd64", asset, provenancetest.Attestation{Identity: "https://github.com/someone/mosey/.github/workflows/ci.yml@refs/heads/trunk"})
 		}, "verifying the Sigstore bundle"},
 		{"wrong digest", func(r *release) []byte {
-			return r.attested(t, []byte("another build"), provenancetest.Attestation{})
+			return r.attested(t, "mosey-0.4.2-linux-amd64", []byte("another build"), provenancetest.Attestation{})
 		}, "verifying the Sigstore bundle"},
 		{"wrong issuer", func(r *release) []byte {
-			return r.attested(t, asset, provenancetest.Attestation{Issuer: "https://accounts.google.com"})
+			return r.attested(t, "mosey-0.4.2-linux-amd64", asset, provenancetest.Attestation{Issuer: "https://accounts.google.com"})
 		}, "verifying the Sigstore bundle"},
 		{"another Sigstore", func(*release) []byte {
-			return provenancetest.New(t).Bundle(t, sha256.Sum256(asset), provenancetest.Attestation{})
+			return provenancetest.New(t).Bundle(t, "mosey-0.4.2-linux-amd64", sha256.Sum256(asset), provenancetest.Attestation{})
 		}, "verifying the Sigstore bundle"},
+		// A genuine bundle from an older release, or for another
+		// platform, re-uploaded here under this asset's name: the bytes,
+		// SHA256SUMS and signature all agree, only the name gives it away.
+		{"an older release's bundle", func(r *release) []byte {
+			return r.attested(t, "mosey-0.3.9-linux-amd64", asset, provenancetest.Attestation{})
+		}, "does not attest mosey-0.4.2-linux-amd64"},
+		{"another platform's bundle", func(r *release) []byte {
+			return r.attested(t, "mosey-0.4.2-linux-arm64", asset, provenancetest.Attestation{})
+		}, "does not attest mosey-0.4.2-linux-amd64"},
 		{"garbage", func(*release) []byte { return []byte("{") }, "parsing the Sigstore bundle"},
 		{"oversized", func(*release) []byte { return bytes.Repeat([]byte(" "), provenance.MaxBundle+1) }, "over"},
 	} {

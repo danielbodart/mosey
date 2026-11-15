@@ -17,19 +17,20 @@ import (
 // (it comes from the network, CLAUDE.md). Verify must never panic, and
 // whatever it accepts must, read independently of it, be a bundle whose
 // certificate names the release workflow and whose statement names the
-// digest asked about: so no mutation turns a refusal into a wrong yes.
+// asset and digest asked about, in one subject: so no mutation turns a
+// refusal into a wrong yes.
 func FuzzVerify(f *testing.F) {
 	s := provenancetest.New(f)
 	digest := provenancetest.Digest(asset)
-	f.Add(s.Bundle(f, digest, provenancetest.Attestation{}))
-	f.Add(s.Bundle(f, digest, provenancetest.Attestation{Identity: "https://example.com/x"}))
+	f.Add(s.Bundle(f, assetName, digest, provenancetest.Attestation{}))
+	f.Add(s.Bundle(f, assetName, digest, provenancetest.Attestation{Identity: "https://example.com/x"}))
 	if real, err := os.ReadFile("testdata/gh_2.104.0_linux_amd64.tar.gz.sigstore.json"); err == nil {
 		f.Add(real)
 	}
 	f.Add([]byte(`{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+json"}`))
 	f.Add([]byte("{}"))
 	f.Fuzz(func(t *testing.T, b []byte) {
-		if err := s.Verifier.Verify(b, digest); err != nil {
+		if err := s.Verifier.Verify(b, assetName, digest); err != nil {
 			return
 		}
 		var bb bundle.Bundle
@@ -58,6 +59,7 @@ func FuzzVerify(f *testing.F) {
 		var st struct {
 			PredicateType string `json:"predicateType"`
 			Subject       []struct {
+				Name   string            `json:"name"`
 				Digest map[string]string `json:"digest"`
 			} `json:"subject"`
 		}
@@ -68,7 +70,7 @@ func FuzzVerify(f *testing.F) {
 			t.Fatalf("accepted predicate %q", st.PredicateType)
 		}
 		for _, sub := range st.Subject {
-			if sub.Digest["sha256"] == hex.EncodeToString(digest[:]) {
+			if sub.Name == assetName && sub.Digest["sha256"] == hex.EncodeToString(digest[:]) {
 				return
 			}
 		}

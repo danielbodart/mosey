@@ -34,7 +34,9 @@ func (e *unprovenError) Unwrap() error { return e.err }
 
 // fetchRelease downloads mosey version v for goos/goarch from the release
 // at base (bootstrap.ReleaseBase, or a test's server), checks its SHA-256
-// against the release's SHA256SUMS and its Sigstore bundle with pv,
+// against the release's SHA256SUMS and its Sigstore bundle with pv, which
+// must attest this asset by name (so this version and platform) as well
+// as by digest,
 // before anyone uses a byte of it (bootstrap.md §4.7.4). HTTPS only,
 // redirects included, every body bounded.
 func fetchRelease(ctx context.Context, hc *http.Client, base, v, goos, goarch string, pv *provenance.Verifier) ([]byte, [32]byte, error) {
@@ -70,7 +72,7 @@ func fetchRelease(ctx context.Context, hc *http.Client, base, v, goos, goarch st
 	case err != nil:
 		return nil, [32]byte{}, err
 	}
-	if err := pv.Verify(bundle, want); err != nil {
+	if err := pv.Verify(bundle, name, want); err != nil {
 		return nil, [32]byte{}, &unprovenError{fmt.Errorf("%s: %w", bootstrap.BundleName(name), err)}
 	}
 	return bin, want, nil

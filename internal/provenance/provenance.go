@@ -2,6 +2,7 @@ package provenance
 
 import (
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -101,8 +102,18 @@ func newVerifier(material root.TrustedMaterial, extra ...verify.VerifierOption) 
 }
 
 // Verify says whether bundleJSON shows that the release workflow built
-// the file whose SHA-256 is digest. Any error means no.
-func (v *Verifier) Verify(bundleJSON []byte, digest [32]byte) error {
+// the release asset called name (bootstrap.AssetName) whose SHA-256 is
+// digest. Any error means no.
+//
+// The name is pinned as well as the digest because the digest alone says
+// only that the workflow built these bytes once, in some release: a
+// genuine bundle for an older, vulnerable release would pass for any
+// newer one if it were put there under the newer name with a matching
+// SHA256SUMS line, which whoever can upload release assets controls too.
+// The name carries the version and the platform, and
+// actions/attest-build-provenance names each subject after the file it
+// attested, so a bundle is good only for the asset it was made for.
+func (v *Verifier) Verify(bundleJSON []byte, name string, digest [32]byte) error {
 	if len(bundleJSON) == 0 {
 		return ErrMissing
 	}
@@ -113,10 +124,10 @@ func (v *Verifier) Verify(bundleJSON []byte, digest [32]byte) error {
 	if err := b.UnmarshalJSON(bundleJSON); err != nil {
 		return fmt.Errorf("parsing the Sigstore bundle: %w", err)
 	}
-	return v.verify(&b, digest)
+	return v.verify(&b, name, digest)
 }
 
-func (v *Verifier) verify(e verify.SignedEntity, digest [32]byte) error {
+func (v *Verifier) verify(e verify.SignedEntity, name string, digest [32]byte) error {
 	res, err := v.v.Verify(e, verify.NewPolicy(
 		verify.WithArtifactDigest("sha256", digest[:]),
 		verify.WithCertificateIdentity(v.id),
@@ -131,5 +142,16 @@ func (v *Verifier) verify(e verify.SignedEntity, digest [32]byte) error {
 		}
 		return fmt.Errorf("the Sigstore bundle attests %s, not %s", got, PredicateType)
 	}
-	return nil
+	// sigstore-go has checked that some subject has digest; this checks
+	// that one subject is both that digest and name. A statement may name
+	// several subjects (one per file a workflow run attested), so the
+	// match must be on the same subject, not a name here and a digest
+	// there.
+	want := hex.EncodeToString(digest[:])
+	for _, sub := range res.Statement.GetSubject() {
+		if sub.GetName() == name && sub.GetDigest()["sha256"] == want {
+			return nil
+		}
+	}
+	return fmt.Errorf("the Sigstore bundle does not attest %s with that SHA-256", name)
 }

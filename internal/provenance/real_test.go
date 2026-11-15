@@ -19,6 +19,7 @@ import (
 const (
 	ghBundle   = "testdata/gh_2.104.0_linux_amd64.tar.gz.sigstore.json"
 	ghIdentity = "https://github.com/cli/cli/.github/workflows/deployment.yml@refs/heads/trunk"
+	ghName     = "gh_2.104.0_linux_amd64.tar.gz"
 	ghDigest   = "98cb101ad87dbbd3f6b2f2bfcbd43197ccd07643140121d8a9cfaa91eadbc24e"
 )
 
@@ -49,7 +50,7 @@ func readGH(t *testing.T) ([]byte, [32]byte) {
 
 func TestARealGitHubAttestationVerifiesUnderTheReleasePolicy(t *testing.T) {
 	b, d := readGH(t)
-	if err := ghVerifier(t, ghIdentity).Verify(b, d); err != nil {
+	if err := ghVerifier(t, ghIdentity).Verify(b, ghName, d); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -62,11 +63,16 @@ func TestARealGitHubAttestationIsNotMoseys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := v.Verify(b, d); err == nil {
+	if err := v.Verify(b, ghName, d); err == nil {
 		t.Error("the GitHub CLI's attestation passed as mosey's")
 	}
+	// Its statement names 21 files. Another of them, by name, with this
+	// one's digest, is refused: name and digest must be one subject's.
+	if err := ghVerifier(t, ghIdentity).Verify(b, "gh_2.104.0_linux_arm64.tar.gz", d); err == nil {
+		t.Error("a genuine attestation passed for another of its subjects' names")
+	}
 	d[0] ^= 1
-	if err := ghVerifier(t, ghIdentity).Verify(b, d); err == nil {
+	if err := ghVerifier(t, ghIdentity).Verify(b, ghName, d); err == nil {
 		t.Error("a genuine attestation passed for another digest")
 	}
 }

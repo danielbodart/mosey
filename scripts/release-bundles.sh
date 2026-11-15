@@ -17,7 +17,8 @@
 # client's, against the trusted root the client embeds
 # (internal/provenance/trusted_root.json, offline), with the pins the
 # client uses (internal/provenance: the workflow identity on trunk,
-# GitHub's OIDC issuer, SLSA provenance, the binary's digest).
+# GitHub's OIDC issuer, SLSA provenance, the binary's digest, and its
+# name, checked with jq since gh does not).
 # internal/provenance's tests check that the pins below are the client's.
 set -euo pipefail
 
@@ -65,6 +66,16 @@ for platform in "${platforms[@]}"; do
         exit 1
     fi
     jq -c . "$bundle" >"$asset.sigstore.json"
+    # The client pins the subject's name too (internal/provenance), which
+    # gh attestation verify does not check: the statement must name this
+    # asset, so a bundle made for another one is caught here, not by
+    # every client that fetches it.
+    if ! jq -e --arg name "mosey-$version-$platform" \
+        '.dsseEnvelope.payload | @base64d | fromjson | [.subject[] | select(.name == $name)] | length == 1' \
+        "$asset.sigstore.json" >/dev/null; then
+        echo "release-bundles: $bundle does not attest mosey-$version-$platform by name" >&2
+        exit 1
+    fi
     gh attestation verify "$asset" \
         --bundle "$asset.sigstore.json" \
         --custom-trusted-root "$jsonl" \

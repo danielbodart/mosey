@@ -467,7 +467,8 @@ exactly this [choice]:
   object on one line) that `actions/attest-build-provenance` made for
   that binary alone in the release job: a DSSE envelope holding an in-toto
   statement of SLSA provenance v1 (`https://slsa.dev/provenance/v1`)
-  whose one subject is the binary's SHA-256; a short-lived Fulcio
+  whose one subject is the binary, by its file name
+  (`mosey-<V>-<os>-<arch>`) and its SHA-256; a short-lived Fulcio
   certificate whose subject alternative name is the workflow
   `https://github.com/danielbodart/mosey/.github/workflows/ci.yml@refs/heads/trunk`
   and whose OIDC issuer is `https://token.actions.githubusercontent.com`,
@@ -700,7 +701,16 @@ goes when a macOS server lands.
     `https://token.actions.githubusercontent.com`, the **artifact
     digest** to the SHA-256 just checked, and the **predicate type** to
     SLSA provenance v1, so another kind of statement about the same file
-    is not taken for provenance.
+    is not taken for provenance;
+  - and pinning the **asset name**: one subject of the statement must
+    be named exactly `mosey-<V>-<os>-<arch>`, the asset asked for, with
+    that SHA-256. The digest alone says only that the workflow built
+    these bytes in *some* release; whoever can upload release assets
+    controls `SHA256SUMS` too, and could otherwise put an older release's
+    genuine binary and genuine bundle under this release's name. The
+    name carries the version and platform, so a bundle is good only for
+    the asset it was made for, and an old, vulnerable mosey cannot be
+    passed off as the current one.
 
   All of this **before** anything is sent to the far host. A 404 on
   `SHA256SUMS` or the binary: `mosey: there is no release vV on GitHub to
@@ -1886,19 +1896,22 @@ sigstore-go's own test CA) playing the release workflow: the right asset
 is chosen and its bundle accepted; a hash mismatch, a missing asset, a
 404, an oversized body and an `http` redirect are each refused before any
 upload; and so are a missing bundle, a bundle for another identity,
-another issuer, another digest or from another Sigstore, a garbled one
+another issuer, another digest, another version's or platform's asset
+name, or from another Sigstore, a garbled one
 and an oversized one, each with the binary and `SHA256SUMS` in agreement.
 
 **Unit, `internal/provenance`:** the embedded trusted root parses and
 has a Fulcio, a Rekor log and a CT log; a bundle signed as the release
 workflow verifies, and one with a wrong identity (another branch,
 another workflow, another owner, a pull request), a wrong issuer, a
-wrong digest, another predicate type, no Rekor entry, or from an
+wrong digest, another asset's name (an older version, another
+platform), another predicate type, no Rekor entry, or from an
 untrusted Sigstore does not; the release policy demands a CT timestamp;
 a real bundle that `actions/attest-build-provenance` made on GitHub
 (the GitHub CLI's, committed under `testdata/`) verifies under the
 release policy and the embedded root with its own identity, and not as
-mosey's; and `scripts/release-bundles.sh` pins what the client pins.
+mosey's, nor for another of its subjects' names; and
+`scripts/release-bundles.sh` pins what the client pins.
 
 **Fuzz** (each run locally for at least a few minutes before it lands,
 durations in the commit message; 10 s each in CI):
@@ -1906,7 +1919,8 @@ durations in the commit message; 10 s each in CI):
 - `FuzzVerify` (`internal/provenance`): whatever is served as a bundle,
   `Verify` does not panic, and anything it accepts, read again
   independently, has a certificate for the release identity and issuer
-  and a SLSA provenance statement naming the digest asked about.
+  and a SLSA provenance statement with one subject naming the asset
+  and digest asked about.
 
 - `FuzzParseClientLine`, `FuzzParseCredentialLine`, `FuzzParseErrorLine`:
   no panic; anything accepted re-marshals to the identical bytes; no
@@ -2002,7 +2016,8 @@ durations in the commit message; 10 s each in CI):
 | late remote bytes corrupt the session screen | ssh's stderr after the line goes, filtered, only to the log file (§7.4) |
 | a planted symlink or another user's file redirects the auto-upload's install (D7) | the installer works through `O_NOFOLLOW` descriptors below `~/.cache`, checks owner and mode at every level, and never replaces what is not the user's (§4.7.7) |
 | a corrupt, cut-short or substituted binary is installed (D7) | the installer checks the length and SHA-256 the client computed or read from `SHA256SUMS` before the rename (§4.7.4, §4.7.7) |
-| a compromised GitHub release, CDN or account serves another binary with a matching `SHA256SUMS` (D7) | the client also verifies the binary's Sigstore bundle against its embedded trusted root, pinning the trunk release workflow's identity, GitHub's OIDC issuer and the digest (§4.6, §4.7.4) |
+| a compromised GitHub release, CDN or account serves another binary with a matching `SHA256SUMS` (D7) | the client also verifies the binary's Sigstore bundle against its embedded trusted root, pinning the trunk release workflow's identity, GitHub's OIDC issuer, the asset's name and the digest (§4.6, §4.7.4) |
+| a release's uploader serves an older, vulnerable release's genuine binary and bundle under the current name (D7) | the bundle's subject must be named for this version and platform, not only carry the digest (§4.7.4) |
 | a hostile remote lies about its platform | it chooses which public build it is sent, nothing more (§4.7.2) |
 
 ---
@@ -2021,8 +2036,9 @@ C. **Signed releases** (§4.6). *Decided (Dan, 2026-11-15; D7 as
    amended): GitHub OIDC and Sigstore, not an SSH key.* CI attests every
    binary with `actions/attest-build-provenance` and publishes each
    bundle next to it; the client verifies it with sigstore-go against an
-   embedded trusted root, pinning the workflow identity, the issuer and
-   the digest (§4.6, §4.7.4). There is no long-lived signing key to guard
+   embedded trusted root, pinning the workflow identity, the issuer, the
+   asset's name (so its version and platform) and the digest (§4.6,
+   §4.7.4). There is no long-lived signing key to guard
    or rotate. `SHA256SUMS` stays.
 
 D. **A local cache of downloaded releases** (§4.7.4). Each host of a

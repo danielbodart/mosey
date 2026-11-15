@@ -708,11 +708,16 @@ that has none, and the copy then runs as the user there.
   `bootstrap.md` §4.6, §4.7.4): the binary must carry SLSA provenance
   signed by a Fulcio certificate for exactly mosey's release workflow on
   `refs/heads/trunk`, issued on GitHub Actions' OIDC token, with a CT log
-  timestamp and a Rekor entry, verified with sigstore-go against a
-  trusted root embedded in the client, before a byte goes to the far
-  host. So a stolen release-upload token, a compromised CDN or a GitHub
-  account that cannot run that workflow on trunk cannot get a binary
-  copied; a missing or wrong bundle is refused. **What it still trusts:**
+  timestamp and a Rekor entry, whose statement names this very asset,
+  `mosey-<V>-<os>-<arch>`, with this digest, verified with sigstore-go
+  against a trusted root embedded in the client, before a byte goes to
+  the far host. So a stolen release-upload token, a compromised CDN or a
+  GitHub account that cannot run that workflow on trunk cannot get a
+  binary copied; a missing or wrong bundle is refused. The name is
+  pinned as well as the digest because the uploader controls
+  `SHA256SUMS` too: without it, an older release's genuine binary and
+  genuine bundle, put under the current name, would pass, and an old,
+  vulnerable mosey would be installed as the current one. **What it still trusts:**
   trunk itself and the workflow on it (anyone who can push there can have
   CI attest what it builds, as D10 already makes every green trunk
   commit a release); GitHub's OIDC issuer and Sigstore's public-good

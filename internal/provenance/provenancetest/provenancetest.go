@@ -60,12 +60,12 @@ type Attestation struct {
 	Identity      string // provenance.Identity
 	Issuer        string // provenance.Issuer
 	PredicateType string // provenance.PredicateType
-	Name          string // the subject's name: "mosey"
 }
 
-// Bundle is the bundle a release would publish for a file whose SHA-256
-// is digest, as JSON (Sigstore bundle v0.3, as actions/attest writes it).
-func (s *Sigstore) Bundle(t testing.TB, digest [32]byte, a Attestation) []byte {
+// Bundle is the bundle a release would publish for the asset called name
+// (bootstrap.AssetName) whose SHA-256 is digest, as JSON (Sigstore bundle
+// v0.3, as actions/attest writes it): one subject, named after the file.
+func (s *Sigstore) Bundle(t testing.TB, name string, digest [32]byte, a Attestation) []byte {
 	t.Helper()
 	if a.Identity == "" {
 		a.Identity = provenance.Identity
@@ -76,12 +76,9 @@ func (s *Sigstore) Bundle(t testing.TB, digest [32]byte, a Attestation) []byte {
 	if a.PredicateType == "" {
 		a.PredicateType = provenance.PredicateType
 	}
-	if a.Name == "" {
-		a.Name = "mosey"
-	}
 	statement, err := json.Marshal(map[string]any{
 		"_type":         "https://in-toto.io/Statement/v1",
-		"subject":       []any{map[string]any{"name": a.Name, "digest": map[string]string{"sha256": hex.EncodeToString(digest[:])}}},
+		"subject":       []any{map[string]any{"name": name, "digest": map[string]string{"sha256": hex.EncodeToString(digest[:])}}},
 		"predicateType": a.PredicateType,
 		"predicate":     map[string]any{"buildDefinition": map[string]any{"buildType": "https://actions.github.io/buildtypes/workflow/v1"}},
 	})

@@ -10,7 +10,9 @@
 // short-lived Fulcio certificate that names the workflow GitHub's OIDC
 // token vouched for, and logged in Rekor. Verify accepts a bundle only if
 // all of that holds against the trusted root embedded here, and only for
-// the identity, issuer and digest it pins. There is no long-lived signing
+// the identity, issuer, asset name and digest it pins: the name carries
+// the version and platform, so a genuine bundle for another release's
+// asset is no good for this one. There is no long-lived signing
 // key to guard or rotate (D7, Dan, 2026-11-15).
 //
 // The trusted root is embedded, so verification needs no network beyond
