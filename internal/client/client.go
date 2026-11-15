@@ -13,6 +13,7 @@ import (
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/handshake"
+	"github.com/danielbodart/mosey/internal/predict"
 	"github.com/danielbodart/mosey/internal/render"
 	"github.com/danielbodart/mosey/internal/terminal"
 )
@@ -54,6 +55,8 @@ type Options struct {
 	HTTP     *http.Client
 	// Self reads this client's own file; nil reads the running image.
 	Self func() ([]byte, error)
+	// Predict is -predict: when predictive local echo is drawn (D12).
+	Predict predict.Mode
 }
 
 // Run is `mosey host` (or `mosey -r host`): the SSH bootstrap, then a
@@ -159,6 +162,7 @@ func Run(ctx context.Context, o Options) error {
 		Log:          o.Log,
 		Capabilities: render.FromEnv(o.Getenv),
 		Agent:        b.forward,
+		Predict:      o.Predict,
 	}
 	// The Session has its own copy, which dial wipes once msg1 is built
 	// (threat-model.md §4.10).

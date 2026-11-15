@@ -7,6 +7,7 @@ import (
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/client"
+	"github.com/danielbodart/mosey/internal/predict"
 )
 
 func TestTheClientCommandLine(t *testing.T) {
@@ -118,5 +119,22 @@ func TestResumeAndListOnTheCommandLine(t *testing.T) {
 		if !errors.As(err, &u) {
 			t.Errorf("%q: %v", args, err)
 		}
+	}
+}
+
+func TestPredictIsAdaptiveByDefaultAndTakesMoshsNames(t *testing.T) {
+	for args, want := range map[string]predict.Mode{"": predict.Adaptive, "always": predict.Always, "never": predict.Never, "adaptive": predict.Adaptive} {
+		a := []string{"far"}
+		if args != "" {
+			a = []string{"-predict", args, "far"}
+		}
+		got, err := parseArgs(a)
+		if err != nil || got.predict != want {
+			t.Errorf("%q: %+v %v", a, got, err)
+		}
+	}
+	var u *bootstrap.UsageError
+	if _, err := parseArgs([]string{"-predict", "experimental", "far"}); !errors.As(err, &u) {
+		t.Errorf("-predict experimental: %v", err)
 	}
 }

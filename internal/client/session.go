@@ -3,13 +3,16 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
+	"time"
 
 	"github.com/danielbodart/mosey/internal/agent"
 	"github.com/danielbodart/mosey/internal/channel"
 	"github.com/danielbodart/mosey/internal/handshake"
+	"github.com/danielbodart/mosey/internal/predict"
 	"github.com/danielbodart/mosey/internal/render"
 	"github.com/danielbodart/mosey/internal/screen"
 	"github.com/danielbodart/mosey/internal/ssp"
@@ -39,6 +42,9 @@ type Session struct {
 	// agent channel and serves the ones the server opens (agent.md §3).
 	// Nil is no agent: the channel is not offered, so none can be opened.
 	Agent *agent.Forwarder
+	// Predict is when predictive local echo is drawn (D12,
+	// prediction.md §11.1); the zero value is predict.Adaptive.
+	Predict predict.Mode
 }
 
 // transport.Conn must be an ssp.Chaffer: NewEndpoint only chaffs over
@@ -99,16 +105,20 @@ func (s *Session) Run(ctx context.Context) error {
 		FrameOverhead:  transport.FrameOverhead,
 		MaxRemoteBytes: screen.MaxDiff,
 	}, input.Clone(), screen.NewGrid(0, 0))
+	engine := predict.New(predict.Config{Mode: s.Predict})
 	l := &loop[*userinput.Stream, *screen.Grid]{
-		sync:   ep,
-		input:  input,
-		paint:  paint,
-		term:   s.Terminal,
-		events: conn.Events(),
-		log:    log,
-		paused: func() bool { return pendingInput(ep, input) >= userinput.MaxPendingInput },
+		sync:    ep,
+		input:   input,
+		paint:   paint,
+		term:    s.Terminal,
+		events:  conn.Events(),
+		log:     log,
+		paused:  func() bool { return pendingInput(ep, input) >= userinput.MaxPendingInput },
+		predict: engine,
+		rtt:     func() time.Duration { return ep.Stats().SRTT },
 	}
 	err = l.run(ctx)
+	log.Info("prediction", "mode", s.Predict, "stats", fmt.Sprintf("%+v", engine.Stats()))
 	if errors.Is(err, errSessionEnded) {
 		return nil
 	}

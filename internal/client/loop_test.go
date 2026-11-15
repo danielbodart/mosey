@@ -24,6 +24,7 @@ func (f *fakeInput) Type(keys []byte) {
 	f.events = append(f.events, userinput.Event{Keys: append([]byte(nil), keys...)})
 }
 func (f *fakeInput) Resize(s userinput.Size) { f.events = append(f.events, userinput.Event{Resize: s}) }
+func (f *fakeInput) Len() uint64             { return uint64(len(f.events)) }
 
 // fakeScreen stands for a screen.Grid: the loop never looks inside one.
 type fakeScreen struct{ text string }
@@ -116,7 +117,10 @@ type harness struct {
 }
 
 // start runs a loop with fakes all round, inside the test's bubble.
-func start(t *testing.T) *harness {
+func start(t *testing.T) *harness { return startWith(t, nil) }
+
+// startWith is start with a predictor, if pr is not nil.
+func startWith(t *testing.T, pr *fakePredict) *harness {
 	h := &harness{
 		sync:   newFakeSync(),
 		input:  &fakeInput{},
@@ -133,6 +137,10 @@ func start(t *testing.T) *harness {
 		events: h.events,
 		log:    slog.New(slog.DiscardHandler),
 		paused: func() bool { return h.paused },
+	}
+	if pr != nil {
+		l.predict = pr
+		l.rtt = func() time.Duration { return 123 * time.Millisecond }
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	h.cancel = cancel
@@ -363,4 +371,61 @@ func TestTheEndOfTheTerminalEndsTheSession(t *testing.T) {
 
 func eventEqual(a, b userinput.Event) bool {
 	return string(a.Keys) == string(b.Keys) && a.Resize == b.Resize
+}
+
+// fakePredict records what the loop tells prediction, and overlays the
+// keys it was told on the newest screen.
+type fakePredict struct {
+	keys  []uint64
+	skips []uint64
+	typed string
+	frame *fakeScreen
+	rtt   time.Duration
+}
+
+func (f *fakePredict) Key(n uint64, b []byte) { f.keys = append(f.keys, n); f.typed += string(b) }
+func (f *fakePredict) Skip(n uint64)          { f.skips = append(f.skips, n) }
+func (f *fakePredict) Frame(g *fakeScreen)    { f.frame, f.typed = g, "" }
+func (f *fakePredict) SetRTT(d time.Duration) { f.rtt = d }
+func (f *fakePredict) Overlay() *fakeScreen   { return &fakeScreen{f.frame.text + f.typed} }
+
+func TestAPredictedKeyIsDrawnAtOnceNotARoundTripLater(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pr := &fakePredict{}
+		h := startWith(t, pr)
+		h.sync.show("$ ")
+		synctest.Wait()
+		h.term.keys <- []byte("l")
+		synctest.Wait()
+		if got := h.paint.drawn[len(h.paint.drawn)-1]; got != "$ l" {
+			t.Fatalf("drawn %q after the key, before any screen", got)
+		}
+		if pr.rtt != 123*time.Millisecond {
+			t.Errorf("prediction was told an RTT of %v", pr.rtt)
+		}
+		// Events are numbered as the stream numbers them: the window size
+		// is event 1, and not a key.
+		if !slices.Equal(pr.skips, []uint64{1}) || !slices.Equal(pr.keys, []uint64{2}) {
+			t.Errorf("skips %v keys %v", pr.skips, pr.keys)
+		}
+		h.stop(t)
+	})
+}
+
+func TestAResizeIsAnEventPredictionCannotReplay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		pr := &fakePredict{}
+		h := startWith(t, pr)
+		h.sync.show("$ ")
+		synctest.Wait()
+		h.term.cols = 120
+		h.term.resized <- struct{}{}
+		synctest.Wait()
+		h.term.keys <- []byte("l")
+		synctest.Wait()
+		if !slices.Equal(pr.skips, []uint64{1, 2}) || !slices.Equal(pr.keys, []uint64{3}) {
+			t.Errorf("skips %v keys %v", pr.skips, pr.keys)
+		}
+		h.stop(t)
+	})
 }

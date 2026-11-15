@@ -15,6 +15,7 @@ import (
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/client"
 	"github.com/danielbodart/mosey/internal/nocore"
+	"github.com/danielbodart/mosey/internal/predict"
 	"github.com/danielbodart/mosey/internal/terminal"
 )
 
@@ -25,7 +26,7 @@ var version = "dev"
 const usage = `mosey -- a remote terminal for bad networks
 
   mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a]
-        [-- SSH-OPTION...] DESTINATION
+        [-predict adaptive|always|never] [-- SSH-OPTION...] DESTINATION
         Log in to DESTINATION with ssh, as your ssh config says, start
         the mosey server there, and stay connected over UDP as the
         network comes and goes.
@@ -39,6 +40,10 @@ const usage = `mosey -- a remote terminal for bad networks
 
         -A and -a are ssh's own: forward the agent or don't (agent
         forwarding arrives in a later version).
+
+        -predict says when to show your typing before the server echoes
+        it: adaptive (the default) on a slow link, always, or never.
+        Guesses not yet confirmed are underlined on a slower one.
 
   mosey -r [OPTIONS] DESTINATION
   mosey -r=SESSION [OPTIONS] DESTINATION
@@ -72,6 +77,7 @@ func main() {
 type cli struct {
 	ssh         bootstrap.SSH
 	upload      client.UploadMode
+	predict     predict.Mode
 	showVersion bool
 	// resume is -r or -r=SESSION (bootstrap.md §9.2), list is -list.
 	resume resumeFlag
@@ -104,7 +110,7 @@ func (r *resumeFlag) Set(v string) error {
 }
 
 // parseArgs reads `mosey [-remote PATH] [-upload MODE] [-ssh PROGRAM]
-// [-A | -a] [-- SSH-OPTION...] DESTINATION`. Every plain word belongs to the client (D7):
+// [-A | -a] [-predict MODE] [-- SSH-OPTION...] DESTINATION`. Every plain word belongs to the client (D7):
 // the destination is the last argument, whatever it is called.
 func parseArgs(args []string) (cli, error) {
 	var c cli
@@ -116,6 +122,7 @@ func parseArgs(args []string) (cli, error) {
 	flags.StringVar(&c.ssh.Server, "remote", "", "the remote mosey `binary`, run as PATH --serve")
 	upload := flags.String("upload", string(client.UploadAsk), "copy mosey to a host without it: ask, yes or no")
 	flags.StringVar(&c.ssh.Program, "ssh", "ssh", "the ssh `program`")
+	prediction := flags.String("predict", predict.Adaptive.String(), "show typing before the echo: adaptive, always or never")
 	var agent agentFlag
 	flags.Var(agent.letter('A'), "A", "forward the agent, as ssh -A")
 	flags.Var(agent.letter('a'), "a", "do not forward the agent, as ssh -a")
@@ -130,6 +137,9 @@ func parseArgs(args []string) (cli, error) {
 		return cli{}, err
 	}
 	c.upload = mode
+	if c.predict, err = predict.ParseMode(*prediction); err != nil {
+		return cli{}, &bootstrap.UsageError{Msg: "mosey: -predict: " + err.Error()}
+	}
 	if c.showVersion {
 		return c, nil
 	}
@@ -234,6 +244,7 @@ func runClient(args []string) int {
 		Resume:    c.resume.set,
 		SessionID: c.resume.sid,
 		Upload:    c.upload,
+		Predict:   c.predict,
 		// The terminal is still cooked when D7 asks (bootstrap.md
 		// §4.7.5), and Open has made sure stdin is one.
 		Ask: client.AskLine(os.Stdin, os.Stderr),

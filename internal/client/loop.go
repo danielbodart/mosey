@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/danielbodart/mosey/internal/terminal"
 	"github.com/danielbodart/mosey/internal/transport"
@@ -34,6 +35,19 @@ type syncer[L, R any] interface {
 type inputLog interface {
 	Type(keys []byte)
 	Resize(size userinput.Size)
+	// Len numbers the events, for prediction's echo ack (prediction.md
+	// §2).
+	Len() uint64
+}
+
+// predictor is the part of predict.Engine the loop drives: it is told each
+// event and each screen, and gives back the screen to draw.
+type predictor[R any] interface {
+	Key(n uint64, b []byte)
+	Skip(n uint64)
+	Frame(g R)
+	SetRTT(d time.Duration)
+	Overlay() R
 }
 
 // painter is the part of render.Renderer the loop draws with.
@@ -60,6 +74,50 @@ type loop[L inputLog, R any] struct {
 	// back: the server has not yet consumed enough of what was sent. It
 	// is asked before each read and again whenever a screen arrives.
 	paused func() bool
+	// predict, if set, is predictive local echo (D12): what is drawn is
+	// its overlay of the screen, with rtt the round trip it is told
+	// before each draw (prediction.md §11).
+	predict predictor[R]
+	rtt     func() time.Duration
+}
+
+// typed appends keys to the input, and tells prediction the event it
+// became: one read is one event, unless it is long enough to be split,
+// which only a paste is (prediction.md §2).
+func (l *loop[L, R]) typed(b []byte) {
+	before := l.input.Len()
+	l.input.Type(b)
+	if l.predict == nil {
+		return
+	}
+	switch after := l.input.Len(); {
+	case after == before+1:
+		l.predict.Key(after, b)
+	case after > before:
+		l.predict.Skip(after)
+	}
+}
+
+// resized appends a resize event, which prediction can't replay.
+func (l *loop[L, R]) resized(size userinput.Size) {
+	l.input.Resize(size)
+	if l.predict != nil {
+		l.predict.Skip(l.input.Len())
+	}
+}
+
+// draw renders screen, or prediction's overlay of it.
+func (l *loop[L, R]) draw(screen R) error {
+	if l.predict != nil {
+		if l.rtt != nil {
+			l.predict.SetRTT(l.rtt())
+		}
+		screen = l.predict.Overlay()
+	}
+	if err := l.paint.Render(screen); err != nil {
+		return fail(err, "drawing: %v", err)
+	}
+	return nil
 }
 
 // errSessionEnded is run's report that the server ended the session (its
@@ -96,7 +154,7 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 	// The size is sent again as the first event, in case it changed
 	// during the bootstrap (bootstrap.md §6.2).
 	size, _ := l.size(userinput.Size{})
-	l.input.Resize(size)
+	l.resized(size)
 	l.sync.Set(l.input)
 	var heldSize *userinput.Size // a resize that came while paused
 	askRead()
@@ -127,13 +185,20 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 		case b := <-reads:
 			reading = false
 			if len(b) > 0 {
-				l.input.Type(b)
+				l.typed(b)
 			}
 			if heldSize != nil && !l.paused() {
-				l.input.Resize(*heldSize)
+				l.resized(*heldSize)
 				heldSize = nil
 			}
 			l.sync.Set(l.input)
+			if len(b) > 0 && haveOne && l.predict != nil {
+				// The point of prediction: the key is on screen now, not a
+				// round trip from now.
+				if err := l.draw(screen); err != nil {
+					return err
+				}
+			}
 			askRead()
 		case <-l.term.Resized():
 			next, changed := l.size(size)
@@ -146,23 +211,26 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 				if l.paused() {
 					heldSize = &next // coalesced to the newest (ssp.md §10.1)
 				} else {
-					l.input.Resize(next)
+					l.resized(next)
 					l.sync.Set(l.input)
 				}
 			}
 			if haveOne {
-				if err := l.paint.Render(screen); err != nil {
-					return fail(err, "drawing: %v", err)
+				if err := l.draw(screen); err != nil {
+					return err
 				}
 			}
 		case <-l.sync.RemoteChanged():
 			screen, _ = l.sync.Remote()
 			haveOne = true
-			if err := l.paint.Render(screen); err != nil {
-				return fail(err, "drawing: %v", err)
+			if l.predict != nil {
+				l.predict.Frame(screen)
+			}
+			if err := l.draw(screen); err != nil {
+				return err
 			}
 			if heldSize != nil && !l.paused() {
-				l.input.Resize(*heldSize)
+				l.resized(*heldSize)
 				heldSize = nil
 				l.sync.Set(l.input)
 			}

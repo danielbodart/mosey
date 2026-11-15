@@ -17,9 +17,10 @@ resumes one from here or another device and takes it over (see
 [Using it](#using-it)), and your ssh-agent comes along when your ssh config
 forwards it (see [Agent forwarding](#agent-forwarding)). While you type,
 both ends send cover traffic on a fixed tick, which hides the timing of
-keys within a run of typing (see [What it is](#what-it-is)). Predictive
-echo is the next slice. Every green commit is already released (see
-[Installing](#installing)).
+keys within a run of typing (see [What it is](#what-it-is)). On a slow
+link your typing shows up at once, before the server echoes it (see
+[Predictive echo](#predictive-echo)). Every green commit is already
+released (see [Installing](#installing)).
 
 ## What it is
 
@@ -59,8 +60,9 @@ config, keys and agent, exactly as Mosh does. It aims to be:
   retransmission and outage probing tuned on a deterministic network
   simulator against replayed cellular, train and hotel-wifi traces. Its
   predictive local echo copes with modern shells (zsh autosuggestions,
-  syntax highlighting, fish): 80% of keystrokes appear instantly, 0.1% are
-  wrong.
+  syntax highlighting, fish): replaying recorded sessions, about 72% of
+  keystrokes appear instantly at a 100 ms round trip and 0.1% are wrong,
+  and no password key was ever shown.
 - **Zero install.** `mosey host` copies its own static binary across when
   the host doesn't have it. One binary is both client and server, so you can
   hop onwards from there.
@@ -140,6 +142,18 @@ needed from quoin. The one exception is a host running quoin's attester
 (`/run/agent-attest/handoff.sock`): mosey doesn't hand connections to it
 yet, so on such a host it refuses every agent connection rather than
 forward past the attester. Details: [docs/spec/agent.md](docs/spec/agent.md).
+
+### Predictive echo
+
+On a slow link mosey shows what you type before the server has echoed it,
+as Mosh does, and takes back any guess the server's screen disagrees
+with. It guesses only what it can (letters, backspace, left and right),
+starts each run of guesses hidden until the server confirms one, and
+underlines guesses not yet confirmed once the round trip is long enough
+to notice. At a password prompt it guesses and keeps nothing.
+`-predict adaptive` (the default) shows guesses from a round trip of about
+40 ms, `-predict always` always, `-predict never` never. Details:
+[docs/spec/prediction.md](docs/spec/prediction.md).
 
 ## Zero install
 
