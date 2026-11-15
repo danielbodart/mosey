@@ -156,8 +156,12 @@ nothing from the host for 15 seconds, it also logs in again over ssh in
 the background, without asking you anything (ssh runs in batch mode),
 and swaps the new connection in with your screen as it was; it keeps
 trying, from every 2 seconds up to once a minute, until it gets the
-session back or finds it has ended, and then exits saying so. A session
-left detached for 7 days is ended (its shell gets SIGHUP).
+session back or finds it has ended, and then exits saying so. While it
+tries, the top line of the screen says how long the host has been silent
+and why the last try failed, so a host batch mode can't log in to (one
+that wants a password or a second factor) shows you why rather than
+leaving the screen frozen; the line goes once the host is heard again. A
+session left detached for 7 days is ended (its shell gets SIGHUP).
 
 Taking a session over with `-s` cuts off any client still attached and
 wipes its keys. If that client is awake within a minute, it exits saying

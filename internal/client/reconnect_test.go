@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/netip"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -78,6 +80,7 @@ func startReconnectingFrom(t *testing.T, first *fakeLink, answers ...func(dial f
 		log:            slog.New(slog.DiscardHandler),
 		reconnectAfter: ReconnectAfter,
 		backoff:        reconnectBackoff,
+		status:         func(s *fakeScreen, text string) *fakeScreen { return &fakeScreen{s.text + "|" + text} },
 	}
 	l.adopt(h.first.link(1))
 	var mu sync.Mutex
@@ -311,5 +314,50 @@ func TestARevocationDuringTheTrysLoginIsALiveUpgradeUnlessTheTryFails(t *testing
 				}
 			}
 		})
+	}
+}
+
+// While R3 tries and fails, the screen says so, with how long the server
+// has been silent and why the last try failed, and says nothing again
+// once the server is heard: a reconnect that cannot succeed (a host that
+// wants a password, which BatchMode cannot give) is never just a frozen
+// screen (D8 R3).
+func TestAFailingReconnectIsShownOnTheScreenUntilTheServerIsHeard(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := startReconnecting(t, fails)
+		h.first.sync.show("shell")
+		synctest.Wait()
+		last := func() string { d := h.paint.drawnSoFar(); return d[len(d)-1] }
+		time.Sleep(ReconnectAfter)
+		synctest.Wait()
+		trying := "shell|mosey: no contact for 15s; reconnecting over ssh"
+		failed := trying + " (last try: ssh: connect to host far port 22: Network is unreachable)"
+		if d := h.paint.drawnSoFar(); !slices.Contains(d, trying) || last() != failed {
+			t.Fatalf("drew %q; want %q then %q", d, trying, failed)
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if want := "shell|mosey: no contact for 16s; reconnecting over ssh (last try: ssh: connect to host far port 22: Network is unreachable)"; last() != want {
+			t.Errorf("a second later drew %q, want %q", last(), want)
+		}
+		h.first.hear()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if last() != "shell" {
+			t.Errorf("once the server was heard again drew %q, want the screen alone", last())
+		}
+	})
+}
+
+// The notice quotes the failure's first line only, as printable ASCII, and
+// at most MaxNoticeErr bytes of it: it may hold whatever ssh printed.
+func TestTheReconnectNoticeQuotesOnlyAPrintableLineOfTheFailure(t *testing.T) {
+	got := reconnectNotice(61500*time.Millisecond, "ssh: \x1b]0;evil\x07denied\nsecond line")
+	if want := "mosey: no contact for 1m2s; reconnecting over ssh (last try: ssh: ]0;evildenied)"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	long := reconnectNotice(time.Second, strings.Repeat("x", 500))
+	if n := strings.Count(long, "x"); n != MaxNoticeErr {
+		t.Errorf("quoted %d bytes of the failure, want %d", n, MaxNoticeErr)
 	}
 }

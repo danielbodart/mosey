@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -111,6 +112,14 @@ type loop[L inputLog, R any] struct {
 	// that link is gone.
 	dialing      atomic.Bool
 	revokedInTry atomic.Bool
+
+	// status, if set, draws notice over a screen (statusLine): while R3
+	// is reconnecting, the user sees that it is, for how long the server
+	// has been silent, and why the last try failed, rather than a screen
+	// that has simply stopped (R3 asks the user nothing, but must not
+	// leave them guessing). notice is "" when there is nothing to say.
+	status func(screen R, text string) R
+	notice string
 }
 
 // link is what loop runs over one transport, all of which a reconnect
@@ -176,6 +185,9 @@ func (l *loop[L, R]) draw(screen R) error {
 			l.predict.SetRTT(l.rtt())
 		}
 		screen = l.predict.Overlay()
+	}
+	if l.status != nil && l.notice != "" {
+		screen = l.status(screen, l.notice)
 	}
 	if err := l.paint.Render(screen); err != nil {
 		return fail(err, "drawing: %v", err)
@@ -252,6 +264,35 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 		results   = make(chan attempt[L, R], 1)
 		pending   error
 	)
+	// What the user is shown of R3 (status): showing from the first try
+	// until the link is heard again or replaced, tick to keep its count of
+	// seconds current, and lastErr the last failed try's reason.
+	var (
+		showing bool
+		tick    <-chan time.Time
+		lastErr string
+	)
+	refresh := func() error {
+		text := ""
+		if showing && l.status != nil {
+			text = reconnectNotice(time.Since(l.heard()), lastErr)
+			tick = time.After(time.Second)
+		} else {
+			tick = nil
+		}
+		if text == l.notice {
+			return nil
+		}
+		l.notice = text
+		if haveOne {
+			return l.draw(screen)
+		}
+		return nil
+	}
+	quiet := func() error {
+		showing, lastErr = false, ""
+		return refresh()
+	}
 	arm := func() {
 		if l.reconnect == nil || l.heard == nil || trying {
 			wake = nil
@@ -279,6 +320,14 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-tick:
+			if time.Since(l.heard()) < l.reconnectAfter {
+				// Heard again while backing off: roaming won.
+				showing = false
+			}
+			if err := refresh(); err != nil {
+				return err
+			}
 		case <-wake:
 			wake = nil
 			heard := l.heard()
@@ -290,6 +339,10 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 				continue
 			}
 			trying = true
+			showing = true
+			if err := refresh(); err != nil {
+				return err
+			}
 			l.log.Info("no word from the server; reconnecting in the background", "silent", time.Since(heard).Round(time.Millisecond), "try", tries+1)
 			heardFn, holder := l.heard, l.holder
 			l.revokedInTry.Store(false)
@@ -318,6 +371,8 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 				l.adopt(a.lk)
 				runLink()
 				tries, notBefore = 0, time.Time{}
+				showing, lastErr = false, ""
+				l.notice, tick = "", nil // the whole screen is redrawn below
 				// SSP starts afresh on the new transport (ssp.md §1.3): the
 				// size goes first again, and the whole screen comes back.
 				heldSize = nil
@@ -331,6 +386,9 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 			case errors.Is(a.err, errAbandoned):
 				l.log.Info("the server is heard again; dropping the reconnect")
 				tries, notBefore = 0, time.Time{}
+				if err := quiet(); err != nil {
+					return err
+				}
 			case isFinal(a.err):
 				return a.err
 			default:
@@ -338,6 +396,10 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 				notBefore = lastFail.Add(l.backoff(tries))
 				tries++
 				l.log.Warn("reconnecting failed; trying again", "err", a.err, "after", time.Until(notBefore).Round(time.Millisecond))
+				lastErr = a.err.Error()
+				if err := refresh(); err != nil {
+					return err
+				}
 			}
 			if a.err != nil && pending != nil {
 				return pending
@@ -449,6 +511,31 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 		}
 	}
 }
+
+// reconnectNotice is the status line R3 shows (loop.status): how long
+// the server has been silent, that mosey is reconnecting over ssh, and the
+// last try's failure, reduced to its first line of printable ASCII and
+// MaxNoticeErr bytes, since it may carry what ssh printed.
+func reconnectNotice(silent time.Duration, lastErr string) string {
+	text := "mosey: no contact for " + silent.Round(time.Second).String() + "; reconnecting over ssh"
+	if lastErr == "" {
+		return text
+	}
+	var b strings.Builder
+	for _, r := range lastErr {
+		if r == '\n' || b.Len() >= MaxNoticeErr {
+			break
+		}
+		if r >= 0x20 && r < 0x7f {
+			b.WriteRune(r)
+		}
+	}
+	return text + " (last try: " + b.String() + ")"
+}
+
+// MaxNoticeErr bounds the failure a reconnect notice quotes [choice: a
+// line's worth; the log file has it whole].
+const MaxNoticeErr = 120
 
 // isFinal is a reconnect that must not be tried again: the session has
 // gone, or another client holds it (bootstrap.md §9.2.2).

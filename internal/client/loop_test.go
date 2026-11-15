@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -58,6 +59,7 @@ func (f *fakeSync) lastSet() int                   { return f.sets[len(f.sets)-1
 
 // fakePaint records what the loop draws.
 type fakePaint struct {
+	mu          sync.Mutex // for a test that reads drawn while the loop still draws
 	drawn       []string
 	invalidated int
 	entered     bool
@@ -65,11 +67,24 @@ type fakePaint struct {
 	size        [2]int
 }
 
-func (p *fakePaint) Render(g *fakeScreen) error { p.drawn = append(p.drawn, g.text); return nil }
-func (p *fakePaint) Invalidate()                { p.invalidated++ }
-func (p *fakePaint) Enter() error               { p.entered = true; return nil }
-func (p *fakePaint) Leave() error               { p.left = true; return nil }
-func (p *fakePaint) Resize(cols, rows int)      { p.size = [2]int{cols, rows} }
+func (p *fakePaint) Render(g *fakeScreen) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.drawn = append(p.drawn, g.text)
+	return nil
+}
+
+// drawnSoFar is a copy of drawn, safe while the loop runs.
+func (p *fakePaint) drawnSoFar() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.drawn)
+}
+
+func (p *fakePaint) Invalidate()           { p.invalidated++ }
+func (p *fakePaint) Enter() error          { p.entered = true; return nil }
+func (p *fakePaint) Leave() error          { p.left = true; return nil }
+func (p *fakePaint) Resize(cols, rows int) { p.size = [2]int{cols, rows} }
 
 // fakeTerm is the user's terminal: what the test types arrives through
 // keys, and its size is whatever the test sets.

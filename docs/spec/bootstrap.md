@@ -1695,6 +1695,20 @@ own session, in the background, and never asks the user anything:
   working session at most a minute after the network returns when
   roaming cannot]. It starts from 2 s again once the session hears from
   the server.
+- **What the user sees.** Nothing is asked, but nothing is hidden either:
+  from the first try until the server is heard again or the new transport
+  is in, the screen's top row is replaced, in reverse video, by `mosey: no
+  contact for DURATION; reconnecting over ssh`, followed after a failed
+  try by ` (last try: REASON)`, REASON the failure's first line in
+  printable ASCII, at most 120 bytes [choice: a line's worth; the log has
+  it whole], since it may carry what ssh said. DURATION is kept current
+  each second. A try that can never work (a host that wants a password,
+  which `BatchMode` refuses) so shows its reason rather than a screen that
+  has simply stopped [choice: R3 says to ask nothing, not to say nothing;
+  tries continue as below, since the user may fix the cause, say by
+  adding the key to the agent, without restarting the client]. The row is
+  part of what is drawn, not of the session's screen: the server never
+  sees it, and the renderer's diff puts the row back when it goes.
 - **The launcher's answer** to `resume:SID:CREDID`, under the lock: no
   session SID that answers is `MOSEY-ERROR 1 session -`. A session that is
   `detached`, or whose `holder` is CREDID, is taken as §9.2 step 2 says:

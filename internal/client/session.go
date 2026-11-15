@@ -146,6 +146,7 @@ func (s *Session) Run(ctx context.Context) error {
 	l.adopt(first)
 	if s.Reconnect != nil {
 		l.reconnect = s.reconnect(log)
+		l.status = statusLine
 	}
 	err = l.run(ctx)
 	if errors.Is(err, errSessionEnded) {
@@ -291,4 +292,29 @@ func pendingInput(ep *ssp.Endpoint[*userinput.Stream, *screen.Grid], input *user
 // the lesser of consumed and ackedLen.
 func pendingSince(input *userinput.Stream, consumed, ackedLen uint64) int {
 	return input.EncodedSince(min(consumed, ackedLen))
+}
+
+// statusLine is g with text over its top row, in reverse video and padded
+// to the row's width: R3's notice (loop.status), drawn as part of the
+// screen so the renderer's diff puts the row back when it goes. The text
+// is printable ASCII (reconnectNotice), one cell a byte; the whole row is
+// replaced, so no wide character is left half covered.
+func statusLine(g *screen.Grid, text string) *screen.Grid {
+	if g == nil {
+		return nil
+	}
+	cols, rows := g.Size()
+	if cols == 0 || rows == 0 {
+		return g
+	}
+	v := g.Clone()
+	st := screen.Style{Attrs: screen.Reverse}
+	for x := range cols {
+		c := screen.Cell{Width: 1, Style: st}
+		if x < len(text) {
+			c.Text = text[x : x+1]
+		}
+		v.SetCell(x, 0, c)
+	}
+	return v
 }

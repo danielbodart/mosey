@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/danielbodart/mosey/internal/channel"
+	"github.com/danielbodart/mosey/internal/screen"
 	"github.com/danielbodart/mosey/internal/transport"
 	"github.com/danielbodart/mosey/internal/userinput"
 )
@@ -56,5 +57,38 @@ func TestTheFlowControlBoundsAreConsistent(t *testing.T) {
 func TestAChannelBodyIsExactlyATransportPayload(t *testing.T) {
 	if channel.MaxBody != transport.MaxPayload {
 		t.Errorf("channel.MaxBody %d, transport.MaxPayload %d", channel.MaxBody, transport.MaxPayload)
+	}
+}
+
+// R3's status line takes the whole top row, in reverse video, and leaves
+// the rest of the screen, and the screen it was drawn over, as they were.
+func TestTheStatusLineCoversOnlyTheTopRowOfACopy(t *testing.T) {
+	g := screen.NewGrid(10, 2)
+	for y := range 2 {
+		for x := range 10 {
+			g.SetCell(x, y, screen.Cell{Text: "a", Width: 1})
+		}
+	}
+	v := statusLine(g, "hi")
+	for x := range 10 {
+		want := ""
+		if x < 2 {
+			want = "hi"[x : x+1]
+		}
+		if c := v.Cell(x, 0); c.Text != want || c.Width != 1 || c.Style.Attrs != screen.Reverse {
+			t.Errorf("top row, column %d: %+v", x, c)
+		}
+		if c := v.Cell(x, 1); c.Text != "a" {
+			t.Errorf("second row, column %d: %+v", x, c)
+		}
+		if c := g.Cell(x, 0); c.Text != "a" {
+			t.Errorf("the original's top row changed at %d: %+v", x, c)
+		}
+	}
+	if err := v.Valid(); err != nil {
+		t.Errorf("not a valid grid: %v", err)
+	}
+	if statusLine(nil, "hi") != nil {
+		t.Error("a status line over no screen yet")
 	}
 }
