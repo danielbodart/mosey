@@ -81,14 +81,31 @@ are in [PLAN.md](PLAN.md#4-clean-room-rules-d3).
 Every green commit on `trunk` that changes the code, the Go toolchain or
 the build is a
 [GitHub Release](https://github.com/danielbodart/mosey/releases), tagged
-`v<version>`, with one static binary per platform and their checksums:
+`v<version>`, with one static binary per platform, their checksums, and
+each binary's signed build provenance:
 
 ```sh
 V=0.123.456   # a release's version, without the v
 curl -fLO "https://github.com/danielbodart/mosey/releases/download/v$V/mosey-$V-linux-amd64"
 curl -fLO "https://github.com/danielbodart/mosey/releases/download/v$V/SHA256SUMS"
 sha256sum --ignore-missing -c SHA256SUMS
+gh attestation verify "mosey-$V-linux-amd64" --repo danielbodart/mosey
 install -m 0755 "mosey-$V-linux-amd64" ~/.local/bin/mosey
+```
+
+`sha256sum` shows the file is the one the release lists. `gh attestation
+verify` shows it was built by mosey's own release workflow on GitHub
+Actions: CI attests every binary with Sigstore (no signing key to leak),
+and each attestation is also published next to its binary as
+`mosey-<version>-<os>-<arch>.sigstore.json`. To check against that file
+rather than ask GitHub, and to pin the workflow and branch exactly as
+mosey itself does:
+
+```sh
+curl -fLO "https://github.com/danielbodart/mosey/releases/download/v$V/mosey-$V-linux-amd64.sigstore.json"
+gh attestation verify "mosey-$V-linux-amd64" --repo danielbodart/mosey \
+  --bundle "mosey-$V-linux-amd64.sigstore.json" \
+  --cert-identity https://github.com/danielbodart/mosey/.github/workflows/ci.yml@refs/heads/trunk
 ```
 
 The platforms are `linux-amd64`, `linux-arm64`, `darwin-amd64` and
@@ -183,13 +200,16 @@ ssh login that starts the session. If neither is this version, it asks
 once per host:
 
 ```
-mosey: HOST has no mosey 0.123.456. Copy this one (linux/amd64, 9.8 MB) to ~/.cache/mosey/0.123.456/ there? [y/N]
+mosey: HOST has no mosey 0.123.456. Copy this one (linux/amd64, 20.8 MB) to ~/.cache/mosey/0.123.456/ there? [y/N]
 ```
 
 and copies its own file over ssh. If the host is another platform (a Mac
 client, a Linux server) it downloads its own version's release for that
 platform from GitHub instead, and checks it against the release's
-`SHA256SUMS` before sending it. On the host the copy installs itself: it
+`SHA256SUMS` and its Sigstore provenance (built by mosey's release
+workflow on trunk, checked against a Sigstore root built into mosey, so
+no other network is needed) before sending it; it refuses a binary
+without that. On the host the copy installs itself: it
 checks its own length and SHA-256, refuses to follow a symlink below
 `~/.cache` or to replace a file that isn't yours, and renames itself into
 place. Then the session starts.

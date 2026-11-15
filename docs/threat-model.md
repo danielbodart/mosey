@@ -702,13 +702,36 @@ that has none, and the copy then runs as the user there.
   platform, the release asset of exactly the client's version, whose
   SHA-256 must match the release's `SHA256SUMS` before a byte goes to the
   far host (`bootstrap.md` §4.7.4). Downloads are HTTPS only, redirects
-  included, size-bounded, with a deadline. **This is integrity, not
-  authenticity:** a compromised GitHub account or CI can publish matching
-  `SHA256SUMS` and binary. Until releases are signed (`bootstrap.md` §14
-  C) the trust placed in the download is the trust placed in the GitHub
-  release, the same as a user who downloads it by hand. The same-platform
-  path, which is the usual one, uses no network and trusts nothing but
-  the file the user is already running.
+  included, size-bounded, with a deadline. `SHA256SUMS` is integrity, not
+  authenticity: whoever can publish to the release can publish a matching
+  pair. **Authenticity is the Sigstore bundle** (S1, D7 as amended,
+  `bootstrap.md` §4.6, §4.7.4): the binary must carry SLSA provenance
+  signed by a Fulcio certificate for exactly mosey's release workflow on
+  `refs/heads/trunk`, issued on GitHub Actions' OIDC token, with a CT log
+  timestamp and a Rekor entry, verified with sigstore-go against a
+  trusted root embedded in the client, before a byte goes to the far
+  host. So a stolen release-upload token, a compromised CDN or a GitHub
+  account that cannot run that workflow on trunk cannot get a binary
+  copied; a missing or wrong bundle is refused. **What it still trusts:**
+  trunk itself and the workflow on it (anyone who can push there can have
+  CI attest what it builds, as D10 already makes every green trunk
+  commit a release); GitHub's OIDC issuer and Sigstore's public-good
+  Fulcio and Rekor (a compromise of both Fulcio and the log's keys could
+  forge a bundle; Rekor's public log makes an unexpected signing
+  visible, though the client does not watch it); the TUF chain through
+  which `scripts/trusted-root.sh` refreshes the embedded root; and
+  sigstore-go and its dependencies, about 65 modules, now on the
+  client's path (DEPENDENCIES.md). The same-platform path, which is the
+  usual one, uses no network and trusts nothing but the file the user is
+  already running.
+- **Where the verifier runs.** Only in the client, before an upload.
+  sigstore-go is compiled into the one binary, so every server role
+  carries its code, but no role calls it: proto and emu run under their
+  unchanged Landlock and seccomp policies, and the package's `init`
+  functions (its dependencies register gRPC and OpenTelemetry defaults
+  and read the hostname) run before `sandbox.Enter`, as every init does.
+  The KILL soak (CI's `kill-soak`) is what shows nothing they start
+  makes a syscall the policies leave out.
 - **The installer** (`mosey --serve=install`, `bootstrap.md` §4.7.7) is the
   only writer of `~/.cache/mosey`. It checks length and SHA-256 through
   one descriptor; the rename that follows goes by name, inside a
@@ -1027,7 +1050,7 @@ target (architecture §6).
 |---|---|
 | Prediction (D12) | Landed: §4.16 |
 | Chaff (D11, O10) | Landed: §4.14, R2 |
-| Auto-upload (D7) | Landed: §4.13. Still to come: signed releases (`bootstrap.md` §14 C) |
+| Auto-upload (D7) | Landed: §4.13, with signed releases (S1: Sigstore bundles, `bootstrap.md` §4.6, §14 C) |
 | macOS server (D22) | Seatbelt or nothing; until then the sandbox returns `ErrUnsupported` and the server says it runs unconfined |
 
 ## Review notes
