@@ -232,13 +232,24 @@ policy is unchanged.
 A resume does not change the socket: the shell keeps its `SSH_AUTH_SOCK`
 for its whole life, and each connection goes to whichever client is
 attached at the time, or is refused if none is, or if that client did not
-negotiate the agent. A session started with `agent=no` has no socket, and
+negotiate the agent. The one exception is the session's start (§4.2): a
+connection made before the first client has attached waits for it. A session started with `agent=no` has no socket, and
 a later `agent=yes` resume does not add one: the shell's environment was
 fixed when it started [derived].
 
 ### 4.2 proto
 
-For each `AgentConn`: if no client is attached, or the attached connection
+Until the first client attaches, or for at most `AgentStartupHold` = 10 s
+[choice] from proto's start, proto holds each `AgentConn` (at most
+`MaxAgentStreams` of them; any more are refused) and serves the held ones,
+as below, once that client is attached; those still held when the time is
+up are closed. The shell starts before the client has finished its
+handshake, so without this a login rc that runs `ssh-add -l` or keychain
+would find no agent, where under `ssh -A` the agent is there from the
+shell's first line. 10 s covers the handshake over a slow, lossy path with
+room to spare.
+
+After that, for each `AgentConn`: if no client is attached, or the attached connection
 did not negotiate `ChannelAgent`, or `MaxAgentStreams` = 16 [choice] agent
 channels are already open on it, proto closes the fd. Otherwise it opens an
 agent channel (§5) and relays the fd's bytes into it and the channel's

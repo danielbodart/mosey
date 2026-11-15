@@ -75,6 +75,13 @@ func readAgentFrame(r io.Reader) ([]byte, error) {
 // the server's Session kept so a test can hand it agent connections.
 func agentSession(t *testing.T, p netsim.Profile, fwd *agent.Forwarder) *server.Session {
 	t.Helper()
+	return agentSessionAfter(t, p, fwd, nil)
+}
+
+// agentSessionAfter is agentSession with early run on the server's
+// Session after it starts and before the client does.
+func agentSessionAfter(t *testing.T, p netsim.Profile, fwd *agent.Forwarder, early func(*server.Session)) *server.Session {
+	t.Helper()
 	n := newSimNet(t, p)
 	ctx, cancel := context.WithCancel(context.Background())
 	em, err := emu.New(80, 24, emu.Options{ScrollbackCells: emu.DefaultScrollbackCells})
@@ -85,6 +92,9 @@ func agentSession(t *testing.T, p netsim.Profile, fwd *agent.Forwarder) *server.
 	srv := &server.Session{Listener: transport.Listen(n.sc, n.creds, n.log), Terminal: prog, Emulator: em, Log: n.log}
 	served := make(chan error, 1)
 	go func() { served <- srv.Run(ctx) }()
+	if early != nil {
+		early(srv)
+	}
 	user := &userTerminal{keys: make(chan []byte), resized: make(chan struct{})}
 	cli := &client.Session{Conn: n.cc, Server: serverAddr, Credential: n.cred, Key: n.key, Terminal: user, Log: n.log,
 		Capabilities: render.Capabilities{UTF8: true}, Agent: fwd}
@@ -176,6 +186,73 @@ func TestWithoutAnAgentTheFarConnectionIsClosed(t *testing.T) {
 		if _, err := program.Read(make([]byte, 1)); err == nil {
 			t.Error("the far program read an answer from no agent")
 		}
+	})
+}
+
+// A program the login rc runs, such as `ssh-add -l`, connects before the
+// client has finished its handshake; it is held until the client attaches
+// and then reaches the agent, as under ssh -A, where the agent is there
+// from the shell's first line (agent.md §4.2).
+func TestAnAgentConnectionMadeBeforeTheClientAttachesWaitsForIt(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	synctest.Test(t, func(t *testing.T) {
+		bind := testBind(t)
+		agentSide, forwarded := net.Pipe()
+		go func() {
+			if _, err := readAgentFrame(agentSide); err != nil {
+				return
+			}
+			agentSide.Write(agentFrame([]byte{6})) // the bind's answer
+			if _, err := readAgentFrame(agentSide); err != nil {
+				return
+			}
+			agentSide.Write(agentFrame([]byte{12, 0, 0, 0, 0}))
+		}()
+		program, local := net.Pipe()
+		agentSessionAfter(t, netsim.LAN(), &agent.Forwarder{Bind: bind, Dial: func(context.Context) (net.Conn, error) { return forwarded, nil }},
+			func(srv *server.Session) {
+				srv.AgentConn(local)
+				// The connection waits a while for the client, not at once.
+				time.Sleep(time.Second)
+			})
+		go program.Write(agentFrame([]byte{11}))
+		got, err := readAgentFrame(program)
+		if err != nil || !bytes.Equal(got, agentFrame([]byte{12, 0, 0, 0, 0})) {
+			t.Fatalf("the early program's answer: %x, %v", got, err)
+		}
+		program.Close()
+	})
+}
+
+// If no client attaches within AgentStartupHold, a connection held for
+// one is closed, so a requester does not wait for ever (agent.md §4.2).
+func TestAnAgentConnectionWithNoClientIsClosedAfterTheHold(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	synctest.Test(t, func(t *testing.T) {
+		n := newSimNet(t, netsim.LAN())
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		em, err := emu.New(80, 24, emu.Options{ScrollbackCells: emu.DefaultScrollbackCells})
+		if err != nil {
+			t.Fatal(err)
+		}
+		prog := newShell()
+		defer prog.Close()
+		srv := &server.Session{Listener: transport.Listen(n.sc, n.creds, n.log), Terminal: prog, Emulator: em, Log: n.log}
+		served := make(chan error, 1)
+		go func() { served <- srv.Run(ctx) }()
+		program, local := net.Pipe()
+		start := time.Now()
+		srv.AgentConn(local)
+		go program.Write(agentFrame([]byte{11}))
+		if _, err := program.Read(make([]byte, 1)); err == nil {
+			t.Error("the far program read an answer from no client")
+		}
+		if waited := time.Since(start); waited < server.AgentStartupHold || waited > server.AgentStartupHold+time.Second {
+			t.Errorf("closed after %v, want %v", waited, server.AgentStartupHold)
+		}
+		cancel()
+		<-served
 	})
 }
 

@@ -131,7 +131,19 @@ type Session struct {
 	mux *channel.Mux
 	// agentIn carries local agent connections to serveAgents.
 	agentIn chan io.ReadWriteCloser
+	// firstAttach closes when the first client attaches, so serveAgents
+	// can stop holding connections made before it (agent.md §4.2).
+	firstAttach chan struct{}
 }
+
+// AgentStartupHold is how long an agent connection made before any client
+// has attached waits for one, rather than being refused at once
+// (agent.md §4.2). The shell starts before the client has finished its
+// handshake, and a login rc that runs `ssh-add -l` or keychain would
+// otherwise find no agent where ssh -A gives one from the first line. It
+// covers the client's handshake over a slow, lossy path with room to
+// spare [choice].
+const AgentStartupHold = 10 * time.Second
 
 func (s *Session) init() {
 	s.once.Do(func() {
@@ -154,6 +166,7 @@ func (s *Session) init() {
 		s.shellExit = make(chan struct{})
 		s.done = make(chan struct{})
 		s.agentIn = make(chan io.ReadWriteCloser, channel.MaxStreams)
+		s.firstAttach = make(chan struct{})
 	})
 }
 
@@ -173,11 +186,31 @@ func (s *Session) AgentConn(c io.ReadWriteCloser) {
 }
 
 // serveAgents serves each agent connection over the current client's
-// agent channels, until ctx is done.
+// agent channels, until ctx is done. Until the first client attaches, or
+// AgentStartupHold has passed, it holds connections instead, up to
+// MaxStreams of them, and serves them once that client is attached.
 func (s *Session) serveAgents(ctx context.Context) error {
+	var held []io.ReadWriteCloser
+	first := s.firstAttach
+	hold := time.NewTimer(AgentStartupHold)
+	defer hold.Stop()
+	serve := func(c io.ReadWriteCloser) {
+		s.mu.Lock()
+		m := s.mux
+		s.mu.Unlock()
+		if m == nil || m.Live() >= channel.MaxStreams {
+			s.Log.Info("refusing an agent connection: no attached client forwards an agent, or too many are open")
+			c.Close()
+			return
+		}
+		go agent.Serve(ctx, m, c, s.Log)
+	}
 	for {
 		select {
 		case <-ctx.Done():
+			for _, c := range held {
+				c.Close()
+			}
 			for {
 				select {
 				case c := <-s.agentIn:
@@ -186,16 +219,31 @@ func (s *Session) serveAgents(ctx context.Context) error {
 					return nil
 				}
 			}
-		case c := <-s.agentIn:
-			s.mu.Lock()
-			m := s.mux
-			s.mu.Unlock()
-			if m == nil || m.Live() >= channel.MaxStreams {
-				s.Log.Info("refusing an agent connection: no attached client forwards an agent, or too many are open")
-				c.Close()
+		case <-first:
+			first = nil
+			hold.Stop()
+			for _, c := range held {
+				serve(c)
+			}
+			held = nil
+		case <-hold.C:
+			if first == nil {
 				continue
 			}
-			go agent.Serve(ctx, m, c, s.Log)
+			first = nil
+			if len(held) > 0 {
+				s.Log.Info("refusing agent connections made before any client attached", "count", len(held))
+			}
+			for _, c := range held {
+				c.Close()
+			}
+			held = nil
+		case c := <-s.agentIn:
+			if first != nil && len(held) < channel.MaxStreams {
+				held = append(held, c)
+				continue
+			}
+			serve(c)
 		}
 	}
 }
@@ -290,6 +338,9 @@ func (s *Session) Run(ctx context.Context) error {
 			}
 			cur = s.attach(parent, c)
 			gone = cur.gone
+			if !attachedOnce {
+				close(s.firstAttach)
+			}
 			attachedOnce = true
 			noClient.Stop()
 			if s.Attached != nil {
