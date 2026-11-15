@@ -319,7 +319,7 @@ func (s *served) waitForEnd() {
 	deadline := time.Now().Add(20 * time.Second)
 	for !strings.Contains(sessionLog(s.state), "session ended") {
 		if time.Now().After(deadline) {
-			s.t.Fatalf("the session did not end; log:\n%s", sessionLog(s.state))
+			s.t.Fatalf("the session did not end; screen:\n%s\nlog:\n%s", s.screenText(), sessionLog(s.state))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -390,7 +390,14 @@ func TestKillSoak(t *testing.T) {
 		t.Logf("cgroup: %s", bytes.TrimSpace(b))
 	}
 	s := serve(t, buildMosey(t, "soak"), "MOSEY_SOAK_ACTION=kill")
-	s.typeKeys(`while :; do head -c 600 /dev/urandom | od -An -tx1 | head -c 1000; printf '\033[6n'; sleep 0.05; done` + "\r")
+	// The loop ends, and the shell with it, when stop exists: the whole
+	// command line is read before the soak starts, so its end needs no
+	// keys. Typing ^C and then exit raced the terminal's answer to the
+	// loop's last cursor query, which can reach the pty after ^C has
+	// flushed its input and so prefix the exit ("\e[24;21Rexit"), and the
+	// shell then never ended.
+	stop := filepath.Join(t.TempDir(), "stop")
+	s.typeKeys(`while [ ! -e '` + stop + `' ]; do head -c 600 /dev/urandom | od -An -tx1 | head -c 1000; printf '\033[6n'; sleep 0.05; done; exit` + "\r")
 	end := time.Now().Add(d)
 	last, window := s.screenText(), time.Now()
 	tick, resize := time.NewTicker(100*time.Millisecond), time.NewTicker(5*time.Second)
@@ -415,9 +422,9 @@ func TestKillSoak(t *testing.T) {
 			t.Fatalf("no output for 10 s; log:\n%s", sessionLog(s.state))
 		}
 	}
-	s.typeKeys("\x03")
-	time.Sleep(200 * time.Millisecond)
-	s.typeKeys("exit\r")
+	if err := os.WriteFile(stop, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	s.waitForEnd()
 	log := sessionLog(s.state)
 	if strings.Contains(log, "emu exited") || strings.Contains(log, "bad system call") {
