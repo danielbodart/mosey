@@ -269,3 +269,50 @@ func TestRecvKeepsNoCopyOfTheCredentialLine(t *testing.T) {
 		}
 	}
 }
+
+// A live upgrade's state crosses an attach socket with its three fds, and
+// the end that connected (Launcher) reads them with recvmsg: none is lost
+// and every one is close-on-exec (server.md §2.8).
+func TestHandoffStateCarriesItsThreeFDsToTheEndThatConnected(t *testing.T) {
+	session, attacher := pairOf(t, Spawner, Launcher)
+	var mine, peers []*os.File
+	for range 3 {
+		a, b, _ := Pair()
+		mine, peers = append(mine, a), append(peers, b)
+	}
+	defer func() {
+		for _, f := range append(mine, peers...) {
+			f.Close()
+		}
+	}()
+	before := openFDs(t)
+	m := handoffState()
+	m.PTY, m.Pidfd, m.Listener = mine[0], mine[1], mine[2]
+	if err := session.Send(m); err != nil {
+		t.Fatal(err)
+	}
+	got, err := attacher.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := got.(HandoffState)
+	for i, f := range []*os.File{s.PTY, s.Pidfd, s.Listener} {
+		if f == nil {
+			t.Fatalf("fd %d missing", i)
+		}
+		if fl, _ := unix.FcntlInt(fdOf(f), unix.F_GETFD, 0); fl&unix.FD_CLOEXEC == 0 {
+			t.Errorf("fd %d is not close-on-exec", i)
+		}
+		// Each is the very socket sent: a byte through it reaches its peer.
+		f.Write([]byte{byte(i)})
+		peers[i].SetReadDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 1)
+		if n, err := peers[i].Read(buf); err != nil || n != 1 || buf[0] != byte(i) {
+			t.Errorf("fd %d: read %d %v", i, n, err)
+		}
+		f.Close()
+	}
+	if after := openFDs(t); after != before {
+		t.Errorf("%d fds open after closing the received ones, was %d", after, before)
+	}
+}

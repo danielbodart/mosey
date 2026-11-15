@@ -47,6 +47,39 @@ func examples() []Message {
 		ClientLine{Line: line(1)}, ClientLine{Line: line(MaxClientLine)},
 		Ready{Line: line(MaxCredentialLine)},
 		Failed{Text: "x"}, Failed{Text: strings.Repeat(" ", MaxFailed)},
+		Start{Cols: 80, Rows: 24, Port: 1, ClientPublic: key(), Name: "s", Adopted: true, SessionID: [16]byte{1}},
+		Start{Cols: 80, Rows: 24, Port: 1, Addr: netip.MustParseAddr("2001:db8::1"), ClientPublic: key(),
+			Name: strings.Repeat("n", MaxSessionName), Adopted: true, SessionID: [16]byte{15: 0xff}},
+		Freeze{}, Thaw{},
+		Snapshot{Fragment: []byte{1}}, Snapshot{More: true, Fragment: bytes.Repeat([]byte{2}, MaxFragment-1)},
+		Seed{Fragment: []byte{1}}, Seed{More: true, Fragment: bytes.Repeat([]byte{2}, MaxFragment-1)},
+		HandoffScreen{Fragment: []byte{1}}, HandoffScreen{More: true, Fragment: bytes.Repeat([]byte{2}, MaxFragment-1)},
+		HandoffRequest{Version: 1, SoftwareVersion: "0.140.1"},
+		HandoffRequest{Version: 255, SoftwareVersion: strings.Repeat("9", MaxSoftwareVersion)},
+		handoffState(),
+		func() Message {
+			m := handoffState()
+			m.Agent, m.State, m.Started, m.Since = true, 3, MaxUnixSeconds, MaxUnixSeconds
+			m.Cols, m.Rows, m.ShellPID, m.ScreenLen = MaxCols, MaxRows, MaxPID, MaxSnapshot
+			m.Peer, m.Name = netip.MustParseAddrPort("[2001:db8::7]:65535"), strings.Repeat("n", MaxSessionName)
+			return m
+		}(),
+		func() Message {
+			m := handoffState()
+			m.Peer, m.ShellPID, m.ScreenLen, m.State = netip.AddrPort{}, 2, 1, 1
+			return m
+		}(),
+		HandoffAgent{}, HandoffTaken{},
+		Adopt{Line: line(1)}, Adopt{Line: line(MaxClientLine)},
+	}
+}
+
+// handoffState is a typical HandoffState (server.md §3.3).
+func handoffState() HandoffState {
+	return HandoffState{
+		Version: 1, SessionID: [16]byte{0xab, 1}, Started: 1794650000, State: 2, Since: 1794651234,
+		Cols: 80, Rows: 24, ShellPID: 4242, ScreenLen: 1234,
+		Peer: netip.MustParseAddrPort("192.0.2.7:50000"), Name: "quiet-heron",
 	}
 }
 
@@ -67,6 +100,11 @@ func roundTrip(t *testing.T, m Message) []byte {
 		case Update:
 			if len(v.Fragment) == 0 {
 				v.Fragment = nil
+			}
+			return v
+		case Start:
+			if !v.Adopted {
+				v.SessionID = [16]byte{}
 			}
 			return v
 		}
@@ -124,6 +162,12 @@ func fixedOrMax(t byte) int {
 		return 1 + MaxFailed
 	case typeStart:
 		return 25 + PublicKeySize
+	case typeSnapshot, typeSeed, typeHandoffScreen:
+		return 1 + MaxFragment
+	case typeHandoffRequest:
+		return 3 + MaxSoftwareVersion
+	case typeAdopt:
+		return 1 + MaxClientLine
 	}
 	return 0
 }
@@ -136,6 +180,10 @@ func fixedOrMin(t byte) int {
 		return 2
 	case typeStart:
 		return 9 + PublicKeySize
+	case typeSnapshot, typeSeed, typeHandoffScreen, typeAdopt:
+		return 3
+	case typeHandoffRequest:
+		return 4
 	}
 	return 1 << 20
 }
@@ -184,6 +232,38 @@ func TestFieldsOutOfRangeAreRefused(t *testing.T) {
 		KillEmu{Generation: 0, Why: KillDeadline}, KillEmu{Generation: 1, Why: 0}, KillEmu{Generation: 1, Why: 3},
 		ClientLine{Line: append(make([]byte, MaxClientLine), '\n')},
 		Failed{}, Failed{Text: "tab\t"}, Failed{Text: strings.Repeat("x", MaxFailed+1)},
+		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "s", Adopted: true},
+		Snapshot{}, Snapshot{Fragment: make([]byte, MaxFragment)},
+		Seed{}, HandoffScreen{}, HandoffScreen{Fragment: make([]byte, MaxFragment)},
+		HandoffRequest{Version: 0, SoftwareVersion: "1.2.3"},
+		HandoffRequest{Version: 1},
+		HandoffRequest{Version: 1, SoftwareVersion: strings.Repeat("9", MaxSoftwareVersion+1)},
+		HandoffRequest{Version: 1, SoftwareVersion: "1.2 3"},
+		HandoffRequest{Version: 1, SoftwareVersion: "1.2\x1b3"},
+		Adopt{}, Adopt{Line: []byte("no newline")},
+	}
+	for _, f := range []func(*HandoffState){
+		func(m *HandoffState) { m.Version = 0 },
+		func(m *HandoffState) { m.SessionID = [16]byte{} },
+		func(m *HandoffState) { m.Started = MaxUnixSeconds + 1 },
+		func(m *HandoffState) { m.Since = MaxUnixSeconds + 1 },
+		func(m *HandoffState) { m.State = 0 },
+		func(m *HandoffState) { m.State = 4 },
+		func(m *HandoffState) { m.Cols = 0 },
+		func(m *HandoffState) { m.Rows = MaxRows + 1 },
+		func(m *HandoffState) { m.ShellPID = 1 },
+		func(m *HandoffState) { m.ShellPID = MaxPID + 1 },
+		func(m *HandoffState) { m.ScreenLen = 0 },
+		func(m *HandoffState) { m.ScreenLen = MaxSnapshot + 1 },
+		func(m *HandoffState) { m.Peer = netip.MustParseAddrPort("192.0.2.7:0") },
+		func(m *HandoffState) { m.Peer = netip.MustParseAddrPort("[::ffff:192.0.2.1]:1") },
+		func(m *HandoffState) { m.Name = "" },
+		func(m *HandoffState) { m.Name = "a b" },
+		func(m *HandoffState) { m.Name = strings.Repeat("n", MaxSessionName+1) },
+	} {
+		m := handoffState()
+		f(&m)
+		bad = append(bad, m)
 	}
 	for _, m := range bad {
 		if b, err := Marshal(m); err == nil {
@@ -194,11 +274,14 @@ func TestFieldsOutOfRangeAreRefused(t *testing.T) {
 
 func TestReservedBitsAreRefused(t *testing.T) {
 	start, _ := Marshal(Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "s"})
-	start[1] = 1
+	start[1] = 1 << 1
 	update := []byte{typeUpdate, 1 << 2}
+	snapshot := []byte{typeSnapshot, 1 << 1, 0}
+	state, _ := Marshal(handoffState())
+	state[2] = 1 << 1
 	family, _ := Marshal(Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "s"})
 	family[8] = 5
-	for _, b := range [][]byte{start, update, family} {
+	for _, b := range [][]byte{start, update, family, snapshot, state} {
 		r := routes[b[0]]
 		if _, err := Parse(r.from, r.to, b); !errors.Is(err, ErrMalformed) {
 			t.Errorf("Parse(%x...) = %v", b[:min(len(b), 10)], err)
@@ -225,7 +308,7 @@ func TestATypeFromTheWrongPeerIsRefused(t *testing.T) {
 }
 
 func TestUnknownTypesAndTheRetiredExitCodeAreRefused(t *testing.T) {
-	for _, typ := range []byte{0x00, 0x08, 0x07, 0x14, 0x22, 0x35, 0x43, 0xff} {
+	for _, typ := range []byte{0x00, 0x0a, 0x14, 0x22, 0x36, 0x43, 0x4a, 0xff} {
 		for _, from := range []Peer{Launcher, Spawner, Proto, Emu} {
 			for _, to := range []Peer{Launcher, Spawner, Proto, Emu} {
 				if _, err := Parse(from, to, []byte{typ, 0, 0, 0, 0}); err == nil {
@@ -267,6 +350,56 @@ func FuzzParse(f *testing.F) {
 				}
 				if !bytes.Equal(again, b) {
 					t.Fatalf("accepted %x, re-marshals to %x", b, again)
+				}
+			}
+		}
+	})
+}
+
+// FuzzHandoff is the attach protocol's live-upgrade messages (server.md
+// §2.8), from both ends of an attach socket: the one place state crosses
+// from another binary. Whatever Parse accepts re-marshals to the same
+// bytes and holds every bound of §3.3; anything refused is ErrMalformed.
+func FuzzHandoff(f *testing.F) {
+	for _, m := range examples() {
+		switch m.(type) {
+		case HandoffRequest, HandoffState, HandoffAgent, HandoffScreen, HandoffTaken, Adopt:
+			b, _ := Marshal(m)
+			if len(b) < 4096 {
+				f.Add(b)
+			}
+		}
+	}
+	f.Fuzz(func(t *testing.T, b []byte) {
+		for _, dir := range [][2]Peer{{Launcher, Spawner}, {Spawner, Launcher}} {
+			m, err := Parse(dir[0], dir[1], b)
+			if err != nil {
+				if !errors.Is(err, ErrMalformed) {
+					t.Fatalf("refusal not ErrMalformed: %v", err)
+				}
+				continue
+			}
+			again, err := Marshal(m)
+			if err != nil || !bytes.Equal(again, b) {
+				t.Fatalf("accepted %x, re-marshals to %x, %v", b, again, err)
+			}
+			switch m := m.(type) {
+			case HandoffState:
+				if m.Version == 0 || m.SessionID == [16]byte{} || m.State < 1 || m.State > 3 ||
+					m.Started > MaxUnixSeconds || m.Since > MaxUnixSeconds ||
+					m.Cols < 1 || m.Cols > MaxCols || m.Rows < 1 || m.Rows > MaxRows ||
+					m.ShellPID < 2 || m.ShellPID > MaxPID || m.ScreenLen < 1 || m.ScreenLen > MaxSnapshot ||
+					len(m.Name) < 1 || len(m.Name) > MaxSessionName ||
+					m.Peer.IsValid() && (m.Peer.Port() == 0 || m.Peer.Addr().Is4In6() || m.Peer.Addr().IsUnspecified()) {
+					t.Fatalf("accepted out of bounds: %+v", m)
+				}
+			case HandoffRequest:
+				if m.Version == 0 || len(m.SoftwareVersion) < 1 || len(m.SoftwareVersion) > MaxSoftwareVersion {
+					t.Fatalf("accepted out of bounds: %+v", m)
+				}
+			case HandoffScreen:
+				if len(m.Fragment) < 1 || len(m.Fragment) > MaxFragment-1 {
+					t.Fatalf("a fragment of %d bytes", len(m.Fragment))
 				}
 			}
 		}

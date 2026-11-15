@@ -70,6 +70,19 @@ const (
 	MaxSessionName = 32
 	// CredentialIDSize is a credential id (D20, transport.md §3.4).
 	CredentialIDSize = 8
+	// SessionIDSize is a session id (D20, transport.md §3.4).
+	SessionIDSize = 16
+	// MaxSnapshot is screen.MaxDiff: the most a live upgrade's screen
+	// snapshot may be, in Snapshot, Seed or HandoffScreen fragments
+	// (server.md §2.8).
+	MaxSnapshot = 48 << 20
+	// MaxPID is pid_max's ceiling on Linux, 2^22 [kernel ABI].
+	MaxPID = 1 << 22
+	// MaxUnixSeconds bounds the hand-off's times as the greeting's
+	// 12-digit fields are bounded (bootstrap.md §9.2.1).
+	MaxUnixSeconds = 1e12 - 1
+	// MaxSoftwareVersion is a swver's longest (bootstrap.md §6.1).
+	MaxSoftwareVersion = 64
 )
 
 // The types of server.md §3.2. The high nibble names the direction.
@@ -80,6 +93,9 @@ const (
 	typeAgentConn  = 0x04
 	typeResume     = 0x05
 	typeEmuPaused  = 0x06
+	typeFreeze     = 0x07
+	typeThaw       = 0x08
+	typeSeed       = 0x09
 	typeInit       = 0x10
 	typeOutput     = 0x11
 	typeResize     = 0x12
@@ -91,10 +107,19 @@ const (
 	typeKillEmu    = 0x32
 	typeAttached   = 0x33
 	typeDetached   = 0x34
+	typeSnapshot   = 0x35
 	typeClientLine = 0x40
 	typeReady      = 0x41
 	typeFailed     = 0x42
 	typeHangup     = 0x43
+	// 0x40 to 0x48 are the attach protocol, frozen across releases
+	// (server.md §2.8); everything else is private to one build.
+	typeHandoffRequest = 0x44
+	typeHandoffState   = 0x45
+	typeHandoffAgent   = 0x46
+	typeHandoffScreen  = 0x47
+	typeHandoffTaken   = 0x48
+	typeAdopt          = 0x49
 )
 
 // Message is one IPC message.
@@ -119,8 +144,14 @@ type Start struct {
 	// line it mints: 1..MaxSessionName bytes, checked by the spawner as an
 	// sname before it sends it, and here only for its length and bytes.
 	Name string
-	UDP  *os.File // the bound socket, never connected
-	PTY  *os.File // the master
+	// Adopted is a live upgrade (server.md §2.8): the pty already has a
+	// shell, proto mints under SessionID rather than drawing one, a Seed
+	// follows the first EmuLink, and the session is one a client has
+	// had, so proto never ends it for want of one.
+	Adopted   bool
+	SessionID [SessionIDSize]byte
+	UDP       *os.File // the bound socket, never connected
+	PTY       *os.File // the master
 }
 
 // EmuEnd is how the previous emu ended, as an EmuLink tells proto.
@@ -266,27 +297,113 @@ type Failed struct{ Text string }
 // shell up: `mosey -kill` (bootstrap.md §9.5).
 type Hangup struct{}
 
-func (Start) typ() byte      { return typeStart }
-func (EmuLink) typ() byte    { return typeEmuLink }
-func (ShellExit) typ() byte  { return typeShellExit }
-func (AgentConn) typ() byte  { return typeAgentConn }
-func (Resume) typ() byte     { return typeResume }
-func (EmuPaused) typ() byte  { return typeEmuPaused }
-func (Init) typ() byte       { return typeInit }
-func (Output) typ() byte     { return typeOutput }
-func (Resize) typ() byte     { return typeResize }
-func (Flush) typ() byte      { return typeFlush }
-func (Update) typ() byte     { return typeUpdate }
-func (Replies) typ() byte    { return typeReplies }
-func (Credential) typ() byte { return typeCredential }
-func (Exit) typ() byte       { return typeExit }
-func (KillEmu) typ() byte    { return typeKillEmu }
-func (Attached) typ() byte   { return typeAttached }
-func (Detached) typ() byte   { return typeDetached }
-func (ClientLine) typ() byte { return typeClientLine }
-func (Ready) typ() byte      { return typeReady }
-func (Failed) typ() byte     { return typeFailed }
-func (Hangup) typ() byte     { return typeHangup }
+// Freeze asks proto to stop touching the pty and answer with a Snapshot of
+// its screen, for a live upgrade (server.md §2.8); Thaw undoes it when the
+// upgrade is abandoned.
+type Freeze struct{}
+
+// Thaw lets a frozen proto read and write the pty again.
+type Thaw struct{}
+
+// Snapshot is one fragment of proto's screen, frozen, as a diff from a 0x0
+// grid (screen.md §5): a run of fragments ending in one with More clear.
+type Snapshot struct {
+	More     bool
+	Fragment []byte
+}
+
+// Seed is one fragment of the screen an adopted proto starts from, as
+// Snapshot.
+type Seed struct {
+	More     bool
+	Fragment []byte
+}
+
+// HandoffRequest asks a session, over its attach socket, to hand itself to
+// the asker, a newer binary (attach protocol, server.md §2.8).
+type HandoffRequest struct {
+	// Version is the attach protocol version the asker chose, in both
+	// ranges.
+	Version uint8
+	// SoftwareVersion is the asker's, which the session checks is newer
+	// than its own.
+	SoftwareVersion string
+}
+
+// HandoffState is the session's state, with a reference to the pty
+// master, a pidfd for the shell and the attach listener (server.md §2.8).
+type HandoffState struct {
+	Version uint8
+	// Agent says a HandoffAgent with the agent listener follows.
+	Agent     bool
+	SessionID [SessionIDSize]byte
+	// Started and Since are unix seconds; State is the greeting's
+	// (1 new, 2 attached, 3 detached).
+	Started, Since uint64
+	State          uint8
+	Cols, Rows     uint16
+	ShellPID       uint32
+	// ScreenLen is how many bytes the HandoffScreen fragments carry.
+	ScreenLen uint32
+	Peer      netip.AddrPort
+	Name      string
+	PTY       *os.File
+	Pidfd     *os.File
+	Listener  *os.File
+}
+
+// HandoffAgent carries the session's agent listener.
+type HandoffAgent struct{ Listener *os.File }
+
+// HandoffScreen is one fragment of the session's screen snapshot.
+type HandoffScreen struct {
+	More     bool
+	Fragment []byte
+}
+
+// HandoffTaken tells the session the asker has its state and a
+// credential from its own proto: the session goes (server.md §2.8 step 9).
+type HandoffTaken struct{}
+
+// Adopt is the launcher's word to a spawner of its own binary: upgrade the
+// session at the other end of Conn, an attach connection already greeted,
+// for the client whose line, rewritten as resume:SID, is Line.
+type Adopt struct {
+	Line []byte
+	Conn *os.File
+}
+
+func (Start) typ() byte          { return typeStart }
+func (EmuLink) typ() byte        { return typeEmuLink }
+func (ShellExit) typ() byte      { return typeShellExit }
+func (AgentConn) typ() byte      { return typeAgentConn }
+func (Resume) typ() byte         { return typeResume }
+func (EmuPaused) typ() byte      { return typeEmuPaused }
+func (Init) typ() byte           { return typeInit }
+func (Output) typ() byte         { return typeOutput }
+func (Resize) typ() byte         { return typeResize }
+func (Flush) typ() byte          { return typeFlush }
+func (Update) typ() byte         { return typeUpdate }
+func (Replies) typ() byte        { return typeReplies }
+func (Credential) typ() byte     { return typeCredential }
+func (Exit) typ() byte           { return typeExit }
+func (KillEmu) typ() byte        { return typeKillEmu }
+func (Attached) typ() byte       { return typeAttached }
+func (Detached) typ() byte       { return typeDetached }
+func (ClientLine) typ() byte     { return typeClientLine }
+func (Ready) typ() byte          { return typeReady }
+func (Failed) typ() byte         { return typeFailed }
+func (Hangup) typ() byte         { return typeHangup }
+func (Freeze) typ() byte         { return typeFreeze }
+func (Thaw) typ() byte           { return typeThaw }
+func (Seed) typ() byte           { return typeSeed }
+func (Snapshot) typ() byte       { return typeSnapshot }
+func (HandoffRequest) typ() byte { return typeHandoffRequest }
+func (HandoffState) typ() byte   { return typeHandoffState }
+func (HandoffAgent) typ() byte   { return typeHandoffAgent }
+func (HandoffScreen) typ() byte  { return typeHandoffScreen }
+func (HandoffTaken) typ() byte   { return typeHandoffTaken }
+func (Adopt) typ() byte          { return typeAdopt }
 
 // route is who may send a type to whom, and how many fds it carries.
 type route struct {
@@ -316,6 +433,18 @@ var routes = map[byte]route{
 	typeReady:      {Spawner, Launcher, 0},
 	typeFailed:     {Spawner, Launcher, 0},
 	typeHangup:     {Launcher, Spawner, 0},
+	typeFreeze:     {Spawner, Proto, 0},
+	typeThaw:       {Spawner, Proto, 0},
+	typeSeed:       {Spawner, Proto, 0},
+	typeSnapshot:   {Proto, Spawner, 0},
+	// On an attach socket the end that connected (a launcher, a lister
+	// or a spawner adopting the session) is Launcher, the session Spawner.
+	typeHandoffRequest: {Launcher, Spawner, 0},
+	typeHandoffState:   {Spawner, Launcher, 3},
+	typeHandoffAgent:   {Spawner, Launcher, 1},
+	typeHandoffScreen:  {Spawner, Launcher, 0},
+	typeHandoffTaken:   {Launcher, Spawner, 0},
+	typeAdopt:          {Launcher, Spawner, 1},
 }
 
 // ErrMalformed is wrapped by every refusal of a message: a violation by the
@@ -335,6 +464,12 @@ func files(m Message) []*os.File {
 		return []*os.File{m.Conn}
 	case AgentConn:
 		return []*os.File{m.Conn}
+	case HandoffState:
+		return []*os.File{m.PTY, m.Pidfd, m.Listener}
+	case HandoffAgent:
+		return []*os.File{m.Listener}
+	case Adopt:
+		return []*os.File{m.Conn}
 	}
 	return nil
 }
@@ -351,6 +486,15 @@ func withFiles(m Message, fs []*os.File) Message {
 	case AgentConn:
 		v.Conn = fs[0]
 		return v
+	case HandoffState:
+		v.PTY, v.Pidfd, v.Listener = fs[0], fs[1], fs[2]
+		return v
+	case HandoffAgent:
+		v.Listener = fs[0]
+		return v
+	case Adopt:
+		v.Conn = fs[0]
+		return v
 	}
 	return m
 }
@@ -362,13 +506,20 @@ func Marshal(m Message) ([]byte, error) {
 	b := []byte{m.typ()}
 	switch m := m.(type) {
 	case Start:
-		b = append(b, 0)
+		var flags byte
+		if m.Adopted {
+			flags |= startAdopted
+		}
+		b = append(b, flags)
 		b = binary.BigEndian.AppendUint16(b, m.Cols)
 		b = binary.BigEndian.AppendUint16(b, m.Rows)
 		b = binary.BigEndian.AppendUint16(b, m.Port)
 		b = appendAddr(b, m.Addr)
 		b = append(b, m.ClientPublic...)
 		b = append(append(b, byte(len(m.Name))), m.Name...)
+		if m.Adopted {
+			b = append(b, m.SessionID[:]...)
+		}
 	case EmuLink:
 		b = binary.BigEndian.AppendUint32(b, m.Generation)
 		b = append(b, byte(m.Reason))
@@ -399,7 +550,37 @@ func Marshal(m Message) ([]byte, error) {
 		if m.Peer.Addr().IsValid() {
 			b = binary.BigEndian.AppendUint16(b, m.Peer.Port())
 		}
-	case Flush, Detached, AgentConn, Hangup:
+	case Flush, Detached, AgentConn, Hangup, Freeze, Thaw, HandoffAgent, HandoffTaken:
+	case Snapshot:
+		b = appendFragment(b, m.More, m.Fragment)
+	case Seed:
+		b = appendFragment(b, m.More, m.Fragment)
+	case HandoffScreen:
+		b = appendFragment(b, m.More, m.Fragment)
+	case HandoffRequest:
+		b = append(b, m.Version, byte(len(m.SoftwareVersion)))
+		b = append(b, m.SoftwareVersion...)
+	case HandoffState:
+		var flags byte
+		if m.Agent {
+			flags |= handoffAgent
+		}
+		b = append(b, m.Version, flags)
+		b = append(b, m.SessionID[:]...)
+		b = binary.BigEndian.AppendUint64(b, m.Started)
+		b = append(b, m.State)
+		b = binary.BigEndian.AppendUint64(b, m.Since)
+		b = binary.BigEndian.AppendUint16(b, m.Cols)
+		b = binary.BigEndian.AppendUint16(b, m.Rows)
+		b = binary.BigEndian.AppendUint32(b, m.ShellPID)
+		b = binary.BigEndian.AppendUint32(b, m.ScreenLen)
+		b = appendAddr(b, m.Peer.Addr())
+		if m.Peer.Addr().IsValid() {
+			b = binary.BigEndian.AppendUint16(b, m.Peer.Port())
+		}
+		b = append(append(b, byte(len(m.Name))), m.Name...)
+	case Adopt:
+		b = append(b, m.Line...)
 	case Update:
 		var flags byte
 		if m.More {
@@ -437,7 +618,34 @@ func Marshal(m Message) ([]byte, error) {
 const (
 	updateMore = 1 << 0
 	updateHeld = 1 << 1
+	// startAdopted is Start's flag for a live upgrade (server.md §3.3).
+	startAdopted = 1 << 0
+	// fragmentMore is Snapshot's, Seed's and HandoffScreen's MORE.
+	fragmentMore = 1 << 0
+	// handoffAgent is HandoffState's "a HandoffAgent follows".
+	handoffAgent = 1 << 0
 )
+
+// appendFragment is a snapshot fragment's layout: flags, then the bytes.
+func appendFragment(b []byte, more bool, fragment []byte) []byte {
+	var flags byte
+	if more {
+		flags |= fragmentMore
+	}
+	return append(append(b, flags), fragment...)
+}
+
+// parseFragment reads appendFragment's layout: a flags byte with only
+// MORE, then 1 to MaxFragment - 1 bytes.
+func parseFragment(t byte, body []byte) (more bool, fragment []byte, err error) {
+	if len(body) < 2 || len(body) > MaxFragment {
+		return false, nil, malformed("type %#02x carries a fragment of %d bytes", t, len(body)-1)
+	}
+	if body[0]&^fragmentMore != 0 {
+		return false, nil, malformed("type %#02x has flags %#02x", t, body[0])
+	}
+	return body[0]&fragmentMore != 0, append([]byte(nil), body[1:]...), nil
+}
 
 // Parse decodes one message that from sent to, refusing anything outside
 // its type's fixed layout, and any type that does not travel that way. A
@@ -479,10 +687,10 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		if len(body) < 8 {
 			return nil, malformed("Start is short")
 		}
-		if body[0] != 0 {
+		if body[0]&^startAdopted != 0 {
 			return nil, malformed("Start has flags %#02x", body[0])
 		}
-		m := Start{Cols: u16(1), Rows: u16(3), Port: u16(5)}
+		m := Start{Cols: u16(1), Rows: u16(3), Port: u16(5), Adopted: body[0]&startAdopted != 0}
 		if err := size(m.Cols, m.Rows); err != nil {
 			return nil, err
 		}
@@ -502,6 +710,18 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		}
 		m.ClientPublic = append([]byte(nil), rest[:PublicKeySize]...)
 		name := rest[PublicKeySize+1:]
+		if m.Adopted {
+			// The session id follows the name.
+			if len(name) < SessionIDSize {
+				return nil, malformed("an adopted Start has no session id")
+			}
+			sid := name[len(name)-SessionIDSize:]
+			name = name[:len(name)-SessionIDSize]
+			m.SessionID = [SessionIDSize]byte(sid)
+			if m.SessionID == ([SessionIDSize]byte{}) {
+				return nil, malformed("an adopted Start's session id is zero")
+			}
+		}
 		if n := int(rest[PublicKeySize]); n < 1 || n > MaxSessionName || n != len(name) {
 			return nil, malformed("Start's name is %d bytes, said to be %d", len(name), n)
 		}
@@ -655,6 +875,50 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		return Detached{}, fixed(0)
 	case typeHangup:
 		return Hangup{}, fixed(0)
+	case typeFreeze:
+		return Freeze{}, fixed(0)
+	case typeThaw:
+		return Thaw{}, fixed(0)
+	case typeHandoffTaken:
+		return HandoffTaken{}, fixed(0)
+	case typeHandoffAgent:
+		return HandoffAgent{}, fixed(0)
+	case typeSnapshot, typeSeed, typeHandoffScreen:
+		more, frag, err := parseFragment(t, body)
+		if err != nil {
+			return nil, err
+		}
+		switch t {
+		case typeSnapshot:
+			return Snapshot{More: more, Fragment: frag}, nil
+		case typeSeed:
+			return Seed{More: more, Fragment: frag}, nil
+		}
+		return HandoffScreen{More: more, Fragment: frag}, nil
+	case typeHandoffRequest:
+		if len(body) < 3 {
+			return nil, malformed("HandoffRequest is short")
+		}
+		m := HandoffRequest{Version: body[0]}
+		v := body[2:]
+		if m.Version == 0 {
+			return nil, malformed("HandoffRequest for attach version 0")
+		}
+		if n := int(body[1]); n < 1 || n > MaxSoftwareVersion || n != len(v) {
+			return nil, malformed("HandoffRequest's version is %d bytes, said to be %d", len(v), n)
+		}
+		if !softwareVersion(v) {
+			return nil, malformed("HandoffRequest's version is not a swver")
+		}
+		m.SoftwareVersion = string(v)
+		return m, nil
+	case typeHandoffState:
+		return parseHandoffState(body)
+	case typeAdopt:
+		if err := line(body, MaxClientLine); err != nil {
+			return nil, err
+		}
+		return Adopt{Line: append([]byte(nil), body...)}, nil
 	case typeClientLine:
 		if err := line(body, MaxClientLine); err != nil {
 			return nil, err
@@ -670,6 +934,86 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		return Failed{Text: string(body)}, nil
 	}
 	return nil, malformed("unknown type %#02x", t)
+}
+
+// handoffFixed is HandoffState's fixed part, after the type: version,
+// flags, session id, started, state, since, cols, rows, pid, length.
+const handoffFixed = 1 + 1 + SessionIDSize + 8 + 1 + 8 + 2 + 2 + 4 + 4
+
+// parseHandoffState reads HandoffState (server.md §3.3), every field
+// bounded before it is kept: it is the one attach-protocol message that
+// carries state from another binary.
+func parseHandoffState(body []byte) (Message, error) {
+	if len(body) < handoffFixed+1 {
+		return nil, malformed("HandoffState is short")
+	}
+	u16 := func(i int) uint16 { return binary.BigEndian.Uint16(body[i:]) }
+	u32 := func(i int) uint32 { return binary.BigEndian.Uint32(body[i:]) }
+	u64 := func(i int) uint64 { return binary.BigEndian.Uint64(body[i:]) }
+	m := HandoffState{
+		Version: body[0], Agent: body[1]&handoffAgent != 0,
+		SessionID: [SessionIDSize]byte(body[2 : 2+SessionIDSize]),
+		Started:   u64(18), State: body[26], Since: u64(27),
+		Cols: u16(35), Rows: u16(37), ShellPID: u32(39), ScreenLen: u32(43),
+	}
+	switch {
+	case m.Version == 0:
+		return nil, malformed("HandoffState for attach version 0")
+	case body[1]&^handoffAgent != 0:
+		return nil, malformed("HandoffState has flags %#02x", body[1])
+	case m.SessionID == [SessionIDSize]byte{}:
+		return nil, malformed("HandoffState's session id is zero")
+	case m.Started > MaxUnixSeconds || m.Since > MaxUnixSeconds:
+		return nil, malformed("HandoffState's times are out of range")
+	case m.State < 1 || m.State > 3:
+		return nil, malformed("HandoffState's state is %d", m.State)
+	case m.ShellPID < 2 || m.ShellPID > MaxPID:
+		return nil, malformed("HandoffState's shell pid is %d", m.ShellPID)
+	case m.ScreenLen < 1 || m.ScreenLen > MaxSnapshot:
+		return nil, malformed("HandoffState's screen is %d bytes", m.ScreenLen)
+	}
+	if err := size(m.Cols, m.Rows); err != nil {
+		return nil, err
+	}
+	addr, rest, err := parseAddr(body[handoffFixed:], "HandoffState")
+	if err != nil {
+		return nil, err
+	}
+	if addr.IsValid() {
+		if len(rest) < 2 {
+			return nil, malformed("HandoffState is short")
+		}
+		port := binary.BigEndian.Uint16(rest)
+		if port == 0 {
+			return nil, malformed("HandoffState's peer has port 0")
+		}
+		m.Peer, rest = netip.AddrPortFrom(addr, port), rest[2:]
+	}
+	if len(rest) < 1 {
+		return nil, malformed("HandoffState has no name")
+	}
+	name := rest[1:]
+	if n := int(rest[0]); n < 1 || n > MaxSessionName || n != len(name) {
+		return nil, malformed("HandoffState's name is %d bytes, said to be %d", len(name), n)
+	}
+	if !printable(name) || bytes.IndexByte(name, ' ') >= 0 {
+		return nil, malformed("HandoffState's name is not printable ASCII")
+	}
+	m.Name = string(name)
+	return m, nil
+}
+
+// softwareVersion says whether b is in bootstrap.md §6.1's swver grammar:
+// letters, digits, '.', '_', '+' and '-'.
+func softwareVersion(b []byte) bool {
+	for _, c := range b {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '.', c == '_', c == '+', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // appendAddr writes an address as its family (0 for none, 4 or 6) and its
