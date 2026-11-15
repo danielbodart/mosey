@@ -302,7 +302,7 @@ so under `synctest.Test` it is virtual time.
 client; `Listen(pc, creds, log)` and `Listener.Accept(ctx)` for the
 server, with `Listener.Addr` and `Listener.Stats`. `*Conn` has
 `Send(payload)`, `Recv(ctx)`, `Events()` (`PeerChanged`, `Rekeyed`,
-`RekeyOverdue`, `Revoked`, `Ended`), `HandshakeHash()` (D28), `Peer()`,
+`RekeyOverdue`, `Revoked`, `Ended`), `Peer()`,
 `Stats()`, `LocalAddressChanged()`, `End(reason)` (tell the peer the
 session is over, then close: `transport.md` §8.4) and `Close()`. Errors
 are `ErrBlocked` (a send held back), `ErrRevoked` and `ErrEnded` (both
@@ -432,7 +432,6 @@ Errors are `*Failure`,
 | Resume (D8) | **built** (resume slice): the attach socket (`server.md` §2.6), `ipc.Resume`, `bootstrap.md` §9.2–§9.4 |
 | Exclusive attach (D26) | **built** (resume slice) on `Hello.Attach`, `transport.KindRevoked`, the `Revoked` event |
 | Agent channel (D15, D25) | **built** (agent slice): `agent.md`, `internal/channel`, `internal/agent`, `Conn.SendChannel`/`RecvChannel`, `ipc.AgentConn`, `server.md` §2.7 |
-| Provenance (D28) | `Conn.HandshakeHash` |
 | Prediction (D12) | **built** (prediction slice): `prediction.md`, `internal/predict`, `Grid.EchoApplied`, the server's echo ack (`prediction.md` §3.1), `mosey -predict` |
 | Chaff (D11, O10) | **built** (chaff slice): `ssp.Chaffer`, `transport.Conn.SendChaff` and `ChaffArrived`, `ssp.md` §9.1 |
 | Auto-upload (D7) | Landed: `bootstrap.md` §4.7, `internal/install` |

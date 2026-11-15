@@ -64,7 +64,7 @@ func DialOffering(ctx context.Context, pc net.PacketConn, addr netip.AddrPort, c
 	}
 	slices.Sort(hello.Channels)
 	e := newEngine(pc, log)
-	c := newConn(e, false, nil, &[32]byte{}, &[32]byte{})
+	c := newConn(e, false, nil, &[32]byte{})
 	c.serverAddr = unmap(addr)
 
 	e.lock()
@@ -188,7 +188,7 @@ func (hs *clientHandshake) onMsg2(c *Conn, pkt []byte, from netip.AddrPort) {
 		c.cur.wipe()
 	}
 	c.cur = newKeyset(&keys, time.Now())
-	c.root, c.hash = keys.Root, keys.Hash
+	c.root = keys.Root
 	keys.Wipe()
 	hs.accepted = bytes.Clone(pkt)
 	c.channels = slices.Clone(server.Channels)

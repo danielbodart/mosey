@@ -41,9 +41,6 @@ func TestARekeyGivesBothSidesTheSameNextEpoch(t *testing.T) {
 	if keys.LocalIndex != 11 || keys.RemoteIndex != 22 || next.LocalIndex != 22 || next.RemoteIndex != 11 {
 		t.Errorf("indices: initiator %d→%d, responder %d→%d", keys.LocalIndex, keys.RemoteIndex, next.LocalIndex, next.RemoteIndex)
 	}
-	if keys.Hash != ([32]byte{}) {
-		t.Error("a rekey set the handshake hash, which never changes")
-	}
 }
 
 func TestARekeyFinishesOnce(t *testing.T) {

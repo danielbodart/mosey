@@ -74,9 +74,6 @@ type Keys struct {
 	LocalIndex, RemoteIndex uint32
 	// Root is the chaining key the next rekey derives from.
 	Root [32]byte
-	// Hash is the handshake hash h, which quoin-attest signs (D28). A rekey
-	// leaves it zero: h never changes for the life of a connection.
-	Hash [32]byte
 }
 
 // Wipe erases the keys and the root.
@@ -230,7 +227,6 @@ func (i *Initiator) ReadMsg2(msg2 []byte) (Keys, Hello, error) {
 		if err = server.agrees(i.offered); err != nil {
 			return
 		}
-		keys.Hash = st.h
 		i2r, r2i, root := st.split()
 		keys.Send, keys.Recv, keys.Root = i2r, r2i, root
 		clear(i2r[:])
@@ -406,7 +402,6 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 		st.mixKey(ss2)
 		clear(ss2)
 		out = append(out, st.encryptAndHash(MarshalHello(r.hello.answer(client)))...)
-		keys.Hash = st.h
 		i2r, r2i, root := st.split()
 		keys.Send, keys.Recv, keys.Root = r2i, i2r, root
 		clear(i2r[:])

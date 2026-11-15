@@ -20,9 +20,6 @@ func TestAClientAndServerHandshakeAndExchangePayloads(t *testing.T) {
 		s := newSetup(t, 20*time.Millisecond)
 		client, server, _ := s.connect(clientAddr.String())
 		exchange(t, client, server, "hello")
-		if client.HandshakeHash() != server.HandshakeHash() || client.HandshakeHash() == ([32]byte{}) {
-			t.Error("the two ends disagree on the handshake hash")
-		}
 		if server.Peer() != clientAddr {
 			t.Errorf("the server sends to %v, not the address msg2 went to", server.Peer())
 		}

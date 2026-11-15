@@ -84,9 +84,6 @@ func TestKeysAreReplacedEveryTwoMinutesAndBothSidesAgree(t *testing.T) {
 		if rekeyed != 4 {
 			t.Errorf("%d Rekeyed events across both ends, not 2 each", rekeyed)
 		}
-		if client.HandshakeHash() != server.HandshakeHash() {
-			t.Error("a rekey changed the handshake hash")
-		}
 	})
 }
 

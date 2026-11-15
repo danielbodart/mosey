@@ -19,7 +19,6 @@ type Conn struct {
 	e      *engine
 	server bool
 
-	hash  [32]byte
 	epoch uint64
 	sid   [16]byte
 
@@ -100,9 +99,9 @@ var (
 	keepaliveNone   = []byte{0x00}
 )
 
-func newConn(e *engine, server bool, cur *keyset, root, hash *[32]byte) *Conn {
+func newConn(e *engine, server bool, cur *keyset, root *[32]byte) *Conn {
 	c := &Conn{
-		e: e, server: server, cur: cur, root: *root, hash: *hash,
+		e: e, server: server, cur: cur, root: *root,
 		recvq:   make(chan []byte, recvQueue),
 		chanq:   make(chan []byte, recvQueue),
 		chaffed: make(chan struct{}, 1),

@@ -234,10 +234,6 @@ func (c *Conn) Recv(ctx context.Context) ([]byte, error) {
 // oldest.
 func (c *Conn) Events() <-chan Event { return c.events }
 
-// HandshakeHash is h, the hash of the handshake that made this connection,
-// which quoin-attest signs (D28). A rekey does not change it.
-func (c *Conn) HandshakeHash() [32]byte { return c.hash }
-
 // Peer is the validated address packets go to: on the client, the
 // server's; on the server, the client's, or the zero AddrPort while none is
 // validated.

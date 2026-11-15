@@ -36,7 +36,7 @@ type keyset struct {
 
 // newKeyset copies k's keys into a key set and erases them from k, so the
 // only copy left is the one this side wipes by transport.md §9's rules.
-// k.Root and k.Hash are the caller's to move.
+// k.Root is the caller's to move.
 func newKeyset(k *handshake.Keys, now time.Time) *keyset {
 	ks := &keyset{local: k.LocalIndex, remote: k.RemoteIndex, send: k.Send, recv: k.Recv, installed: now}
 	clear(k.Send[:])

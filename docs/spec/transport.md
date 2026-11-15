@@ -362,15 +362,15 @@ The client does the mirror image with `DECAP(sk_C, enc2, info = h)` and
 `DecryptAndHash(c2)`, then `Split()`.
 
 The **handshake hash** is `h` after `MixHash(c2)`, the last step before
-`Split`. It is the same on both sides, never changes for the life of the
-connection (a rekey does not touch it), and is what `Conn.HandshakeHash`
-returns for quoin-attest to sign (D28). It binds the protocol name, the
-sid, both one-shot keys, the credential id, both indices, both
-encapsulations and both hellos.
+`Split`. It binds the protocol name, the sid, both one-shot keys, the
+credential id, both indices, both encapsulations and both hellos, and
+through the AEAD tags on msg2 both sides prove they hold the same one. It
+stays inside the handshake: mosey exports no channel binding (D28, as
+amended 2026-11-15, removed the one kept for an agent's use).
 
 `Keys` for epoch 0: on the client `Send = k_i2r`, `Recv = k_r2i`; on the
 server the reverse. `LocalIndex` is the side's own index, `RemoteIndex`
-the peer's, `Root = root`, `Hash = h`.
+the peer's, `Root = root`.
 
 ### 3.8 Processing order and the responder's state
 
@@ -834,7 +834,6 @@ erase ss, out
 - The rekey's own transcript (`rh`, `enc`, `idx_R'`) is bound into the
   keys, and every rekey frame travels sealed under the current keys, so
   only the peer can have sent it.
-- The handshake hash `h` (D28) does not change.
 
 "Initiator" and "responder" here are rekey roles, independent of who was
 client: the client's `Send` key in the new epoch is `k_I→R` if the client
@@ -1352,7 +1351,7 @@ nothing.
 Beyond the general rules in `architecture.md` §6:
 
 - **Known-answer transcripts.** With `testing/cryptotest.SetGlobalRandom`
-  fixing the randomness, a test pins msg1, msg2, `h` and the epoch-0 keys
+  fixing the randomness, a test pins msg1, msg2 (whose AEAD tags cover `h`) and the epoch-0 keys
   byte for byte, and the same for one rekey, so a refactor cannot change
   the wire unnoticed.
 - **Sizes.** msg1 with 1 and 16 channels is 1170 and 1185 bytes; msg2

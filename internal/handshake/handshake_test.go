@@ -119,7 +119,7 @@ func TestXWingSizesAreTheSpecs(t *testing.T) {
 	}
 }
 
-func TestBothSidesAgreeOnTheKeysAndTheHandshakeHash(t *testing.T) {
+func TestBothSidesAgreeOnTheKeys(t *testing.T) {
 	w := newWorld(t)
 	i := w.initiator(t, 7)
 	msg2, p, err := w.resp.ReadMsg1(i.Msg1())
@@ -132,9 +132,6 @@ func TestBothSidesAgreeOnTheKeysAndTheHandshakeHash(t *testing.T) {
 	}
 	if keys.Send != p.Keys.Recv || keys.Recv != p.Keys.Send || keys.Root != p.Keys.Root {
 		t.Error("the two sides derived different keys")
-	}
-	if keys.Hash != p.Keys.Hash || keys.Hash == ([32]byte{}) {
-		t.Error("the handshake hashes differ")
 	}
 	if keys.Send == keys.Recv {
 		t.Error("both directions share a key")

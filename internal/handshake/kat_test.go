@@ -58,7 +58,6 @@ func transcript(t *testing.T) map[string]string {
 		"credential": digest(cred.ID[:], cred.PSK[:], cred.ServerPublic, key.PublicKey()),
 		"msg1":       digest(i.Msg1()),
 		"msg2":       digest(msg2),
-		"h":          hex.EncodeToString(keys.Hash[:])[:16],
 		"epoch 0":    digest(keys.Send[:], keys.Recv[:], keys.Root[:]),
 		"rekey init": digest(parts[0], parts[1]),
 		"rekey resp": digest(rresp),
@@ -67,7 +66,7 @@ func transcript(t *testing.T) map[string]string {
 }
 
 // TestTheWireIsPinnedByAKnownAnswerTranscript fixes the randomness and
-// pins msg1, msg2, h, the epoch-0 keys and one rekey byte for byte
+// pins msg1, msg2, the epoch-0 keys and one rekey byte for byte
 // (transport.md §11), so a refactor cannot change the wire unnoticed. If a
 // change to the wire is meant, the new digests go here in the same commit
 // as the spec change that explains them.
@@ -76,7 +75,6 @@ func TestTheWireIsPinnedByAKnownAnswerTranscript(t *testing.T) {
 		"credential": "98d2879c2ea90104",
 		"msg1":       "8ebb5aed30f10e95",
 		"msg2":       "7f8a6faf0d8aa684",
-		"h":          "4ab068821de412f0",
 		"epoch 0":    "799ea06560db97dc",
 		"rekey init": "31e995838de0b213",
 		"rekey resp": "2a1d9c38695da5b0",

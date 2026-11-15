@@ -40,10 +40,10 @@ type Listener struct {
 // to with what each has been sent and has proved it sent (transport.md §3.8,
 // §7.2).
 type pending struct {
-	p          *handshake.Pending
-	ks         *keyset
-	root, hash [32]byte
-	addrs      map[netip.AddrPort]*budget
+	p     *handshake.Pending
+	ks    *keyset
+	root  [32]byte
+	addrs map[netip.AddrPort]*budget
 }
 
 type budget struct{ recv, sent int }
@@ -239,7 +239,7 @@ func (l *Listener) handleMsg1(pkt []byte, from netip.AddrPort) {
 		return
 	}
 	if pc == nil {
-		pc = &pending{p: p, ks: newKeyset(&p.Keys, time.Now()), root: p.Keys.Root, hash: p.Keys.Hash,
+		pc = &pending{p: p, ks: newKeyset(&p.Keys, time.Now()), root: p.Keys.Root,
 			addrs: map[netip.AddrPort]*budget{}}
 		p.Keys.Wipe()
 		l.e.table.set(pc.ks.local, pc)
@@ -315,7 +315,7 @@ func (l *Listener) confirm(pc *pending, pkt []byte, from netip.AddrPort) {
 	delete(l.pendings, pc.p)
 	l.collectErased()
 
-	c := newConn(l.e, true, pc.ks, &pc.root, &pc.hash)
+	c := newConn(l.e, true, pc.ks, &pc.root)
 	c.listener, c.sid = l, pc.p.SessionID
 	// What both offered: the server's answer in msg2 (transport.md §3.6).
 	for _, ch := range pc.p.Hello.Channels {
