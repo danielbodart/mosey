@@ -121,6 +121,9 @@ ssh ──stdin──► launcher                       spawner                p
    §6.2, §6.4); the line carries no software version. Any failure is one line on
    stderr, the matching `MOSEY-ERROR` line (`line`, `version` or
    `unsupported`) on stdout, and exit 1; nothing else has started.
+   When it is to start a session and the line has a `dir`, the launcher
+   checks, before starting anything, that it names a directory
+   (`bootstrap.md` §9.2.3); if not, the same with code `dir`.
 2. **Launcher starts the spawner**: `exec.Cmd{Path: Self, Args: [Self,
    "--serve=spawner"]}` (`Self` is `/proc/self/exe` on Linux, §2.3), `SysProcAttr{Setsid: true}`, stdin and stdout
    `/dev/null`, stderr `/dev/null` (the spawner opens its own log; it
@@ -163,6 +166,9 @@ ssh ──stdin──► launcher                       spawner                p
    9. Start the login shell on the pty's slave (§2.5), then close the
       slave. The shell starts this late so a failure earlier leaves no
       shell behind, and so its start-up overlaps the client's handshake.
+      If the line has a `type`, write its text and one CR to the pty
+      master now, in one write (`bootstrap.md` §9.2.3); a failure is
+      logged and the session goes on.
    10. Send `Ready{line}` to the launcher and close B. From here on the
       launcher's fate does not matter.
    11. Supervise (§5) and serve the attach socket until the session ends
@@ -278,7 +284,10 @@ triggers above (nothing emu does is one of them):
   LDAP or sssd user's shell. Else the shell field of the current uid's
   line in `/etc/passwd`, parsed by the spawner (Go's `os/user` does not
   expose it). Else `/bin/sh`.
-- **Directory.** `$HOME`, else the passwd home, else `/`.
+- **Directory.** The home directory: `$HOME`, else the passwd home,
+  else `/`. If the `ClientLine` has a `dir` (`bootstrap.md` §9.2.3), that
+  directory instead: as it is if absolute, else joined to the home
+  directory. One that is not a directory fails the start.
 - **argv[0]** is `-` plus the shell's base name, the login-shell
   convention (S4 `startShell`).
 - **Process.** `SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}`,
@@ -412,12 +421,13 @@ releases that speak the same attach protocol.
 (`bootstrap.md` §9.2.1) and the messages that follow it on an attach
 socket: `ClientLine` (0x40), `Ready` (0x41), `Failed` (0x42) and
 `Hangup` (0x43) (§3.3), with §3.1's framing (one seqpacket message each,
-type byte first). This is **attach protocol v1**
-(`bootstrap.AttachProtocol`); the greeting's `aproto` says which one
+type byte first). This is **attach protocol 2**
+(`bootstrap.AttachProtocol`; 2 since 0x40's ClientLine went to version
+2, `bootstrap.md` §9.2.1); the greeting's `aproto` says which one
 version a session's spawner speaks, and a launcher attaches it only if
 it is its own, as the handshake does with its own number (`transport.md`
-§3.6). There is no range: a release that changes a v1 message, or adds
-one a v1 spawner would refuse, gives the attach protocol a new number;
+§3.6). There is no range: a release that changes one of its messages, or adds
+one a spawner of this number would refuse, gives the attach protocol a new number;
 0x44 to 0x4F are kept for that. Every other IPC type (§3.2) is private to one build: a
 spawner only ever exchanges them with its own proto and emu, and a
 launcher with the spawner it started from its own file.
@@ -427,7 +437,7 @@ step 5) and attaches it as §2.6 says: it sends the session's spawner the
 line, and prints the credential line the session's own proto mints.
 Nothing compares software versions. A session whose greeting does not
 parse is not chosen. One whose `aproto` is another number is not taken by
-`auto`; `name:NAME` or `resume:SID` naming it fails with `MOSEY-ERROR 1
+`auto`; `name:NAME` or `resume:SID` naming it fails with `MOSEY-ERROR 2
 attach P-N` and, on stderr, `session NAME speaks attach protocol P; this
 mosey speaks N`.
 
@@ -658,7 +668,7 @@ idle timer runs from it.
 
 **0x40 ClientLine** (launcher → spawner): type, then the line as read
 from stdin including its `\n`, 1..`MaxClientLine` bytes.
-`MaxClientLine` = 4096 [`bootstrap.md` §6.2].
+`MaxClientLine` = 8192 [`bootstrap.md` §6.2].
 
 **0x41 Ready** (spawner → launcher): type, then the credential line,
 as `Credential`.
@@ -1387,7 +1397,7 @@ is its threads of control and the ordering rules the IPC imposes:
 | `MaxReplyTokens`: reply allowance per request | introducers in this `Output` and the one before, at most 8 | server | [derived; `TestReplyAllowanceCoversRealPrograms`, not yet written] |
 | `screen.MaxDiff`: one `Update` run, reassembled | 48 MiB | proto | [`screen.md` §5.12] |
 | `ReplyQueue` | 64 KiB, drop when full | server | [S2, reply flood] |
-| `MaxClientLine` | 4096 B | ipc, bootstrap | [`bootstrap.md` §6.2] |
+| `MaxClientLine` | 8192 B | ipc, bootstrap | [`bootstrap.md` §6.2] |
 | `MaxCredentialLine` | 2048 B | ipc, bootstrap | [`bootstrap.md` §6.3] |
 | T1: launcher reads the `ClientLine` | 30 s | launcher | [`bootstrap.md` §4.4: `handshake.CredentialTTL`] |
 | T2: launcher waits for `Ready` | 15 s | launcher, spawner | [derived] |

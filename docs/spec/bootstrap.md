@@ -77,7 +77,7 @@ enter raw mode, run Session
 ## 2. The command line the client accepts
 
 ```
-mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-- SSH-OPTION...] DESTINATION
+mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-- SSH-OPTION...] DESTINATION
 ```
 
 - `DESTINATION` is passed to ssh unchanged: `host`, `user@host`, an alias
@@ -108,6 +108,21 @@ mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -n
 - `-list` lists the sessions there and exits (§9.4); `-kill NAME` ends
   session NAME (§9.5). The four exclude each other. The old `-r` and
   `-r=SESSION` are gone: `-s` replaces them.
+- `-dir DIR` and `-type TEXT` say how a session starts (§9.2.3): its
+  login shell starts in DIR, relative to the remote `$HOME` unless it is
+  absolute, and TEXT is typed into it, followed by Enter. They apply only
+  when the command **creates** a session: a plain `mosey DEST` that finds
+  none detached, `-new`, or `-s NAME` when there is no session NAME. When
+  it resumes or takes over an existing session they are ignored, without
+  an error. DIR is 1 to 1024 bytes of UTF-8 with no control character;
+  TEXT is 1 to 1024 bytes of UTF-8 with no control character but tab
+  (§6.2's `dirtext` and `typetext`); anything else, or either one with
+  `-list` or `-kill`, is a usage error. An empty value is the same as
+  leaving the flag out. They replace what a tmux user does with
+  `tmux new-session -c DIR` and then `tmux send-keys TEXT Enter`, so a
+  session can open in a project and start a program there, and leave the
+  user in that directory's shell, with their whole `PATH`, when the
+  program exits.
 - `SSH-OPTION`s after `--` are filtered (§2.1) and passed to both ssh
   invocations.
 
@@ -349,7 +364,7 @@ messages between launcher and spawner are `server.md` §2.1 and §3.3
 (`ClientLine` 0x40, `Ready` 0x41, `Failed` 0x42, on the socketpair B);
 the timeouts T1–T3 are `server.md` §8.
 
-1. **Launcher.** Read stdin **to EOF**, at most 4097 bytes, within T1 =
+1. **Launcher.** Read stdin **to EOF**, at most 8193 bytes, within T1 =
    30 s [derived: `handshake.CredentialTTL`; the client writes the line
    before authentication, so it is there when the command starts]. Stdin
    must be exactly one ClientLine: one LF, at the end, then EOF. Anything
@@ -965,7 +980,7 @@ tested). Off: the bootstrap runs with `ForwardAgent=no`, the ClientLine says
 - **Decimal fields** are `0` or a non-zero digit followed by digits: no
   sign, no leading zero.
 - **The first two fields are frozen forever**: a magic word, then the
-  bootstrap protocol version (`bootstrap.Version`, now `1`). Any version of
+  bootstrap protocol version (`bootstrap.Version`, now `2`). Any version of
   mosey can therefore tell a line it cannot read from a line that is not
   its own, and the `MOSEY-ERROR` grammar in full, its size bound included,
   is frozen too, so a client of any version can read any server's refusal
@@ -980,17 +995,23 @@ tested). Off: the bootstrap runs with `ForwardAgent=no`, the ClientLine says
   accepts any `proto`, since its whole grammar is frozen. There is no
   range and no fallback: a mismatch fails the bootstrap with one line
   naming both numbers (§6.4). A new field or a new value means a new
-  version.
-- **Stable from here on (D8 V1).** The v1 grammars of §6.2–§6.4 are
+  version. **Version 2** (2026-11-15) added the ClientLine's `dir` and
+  `type` (§6.2, §9.2.3) and the ErrorLine code `dir`; nothing else
+  changed from 1. A v1 server meeting a v2 client, or the reverse, fails
+  with §6.4's one line naming both numbers, and the host's mosey is
+  upgraded as D7 says (Nix, or replacing the binary). No v1 line is
+  still read or written (no users yet: no compatibility work, Dan,
+  2026-11-15).
+- **Stable from here on (D8 V1).** The grammars of §6.2–§6.4 are
   frozen like the wire protocol: a client and a server of different
   releases meet as a matter of course (whatever mosey the host has,
-  §4.7), so a release may not change what a v1 field means or add a value
-  a v1 parser would refuse. The version is the promise: as long as it is
-  `1`, every release reads every other's lines. No line carries a
+  §4.7), so a release may not change what a field of this version means
+  or add a value its parser would refuse. The version is the promise: as
+  long as it is `2`, every release reads every other's lines. No line carries a
   software version, and nothing compares one (Dan, 2026-11-15: "when I
   use SSH I don't really worry about the version stuff"). Fields marked
   *reserved* below have a grammar now so a later slice can start accepting
-  values without changing the grammar; a v1 server refuses them with
+  values without changing the grammar; a server refuses them with
   `unsupported`.
 
 ```
@@ -1005,8 +1026,8 @@ word    = 1*64( ALPHA / DIGIT / "." / "_" / "+" / "-" )
 
 ```
 client-line = "MOSEY-CLIENT" SP proto SP attach SP agent
-              SP cols SP rows SP env SP public LF
-proto   = dec                       ; = 1
+              SP cols SP rows SP env SP dir SP type SP public LF
+proto   = dec                       ; = 2
 attach  = "auto"                    ; R1: the newest detached session, else a new one (§9.2)
         / "new"                     ; -new: a new session with a generated name
         / "name:" sname             ; -s NAME: NAME, taken over if attached, else started
@@ -1024,6 +1045,11 @@ name    = "COLORTERM" / "LANG" / "LANGUAGE" / "LC_ADDRESS" / "LC_ALL"
         / "LC_MESSAGES" / "LC_MONETARY" / "LC_NAME" / "LC_NUMERIC"
         / "LC_PAPER" / "LC_TELEPHONE" / "LC_TIME" / "TERM"
 vchar   = ALPHA / DIGIT / "." / "_" / "@" / ":" / "+" / "-"
+dir     = "-" / b64text             ; -dir; the base64url of a dirtext
+type    = "-" / b64text             ; -type; the base64url of a typetext
+b64text = base64url, no padding, of 1..1024 bytes
+dirtext = 1..1024 bytes of UTF-8, no control character (Unicode Cc)
+typetext = 1..1024 bytes of UTF-8, no control character (Unicode Cc) but TAB
 public  = b64(1216)                 ; 1622 characters
 ```
 
@@ -1034,24 +1060,40 @@ public  = b64(1216)                 ; 1622 characters
 | `agent` | whether the client will forward an agent (D25). The server needs it at spawn time to give the shell an `SSH_AUTH_SOCK` (`agent.md` §4.1) and, for `new` and resume alike, to trigger ssh's bind (§8). Slice 1 sent `no` only and refused `yes` with `unsupported agent`; the agent slice accepts both |
 | `cols`, `rows` | the client terminal's size; a terminal that reports 0 is sent as 80×24. The server clamps it (D23, `screen.ClampSize`). The client sends its size again as the first userinput event after connecting, in case it changed during the bootstrap |
 | `env` | the client's locale and terminal variables, from the allow-list only. A variable that is unset, empty, longer than 64 bytes or holds a byte outside `vchar` is left out (logged at debug), never escaped. The server gives the locale variables to the shell; what it does with `TERM` and `COLORTERM` is `server.md`'s (the shell's `TERM` describes the server's emulator, not the client's terminal) |
+| `dir` | `-dir`: the directory a new session's login shell starts in, relative to the remote `$HOME` unless absolute (§9.2.3). `-` for none: the shell starts in `$HOME` (`server.md` §2.5). Only a session the line creates uses it |
+| `type` | `-type`: the text typed into a new session's pty once its shell has started, followed by Enter (§9.2.3). `-` for none. Only a session the line creates uses it |
 | `public` | the client's one-shot X-Wing encapsulation key, `OneShotKey.PublicKey()`, 1216 bytes [S1, measured from `crypto/hpke`] |
 
-Size: at most 2974 bytes [derived: the fixed fields and their 7 spaces come
-to 1696 with the longest attach, `resume:SID:CREDID` at 41 bytes; env at
-most 1277 (156 bytes of names, 17 × 65 for `=` and value, 16 commas); LF
-1]. **`MaxClientLine` = 4096**
-[derived: the next power of two, so the server's read bound is fixed and
-generous].
+`dir` and `type` are base64url because a path or a command holds spaces,
+and §6.1 keeps every field free of them; base64url keeps the line
+printable ASCII whatever the user typed, and its strict decoding keeps
+the line canonical. The text inside is still checked: valid UTF-8 (Go's
+`utf8.Valid`) and no rune for which `unicode.IsControl` holds, but TAB in
+`type`. So a `-dir` cannot smuggle a NUL or a newline into a path, and a
+`-type` cannot carry an Enter of its own (a second command), an ESC (a
+line editor's key binding) or a Ctrl-C [choice: one line of ordinary
+text, with tab kept because a user may type it]. The bound is 1024 bytes
+each [choice: `PATH_MAX` on macOS, so any of our platforms can name the
+directory; for `type`, a quarter of the 4096 bytes termios(3) says a
+canonical-mode line holds, so the text and its Enter always arrive as one
+line the shell can read].
+
+Size: at most 5708 bytes [derived: the fixed fields and their 9 spaces come
+to 1698 with the longest attach, `resume:SID:CREDID` at 41 bytes; env at
+most 1277 (156 bytes of names, 17 × 65 for `=` and value, 16 commas);
+`dir` and `type` 1366 each (the base64url of 1024 bytes); LF 1].
+**`MaxClientLine` = 8192** [derived: the next power of two, so the
+server's read bound is fixed and generous].
 
 Why not pass the environment as ssh `SendEnv`: sshd's `AcceptEnv` decides
 what arrives, differently on every host, and the values arrive in the
 environment of a process the server cannot validate first. On the line, the
 grammar is ours and the parser is fuzzed.
 
-Example (key shortened):
+Example (key shortened; `c3Jj` is `-dir src`):
 
 ```
-MOSEY-CLIENT 1 new no 211 58 COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256color nW3b…Qe8
+MOSEY-CLIENT 2 new no 211 58 COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256color c3Jj - nW3b…Qe8
 ```
 
 ### 6.3 CredentialLine: server → client, on ssh's stdout
@@ -1116,7 +1158,8 @@ still parses the line. The longest line is 100 bytes [derived:
 LF]; 128 leaves room and is the bound the client enforces.
 
 A client reading a code it does not know treats it as `internal` (the
-generic message below, with the code shown in it). The codes v1 defines:
+generic message below, with the code shown in it). The codes defined so
+far (`dir` since version 2):
 
 | Code | When | `detail` | Client says (exit 1) |
 |---|---|---|---|
@@ -1126,6 +1169,7 @@ generic message below, with the code shown in it). The codes v1 defines:
 | `unsupported` | a reserved value the server does not yet accept (slice 1 sent it for `agent=yes`; no v1 value is reserved now) | the field's name | `mosey: the remote mosey can't do F yet` |
 | `session` | `resume:SID…` names no session of this user that answers (§9.2) | `-` | R3's reconnect (§9.2.2): `mosey: session NAME on DEST has ended: its shell exited, or the host restarted` |
 | `taken` | R3's `resume:SID:CREDID` finds its session held by another credential than CREDID: another client has taken it over (§9.2.2, D26) | when that client attached, in unix seconds | `mosey: session NAME taken over by another client at TIME` (exit 3, as §9.1) |
+| `dir` | the line would create a session and its `dir` is not a directory the launcher can reach (§9.2.3); no session was started | `-` | `mosey: DIR is not a directory on DEST, so no session was started`, DIR as the user gave it |
 | `internal` | the server failed to start the session; stderr says why | `-` | `mosey: the server failed to start (see above)` |
 | any other word | a later server's code | any | `mosey: the server refused: CODE (see above)` |
 
@@ -1468,11 +1512,15 @@ the CredentialLine (§6.3), so the client can say it, and in the greeting
 | Command | ClientLine `attach` | What the launcher does, holding the lock |
 |---|---|---|
 | `mosey DEST` | `auto` | of the sessions the launcher can attach (step 5: any version's, if their attach protocol is this launcher's) that are `detached` (below), the one with the newest `since`, taken with `resume:SID`; if none is detached, a new session with a generated name, `new:NAME`. It never takes a session that is `new` or `attached` |
-| `mosey -s NAME DEST` | `name:NAME` | session NAME (step 5: of any version; one of another attach protocol is `MOSEY-ERROR 1 attach P-N`), whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
+| `mosey -s NAME DEST` | `name:NAME` | session NAME (step 5: of any version; one of another attach protocol is `MOSEY-ERROR 2 attach P-N`), whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
 | `mosey -new DEST` | `new` | a new session with a generated name, `new:NAME` |
 | R3's reconnect | `resume:SID:CREDID` | §9.2.2 |
 | `mosey -list DEST` | none: `--serve=list` (§9.4) | |
 | `mosey -kill NAME DEST` | none: `--serve=kill NAME` (§9.5) | |
+
+Each row that can start a session (`auto`, `name:NAME`, `new`) uses the
+line's `dir` and `type` only when it does start one (§9.2.3); a row that
+takes an existing session ignores them.
 
 **What counts as detached.** A greeting says `detached` when its last
 client said it was leaving (END `detached`, §9.3), when that client's
@@ -1518,7 +1566,7 @@ The steps:
    its own. To take one it closes every other connection, rewrites the
    line's `attach` as `resume:SID` (a reconnect keeps its CREDID,
    `resume:SID:CREDID`, §9.2.2) and sends it to that session's spawner.
-   A `new:NAME` or the all-zero SID from a client is `MOSEY-ERROR 1 line -`.
+   A `new:NAME` or the all-zero SID from a client is `MOSEY-ERROR 2 line -`.
 3. **Spawner.** The session's spawner owns the socket. It checks the
    peer's uid with `SO_PEERCRED` [S1 `resume.go`], sends its greeting
    (§9.2.1), and reads the launcher's `ClientLine` (0x40). It parses it
@@ -1532,7 +1580,7 @@ The steps:
    the session's, marks the session held by it (the lock paragraph above)
    and sends it to the launcher in `Ready` (0x41), which prints it exactly
    as for a new session. Any failure is `Failed` (0x42), which the
-   launcher turns into `MOSEY-ERROR 1 internal -`.
+   launcher turns into `MOSEY-ERROR 2 internal -`.
 4. **Handshake and takeover** as §7 and §9.1: on confirmation every other
    transport of the session is revoked, and its client exits saying so.
 5. **Versions** (D8 V1). Every session's greeting is in the stable
@@ -1548,7 +1596,7 @@ The steps:
    not parse is not chosen. One whose attach protocol is not this
    launcher's is never taken by `auto` (it is listed by `-list`, so the
    user can see it); `name:NAME` or `resume:SID` naming it is refused with
-   `MOSEY-ERROR 1 attach P-N`, P its spawner's number and N the
+   `MOSEY-ERROR 2 attach P-N`, P its spawner's number and N the
    launcher's, and the launcher's stderr says `session NAME speaks attach protocol P; this mosey speaks
    N`. Its name stays taken: a new session is never given it.
 6. **The size** in the ClientLine is not applied by the spawner (an
@@ -1572,7 +1620,7 @@ message of printable ASCII (§6.1's rules), **not** an IPC message:
 session-line = "MOSEY-SESSION" SP aproto SP sessionid SP name
                SP started SP state SP since SP peer SP holder LF
 aproto       = dec              ; the attach protocol the spawner speaks,
-                                ; 1..255; "1" now
+                                ; 1..255; "2" now
 sessionid    = b64(16)
 name         = sname            ; §6.2
 started      = dec              ; unix seconds the session started
@@ -1604,7 +1652,14 @@ greeting, never in it, so `ParseSessionLine` reads the greeting of any
 session of any later version, whatever its `aproto`. A launcher attaches
 a session only if `aproto` equals its own `bootstrap.AttachProtocol`
 (§9.2 step 5). No software version is in it. The parser is canonical and
-fuzzed. `MaxSessionLine` = 256 bytes, also frozen, since every launcher
+fuzzed.
+
+**Attach protocol 2** (2026-11-15). The `ClientLine` message (0x40)
+carries a ClientLine, so when that line's version went to 2 (§6.1) the
+attach protocol went to 2 with it: a spawner of attach protocol 1 would
+refuse a version-2 line. A session started by a binary of attach
+protocol 1 is therefore listed, but not taken (§9.2 step 5), until it
+ends; nothing else changed. `MaxSessionLine` = 256 bytes, also frozen, since every launcher
 reads the greeting into a buffer of that size [derived: the longest line
 is 13 + 3 + 22 + 32 + 12 + 8 + 12 + 47 + 11, 8 spaces and LF = 169, with
 the 12-digit bound on the times].
@@ -1657,12 +1712,12 @@ own session, in the background, and never asks the user anything:
   part of what is drawn, not of the session's screen: the server never
   sees it, and the renderer's diff puts the row back when it goes.
 - **The launcher's answer** to `resume:SID:CREDID`, under the lock: no
-  session SID that answers is `MOSEY-ERROR 1 session -`. A session that is
+  session SID that answers is `MOSEY-ERROR 2 session -`. A session that is
   `detached`, or whose `holder` is CREDID, is taken as §9.2 step 2 says:
   the second case is a path broken one way only (the server still hears
   the client, so it never went `detached`), and the takeover revokes this
   client's own old transport. A session any other credential holds is
-  `MOSEY-ERROR 1 taken SINCE`, SINCE its greeting's `since`. The
+  `MOSEY-ERROR 2 taken SINCE`, SINCE its greeting's `since`. The
   launcher passes CREDID on to the spawner, and while the credential it
   mints is out the greeting's `holder` is CREDID, not the new one: the
   hold is that client's. Otherwise a try dropped at the swap (below)
@@ -1698,6 +1753,53 @@ own session, in the background, and never asks the user anything:
   its session by SID, not by name, so it never attaches a newer session
   that reused the name after the old one ended; that this meets R3's "by
   name" is also Dan's to confirm.
+
+#### 9.2.3 Where a new session starts: `-dir` and `-type`
+
+`-dir DIR` and `-type TEXT` (§2) travel as the ClientLine's `dir` and
+`type` (§6.2). They are what a session is started with, never what it is
+attached with: a tmux user's `tmux new-session -c DIR` followed by
+`tmux send-keys TEXT Enter`, without tmux (Dan, 2026-11-15).
+
+- **Only on creation.** The launcher uses them only when §9.2's table has
+  it start a session (`new:NAME`): a plain `mosey DEST` with no session
+  detached, `-new`, or `-s NAME` with no session NAME. When it takes an
+  existing session they are ignored, with no error and no message: the
+  `resume:SID` line it sends that session's spawner has `dir` and `type`
+  set to `-`. A reconnect (§9.2.2) sends `-` for both. So
+  `mosey -s work -dir src -type 'claude' DEST` is a command a user can
+  repeat: the first run makes the session, every later one returns to it.
+- **The directory.** The launcher resolves `dir`: an absolute path is
+  used as it is; any other is joined to the home directory the shell
+  would start in (`server.md` §2.5: `$HOME`, else the passwd home, else
+  `/`), and cleaned (`filepath.Join`). It must then name a directory the
+  launcher can `stat` (symlinks followed). Before it starts a spawner,
+  holding the lock, the launcher checks this; if it fails the launcher
+  starts nothing, writes `the directory DIR is not one: ERR` on stderr and
+  `MOSEY-ERROR 2 dir -` on stdout, and the client says `mosey: DIR is not
+  a directory on DEST, so no session was started` and exits 1 (§6.4). The
+  spawner resolves the same `dir` the same way and starts the login shell
+  there (`server.md` §2.5); should it have gone in between, starting the
+  shell fails and the session with it (`Failed`, `internal`).
+- **The text.** Once the login shell has started, the spawner writes
+  `type`'s text and then one CR (0x0D, what a terminal's Enter key sends)
+  into the pty master, in one write. "Started" means the spawner's
+  fork and exec of the shell have returned: it does not wait for a prompt
+  [choice: the simplest rule that works]. The text sits in the tty's
+  input queue, as a fast typist's typeahead would, until the shell reads
+  its first line, and the tty's `ICRNL` turns the CR into the newline that
+  ends that line. This is what `tmux send-keys TEXT Enter` does to a new
+  pane, so a shell, its rc files and its line editor see exactly what
+  they would see under tmux. Two consequences, both tmux's too: the tty
+  echoes typeahead when it arrives, so the text may show before the
+  prompt as well as after it, and a program the rc files run that reads
+  the terminal (a prompt for a passphrase, say) gets the text instead of
+  the shell. The text is typed into the shell, never run by the server:
+  it is the user's own command, with the user's own `PATH` and aliases,
+  and when it exits the user is at that shell's prompt in DIR. It is
+  written before the spawner sends `Ready`, so it always comes before
+  anything the client types. A failed write is logged and the session
+  goes on.
 
 ### 9.3 How long a session lives (D8 R4)
 
@@ -1789,7 +1891,7 @@ and after its greeting sends it `Hangup` (0x43, `server.md` §2.6); the
 spawner hangs the shell up (§9.3), and closes the connection once it has
 sent the signals. The server prints nothing and exits 0, and the client
 says `mosey: ended session NAME on DEST`. With no session called NAME the
-server prints `MOSEY-ERROR 1 session -` and exits 1, and the client says
+server prints `MOSEY-ERROR 2 session -` and exits 1, and the client says
 `mosey: no session called NAME on DEST` and exits 1. Any other failure is
 reported as `-list`'s are.
 
@@ -1832,7 +1934,7 @@ nor `transport`.
 ```go
 const (
 	Version           = 1
-	MaxClientLine     = 4096
+	MaxClientLine     = 8192
 	MaxCredentialLine = 2048
 	MaxErrorLine      = 128 // frozen with the ErrorLine grammar
 	MaxPreamble       = 64 << 10
@@ -1848,6 +1950,7 @@ type ClientLine struct {
 	Agent           bool              // agent
 	Cols, Rows      uint16            // 1..65535
 	Env             map[string]string // allow-listed names only; Marshal sorts
+	Dir, Type       string            // dir, type: "" is "-" (§6.2, §9.2.3)
 	Public          []byte            // 1216 bytes
 }
 
@@ -1864,6 +1967,10 @@ type CredentialLine struct {
 
 // ValidSessionName is §6.2's sname.
 func ValidSessionName(string) bool
+
+// ValidDir and ValidType are §6.2's dirtext and typetext.
+func ValidDir(string) bool
+func ValidType(string) bool
 
 // ErrorLine is §6.4; Detail "" is "-".
 type ErrorLine struct {
@@ -2053,8 +2160,9 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 
 | Name | Value | Provenance |
 |---|---|---|
-| `bootstrap.Version` | 1 | ours |
-| `MaxClientLine` | 4096 B | [derived] §6.2: at most 2974 B used |
+| `bootstrap.Version` | 2 | ours (§6.1: 2 added `dir` and `type`) |
+| `MaxClientLine` | 8192 B | [derived] §6.2: at most 5708 B used |
+| `-dir`, `-type` length | 1–1024 B each | [choice] §6.2: macOS `PATH_MAX`; a quarter of termios(3)'s 4096-byte canonical line |
 | `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1797 B used |
 | `MaxErrorLine` | 128 B, frozen | [derived] §6.4: at most 100 B used |
 | Session with no confirmed credential | ends after `handshake.CredentialTTL` (30 s) | [derived] §4.5 |
@@ -2086,7 +2194,7 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | stderr filter line cut | 1024 B | [choice] |
 | Taken-over exit status | 3 | ours |
 | `MaxSessionLine` | 256 B | [derived] §9.2.1: at most 169 B used |
-| `bootstrap.AttachProtocol` | 1 | ours (§9.2.1, `server.md` §2.8) |
+| `bootstrap.AttachProtocol` | 2 | ours (§9.2.1, `server.md` §2.8: 2 since the ClientLine's version 2) |
 | Greeting deadline (launcher, lister) | 2 s per socket | [choice]: the spawner answers at once; a hung one is skipped, not waited on |
 | Session name (`sname`) | 1–32 B of letters, digits, `-_.` | [choice] §6.2: safe unquoted in any shell and on any terminal |
 | Generated name | `ADJECTIVE-NOUN`, 64 × 64 words; 32 draws, then `-` and 4 hex digits | [choice] §9.2 |
@@ -2107,7 +2215,12 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 **Unit, `internal/bootstrap`:**
 
 - Marshal/Parse round trips for both lines and the error line, including
-  maxima (every env name at 64 bytes, longest IPv6).
+  maxima (every env name at 64 bytes, longest IPv6, a 1024-byte `dir`
+  and `type`).
+- `dir` and `type`: a 1025-byte text, a NUL, an LF, a CR, an ESC, a DEL,
+  a C1 control, invalid UTF-8 and a padded or non-canonical base64url
+  field are each refused; a tab is accepted in `type` and refused in
+  `dir`; spaces and non-ASCII letters are accepted in both.
 - Each rule of §6.1 broken once: CR, double space, trailing space, padding,
   non-zero trailing bits, wrong decoded length, leading zero, `0` cols,
   65536, unknown env name, unsorted or repeated names, `::ffff:` and zoned
@@ -2168,7 +2281,9 @@ durations in the commit message; 10 s each in CI):
 - `FuzzParseClientLine`, `FuzzParseCredentialLine`, `FuzzParseErrorLine`:
   no panic; anything accepted re-marshals to the identical bytes; no
   accepted CredentialLine has an unspecified, multicast or limited
-  broadcast `addr`.
+  broadcast `addr`; no accepted ClientLine has a `dir` or `type` outside
+  `dirtext` and `typetext` (§6.2), checked against a reference written
+  out rune by rune in the test.
 - `FuzzChooseAddr`: no panic; the result, if any, breaks no row of §7.2.
 - `FuzzReadCredential`: no panic; at most `MaxPreamble + MaxCredentialLine`
   bytes read; the result, if any, re-marshals to a line present in the
@@ -2196,7 +2311,7 @@ durations in the commit message; 10 s each in CI):
   With the real `mosey` built by the test: the line exchange, a server of
   another version (a second build with another `-X main.version`) that
   serves the client all the same (D8 V1), a server of another protocol
-  (a stand-in that answers `MOSEY-ERROR 2 version -`) refused with §6.4's
+  (a stand-in that answers `MOSEY-ERROR 3 version -`) refused with §6.4's
   line, `-remote` to a
   missing file (exit 127), a server that prints rc noise before the line,
   and that the fake ssh exits once the line is out while the session lives
@@ -2231,6 +2346,13 @@ durations in the commit message; 10 s each in CI):
   third exits 3; `-new` starts a third session; `-list` shows every name
   and state; `-kill NAME` ends one, whose client exits 0; and `exit` in
   the last ends it, after which nothing of it is running.
+- **Start options through real sshd** (§9.2.3), same harness
+  (`TestDirAndTypeStartASessionAndAreIgnoredOnResume`): `-s work -dir
+  sub -type 'echo hi'` creates session `work` whose shell is in
+  `$HOME/sub` and whose screen shows `hi` as a line of output; after it
+  detaches, `-s work -dir other -type …` resumes it, still in `$HOME/sub`
+  (`other` does not exist, and nothing is typed); `-new -dir missing` is
+  refused with §6.4's `dir` message, exit 1, and starts no session.
 - **Reconnect, R3** (§9.2.2), on netsim in virtual time
   (`TestAClientWhosePathDiesReconnectsByItselfAndKeepsItsScreen`,
   `TestAReconnectThatFindsTheSessionGoneOrTakenEndsTheClient`), the
