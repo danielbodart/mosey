@@ -3,6 +3,7 @@ package provenance_test
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -179,6 +180,11 @@ func without(t *testing.T, b []byte, field string) []byte {
 // same things.
 func TestTheReleaseJobChecksWhatTheClientChecks(t *testing.T) {
 	script, err := os.ReadFile("../../scripts/release-bundles.sh")
+	if errors.Is(err, fs.ErrNotExist) {
+		// The Nix build's source holds only cmd/, internal/ and go.mod
+		// (flake.nix); `mise run check` runs this from the repository.
+		t.Skip("scripts/ is not in this source tree")
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
