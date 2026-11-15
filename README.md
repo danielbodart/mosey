@@ -122,39 +122,46 @@ version (see [Zero install](#zero-install)). Then:
 
 ```sh
 mosey host                 # resume your most recently detached session on host, or start a new one
-mosey -s NAME host         # attach to the session called NAME, taking it over; create it if missing (landing)
-mosey -new host            # always start a fresh session, with a generated name (landing)
-mosey -list host           # your sessions on host: name, attached or detached, since when, version (names and versions landing)
-mosey -kill NAME host      # end the session called NAME (landing)
+mosey -s NAME host         # attach to the session called NAME, taking it over; create it if missing
+mosey -new host            # always start a fresh session, with a generated name
+mosey -list host           # your sessions on host: name, attached or detached, since when, version
+mosey -kill NAME host      # end the session called NAME (its shell gets SIGHUP)
 ```
 
 Plain `mosey host` never takes over a session that is attached somewhere
 else, so a second terminal to the same host gets a session of its own.
 Every session has a name; one you didn't name gets a generated one, such
-as `quiet-heron`. (Automatic resume and names are landing: today's build
-still resumes with `-r`, which `-s` replaces.)
+as `quiet-heron`. The list of sessions lives only on the host: your
+machine keeps no record of them, so another device sees the same ones.
 
-**The session lives until its shell exits.** Typing `exit` or Ctrl-D in
-the remote shell, or anything else that ends that shell, ends the
-session. Anything that happens on **your own machine**, the client, only
-detaches: closing the terminal window, logging out of your laptop,
-rebooting it, or the laptop crashing or losing its network. There is no
-detach key; closing the client's terminal is how you detach. The session
-then waits on the server, and the next plain `mosey host`, from this
-machine or another, picks it up again. While the client is still running
-it reconnects by itself after a dead spot (landing: if the network stays
-gone, it also logs in again over ssh in the background until it gets the
-session back, or exits saying the session has ended). A detached session
-is ended after 7 days unused (landing).
+**A session ends only when its shell does.** Typing `exit` or Ctrl-D in
+the **remote** shell, or anything else that ends that shell, ends the
+session, and `mosey -kill NAME host` ends it from outside.
+
+**Everything that happens on your own machine, the client, only
+detaches.** Closing the terminal window, logging out of your laptop,
+putting it to sleep, rebooting it, or it crashing or losing its network:
+none of these touch the session, which waits on the host. There is no
+detach key; closing the client's terminal is how you detach. The next
+plain `mosey host`, from this machine or another, picks the session up
+again (a client that vanished without a word counts as detached once the
+host has heard nothing from it for 15 seconds).
+
+While the client runs it rides out a dead spot by itself. If it hears
+nothing from the host for 15 seconds, it also logs in again over ssh in
+the background, without asking you anything (ssh runs in batch mode),
+and swaps the new connection in with your screen as it was; it keeps
+trying, from every 2 seconds up to once a minute, until it gets the
+session back or finds it has ended, and then exits saying so. A session
+left detached for 7 days is ended (its shell gets SIGHUP).
 
 Taking a session over with `-s` cuts off any client still attached and
 wipes its keys. If that client is awake within a minute, it exits saying
-who took over and when; one asleep longer (a closed laptop) is still cut
-off, but wakes to a session that never answers, with no word why.
-Nothing secret is ever saved to disk: each resume is a fresh SSH login and
-a fresh handshake ([docs/spec/bootstrap.md §9](docs/spec/bootstrap.md)).
-A client that just loses its network for a while needs none of this: it
-carries on by itself when packets flow again.
+who took over and when; one that was asleep finds out when it tries to
+reconnect, and exits saying the session was taken over. It never takes
+the session back by itself. Nothing secret is ever saved to disk: each
+resume is a fresh SSH login and a fresh handshake
+([docs/spec/bootstrap.md §9](docs/spec/bootstrap.md)).
 
 ### Agent forwarding
 

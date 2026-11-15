@@ -214,7 +214,7 @@ Every `mosey host` bootstraps through ssh as in §3.1; its `ClientLine`
 says which session (`auto`, `new`, `name:NAME`, or R3's
 `resume:SID:CREDID`, `bootstrap.md` §9.2). The launcher, holding an
 `flock` on `R/mosey/lock`, reads the greetings of every `attach.sock`
-(`server.md` §2.6) and chooses: a new session (`server.Choose`; the line
+(`server.md` §2.6) and chooses: a new session (`choose` in `internal/server/choose.go`; the line
 goes to a spawner of its own as `new:NAME`), or an existing one, whose
 spawner it sends the line as `resume:SID`. The spawner checks it
 and sends proto `ipc.Resume`; proto mints a new credential for the new

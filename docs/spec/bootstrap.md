@@ -2204,11 +2204,14 @@ durations in the commit message; 10 s each in CI):
   the last ends it, after which nothing of it is running.
 - **Reconnect, R3** (§9.2.2), on netsim in virtual time
   (`TestAClientWhosePathDiesReconnectsByItselfAndKeepsItsScreen`,
-  `TestAReconnectThatFindsTheSessionGoneEndsWithAMessage`,
-  `TestAReconnectThatFindsTheSessionTakenEndsAsTakenOver`), and the
-  client loop's swap under synctest with fakes (`internal/client`).
-- **The idle timeout** (§9.3), with an injected short `IdleTimeout`, on
-  the spawner with a stub proto (`internal/server`).
+  `TestAReconnectThatFindsTheSessionGoneOrTakenEndsTheClient`), the
+  server's silence rule (`TestASilentClientCountsAsDetachedUntilItIsHeardAgain`),
+  and the client loop's tries, backoff and swap under synctest with fakes
+  (`internal/client`, `reconnect_test.go`).
+- **The idle timeout and `-kill`** (§9.3, §9.5), with an injected short
+  `IdleTimeout`, on the spawner with a stub proto
+  (`TestADetachedSessionIsHungUpAfterTheIdleTimeoutAndAnAttachStopsTheClock`,
+  `TestKillHangsTheShellUp`, `internal/server`).
 - **Auto-upload through the real sshd** (§4.7), with the remote's `HOME`
   a temporary directory (the throwaway sshd's `SetEnv HOME=`), no
   `-remote`, and a version nothing on the remote `PATH` can have: the
