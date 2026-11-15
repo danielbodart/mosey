@@ -40,8 +40,8 @@ the same file, re-executed with a flag. A plain word never selects a role
 | `mosey --serve=spawner` | **spawner**: binds UDP, opens the pty, starts the shell, starts and supervises proto and emu | no | the session |
 | `mosey --serve=proto` | **proto**: keys, UDP, transport, SSP, every protocol parser, the pty master, the reply grammar | Landlock + seccomp | the session |
 | `mosey --serve=emu` | **emu**: tuios.dev/vt and nothing else | Landlock + seccomp | until it dies; restarted |
-| `mosey --serve=version` | prints the version (D7's probe, `bootstrap.md` §4.7.2) | no | instant |
-| `mosey --serve=install V HASH SIZE TEMP` | installs the uploaded copy it is running from into `~/.cache/mosey/V/` (D7, `bootstrap.md` §4.7.7) | no | instant |
+| `mosey --serve=protocol` | prints the bootstrap line version and the handshake protocol, `1 1` (D7's probe asks the cached copy, `bootstrap.md` §4.7.2) | no | instant |
+| `mosey --serve=install HASH SIZE TEMP` | installs the uploaded copy it is running from as `~/.cache/mosey/mosey` (D7, `bootstrap.md` §4.7.7) | no | instant |
 | `mosey --serve=list` | **lister**: reads every session's greeting (§2.6) and prints one line each (`bootstrap.md` §9.4) | no | instant |
 
 Any other `--serve=` value prints `mosey --serve: unknown role` and exits
@@ -117,12 +117,12 @@ ssh ──stdin──► launcher                       spawner                p
 1. **Launcher reads the line.** Stdin to EOF, at most `MaxClientLine`
    + 1 bytes, within T1; it must be exactly one line (`bootstrap.md`
    §4.4). `bootstrap.ParseClientLine` decides validity, then the
-   protocol version, the software version and the reserved fields are
-   checked (`bootstrap.md` §6.2, §6.4). Any failure is one line on
+   protocol version and the reserved fields are checked (`bootstrap.md`
+   §6.2, §6.4); the line carries no software version. Any failure is one line on
    stderr, the matching `MOSEY-ERROR` line (`line`, `version` or
    `unsupported`) on stdout, and exit 1; nothing else has started.
 2. **Launcher starts the spawner**: `exec.Cmd{Path: Self, Args: [Self,
-   "--serve=spawner"]}`, `SysProcAttr{Setsid: true}`, stdin and stdout
+   "--serve=spawner"]}` (`Self` is `/proc/self/exe` on Linux, §2.3), `SysProcAttr{Setsid: true}`, stdin and stdout
    `/dev/null`, stderr `/dev/null` (the spawner opens its own log; it
    must hold no copy of ssh's pipes, or ssh would wait for it), one
    extra file: its end of a seqpacket socketpair B, as fd 3. Environment:
@@ -200,8 +200,15 @@ ssh ──stdin──► launcher                       spawner                p
 
 Both are started the same way:
 
-- `Path`: `Spawner.Self` (`os.Executable()`), `Args: [Self,
-  "--serve=proto"]` or `"--serve=emu"`.
+- `Path`: `Spawner.Self`, which on Linux is `/proc/self/exe`, never the
+  file's path: D7 replaces `~/.cache/mosey/mosey` in place when a client
+  of another protocol needs it (`bootstrap.md` §4.7.7), and a running
+  session that restarts emu, or a session started a moment before the
+  rename, must exec its own binary, not the new file at the old path.
+  `Args: [Self-path, "--serve=proto"]` or `"--serve=emu"`, the path
+  (`os.Executable()`) as argv[0], so `ps` and the tests still see which
+  file it came from. Elsewhere (no server yet, D22) `Self` is
+  `os.Executable()`.
 - `Env: []string{}`: no `HOME`, no `SSH_AUTH_SOCK`, no bus address,
   nothing a confused role could follow (S4 `childEnv`). A `soak` build
   (§9) passes `MOSEY_SOAK_*` and nothing else.
@@ -294,6 +301,15 @@ triggers above (nothing emu does is one of them):
     (§11, item 9).
   - The locale variables (`LANG`, `LANGUAGE`, `LC_*`) from the
     `ClientLine`, replacing any of the same name.
+  - **Hopping** (D7, `bootstrap.md` §4.7.9): if the spawner's binary is
+    the cached copy, `$HOME/.cache/mosey/mosey` (the same file, by device
+    and inode, as `os.Executable()` at the spawner's start), and no
+    `mosey` is on the environment's `PATH`, `PATH` gets
+    `$HOME/.cache/mosey` put first, so `mosey otherhost` in the session
+    finds it. A `PATH` that already has a `mosey`, or a server that is
+    not the cached copy (Nix's, a package's, `-remote`'s), leaves `PATH`
+    as it is. A login profile that assigns `PATH` outright undoes this
+    (`bootstrap.md` §14 question G).
   The spawner re-checks each `ClientLine` variable against
   `bootstrap.md` §6.2's names and its `vchar` alphabet, 1–64 bytes,
   whatever the parser accepted. Anything else is dropped and logged.
@@ -341,8 +357,8 @@ since it holds the keys.
   (`bootstrap.ParseClientLine`, whole and canonical), it is
   `resume:SID`, or a reconnect's `resume:SID:CREDID` (the launcher has
   chosen, under its lock, and checked any holder, `bootstrap.md` §9.2;
-  CREDID only labels the hold, §9.2.2), its SID is the session's (its
-  `swver` may be any version's, D8 V1), and its public key is an X-Wing key (`agent` may be either: the
+  CREDID only labels the hold, §9.2.2), its SID is the session's, and
+  its public key is an X-Wing key (`agent` may be either: the
   resuming client's own bootstrap triggered its own bind, and whether its
   connection carries the agent is the hello's business, `agent.md` §4.1)
   (`handshake.CheckPublicKey`). Then it sends proto `Resume` and waits up
@@ -382,33 +398,37 @@ socket. `agent.md` §4 is its full rule; in short:
 
 ### 2.8 The attach protocol (D8 V1)
 
-D8 V1: client and server of different mosey versions is normal. A newer
-client attaches a session an older binary runs, and that session goes on
-running its own binary; an upgrade takes effect on new sessions. There
-is no live upgrade (Dan, 2026-11-15). This rests on one promise: **what
-crosses the attach socket is stable.** The launcher or lister that
-connects and the spawner that answers may be any two releases from the
-stable-protocol slice on.
+D8 V1: client and server of different mosey versions is normal. After
+the host's mosey is upgraded (by Nix, or by replacing the binary), a
+launcher of the new binary attaches a session the old one runs, and that
+session goes on running its own binary; an upgrade takes effect on new
+sessions. There is no live upgrade (Dan, 2026-11-15). This rests on one
+promise: **what crosses the attach socket is stable.** The launcher or
+lister that connects and the spawner that answers may be any two
+releases that speak the same attach protocol.
 
 **The stability promise.** The attach protocol is the greeting
 (`bootstrap.md` §9.2.1) and the messages that follow it on an attach
 socket: `ClientLine` (0x40), `Ready` (0x41), `Failed` (0x42) and
 `Hangup` (0x43) (§3.3), with §3.1's framing (one seqpacket message each,
-type byte first). This is **attach protocol v1**; the greeting's
-`arange` says which versions a session speaks (`1-1` now), and both
-sides use the highest version in both ranges, as the handshake does
-(`transport.md` §3.6). A later release may add types or fields only
-under a version of its own, keeps speaking v1 for as long as its range
-includes it, and never changes what a v1 message means; 0x44 to 0x4F
-are kept for it. Every other IPC type (§3.2) is private to one build: a
+type byte first). This is **attach protocol v1**
+(`bootstrap.AttachProtocol`); the greeting's `aproto` says which one
+version a session's spawner speaks, and a launcher attaches it only if
+it is its own, as the handshake does with its own number (`transport.md`
+§3.6). There is no range: a release that changes a v1 message, or adds
+one a v1 spawner would refuse, gives the attach protocol a new number;
+0x44 to 0x4F are kept for that. Every other IPC type (§3.2) is private to one build: a
 spawner only ever exchanges them with its own proto and emu, and a
 launcher with the spawner it started from its own file.
 
-A launcher takes a session of any version (`bootstrap.md` §9.2 step 5)
-and attaches it as §2.6 says: it sends the session's spawner the line,
-and prints the credential line the session's own proto mints. Nothing
-compares the two mosey versions. A session whose greeting does not parse,
-or whose `arange` does not meet the launcher's, is not chosen.
+A launcher takes a session of any mosey version (`bootstrap.md` §9.2
+step 5) and attaches it as §2.6 says: it sends the session's spawner the
+line, and prints the credential line the session's own proto mints.
+Nothing compares software versions. A session whose greeting does not
+parse is not chosen. One whose `aproto` is another number is not taken by
+`auto`; `name:NAME` or `resume:SID` naming it fails with `MOSEY-ERROR 1
+attach P` and, on stderr, `session NAME speaks attach protocol P; this
+mosey speaks N`.
 
 ---
 
@@ -1564,9 +1584,8 @@ it lands, with the duration and exec count in the commit message.
   be another uid; otherwise the check's function is tested alone).
 - A resume through the socket, with stub proto: greeting, `ClientLine`,
   `Resume` forwarded, `Credential` checked (a different `sessionid`,
-  `addr`, `port` or `swver` is a violation), `Ready` returned. A wrong
-  SID, `new` or a bad key is `Failed`, and proto never hears of it; a
-  client of another `swver` is served (D8 V1).
+  `addr`, `port` or `name` is a violation), `Ready` returned. A wrong
+  SID, `new` or a bad key is `Failed`, and proto never hears of it.
 - A lister that closes after the greeting changes nothing.
 - The greeting follows `Attached` and `Detached`, says `attached` held by
   a resume's credential until its TTL (a reconnect's hold naming the
@@ -1579,9 +1598,12 @@ it lands, with the duration and exec count in the commit message.
   takes NAME whatever its state, else starts it; `new` always starts; R3's
   holder rule gives `session`, `taken` or the session; generated names
   never clash.
-- The launcher's version rule (§2.8): a session of any version is
-  attached as it is, running its own binary; one whose `arange` does not
-  meet the launcher's is passed over.
+- The launcher's attach-protocol rule (§2.8): a session of any mosey
+  version is attached as it is, running its own binary; one of another
+  attach protocol is passed over by `auto`, refused with `attach` by
+  `name` and `resume`, and keeps its name from a new session.
+- Hopping (§2.5): `PATH` gets `~/.cache/mosey` first only when the
+  binary is the cached copy and `PATH` has no `mosey`.
 - `Session`: a client silent for `SilentAfter` is reported `Detached`
   and, when heard again, `Attached`, without losing its connection.
 - `Session` (in process, netsim, synctest): a client vanishes without

@@ -6,8 +6,8 @@ lives in `internal/server` and is specified in `server.md`; this document
 says what the server must do *as seen from the SSH channel*.
 
 Decisions implemented here: D6 (start over SSH with the user's config), D7
-(one binary, auto-upload), D8 (resume; its stable protocol, V1, in §6 and
-§9.2), D20 (B3:
+(one binary, auto-upload where the host has none), D8 (resume; its stable
+protocol, V1, in §6 and §9.2), D20 (B3:
 one-shot keys over stdin and stdout), D25 (agent bind capture, §8; the channel it feeds is `agent.md`), D26
 (exclusive attach). They are locked; where this text and PLAN.md disagree,
 PLAN.md wins and this file is the bug.
@@ -86,10 +86,10 @@ mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -n
   0x21 or 0x7F (ssh would read a space as the start of the command). Anything
   else is a usage error (exit 2).
 - `-remote PATH` is the remote mosey binary (§4.2). Without it the client
-  looks for its own version and copies it over if it is missing (D7,
-  §4.7).
-- `-upload ask|yes|no` is what to do when the far host has no mosey of
-  this version (§4.7.5). Default `ask`. Any other value is a usage error.
+  uses whatever mosey the host has, and copies itself over only if there
+  is none it can use (D7, §4.7).
+- `-upload ask|yes|no` is what to do when the far host has no mosey it
+  can use (§4.7.5). Default `ask`. Any other value is a usage error.
 - `-ssh PROGRAM` is the local ssh. Default `ssh`, found on `PATH`. Tests
   point it at a fake (§12).
 - `-A` and `-a` are ssh's own flags (D25): force agent forwarding on or off.
@@ -271,7 +271,7 @@ pathchar = ALPHA / DIGIT / "." / "_" / "/" / "+" / "-"
 and must not start with `-`. A `-remote` outside this is a usage error. The
 leading `~/` is left for the remote `/bin/sh` to expand (it is the start of
 a word in its script, and the outer shell sees it only inside quotes),
-which is what D7's `~/.cache/mosey/<version>/mosey` needs [shells: checked
+which is what D7's `~/.cache/mosey/mosey` needs [shells: checked
 under each outer shell above]. `--serve` must be the binary's first
 argument: `cmd/mosey` tests only `os.Args[1]`.
 
@@ -288,15 +288,16 @@ Two ways, chosen by whether the user named one:
   status, and the client reports 126 or 127 with no protocol line as
   `ErrNoServer` (§10). A launcher never exits 126 or 127 itself (its
   failures are exit 1, §4.4), so the two cannot be confused. A server of
-  another mosey version serves the client as its own would (D8 V1, §6.4):
-  only a bootstrap line it cannot read is refused.
+  any mosey version serves the client as its own would (D8 V1); one of
+  another protocol fails the bootstrap with one line naming both numbers
+  (§6.4), and is never replaced: the user named it.
 - **No `-remote` (the default): D7.** The remote command becomes §4.7's
-  probe, which runs `~/.cache/mosey/<V>/mosey` or `mosey` on the remote
-  `PATH`, whichever says it is this client's version `V`, and otherwise
-  prints the remote's platform; the client then copies a matching build
-  over, with the user's consent, and starts again once (§4.7). The two
-  lines of §6 do not change. `mosey --serve=version`, reserved in slice 1,
-  is what the probe asks each candidate.
+  probe, which runs `mosey` on the remote `PATH`, of whatever version, or
+  else `~/.cache/mosey/mosey` if it speaks the client's protocol, and
+  otherwise prints the remote's platform; the client then copies a build
+  over, with the user's consent, and starts again once (§4.7). The lines
+  of §6 do not change. `mosey --serve=protocol` is what the probe asks
+  the cached copy.
 
 ### 4.3 The client's process handling
 
@@ -354,7 +355,7 @@ the timeouts T1–T3 are `server.md` §8.
    must be exactly one ClientLine: one LF, at the end, then EOF. Anything
    else is `MOSEY-ERROR ... line`.
 2. **Launcher.** Parse it (§6.2), which checks the line's protocol
-   version (§6.4); the software version is never compared (D8 V1). Then
+   version (§6.4); no software version is sent or compared (D8 V1). Then
    start the spawner, `mosey --serve=spawner`, as a new
    process with `Setsid`, stdio on `/dev/null` and B as fd 3, send it
    `ClientLine` (0x40), and wait up to T2 = 15 s for `Ready` or `Failed`.
@@ -365,10 +366,10 @@ the timeouts T1–T3 are `server.md` §8.
    T3 = 10 s [choice]. **The spawner checks every field it owns**: the
    line must parse (`ParseCredentialLine`), re-marshal to the same bytes,
    and carry exactly the spawner's own advertised `addr` (or `-`), its own
-   bound `port` and its own `swver` (`server.md` §3.4). Proto chooses only
-   `credid`, `sessionid`, `psk` and `public`, the four things it alone
-   knows; a compromised or buggy proto cannot choose where the client
-   sends UDP or what version it claims. Only then does the spawner start
+   bound `port` and the session's `name` (`server.md` §3.4). Proto chooses
+   only `credid`, `sessionid`, `psk` and `public`, the four things it
+   alone knows; a compromised or buggy proto cannot choose where the
+   client sends UDP. Only then does the spawner start
    the login shell with the line's environment (§6.2), and send `Ready`
    (0x41) with the line.
 4. **Launcher.** If the line says `agent=yes` and sshd set
@@ -525,11 +526,10 @@ once its release job has started, the cancellation lets it finish
 
 Why bare files: the hash in `SHA256SUMS` is then the hash of the very
 bytes the client sends and the remote installs at
-`~/.cache/mosey/<V>/mosey`, so one hash is checked on download, after the
+`~/.cache/mosey/mosey`, so one hash is checked on download, after the
 copy, and against a file already there; and the client needs no archive
 parser for a file from the network [derived]. Why the version in the name:
-a downloaded file says what it is, and two versions can sit in one
-directory without one overwriting the other.
+a downloaded file says what it is.
 
 Mapping the remote's `uname -s` and `uname -m` to `os` and `arch`
 (`Linux` → `linux`, `Darwin` → `darwin`, `x86_64` → `amd64`, `aarch64`
@@ -542,54 +542,54 @@ patch) has no release, so it can upload only itself.
 
 ### 4.7 Auto-upload (D7)
 
-D7: if the far host has no mosey of the client's version, the client copies
-over a matching static build, hash-checked, installed to
-`~/.cache/mosey/<V>/mosey`, asking the first time, and never replacing a file
-someone else owns. `V` is the client's own version, exactly as it sends it in
-`swver` (§6.2). This section is the whole of it; nothing here changes the two
-lines of §6 or what a server does once it is running.
+D7, as Dan amended it on 2026-11-15: **the client installs itself only
+where the host has no mosey it can use.** It uses whatever mosey the host
+has, of whatever version. Upgrading is done by Nix or by replacing the
+binary, never by the client while it moves between hosts; the next session
+on that host runs the new binary.
+
+The host's mosey is, in order: `mosey` on the remote `PATH`; otherwise the
+single file `~/.cache/mosey/mosey`, which only D7 writes. When there is
+neither, or the cached file speaks another protocol than the client
+(§4.7.2), the client copies a static build to `~/.cache/mosey/mosey`,
+hash-checked, asking the first time, never replacing a file someone else
+owns. Nothing here changes the lines of §6 or what a server does once it
+is running.
 
 ```
 client                                                     far host
 ------                                                     --------
-ssh … "PROBE"   + ClientLine  ──────────────────────────►  ~/.cache/mosey/V/mosey --serve=version = V ?  exec it --serve
-                                                           mosey --serve=version = V ?                  exec it --serve
-                              ◄──────── MOSEY-PROBE 1 Linux x86_64      (neither: say what this host is)
+ssh … "PROBE"   + ClientLine  ──────────────────────────►  mosey on PATH?                         exec it --serve
+                                                           else ~/.cache/mosey/mosey, if its
+                                                             --serve=protocol is the client's?    exec it --serve
+                              ◄──────── MOSEY-PROBE 1 Linux x86_64 none   (neither: say what this host is)
 ask the user (first time per host)
 pick the binary: our own file, or the release asset, SHA-256 checked
 ssh … "UPLOAD"  + the binary  ──────────────────────────►  mktemp in ~/.cache/mosey; cat; run it as
-                                                           --serve=install V HASH SIZE TEMP: checks, hash, rename
+                                                           --serve=install HASH SIZE TEMP: checks, hash, rename
                               ◄──────── exit 0
-ssh … "PROBE"   + ClientLine  ──────────────────────────►  ~/.cache/mosey/V/mosey --serve   (as §4.4)
+ssh … "PROBE"   + ClientLine  ──────────────────────────►  ~/.cache/mosey/mosey --serve   (as §4.4)
 ```
 
 #### 4.7.1 When it applies
 
-Only when the user gave no `-remote` (§4.2), and only if `V` can name a
-directory: a valid `swver` (§6.1) other than `.` and `..`. Every `swver`
-byte is a `pathchar` (§4.1), so `~/.cache/mosey/V/mosey` needs no quoting
-anywhere. A version that cannot (none that `scripts/version.sh` or the
-flake makes) runs slice 1's `mosey --serve`, with no probe and no upload,
-and the log says why.
+Only when the user gave no `-remote` (§4.2).
 
 **The probe and the roles.** Every command that runs a server role probes:
 `mosey DEST`, `mosey -s NAME DEST` and `mosey -new DEST` (the launcher,
 `--serve`, each with its own ClientLine `attach`, §9.2), R3's background
 reconnect (the launcher again), `mosey -list DEST` (`--serve=list`, §9.4)
 and `mosey -kill NAME DEST` (`--serve=kill`, §9.5). The probe runs the
-matching binary with that command's flag, so a host whose only mosey is
-the one D7 put in `~/.cache/mosey/V/` is found by all of them. **Only the
-three that the user typed to get a session upload.** When the probe
-answers `MOSEY-PROBE`:
+host's mosey with that command's flag, so a host whose only mosey is the
+one D7 put in `~/.cache/mosey/` is found by all of them. **Only the three
+that the user typed to get a session upload.** When the probe answers
+`MOSEY-PROBE`:
 
 | Command | What the client does |
 |---|---|
 | `mosey DEST`, `mosey -s NAME DEST`, `mosey -new DEST` | §4.7.3–§4.7.8: ask, copy, start again |
 | R3's background reconnect (§9.2.2) | nothing is copied and nothing is asked (D8 R3): the attempt fails, is logged, and is tried again after the backoff |
-| `mosey -list DEST`, `mosey -kill NAME DEST` | nothing is copied: `mosey: no mosey V on DEST, so no sessions of it: mosey DEST starts one, copying mosey there`, exit 1. Listing or ending is not a reason to install anything. |
-
-Sessions of another version on a host are listed and resumed as §9.2
-says.
+| `mosey -list DEST`, `mosey -kill NAME DEST` | nothing is copied: `mosey: no mosey on DEST, so no sessions: mosey DEST starts one, copying mosey there`, exit 1. Listing or ending is not a reason to install anything. |
 
 `~/.cache` is literal: the remote's `XDG_CACHE_HOME` is not consulted. The
 probe, the upload and the installer must agree on one path without a round
@@ -597,65 +597,75 @@ trip to ask, and D7 names this one.
 
 #### 4.7.2 The probe
 
-The remote command (one argument, as §4.1, `V` substituted):
+The remote command (one argument, as §4.1; `B H` is the client's
+`--serve=protocol` answer, `bootstrap.Version` and `handshake.Protocol`,
+now `1 1`):
 
 ```
-exec /bin/sh -c 'v=V; c="$HOME/.cache/mosey"; d="$c/$v"; set -- mosey; if test -h "$c" || test -h "$d" || test -h "$d/mosey"; then :; elif test -O "$HOME/.cache" && test -O "$c" && test -O "$d" && test -O "$d/mosey"; then set -- "$d/mosey" mosey; fi; for m in "$@"; do if [ "$("$m" --serve=version </dev/null 2>/dev/null)" = "$v" ]; then exec "$m" FLAG; fi; done; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
+exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; c="$HOME/.cache/mosey"; f="$c/mosey"; k=none; if test -e "$f" || test -h "$f"; then k=other; if test -h "$c" || test -h "$f"; then :; elif test -O "$HOME/.cache" && test -O "$c" && test -O "$f" && [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown} $k"'
 ```
 
-- **The cache first**, then `mosey` on the remote `PATH`. Each candidate is
-  asked its version by running `--serve=version` (server.md §1), with stdin
-  on `/dev/null` (the ClientLine waiting on stdin is for the launcher, and
-  a program that is not mosey must not eat it) and stderr dropped (`sh:
-  mosey: not found` is the normal case). The first that prints exactly `V`
-  is exec'd with `FLAG`, the command's own (§4.7.1: `--serve` for the
-  launcher, which reads the ClientLine as in §4.4, or `--serve=list`). A file
-  in the cache is asked too rather than trusted for its path: it may be a
-  half-written copy from a crashed upload, or one put there by hand. Asking
-  cannot tell apart two builds that carry the same version string: a
-  stale plain `go build` in `~/.cache/mosey/dev/` says `dev` and is run by
-  a newer `dev` client, protocol differences and all. Release and CI
-  builds have one version per commit; a developer moving between plain
-  builds passes `-remote` or clears the cache.
-- **The cached copy is a candidate only under the installer's rules**
-  (§4.7.7): `~/.cache/mosey`, `~/.cache/mosey/V` and the file are not
-  symlinks (`test -h`), and they and `~/.cache` (which may be one) are the
-  user's (`test -O`, which follows a link). Otherwise only `mosey` on
-  `PATH` is asked, so the probe never runs a file from a place the
-  installer would refuse to write. The probe does not check modes: a
-  directory others may write would have been refused by the installer,
-  which creates each one 0700, and a user who loosens one afterwards has
-  opened their files to whoever can write there, as with any file they
-  run. `test -O` is not in POSIX `test`, but dash, bash, BusyBox ash and
-  the BSD and macOS `/bin/sh` all have it; a `/bin/sh` without it makes the
-  test false, so the cache is skipped and the probe still works.
-- **Neither:** one `MOSEY-PROBE` line on stdout, then exit 0. The probe
-  never exits 126 or 127, so `ErrNoServer` from an exit status means only
-  what it meant in slice 1.
+- **`PATH` first** (Dan, 2026-11-15). A `mosey` on the remote `PATH` is
+  exec'd with `FLAG`, the command's own (§4.7.1: `--serve` for the
+  launcher, which reads the ClientLine as in §4.4, or `--serve=list`), as
+  it is: it was put there by Nix, a package or the user, and upgrading it
+  is theirs. It is not asked anything first. If it speaks another
+  protocol, the bootstrap line or the handshake says so and the client
+  fails with one line naming both numbers (§6.4, `transport.md` §3.6); it
+  never replaces a file it did not install.
+- **Otherwise the cached copy**, `~/.cache/mosey/mosey`, under the
+  installer's rules (§4.7.7): neither `~/.cache/mosey` nor the file is a
+  symlink (`test -h`), and they and `~/.cache` (which may be one) are the
+  user's (`test -O`, which follows a link), so the probe never runs a file
+  from a place the installer would refuse to write. It is asked
+  `--serve=protocol` (server.md §1), with stdin on `/dev/null` (the
+  ClientLine waiting on stdin is the launcher's) and stderr dropped, and
+  exec'd only if it prints exactly the client's own answer. Its software
+  version does not matter: a copy left by an older client that speaks
+  the same protocol is used as it is.
+- **`--serve=protocol`** prints one line, the bootstrap line version
+  (§6.1) and the handshake protocol (`transport.md` §2.3), as decimals
+  separated by a space: `1 1` now. It is the one thing every mosey answers
+  the same way for ever (D8 V1). The attach protocol (§9.2.1) is not in
+  it: that is spoken between server binaries on one host, never by the
+  client.
+- **Neither:** one `MOSEY-PROBE` line on stdout, then exit 0. Its last
+  field says whether there is a cached file the probe could not use
+  (`other`: it speaks another protocol, does not answer, or breaks the
+  installer's rules, which the installer will then name) or none
+  (`none`), so the question can say which (§4.7.5). The probe never exits
+  126 or 127 itself, so `ErrNoServer` from an exit status means only what
+  it meant in slice 1.
+- **`command -v` and `test -O`.** `command -v` is POSIX. `test -O` is not,
+  but dash, bash, BusyBox ash and the BSD and macOS `/bin/sh` all have it;
+  a `/bin/sh` without it makes the test false, so the cache is not run and
+  the client offers to copy, and the installer then says why it cannot.
 - **Quoting.** The text inside the single quotes has no `'`, no `\` (fish
   reads `\'` and `\\` inside single quotes), no `!` and no newline (csh
   refuses a newline inside quotes), so every login shell of §4.1 passes it
   to `/bin/sh` unchanged [shells: run under each in §12's test].
-- **Cost.** In the everyday case one exec of `/bin/sh` and one or two of
-  `mosey --serve=version` (a Go binary's start, a few milliseconds) on top
-  of slice 1's command; no extra round trip.
+- **Cost.** In the everyday case one exec of `/bin/sh` on top of slice
+  1's command; with only the cached copy, one more of `mosey
+  --serve=protocol` (a Go binary's start, a few milliseconds). No extra
+  round trip.
 
 **The probe line**, read by `ReadCredential` (§6.5) like the other lines of
 ours and fuzzed with them:
 
 ```
-probe-line = "MOSEY-PROBE" SP proto SP sysname SP machine LF
+probe-line = "MOSEY-PROBE" SP proto SP sysname SP machine SP cached LF
 proto      = decimal                 ; must be Version
 sysname    = 1*64(%x21-7E)           ; uname -s, or "unknown"
 machine    = 1*64(%x21-7E)           ; uname -m, or "unknown"
+cached     = "none" / "other"
 ```
 
-At most 148 bytes [derived: 11 + 1 + 5 + 1 + 64 + 1 + 64 + LF];
+At most 154 bytes [derived: 11 + 1 + 5 + 1 + 64 + 1 + 64 + 1 + 5 + LF];
 **`MaxProbeLine` = 160**. Canonical as §6.1 asks. `ReadCredential` returns
-it as a `*NoServerError` (`errors.Is(err, ErrNoServer)`) carrying the two
-fields. A `uname` that prints a space or something longer gives a line that
-does not parse, which is `ErrBadLine`: a host that odd has no release asset
-anyway.
+it as a `*NoServerError` (`errors.Is(err, ErrNoServer)`) carrying the
+fields. A `uname` that prints a space or something longer gives a line
+that does not parse, which is `ErrBadLine`: a host that odd has no release
+asset anyway.
 
 The far side chooses these fields, and a hostile one can claim any
 platform. All it gains is which public build the client sends it.
@@ -686,16 +696,17 @@ goes when a macOS server lands.
   `PR_SET_DUMPABLE 0` does not get in the way. Read whole, at most
   `MaxBinary` = 128 MiB [choice; a release is about 10 MB], and hashed as
   read. No network.
-- **Otherwise:** the release asset of §4.6 for **exactly `V`** and the
-  remote's os/arch. Only a release version has one: `V` must match
-  `MAJOR.MINOR.PATCH` with each part a decimal of at most 9 digits, no
-  leading zero, and `PATCH` ≥ 1 (CI's run number) [derived from
-  `scripts/version.sh`: a local build's patch is a 14-digit timestamp, a
-  plain `go build` says `dev`; the flake installs a release's binary, so
-  its version is a release's]. Anything
-  else is a development build: `mosey: this is a development build (V) and
-  DEST is OS/ARCH, which it cannot copy itself to: build mosey for OS/ARCH
-  and pass -remote, or put it at ~/.cache/mosey/V/mosey there`.
+- **Otherwise:** the release asset of §4.6 for the client's **own
+  version `V`** and the remote's os/arch (Dan: "we're gonna download it
+  from GitHub, and we've asked the user"). Only a release version has
+  one: `V` must match `MAJOR.MINOR.PATCH` with each part a decimal of at
+  most 9 digits, no leading zero, and `PATCH` ≥ 1 (CI's run number)
+  [derived from `scripts/version.sh`: a local build's patch is a 14-digit
+  timestamp, a plain `go build` says `dev`; the flake installs a release's
+  binary, so its version is a release's]. Anything else is a development
+  build: `mosey: this is a development build (V) and DEST is OS/ARCH,
+  which it cannot copy itself to: build mosey for OS/ARCH and put it at
+  ~/.cache/mosey/mosey there, or pass -remote`.
 
   The download: `SHA256SUMS` first, then the binary, both from
   `https://github.com/danielbodart/mosey/releases/download/v<V>/`. HTTPS
@@ -725,40 +736,43 @@ upload's command line (§4.7.6), and the installer refuses anything else.
 
 #### 4.7.5 Consent
 
-`-upload` says what happens when the probe finds nothing:
+`-upload` says what happens when the probe finds nothing it can use:
 
 | `-upload` | |
 |---|---|
 | `ask` (default) | if this host is remembered, go on; else ask; `y` or `yes` (any case) goes on and remembers the host; anything else, or end of input, is no |
 | `yes` | go on without asking; remember nothing |
-| `no` | never copy: `mosey: DEST has no mosey V: install it there, or run without -upload=no` |
+| `no` | never copy: `mosey: DEST has no mosey: install it there, or run without -upload=no` |
 
 **The question**, on stderr while the terminal is still cooked (§4.3),
 after the probe's ssh has exited, so no ssh is reading `/dev/tty`:
 
 ```
-mosey: DEST has no mosey V. Copy this one (OS/ARCH, N.N MB) to ~/.cache/mosey/V/ there? [y/N] 
-mosey: DEST has no mosey V. Download mosey V for OS/ARCH from GitHub and copy it to ~/.cache/mosey/V/ there? [y/N] 
+mosey: DEST has no mosey. Copy this one (OS/ARCH, N.N MB) to ~/.cache/mosey/ there? [y/N] 
+mosey: DEST has no mosey. Download mosey V for OS/ARCH from GitHub and copy it to ~/.cache/mosey/ there? [y/N] 
 ```
 
 (the first for the client's own platform, the second for another, which is
-asked before anything is downloaded), and the answer is one line read from the terminal, at most 64 bytes
-counted. Every field in it is the client's own (the destination as typed,
-its version, the platform mapped through §4.7.3), never a remote string.
+asked before anything is downloaded). When the probe said `other`, each
+starts instead `mosey: DEST's ~/.cache/mosey/mosey cannot serve this
+mosey.` and asks to replace it: `Replace it with this one (OS/ARCH, N.N
+MB)? [y/N]`, or `Replace it with mosey V for OS/ARCH from GitHub? [y/N]`.
+The answer is one line read from the terminal, at most 64 bytes counted.
+Every field in it is the client's own (the destination as typed, its
+version, the platform mapped through §4.7.3), never a remote string.
 
 **The first time** is per `user@hostname:port` as `ssh -G` resolved them
 (§3; `user`, `hostname` and `port`), so an alias and its target are one
-host, and two accounts on one host are two. Not per version: under D10
-every commit is a release, and a question at each upgrade would teach
-people to type `y` without reading. A remembered host is a line in
-`$XDG_STATE_HOME/mosey/upload-hosts` (else `~/.local/state/mosey/`),
-beside the log (§7.4): the file is 0600 in a 0700 directory, at most
-1 MiB, one key per line, rewritten whole through a temporary file and a
-rename. A key holds only bytes 0x21–0x7E and is at most 1100 bytes; a
-host whose key cannot be written is asked each time. Failing to read or
-write the file is logged, and the host is asked again next time; it never
-stops a session. The state directory, not the config one: the client
-writes it, and a home-manager user's `~/.config` may be read-only.
+host, and two accounts on one host are two. Not per version. A remembered
+host is a line in `$XDG_STATE_HOME/mosey/upload-hosts` (else
+`~/.local/state/mosey/`), beside the log (§7.4): the file is 0600 in a
+0700 directory, at most 1 MiB, one key per line, rewritten whole through a
+temporary file and a rename. A key holds only bytes 0x21–0x7E and is at
+most 1100 bytes; a host whose key cannot be written is asked each time.
+Failing to read or write the file is logged, and the host is asked again
+next time; it never stops a session. The state directory, not the config
+one: the client writes it, and a home-manager user's `~/.config` may be
+read-only.
 
 The prompt goes through an interface (`client.Options.Ask`) so tests
 answer it. `cmd/mosey` reads the answer from the terminal it already
@@ -767,11 +781,11 @@ requires (§4.3: stdin and stdout must be one).
 #### 4.7.6 The upload
 
 The same ssh as §4.1, every option the same (one fresh connection, nothing
-forwarded), with this remote command (`V`, `HASH` as 64 lower-case hex
-digits, `SIZE` in decimal):
+forwarded), with this remote command (`HASH` as 64 lower-case hex digits,
+`SIZE` in decimal):
 
 ```
-exec /bin/sh -c 'umask 077; d="$HOME/.cache/mosey"; mkdir -p "$d" || exit 1; t=$(mktemp "$d/.upload.XXXXXXXX") || exit 1; cat >"$t" && chmod 700 "$t" && "$t" --serve=install V HASH SIZE "$t"; s=$?; rm -f "$t"; exit $s'
+exec /bin/sh -c 'umask 077; d="$HOME/.cache/mosey"; mkdir -p "$d" || exit 1; t=$(mktemp "$d/.upload.XXXXXXXX") || exit 1; cat >"$t" && chmod 700 "$t" && "$t" --serve=install HASH SIZE "$t"; s=$?; rm -f "$t"; exit $s'
 ```
 
 - **stdin is the binary**, written whole and then closed; nothing else.
@@ -803,22 +817,21 @@ ssh's exit status:
 
 | Status | Meaning | Client says (exit 1) |
 |---|---|---|
-| 0 | installed | `mosey: copied mosey V to DEST` and goes on (§4.7.8) |
+| 0 | installed | `mosey: copied mosey to DEST` and goes on (§4.7.8) |
 | 126 | the copy would not run | `mosey: the copy of mosey would not run on DEST: is ~/.cache on a filesystem mounted noexec?` |
 | 255 | ssh failed | `mosey: ssh to DEST failed` |
 | other | refused or failed; stderr has said why | `mosey: copying mosey to DEST failed (exit N; see above)` |
 
-#### 4.7.7 The installer: `mosey --serve=install V HASH SIZE TEMP`
+#### 4.7.7 The installer: `mosey --serve=install HASH SIZE TEMP`
 
 A server role (`server.md` §1) that runs once, from the uploaded file, and
 is the only code that writes the cache. It is not sandboxed (it must write
 the user's home) and reads nothing from the network. In order:
 
-1. **Arguments.** Exactly four. `V` a `swver` that §4.7.1 accepts; `HASH`
-   64 lower-case hex digits; `SIZE` a decimal from 1 to `MaxBinary`;
-   `TEMP` exactly `$HOME/.cache/mosey/.upload.` followed by 1 to 64
-   `pathchar`s other than `/`. `HOME` must be absolute. Anything else:
-   refused.
+1. **Arguments.** Exactly three. `HASH` 64 lower-case hex digits; `SIZE`
+   a decimal from 1 to `MaxBinary`; `TEMP` exactly
+   `$HOME/.cache/mosey/.upload.` followed by 1 to 64 `pathchar`s other
+   than `/`. `HOME` must be absolute. Anything else: refused.
 2. **Home.** `open($HOME, O_DIRECTORY)`, following symlinks (a home under
    `/home → /usr/home` is ordinary). It must be owned by the user or root
    and writable by neither group nor others: sshd's own `StrictModes` rule
@@ -828,30 +841,32 @@ the user's home) and reads nothing from the network. In order:
    link to another disk is common and is the user's own doing. What it
    resolves to must be a directory owned by the user and writable by
    neither group nor others.
-4. **`~/.cache/mosey`** and **`~/.cache/mosey/V`**. Each created 0700 if
-   absent, then opened relative to its parent's descriptor with
-   `O_NOFOLLOW | O_DIRECTORY`: a symlink is refused (`ELOOP` or
-   `ENOTDIR`), so nothing planted can send the install elsewhere. Each must
-   be owned by the user and writable by neither group nor others.
+4. **`~/.cache/mosey`.** Created 0700 if absent, then opened relative to
+   its parent's descriptor with `O_NOFOLLOW | O_DIRECTORY`: a symlink is
+   refused (`ELOOP` or `ENOTDIR`), so nothing planted can send the
+   install elsewhere. It must be owned by the user and writable by
+   neither group nor others.
 5. **The upload.** `TEMP`'s last component, opened relative to
    `~/.cache/mosey` with `O_NOFOLLOW`: a regular file, owned by the user,
    one link, exactly `SIZE` bytes, and SHA-256 equal to `HASH`, all read
    through that one descriptor. On a mismatch it is unlinked and the
    installer refuses.
-6. **What is there now.** `fstatat(V-dir, "mosey", AT_SYMLINK_NOFOLLOW)`:
-   absent is fine; a regular file owned by the user is replaced; a
-   symlink, a directory, anything else, or **a file owned by anyone else**
-   is refused and left exactly as it is (D7: never replaces a file someone
-   else owns).
+6. **What is there now.** `fstatat(~/.cache/mosey, "mosey",
+   AT_SYMLINK_NOFOLLOW)`: absent is fine; a regular file owned by the user
+   is replaced (§4.7.2: one that speaks another protocol); a symlink, a
+   directory, anything else, or **a file owned by anyone else** is refused
+   and left exactly as it is (D7: never replaces a file someone else
+   owns).
 7. **Install.** `fchmod 0700`, `fsync` and `fstat` on the upload, then
-   `renameat(~/.cache/mosey, TEMP, V-dir, "mosey")`, atomic within the
-   filesystem. `rename(2)` takes names, so TEMP is looked up again here:
-   `fstatat(V-dir, "mosey", AT_SYMLINK_NOFOLLOW)` must then show the
-   device and inode of the descriptor that was hashed, or the file is
-   unlinked and the installer refuses. Then `fsync` of the version
-   directory. A session running
-   from the file it replaces is unaffected: its spawner re-executes
-   `/proc/self/exe` (`server.md`, threat-model §4.11).
+   `renameat(~/.cache/mosey, TEMP, ~/.cache/mosey, "mosey")`, atomic
+   within the filesystem. `rename(2)` takes names, so TEMP is looked up
+   again here: `fstatat(~/.cache/mosey, "mosey", AT_SYMLINK_NOFOLLOW)`
+   must then show the device and inode of the descriptor that was
+   hashed, or the file is unlinked and the installer refuses. Then
+   `fsync` of `~/.cache/mosey`. A session running from the file it
+   replaces is unaffected: its processes keep the old file open, and its
+   spawner re-executes its roles through `/proc/self/exe`, never by path
+   (`server.md` §2.3, threat-model §4.11), so they are the old binary too.
 
 Every step works through the descriptors of the step before
 (`openat`, `mkdirat`, `fstatat`, `renameat`), so no directory is looked up
@@ -866,24 +881,35 @@ is the user's alone, so another user can neither plant nor replace a file
 there. The same user can (threat-model T12), which is why the copy is never
 a trust anchor (S7 §10, threat-model §4.13).
 
-Old versions are not removed (§14 question E).
-
 #### 4.7.8 Starting again
 
 After a 0 exit the client runs §4.1 once more with the probe, the same
 config and the **same** ClientLine: its one-shot key was never used, since
 no launcher read the first line, and the key is public anyway (B3 needs
 SSH authentic, not confidential). If this second probe also says
-`MOSEY-PROBE`, the client stops: `mosey: copied mosey V to DEST, but it is
+`MOSEY-PROBE`, the client stops: `mosey: copied mosey to DEST, but it is
 still not found there` (no loop). Anything else proceeds or fails exactly
 as a first attempt would.
 
-#### 4.7.9 Costs and failures
+#### 4.7.9 Hopping on
 
-The first session at a new version costs three SSH logins (probe, upload,
-start) instead of one, and one prompt the first time ever per host; every
-later session at that version, one login. A user with a key that asks for
-a touch per login touches three times, once per upgrade per host.
+A session whose server is the cached copy, on a host with no `mosey` on
+`PATH`, gets `~/.cache/mosey` put first on its login shell's `PATH`
+(`server.md` §2.5), so `mosey otherhost` typed inside it finds the same
+file and carries on (D7: "a host can hop on with it"). Nothing else on the
+host changes: no rc file is edited and nothing is linked into a `PATH`
+directory. A login shell whose profile sets `PATH` outright, rather than
+adding to it, undoes this (Debian's `/etc/profile` and NixOS's
+`set-environment` both do, for bash): §14 question G.
+
+#### 4.7.10 Costs and failures
+
+The first session on a host with no mosey costs three SSH logins (probe,
+upload, start) instead of one, and one prompt the first time ever per
+host; every later session, one login, whichever client version runs it.
+Upgrading the client does not touch the host: a host keeps the mosey it
+has until Nix, a package or the user replaces it, or, for the cached
+copy, until a client of another protocol replaces it.
 
 | Situation | What happens |
 |---|---|
@@ -891,11 +917,11 @@ a touch per login touches three times, once per upgrade per host.
 | offline, other platform | §4.7.4's fetch error and the advice to copy it by hand |
 | development build, other platform | §4.7.4's message, before any download |
 | no consent | `mosey: not copying mosey to DEST` |
-| `~/.cache/mosey` is a symlink, or a version directory or the file is someone else's | the installer refuses (stderr says which), exit 1 |
+| `mosey` on `PATH` of another protocol | `mosey: DEST's mosey speaks protocol P; this mosey speaks N` (§6.4), exit 1; nothing is copied |
+| `~/.cache/mosey` is a symlink, or the cached file is a symlink or someone else's | the installer refuses (stderr says which), exit 1 |
 | `~/.cache` on a `noexec` mount | upload exit 126, §4.7.6 |
 | the probe line does not parse | `ErrBadLine`, as for any malformed line of ours |
 | a `-remote` was given | none of this: §4.2 |
-
 
 ---
 
@@ -939,23 +965,23 @@ tested). Off: the bootstrap runs with `ForwardAgent=no`, the ClientLine says
   (§6.4).
 - **Canonical.** A parser accepts a line only if marshalling what it parsed
   gives back the same bytes. The fuzz targets check exactly this (§12).
-- **Strict versioning.** A v1 parser refuses any ClientLine or
-  CredentialLine whose version field is not `1`, before reading the rest,
-  with an error that carries the number it saw (`*VersionError`, §10.1).
-  The ErrorLine is the exception: its parser accepts any `proto`, since its
-  whole grammar is frozen. A new field or a new value means a new version.
-- **Stable from here on (D8 V1).** Since the stable-protocol slice the v1
-  grammars of §6.2–§6.4 are frozen like the wire protocol: a client and a
-  server of different releases meet as a matter of course (`-remote`, an
-  older client resuming a newer session, §9.2 step 5), so a release may
-  not change what a v1 field means or add a value a v1 parser would
-  refuse. A later release that needs a new field or value writes it as
-  line version 2, and goes on reading v1 lines for ever. The client sends
-  the newest line version it speaks; a server that cannot read it answers
-  `MOSEY-ERROR P version` with P its own newest (§6.4), and a client that
-  also speaks P sends its line again at P, in a new SSH login, once. Only
-  v1 exists, so today that retry has nothing to fall back to (§6.4).
-  Fields marked
+- **One version, strictly.** Each build speaks exactly one line
+  version, `bootstrap.Version`. Its parser refuses any ClientLine,
+  CredentialLine or ProbeLine whose version field is another, before
+  reading the rest, with an error that carries the number it saw
+  (`*VersionError`, §10.1). The ErrorLine is the exception: its parser
+  accepts any `proto`, since its whole grammar is frozen. There is no
+  range and no fallback: a mismatch fails the bootstrap with one line
+  naming both numbers (§6.4). A new field or a new value means a new
+  version.
+- **Stable from here on (D8 V1).** The v1 grammars of §6.2–§6.4 are
+  frozen like the wire protocol: a client and a server of different
+  releases meet as a matter of course (whatever mosey the host has,
+  §4.7), so a release may not change what a v1 field means or add a value
+  a v1 parser would refuse. The version is the promise: as long as it is
+  `1`, every release reads every other's lines. No line carries a
+  software version, and nothing compares one (Dan, 2026-11-15: "when I
+  use SSH I don't really worry about the version stuff"). Fields marked
   *reserved* below have a grammar now so a later slice can start accepting
   values without changing the grammar; a v1 server refuses them with
   `unsupported`.
@@ -965,13 +991,13 @@ SP      = %x20
 LF      = %x0A
 dec     = "0" / (%x31-39 *DIGIT)
 b64(n)  = base64url, no padding, of exactly n bytes
-swver   = 1*64( ALPHA / DIGIT / "." / "_" / "+" / "-" )   ; "dev" or "0.123.20261114"
+word    = 1*64( ALPHA / DIGIT / "." / "_" / "+" / "-" )
 ```
 
 ### 6.2 ClientLine: client → server, on ssh's stdin
 
 ```
-client-line = "MOSEY-CLIENT" SP proto SP swver SP attach SP agent
+client-line = "MOSEY-CLIENT" SP proto SP attach SP agent
               SP cols SP rows SP env SP public LF
 proto   = dec                       ; = 1
 attach  = "auto"                    ; R1: the newest detached session, else a new one (§9.2)
@@ -997,17 +1023,16 @@ public  = b64(1216)                 ; 1622 characters
 | Field | Meaning |
 |---|---|
 | `proto` | `bootstrap.Version` |
-| `swver` | the client's software version (`main.version`): what D7's probe looks for (§4.7.2), and the log's. The server never compares it with its own (D8 V1, §6.4) |
 | `attach` | which session (D8, §9.2): `auto` for a plain `mosey DEST`, `new` for `-new`, `name:NAME` for `-s NAME`, and `resume:SID:CREDID` for R3's background reconnect, naming the session and the credential this client last held it with. `new:NAME` and `resume:SID` are what the launcher, having chosen, hands the session's spawner (§9.2), with a reconnect's CREDID kept (§9.2.2); a launcher refuses `new:NAME` from a client with `line`. The all-zero SID is refused: no session has it |
 | `agent` | whether the client will forward an agent (D25). The server needs it at spawn time to give the shell an `SSH_AUTH_SOCK` (`agent.md` §4.1) and, for `new` and resume alike, to trigger ssh's bind (§8). Slice 1 sent `no` only and refused `yes` with `unsupported agent`; the agent slice accepts both |
 | `cols`, `rows` | the client terminal's size; a terminal that reports 0 is sent as 80×24. The server clamps it (D23, `screen.ClampSize`). The client sends its size again as the first userinput event after connecting, in case it changed during the bootstrap |
 | `env` | the client's locale and terminal variables, from the allow-list only. A variable that is unset, empty, longer than 64 bytes or holds a byte outside `vchar` is left out (logged at debug), never escaped. The server gives the locale variables to the shell; what it does with `TERM` and `COLORTERM` is `server.md`'s (the shell's `TERM` describes the server's emulator, not the client's terminal) |
 | `public` | the client's one-shot X-Wing encapsulation key, `OneShotKey.PublicKey()`, 1216 bytes [S1, measured from `crypto/hpke`] |
 
-Size: at most 3039 bytes [derived: the fixed fields and their 8 spaces come
-to 1761 with a 64-byte swver and the longest attach, `resume:SID:CREDID`
-at 41 bytes; env at most 1277 (156 bytes of names, 17 × 65 for `=` and
-value, 16 commas); LF 1]. **`MaxClientLine` = 4096**
+Size: at most 2974 bytes [derived: the fixed fields and their 7 spaces come
+to 1696 with the longest attach, `resume:SID:CREDID` at 41 bytes; env at
+most 1277 (156 bytes of names, 17 × 65 for `=` and value, 16 commas); LF
+1]. **`MaxClientLine` = 4096**
 [derived: the next power of two, so the server's read bound is fixed and
 generous].
 
@@ -1019,13 +1044,13 @@ grammar is ours and the parser is fuzzed.
 Example (key shortened):
 
 ```
-MOSEY-CLIENT 1 0.214.20261114093012 new no 211 58 COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256color nW3b…Qe8
+MOSEY-CLIENT 1 new no 211 58 COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256color nW3b…Qe8
 ```
 
 ### 6.3 CredentialLine: server → client, on ssh's stdout
 
 ```
-cred-line = "MOSEY-CONNECT" SP proto SP swver SP addr SP port
+cred-line = "MOSEY-CONNECT" SP proto SP addr SP port
             SP credid SP sessionid SP name SP psk SP public LF
 addr      = "-" / ipv4 / ipv6       ; netip.Addr.String() form, no zone, never 4-in-6;
                                     ; not unspecified, multicast or 255.255.255.255
@@ -1039,7 +1064,6 @@ public    = b64(1216)               ; 1622 characters
 
 | Field | Meaning |
 |---|---|
-| `swver` | the server's software version: the version of the proto that minted the credential, which for a resumed session is the binary that started it. It may differ from the client's (D8 V1); it is for the log, and the spawner checks it is its own (§4.4 step 3) |
 | `addr` | the server's address as SSH reached it: the third field of `SSH_CONNECTION`, parsed with `netip.ParseAddr`, unmapped (`Unmap`) and with any zone dropped. `-` if there is no `SSH_CONNECTION`, it does not parse as four fields, or the address is one the grammar forbids. Set by the spawner from its own environment; proto must copy it exactly (§4.4 step 3) |
 | `port` | the UDP port the spawner bound; likewise the spawner's, checked |
 | `credid` | `handshake.Credential.ID` [S1: 8 bytes, our choice] |
@@ -1058,8 +1082,8 @@ and `ff00::/8` (`IsMulticast`), and the limited broadcast
 belong to the grammar and the fuzzer; the checks that need the client's own
 interfaces or config are §7.2's.
 
-Size: at most 1862 bytes [derived: 13 + 1 + 64 + 39 (longest IPv6 text) +
-5 + 11 + 22 + 32 + 43 + 1622, 9 spaces, LF]. **`MaxCredentialLine` = 2048**
+Size: at most 1797 bytes [derived: 13 + 1 + 39 (longest IPv6 text) +
+5 + 11 + 22 + 32 + 43 + 1622, 8 spaces, LF]. **`MaxCredentialLine` = 2048**
 [derived].
 
 The client turns it into a `handshake.Credential` (ID, SessionID, PSK,
@@ -1072,7 +1096,7 @@ ServerPublic) and a UDP destination (§7.2). `bootstrap` does not import
 error-line = "MOSEY-ERROR" SP eproto SP code SP detail LF
 eproto     = "0" / (%x31-39 0*4DIGIT)    ; 0..99999, any version, no leading zero
 code       = 1*16(%x61-7A)               ; a lower-case word
-detail     = "-" / swver
+detail     = "-" / word
 ```
 
 This grammar, **and its bound `MaxErrorLine` = 128 bytes**, is frozen in
@@ -1081,7 +1105,7 @@ refusal, and no future server may send a longer one. It freezes the
 *shape* of each field, not a list of values: `code` is any lower-case word
 of 1 to 16 letters, so a later version can add a code and an older client
 still parses the line. The longest line is 100 bytes [derived:
-`MOSEY-ERROR` 11 + SP + 5 digits + SP + 16 letters + SP + 64-byte swver +
+`MOSEY-ERROR` 11 + SP + 5 digits + SP + 16 letters + SP + 64-byte word +
 LF]; 128 leaves room and is the bound the client enforces.
 
 A client reading a code it does not know treats it as `internal` (the
@@ -1090,28 +1114,28 @@ generic message below, with the code shown in it). The codes v1 defines:
 | Code | When | `detail` | Client says (exit 1) |
 |---|---|---|---|
 | `line` | the stdin line is malformed or not alone | `-` | `mosey: the server could not read this client's request: a bug, please report it` |
-| `version` | the ClientLine's `proto` is a line version the server cannot read (§6.1, "Stable from here on"). Never the software version (D8 V1) | the server's `swver` | `mosey: the remote mosey D cannot read this client's request (bootstrap protocol N, it speaks P)`. A client that speaks P sends its line again at P (§6.1); with only v1 there is none |
+| `version` | the ClientLine's `proto` is not the server's line version (§6.1) | `-` | `mosey: DEST's mosey speaks protocol P; this mosey speaks N`, P being the line's `eproto`. A CredentialLine or ProbeLine of another version (`*VersionError`) gets the same message |
+| `attach` | `name:NAME` or `resume:SID…` names a session whose spawner speaks another attach protocol (§9.2.1), which this launcher cannot attach | that spawner's attach version | `mosey: session NAME on DEST was started by a mosey that speaks attach protocol P, which DEST's mosey cannot attach (see above)`; the launcher's stderr line names both numbers |
 | `unsupported` | a reserved value the server does not yet accept (slice 1 sent it for `agent=yes`; no v1 value is reserved now) | the field's name | `mosey: the remote mosey can't do F yet` |
 | `session` | `resume:SID…` names no session of this user that answers (§9.2) | `-` | R3's reconnect (§9.2.2): `mosey: session NAME on DEST has ended: its shell exited, or the host restarted` |
 | `taken` | R3's `resume:SID:CREDID` finds its session held by another credential than CREDID: another client has taken it over (§9.2.2, D26) | when that client attached, in unix seconds | `mosey: session NAME taken over by another client at TIME` (exit 3, as §9.1) |
 | `internal` | the server failed to start the session; stderr says why | `-` | `mosey: the server failed to start (see above)` |
 | any other word | a later server's code | any | `mosey: the server refused: CODE (see above)` |
 
-**No software version check** (D8 V1, as amended 2026-11-15). Client and
-server of different mosey versions is normal and must work: never a
-lockout, never a client downgrade. Neither the launcher, nor a session's
-spawner, nor the client compares `swver` with its own; what two builds
-must agree on is negotiated, the bootstrap line's version here (§6.1) and
-the protocol version in the handshake (`transport.md` §2.3, §3.6). D7's
-probe still looks for the client's own version and copies it over if it
-is missing (§4.7): that is how a newer client brings its fixes to a host,
-not a condition for talking to it. The fixes take effect in the sessions
-started from then on; a session of an older binary goes on running that
-binary, and the newer client resumes it as it is (§9.2 step 5). There is
-no live upgrade (D8 V1, Dan, 2026-11-15).
+**No software versions** (D8 V1, as amended by Dan on 2026-11-15). Client
+and server of different mosey versions is normal and must work: no line
+carries a software version and nothing compares one. What two builds
+must agree on is one protocol number per layer: the bootstrap line's
+version here (§6.1), the handshake's protocol (`transport.md` §2.3,
+§3.6) and, between server binaries on one host, the attach protocol
+(§9.2.1). Each is checked for equality, and a mismatch fails with one
+line naming both numbers. D7 uses whatever mosey the host has (§4.7);
+the host's mosey is upgraded by Nix or by replacing the binary, and new
+sessions use it. A session of an older binary goes on running that
+binary until it ends. There is no live upgrade (Dan, 2026-11-15).
 
-The ErrorLine carries the server's own `proto`, and the client prints both
-numbers when they differ.
+The ErrorLine carries the server's own `proto`, which is how the client
+names the server's number.
 
 ### 6.5 Reading stdout: `ReadCredential`
 
@@ -1172,7 +1196,7 @@ it.
           │ Spawning   │──────────────────────────────────────────► Failed
           └─────┬──────┘
                 │ started: write ClientLine, close stdin
-          ┌─────▼──────┐ ErrorLine ─────────────► Failed(code)    (D7 slice: version on a new attach → Uploading)
+          ┌─────▼──────┐ ErrorLine ─────────────► Failed(code)    (D7: a ProbeLine on a new attach → Uploading)
           │ AwaitLine  │ EOF / bound / bad line ► Failed(ssh exit status)
           └─────┬──────┘ ctx done ──────────────► Failed(cancelled), ssh killed
                 │ CredentialLine (ssh stderr now goes to the log file; reap ssh in background)
@@ -1253,7 +1277,7 @@ over UDP: is UDP port PORT open?` (the classic firewall case). Then
 
 Only after Dial succeeds does the client put the terminal in raw mode and
 start `client.Session` (§4.3: ssh's prompts need a cooked terminal). The
-Hello it sends: `Version` = the hello version, `Channels` = `{Terminal}`,
+Hello it sends: `Protocol` = `handshake.Protocol`, `Channels` = `{Terminal}`,
 plus `Agent` when §5 says on and §8 captured and pinned a bind, `Attach` =
 `Exclusive` (D26: the only mode in v1). So with the agent on, Dial waits
 for the capture's final state (§4.3), which costs nothing when the bind
@@ -1436,8 +1460,8 @@ the CredentialLine (§6.3), so the client can say it, and in the greeting
 
 | Command | ClientLine `attach` | What the launcher does, holding the lock |
 |---|---|---|
-| `mosey DEST` | `auto` | of the sessions the launcher can attach (step 5: any version's, under the stable attach protocol) that are `detached` (below), the one with the newest `since`, taken with `resume:SID`; if none is detached, a new session with a generated name, `new:NAME`. It never takes a session that is `new` or `attached` |
-| `mosey -s NAME DEST` | `name:NAME` | session NAME (step 5: of any version), whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
+| `mosey DEST` | `auto` | of the sessions the launcher can attach (step 5: any version's, if their attach protocol is this launcher's) that are `detached` (below), the one with the newest `since`, taken with `resume:SID`; if none is detached, a new session with a generated name, `new:NAME`. It never takes a session that is `new` or `attached` |
+| `mosey -s NAME DEST` | `name:NAME` | session NAME (step 5: of any version; one of another attach protocol is `MOSEY-ERROR 1 attach P`), whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
 | `mosey -new DEST` | `new` | a new session with a generated name, `new:NAME` |
 | R3's reconnect | `resume:SID:CREDID` | §9.2.2 |
 | `mosey -list DEST` | none: `--serve=list` (§9.4) | |
@@ -1492,8 +1516,7 @@ The steps:
    peer's uid with `SO_PEERCRED` [S1 `resume.go`], sends its greeting
    (§9.2.1), and reads the launcher's `ClientLine` (0x40). It parses it
    again (it trusts no other process's parse) and checks it is
-   `resume:SID` or `resume:SID:CREDID` for its own SID (never its `swver`,
-   D8 V1), and that the
+   `resume:SID` or `resume:SID:CREDID` for its own SID, and that the
    client's public key is an X-Wing key. It forwards the key to proto
    (`Resume`, 0x05), and proto mints a credential for the **same SID**
    with the usual TTL (30 s) and cap (2 unused, the oldest evicted and
@@ -1506,17 +1529,21 @@ The steps:
 4. **Handshake and takeover** as §7 and §9.1: on confirmation every other
    transport of the session is revoked, and its client exits saying so.
 5. **Versions** (D8 V1). Every session's greeting is in the stable
-   form of §9.2.1, which any launcher of the stable-protocol slice or
-   later reads in full, so a launcher chooses among the sessions of every
-   version alike: an upgraded client's plain `mosey DEST` takes its
-   detached session back, and `-s NAME` finds NAME, whichever binary runs
-   it. Nothing compares the two mosey versions: the launcher attaches the
-   session as steps 2–4 say, through the stable attach protocol
-   (`server.md` §2.8), and the session goes on running its own binary, so
-   an upgrade takes effect on new sessions. The client and the session's
-   proto then negotiate their protocol version in the handshake
-   (`transport.md` §2.3). A session whose greeting does not parse, or
-   whose attach range this build does not meet, is not chosen.
+   form of §9.2.1, which every launcher reads in full, so a launcher
+   chooses among the sessions of every mosey version alike: after the
+   host's mosey is upgraded, a plain `mosey DEST` takes its detached
+   session back, and `-s NAME` finds NAME, whichever binary runs it. No
+   software version is compared: the launcher attaches the session as
+   steps 2–4 say, through the attach protocol (`server.md` §2.8), and the
+   session goes on running its own binary, so an upgrade takes effect on
+   new sessions. The client and the session's proto then check their
+   handshake protocol (`transport.md` §2.3). A session whose greeting does
+   not parse is not chosen. One whose attach protocol is not this
+   launcher's is never taken by `auto` (it is listed by `-list`, so the
+   user can see it); `name:NAME` or `resume:SID` naming it is refused with
+   `MOSEY-ERROR 1 attach P`, P its spawner's number, and the launcher's
+   stderr says `session NAME speaks attach protocol P; this mosey speaks
+   N`. Its name stays taken: a new session is never given it.
 6. **The size** in the ClientLine is not applied by the spawner (an
    unconfirmed attach must change nothing). The client sends its size as
    the first input event once connected (§6.2), which resizes the pty and
@@ -1535,10 +1562,10 @@ The first message the spawner sends on an attach socket, one seqpacket
 message of printable ASCII (§6.1's rules), **not** an IPC message:
 
 ```
-session-line = "MOSEY-SESSION" SP swver SP arange SP sessionid SP name
+session-line = "MOSEY-SESSION" SP aproto SP sessionid SP name
                SP started SP state SP since SP peer SP holder LF
-arange       = dec "-" dec      ; attach protocol versions spoken, min-max,
-                                ; each 1..255, min <= max; "1-1" now
+aproto       = dec              ; the attach protocol the spawner speaks,
+                                ; 1..255; "1" now
 sessionid    = b64(16)
 name         = sname            ; §6.2
 started      = dec              ; unix seconds the session started
@@ -1562,18 +1589,18 @@ the user's own processes can read a greeting. R3 uses it to tell "still
 held by me" from "held by someone else" (§9.2.2).
 
 **Frozen in full** (D8 V1). The whole line is stable across releases:
-`arange` says which versions of the attach protocol (`server.md`
-§2.8, the messages that follow the greeting) the session's spawner
-speaks, and the fields after it keep their v1 meaning in every later
-release. A later attach version adds what it needs in messages after the
+`aproto` is the one version of the attach protocol (`server.md` §2.8,
+the messages that follow the greeting) the session's spawner speaks, and
+the fields after it keep their v1 meaning in every later release. A
+later attach version changes what it needs in messages after the
 greeting, never in it, so `ParseSessionLine` reads the greeting of any
-session of any later version. A launcher attaches a session only if the
-two ranges meet, and uses the highest version in both (as
-`transport.md` §3.6 does). The parser is canonical and fuzzed. `MaxSessionLine` =
-256 bytes, also frozen, since every launcher reads the greeting into a
-buffer of that size [derived: the longest line is 13 + 64 + 7 + 22 + 32
-+ 12 + 8 + 12 + 47 + 11, 9 spaces and LF = 238, with the 12-digit bound
-on the times].
+session of any later version, whatever its `aproto`. A launcher attaches
+a session only if `aproto` equals its own `bootstrap.AttachProtocol`
+(§9.2 step 5). No software version is in it. The parser is canonical and
+fuzzed. `MaxSessionLine` = 256 bytes, also frozen, since every launcher
+reads the greeting into a buffer of that size [derived: the longest line
+is 13 + 3 + 22 + 32 + 12 + 8 + 12 + 47 + 11, 8 spaces and LF = 169, with
+the 12-digit bound on the times].
 
 #### 9.2.2 Reconnect (D8 R3)
 
@@ -1711,7 +1738,8 @@ it.
 `mosey -list DEST` runs `mosey --serve=list` over the bootstrap's own ssh
 command (§4.1, its last argument `exec /bin/sh -c 'exec SERVER
 --serve=list'`, or with no `-remote` §4.7.2's probe running
-`--serve=list`, which finds the copy in `~/.cache/mosey/V/`), with stdin
+`--serve=list`, which finds the host's mosey, `PATH`'s or the cached
+copy), with stdin
 closed. A probe that answers `MOSEY-PROBE` is reported as §4.7.1 says,
 not shown as a list, and nothing is copied. The server connects to every
 attach socket as the launcher does (without the lock: it chooses
@@ -1719,7 +1747,7 @@ nothing), reads each greeting, prints one line per session that answered,
 oldest first, and exits 0:
 
 ```
-list-line = "MOSEY-LIST" SP "1" SP lname SP lstate SP lsince SP swver LF
+list-line = "MOSEY-LIST" SP "1" SP lname SP lstate SP lsince LF
 lname     = sname
 lstate    = "new" / "attached" / "detached"
 lsince    = dec                 ; unix seconds of the last change of state
@@ -1728,7 +1756,7 @@ lsince    = dec                 ; unix seconds of the last change of state
 The client reads ssh's stdout (at most 256 KiB), skips anything that is
 not a `MOSEY-` line (a login shell's chatter, §6.5), and parses each
 `MOSEY-LIST` line with `ParseListLine`: canonical, at most `MaxListLine` =
-160 bytes [derived: 10 + 1 + 32 + 8 + 12 + 64, 5 spaces and LF = 133],
+160 bytes [derived: 10 + 1 + 32 + 8 + 12, 4 spaces and LF = 68],
 and fuzzed, since a hostile server writes it. At most `MaxListed` = 1024
 lines are shown [choice]; a line that does not parse is not shown, and
 the client says how many it dropped. Every field it prints is from a
@@ -1736,8 +1764,8 @@ grammar of printable ASCII with no space, so the table the client lays out
 itself cannot carry an escape sequence (D9):
 
 ```
-NAME          STATE     SINCE                      VERSION
-quiet-heron   detached  2026-11-14T09:30:12+00:00  0.214.20261114
+NAME          STATE     SINCE
+quiet-heron   detached  2026-11-14T09:30:12+00:00
 ```
 
 `SINCE` is in the client's local zone, as §9.1's times are. With no line it prints `no sessions on DEST`.
@@ -1769,6 +1797,8 @@ reported as `-list`'s are.
 | ssh cannot start | `mosey: running PROGRAM: ERR` | 1 |
 | `ErrNoLine`, ssh exit 255 | (ssh has already said why on stderr) `mosey: ssh to DEST failed` | 1 |
 | `ErrNoLine`, ssh exit 126/127 (`ErrNoServer`, with `-remote`) | `mosey: no mosey at SERVER on DEST: install it there or pass -remote` | 1 |
+| `*VersionError`, or ErrorLine `version` (any server: `PATH`'s, `-remote`'s, or the cached copy) | `mosey: DEST's mosey speaks protocol P; this mosey speaks N` (§6.4) | 1 |
+| the handshake's `*IncompatibleVersionError` | `mosey: DEST's mosey speaks handshake protocol P; this mosey speaks N` (`transport.md` §3.6) | 1 |
 | ProbeLine (`ErrNoServer`, no `-remote`) | the upload of §4.7, and its messages; for `-list` and `-kill`, §4.7.1's messages and no upload; for R3's reconnect, a log line and another try | 1 |
 | `ErrNoLine`, other exit | `mosey: the remote mosey exited with status N` | 1 |
 | `ErrBadLine` | `mosey: DEST sent a malformed mosey line` | 1 |
@@ -1803,7 +1833,6 @@ const (
 
 // ClientLine is §6.2. Marshal always writes proto = Version.
 type ClientLine struct {
-	SoftwareVersion string            // swver
 	Attach          Attach            // AttachNew (the zero value), AttachAuto, AttachName, AttachResume
 	Name            string            // "name:NAME", or "new:NAME" ("" is plain "new")
 	SessionID       [16]byte          // "resume:SID"
@@ -1817,7 +1846,6 @@ type ClientLine struct {
 
 // CredentialLine is §6.3. Marshal always writes proto = Version.
 type CredentialLine struct {
-	SoftwareVersion string
 	Addr            netip.Addr // the zero Addr is "-"
 	Port            uint16
 	CredentialID    [8]byte
@@ -1840,6 +1868,7 @@ type ErrorLine struct {
 const (
 	CodeLine        = "line"
 	CodeVersion     = "version"
+	CodeAttach      = "attach" // the session's attach protocol is not this launcher's (§9.2 step 5)
 	CodeUnsupported = "unsupported"
 	CodeSession     = "session"
 	CodeTaken       = "taken" // R3: another credential holds the session (§9.2.2)
@@ -1848,10 +1877,9 @@ const (
 
 // SessionLine is §9.2.1, the spawner's greeting on its attach socket.
 type SessionLine struct {
-	SoftwareVersion string
-	// AttachMin and AttachMax are the attach protocol versions the
-	// session's spawner speaks (server.md §2.8).
-	AttachMin, AttachMax int
+	// AttachProtocol is the attach protocol the session's spawner speaks
+	// (server.md §2.8), 1..255.
+	AttachProtocol  int
 	SessionID       [16]byte
 	Name            string
 	Started         time.Time // to the second
@@ -1862,15 +1890,17 @@ type SessionLine struct {
 	HasHolder       bool
 }
 
-const MaxSessionLine = 256
+const (
+	MaxSessionLine = 256
+	AttachProtocol = 1 // this build's attach protocol (§9.2.1)
+)
 
 // ListLine is §9.4: one session as --serve=list prints it, and the
 // client parses it; Name "" and State 0 are "-", Since zero is "-".
 type ListLine struct {
-	Name            string
-	State           SessionState
-	Since           time.Time
-	SoftwareVersion string
+	Name  string
+	State SessionState
+	Since time.Time
 }
 
 const (
@@ -1884,10 +1914,6 @@ func ParseListLine([]byte) (ListLine, error)
 func MarshalSessionLine(SessionLine) []byte
 func ParseSessionLine([]byte) (SessionLine, error)
 
-// AttachVersion is the attach protocol version this build and a session
-// whose greeting is g use: the highest in both ranges, ok false if none.
-func AttachVersion(g SessionLine) (version int, ok bool)
-
 func MarshalClientLine(ClientLine) []byte
 func ParseClientLine([]byte) (ClientLine, error)
 func MarshalCredentialLine(CredentialLine) []byte
@@ -1900,11 +1926,12 @@ func ParseErrorLine([]byte) (ErrorLine, error)
 // bad protocol line, ErrBadLine.
 func ReadCredential(r io.Reader) (CredentialLine, error)
 
-// ProbeLine is §4.7.2: what the probe prints when no mosey of this
-// version is there. Marshal always writes proto = Version.
+// ProbeLine is §4.7.2: what the probe prints when the host has no mosey
+// it can use. Marshal always writes proto = Version.
 type ProbeLine struct {
 	System  string // uname -s
 	Machine string // uname -m
+	Cached  bool   // "other": a cached file is there but cannot be used
 }
 
 func MarshalProbeLine(ProbeLine) []byte
@@ -1921,9 +1948,12 @@ func IsRelease(v string) bool
 func AssetName(v, goos, goarch string) string
 // ParseSums finds name's hash in a SHA256SUMS file (§4.6, §4.7.4).
 func ParseSums(sums []byte, name string) ([32]byte, error)
-// CanUpload is §4.7.1's rule on V; CachePath is ~/.cache/mosey/V/mosey.
-func CanUpload(v string) bool
-func CachePath(v string) string
+// CachePath is ~/.cache/mosey/mosey (§4.7), as the remote /bin/sh
+// expands it.
+const CachePath = "~/.cache/mosey/mosey"
+// ProtocolAnswer is what `mosey --serve=protocol` prints (§4.7.2), LF
+// excluded: the bootstrap line version and the handshake protocol.
+func ProtocolAnswer(handshakeProtocol int) string
 
 var (
 	ErrBadLine  = errors.New("bootstrap: malformed mosey line")
@@ -1969,7 +1999,7 @@ type SSH struct {
 	Destination  string
 	Options      SSHOptions
 	Server       string // the remote mosey binary, §4.1's charset; "" is §4.7's probe
-	Version      string // this client's swver, for the probe (§4.7.2)
+	Protocol     string // ProtocolAnswer: what the probe asks the cached copy (§4.7.2)
 	AgentCapture string // the capture socket (§8); "" is ForwardAgent=no
 	Role         string // "" runs --serve; "list" --serve=list (§9.4); "kill" --serve=kill RoleArg (§9.5)
 	RoleArg      string // kill's session name, an sname
@@ -2005,7 +2035,7 @@ The implementation adds, beside the above: `*UsageError` (what
 lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 `ClientEnv` (§6.2's env from the environment, naming what it left out),
 `SSH.RemoteCommand` (§4.1's one argument), `ExitStatus`, `EnvNames`,
-`ValidServer`, `ValidSoftwareVersion`, `ValidEnvValue`, the field sizes
+`ValidServer`, `ValidEnvValue`, the field sizes
 (`PublicKeySize` and so on), `TailSize`, `MaxSanitizedLine` and
 `MaxConfig`. `Sanitize` returns an `io.WriteCloser` rather than an
 `io.Writer`: a rune split across two writes is held for the next, and
@@ -2018,14 +2048,14 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Name | Value | Provenance |
 |---|---|---|
 | `bootstrap.Version` | 1 | ours |
-| `MaxClientLine` | 4096 B | [derived] §6.2: at most 3039 B used |
-| `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1862 B used |
+| `MaxClientLine` | 4096 B | [derived] §6.2: at most 2974 B used |
+| `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1797 B used |
 | `MaxErrorLine` | 128 B, frozen | [derived] §6.4: at most 100 B used |
 | Session with no confirmed credential | ends after `handshake.CredentialTTL` (30 s) | [derived] §4.5 |
 | Spawner backstop (requirement on server.md) | CredentialTTL + 10 s | [choice] §4.5 |
 | Client log rotation | 1 MiB, one old file | [choice] §7.4 |
 | `MaxPreamble` | 64 KiB | [choice] |
-| `MaxProbeLine` | 160 B | [derived] §4.7.2: at most 148 B used |
+| `MaxProbeLine` | 160 B | [derived] §4.7.2: at most 154 B used |
 | `MaxBinary` (upload, download, installer) | 128 MiB | [choice]; a release is about 10 MB |
 | `SHA256SUMS` read bound | 64 KiB | [choice]; four lines today |
 | Release fetch deadline | 5 min | [choice] §4.7.4 |
@@ -2049,7 +2079,8 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Default size when the terminal says 0 | 80×24 | [choice]; the VT100's |
 | stderr filter line cut | 1024 B | [choice] |
 | Taken-over exit status | 3 | ours |
-| `MaxSessionLine` | 256 B | [derived] §9.2.1: at most 230 B used |
+| `MaxSessionLine` | 256 B | [derived] §9.2.1: at most 169 B used |
+| `bootstrap.AttachProtocol` | 1 | ours (§9.2.1, `server.md` §2.8) |
 | Greeting deadline (launcher, lister) | 2 s per socket | [choice]: the spawner answers at once; a hung one is skipped, not waited on |
 | Session name (`sname`) | 1–32 B of letters, digits, `-_.` | [choice] §6.2: safe unquoted in any shell and on any terminal |
 | Generated name | `ADJECTIVE-NOUN`, 64 × 64 words; 32 draws, then `-` and 4 hex digits | [choice] §9.2 |
@@ -2060,7 +2091,7 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | `ReconnectTry` (one R3 try, to the dial) | 60 s | [D] §9.2.2: twice the credential TTL |
 | `IdleTimeout` (a detached session's shell is hung up) | 7 days | [D] Dan, 2026-11-15 (D8 R4); a constant (PLAN O14) |
 | `HangupGrace` (SIGHUP, then the teardown) | 10 s | [choice] §9.3 |
-| `MaxListLine`, `MaxListed` | 160 B, 1024 lines | [derived] §9.4: at most 133 B used; [choice] |
+| `MaxListLine`, `MaxListed` | 160 B, 1024 lines | [derived] §9.4: at most 68 B used; [choice] |
 | R3: no session | exit 1 | [choice] §9.2.2 |
 
 ---
@@ -2070,7 +2101,7 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 **Unit, `internal/bootstrap`:**
 
 - Marshal/Parse round trips for both lines and the error line, including
-  maxima (64-byte swver, every env name at 64 bytes, longest IPv6).
+  maxima (every env name at 64 bytes, longest IPv6).
 - Each rule of §6.1 broken once: CR, double space, trailing space, padding,
   non-zero trailing bits, wrong decoded length, leading zero, `0` cols,
   65536, unknown env name, unsorted or repeated names, `::ffff:` and zoned
@@ -2105,15 +2136,17 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
   LF and TAB, nor 0x7F.
 - The agent decision table of §5.
 - The probe and the upload command (§4.7) under each outer shell that is
-  installed, as for §4.1: the probe execs a cached or `PATH` mosey that
-  says `V`, skips one that says anything else, and prints a ProbeLine
-  that parses when there is none; the upload command installs through a
-  stand-in installer and removes its temporary file.
+  installed, as for §4.1: the probe execs a `PATH` mosey whatever it
+  says, prefers it to a cached copy, execs a cached copy that answers the
+  client's protocol, skips one that answers anything else (`other`), a
+  symlinked one or a symlinked `~/.cache/mosey`, and prints a ProbeLine
+  that parses when there is none (`none`); the upload command installs
+  through a stand-in installer and removes its temporary file.
 - `Platform`, `IsRelease`, `AssetName` and `ParseSums`, each row and rule.
 
 **Unit, `internal/install`:** a fresh install; replacing the user's own
-older file; refusing, and leaving untouched, a `~/.cache/mosey` or version
-directory that is a symlink, a file that is a symlink, a directory or
+older file; refusing, and leaving untouched, a `~/.cache/mosey` that is a
+symlink, a file that is a symlink, a directory or
 someone else's (the "user" is a field, so a test can play another uid), a
 group- or world-writable directory, a size or hash mismatch (the upload is
 removed), a `TEMP` outside `~/.cache/mosey`, a relative `HOME`.
@@ -2156,7 +2189,9 @@ durations in the commit message; 10 s each in CI):
   with `sh -c` locally, with `SSH_CONNECTION="127.0.0.1 1 127.0.0.1 22"`.
   With the real `mosey` built by the test: the line exchange, a server of
   another version (a second build with another `-X main.version`) that
-  serves the client all the same (D8 V1), `-remote` to a
+  serves the client all the same (D8 V1), a server of another protocol
+  (a stand-in that answers `MOSEY-ERROR 2 version -`) refused with §6.4's
+  line, `-remote` to a
   missing file (exit 127), a server that prints rc noise before the line,
   and that the fake ssh exits once the line is out while the session lives
   on (detach, §4.4 step 5; asserted as "exits", with the test's own
@@ -2201,16 +2236,20 @@ durations in the commit message; 10 s each in CI):
   (`TestADetachedSessionIsHungUpAfterTheIdleTimeoutAndAnAttachStopsTheClock`,
   `TestKillHangsTheShellUp`, `internal/server`).
 - **Auto-upload through the real sshd** (§4.7), with the remote's `HOME`
-  a temporary directory (the throwaway sshd's `SetEnv HOME=`), no
-  `-remote`, and a version nothing on the remote `PATH` can have: the
-  client asks, is told `y`, copies itself, and ends with a working
-  session and `~/.cache/mosey/V/mosey` byte-for-byte the client's file;
-  a second client of another version upgrades beside it; a cached file
-  of the wrong version is replaced; and a `~/.cache/mosey` that is a
-  symlink is refused with nothing written through it.
+  a temporary directory and its `PATH` the test's own (the throwaway
+  sshd's `SetEnv HOME= PATH=`), and no `-remote`: on a host with no
+  mosey the client asks, is told `y`, copies itself, and ends with a
+  working session and `~/.cache/mosey/mosey` byte-for-byte the client's
+  file, whose shell finds `mosey` in `~/.cache/mosey` (§4.7.9); a client
+  of another version then uses that copy as it is and copies nothing; a
+  cached copy of another protocol is replaced; a `mosey` on `PATH` of
+  another version is used as it is, and one of another protocol fails
+  with §6.4's line and nothing is copied; and a cached file that is a
+  symlink, or a `~/.cache/mosey` that is one, is refused with nothing
+  written through it.
 - **NixOS VM** (`tests/install.nix`, CI's `vm-install`): a host with no
-  mosey gets one by consent and runs the session from the cache; a
-  second run asks nothing.
+  mosey gets one by consent and runs the session from
+  `~/.cache/mosey/mosey`; a second run asks nothing.
 - The netsim end-to-end test starts at `client.Session` and does not involve
   ssh at all; this document's part is that a `CredentialLine` round-tripped
   through Marshal/Parse yields the `handshake.Credential` it is given.
@@ -2228,12 +2267,12 @@ durations in the commit message; 10 s each in CI):
 | a hostile remote injects a session-bind after ssh's | §8's state machine: anything after ssh's own bind means no bind ([S3] E11) |
 | a live ControlMaster carries the bootstrap | always a fresh connection ([S3] E12, E12b) |
 | the user's config undoes a bootstrap option | ours come first; flags that beat `-o` are filtered (§2.1, §4.1) |
-| version skew between client and server | normal (D8 V1): the line's version is checked and the protocol version negotiated inside the authenticated handshake (`transport.md` §3.6), so no one on the path can push a pair down to an older version; a session runs the binary that started it until it ends (§9.2 step 5, `server.md` §2.8) |
+| version skew between client and server | normal (D8 V1): no software version is compared; the line's version and the handshake's protocol are each checked for equality, the latter inside the authenticated handshake (`transport.md` §3.6), so no one on the path can make two builds disagree about it; a session runs the binary that started it until it ends (§9.2 step 5, `server.md` §2.8) |
 | a stolen client keeps the session | exclusive attach on any new confirmed login (§9.1, D26); its background reconnect never takes back a session another credential holds (§9.2.2) |
 | a hostile server prints escape sequences in `-list`'s names | the client parses each list line against a grammar of printable ASCII and lays out the table itself (§9.4, fuzzed) |
 | a hostile server sends a name that is not an `sname` | the CredentialLine refuses it (§6.3), so the client never prints one |
 | a hostile remote steers the client's UDP at a broadcast, multicast or local address | grammar refuses unspecified, multicast, limited broadcast; §7.2 refuses local directed broadcast and loopback for a non-loopback destination (threat-model §4.9) |
-| a compromised proto chooses where the client sends UDP | the spawner checks `addr`, `port`, `swver` against its own (§4.4 step 3) |
+| a compromised proto chooses where the client sends UDP | the spawner checks `addr`, `port` and `name` against its own (§4.4 step 3) |
 | failed bootstraps pile up detached shells | a session with no confirmed credential ends after CredentialTTL (§4.5) |
 | late remote bytes corrupt the session screen | ssh's stderr after the line goes, filtered, only to the log file (§7.4) |
 | a planted symlink or another user's file redirects the auto-upload's install (D7) | the installer works through `O_NOFOLLOW` descriptors below `~/.cache`, checks owner and mode at every level, and never replaces what is not the user's (§4.7.7) |
@@ -2246,9 +2285,9 @@ durations in the commit message; 10 s each in CI):
 ## 14. Open in this document
 
 A. **An upgraded client and an old session.** *Closed by D8 V1* (§9.2
-   step 5): a launcher of any version attaches a session of any version,
-   which goes on running its own binary; an upgrade takes effect on new
-   sessions.
+   step 5): a launcher of any version attaches a session of any version
+   with its attach protocol, which goes on running its own binary; an
+   upgrade takes effect on new sessions.
 
 B. **The spawner's confirmation backstop** (§4.5): the `Attached`
    message and the CredentialTTL + 10 s rule are a requirement this
@@ -2269,11 +2308,9 @@ D. **A local cache of downloaded releases** (§4.7.4). Each host of a
    `$XDG_CACHE_HOME/mosey/` would save that, at the cost of one more
    file the client must re-verify before trusting.
 
-E. **Old versions in `~/.cache/mosey`** (§4.7.7). Under D10 each upgrade
-   leaves about 10 MB per host. Removing a version is safe for running
-   sessions (they run `/proc/self/exe`), but a resume from an old client
-   (question A) would then upload that version again, so pruning waits
-   for the resume slice's answer to A.
+E. **Old versions in `~/.cache/mosey`.** *Closed by D7 as amended
+   2026-11-15*: there is one file, `~/.cache/mosey/mosey`, replaced only
+   when it speaks another protocol, so nothing piles up.
 
 D. **Telling a client taken over long ago** (§9.1). *Answered by the
    sessions slice*: R3's reconnect hears `taken` from the launcher and
@@ -2282,6 +2319,16 @@ D. **Telling a client taken over long ago** (§9.1). *Answered by the
 F. **A background reconnect that finds its session held by another
    client** (PLAN O15, §9.2.2). For Dan: it exits as taken over today;
    it could take the session back as `-s` does.
+
+G. **Hopping through a login profile that sets `PATH`** (§4.7.9). For
+   Dan. The session's shell is a login shell (D14), and some profiles
+   assign `PATH` rather than add to it: Debian's `/etc/profile` and
+   NixOS's `set-environment` do, for bash, so on those hosts the
+   `~/.cache/mosey` mosey puts first is gone by the prompt and `mosey
+   otherhost` is not found. A host that has mosey on `PATH` is
+   unaffected. Making it survive means touching something the profile
+   reads (an rc file, or a link into a `PATH` directory), which this
+   slice does not do.
 
 ---
 

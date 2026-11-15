@@ -8,8 +8,10 @@ forwarding (D15, D25), predictive echo (D12), chaff (D11) and auto-upload
 (D7) have landed on it since, each through hooks slice 1 reserved, so
 none changed a wire format or an interface below it (§7). The versioning
 slice (D8 V1) then made the wire and the attach socket stable across
-releases: the hello carries a version range, and a newer client attaches
-a session an older server runs.
+releases, and the simplification of 2026-11-15 (Dan) left one protocol
+number per layer (the bootstrap lines, the hello, the greeting), each
+checked for equality, no software version anywhere on the wire, and D7
+using whatever mosey the host has.
 
 The interfaces themselves are Go, with doc comments, under `internal/`.
 Changing an exported signature another owner calls means agreeing it with
@@ -41,7 +43,7 @@ decision wins.
 | `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | launcher, spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
 | `internal/server` | The four roles (launcher, spawner, proto, emu); proto's `Session`, runnable in process for tests; the emu reply grammar | all server roles | **server-proc** | `doc.go`, `proto.go`, `launcher.go`, `spawner_linux.go`, `protorole.go`, `emurole.go`, `ipcemu.go`, `reply.go` |
 | `internal/bootstrap` | The SSH command line, the stdin and stdout lines (D6, D20, D25); D7's probe line, upload command and release rules | client, spawner | **bootstrap-client** | `doc.go`, `line.go`, `ssh.go`, `probe.go`, `upload.go` |
-| `internal/install` | `mosey --serve=install`: puts an uploaded copy into `~/.cache/mosey/<version>/` safely (D7, `bootstrap.md` §4.7.7) | server host (one-shot) | **bootstrap-client** | `doc.go`, `install.go`, `install_unix.go` |
+| `internal/install` | `mosey --serve=install`: puts an uploaded copy at `~/.cache/mosey/mosey` safely (D7, `bootstrap.md` §4.7.7) | server host (one-shot) | **bootstrap-client** | `doc.go`, `install.go`, `install_unix.go` |
 | `internal/terminal` | The client's own tty: raw mode, size, SIGWINCH | client | **bootstrap-client** | `terminal.go` |
 | `internal/client` | `mosey host`: bootstrap (copying mosey over first if need be, D7), then `Session` (SSP + render + input) | client | **bootstrap-client** | `client.go`, `upload.go` |
 | `cmd/mosey` | The one binary: `main.go` is the client (`mosey host`), `server.go` the server (`mosey --serve`, re-executing itself as `mosey --serve=proto` and `mosey --serve=emu`; a flag, so it never collides with a host called server) | | **bootstrap-client** (`main.go`), **server-proc** (`server.go`) | `main.go`, `server.go` |
@@ -77,7 +79,7 @@ predict                         (screen; golang.org/x/text/width) -- never parse
 emu                             (screen)
 bootstrap                       ()              -- raw bytes; never handshake
 pty, sandbox, ipc, nocore       ()
-install                         (bootstrap)     -- the version and path rules only
+install                         (bootstrap)     -- the size bound only
 terminal                        ()
 server                          (all of the above but client, terminal, render)
 client                          (all of the above but server, pty, sandbox, ipc, emu)
@@ -228,10 +230,11 @@ on every connection (`ssp.md` §1.3), so the first diff is the whole screen,
 and every per-connection count (`InputConsumed`, the echo ack and applied
 count, §3.8) starts at 0. A client that leaves sends `End(EndDetached)`;
 proto also reports a client silent for 15 s as detached (`SilentAfter`).
-A session may be of any version (D8 V1): the launcher attaches it
-through the stable attach protocol, and it goes on running its own
-binary. The client and the session's proto negotiate the protocol
-version in the handshake (each hello carries a range; `Conn.Protocol`).
+A session may be of any mosey version (D8 V1): the launcher attaches it
+if it speaks the launcher's attach protocol, and it goes on running its
+own binary. The client and the session's proto check each other's
+protocol number in the handshake (one byte in each hello;
+`Conn.Protocol`).
 The session runs on until its shell exits, `mosey -kill` (`ipc.Hangup`)
 or 7 days detached (`IdleTimeout`), the last two a SIGHUP from the
 spawner. `mosey -list` reads the greetings and prints `MOSEY-LIST` lines,
@@ -405,16 +408,20 @@ stable attach protocol (`server.md` §2.8) `ClientLine`, `Ready`,
 `ParseSSHOptions`, `Config` (from `SSH.Resolve`, which runs `ssh -G`),
 `SSH.Command(ctx, Config)`, `AgentSocket` and `ChooseAddr`; for D7 the
 `ProbeLine`, `NoServerError`, `SSH.UploadCommand`, `Platform`,
-`IsRelease`, `AssetName`, `ParseSums` and `CachePath`. The spawner
+`IsRelease`, `AssetName`, `ParseSums`, `CachePath` and
+`ProtocolAnswer`. The spawner
 uses `ParseClientLine`, `MarshalCredentialLine` and `MarshalErrorLine`.
 The resume slice adds `SessionLine` (the attach socket's greeting) with
 `MarshalSessionLine` and `ParseSessionLine`, and
 `SSH.Role` for `--serve=list`; the sessions slice adds `Attach`,
 `ValidSessionName`, `ListLine` with `MarshalListLine`/`ParseListLine`,
 `CodeTaken`, `SSH.RoleArg` for `--serve=kill NAME` and `SSH.Batch`, and
-drops `AnySession` and `CodeAmbiguous`; the stable-protocol slice adds
-`SessionLine.AttachMin`/`AttachMax` and `AttachVersion`, and
-`CodeVersion` now means only a line version the server cannot read.
+drops `AnySession` and `CodeAmbiguous`; the simplification of
+2026-11-15 drops every `SoftwareVersion` field, `CanUpload` and
+`ValidSoftwareVersion`, gives `SessionLine` one `AttachProtocol` (with
+the constant `AttachProtocol`) in place of a range, and adds
+`CodeAttach`; `CodeVersion` means only a line version the server cannot
+read.
 
 **terminal.** `Terminal` (`Read`, `Write`, `Size`, `Resized`, `Raw`,
 `Restore`); `Open(in, out)` leaves the mode alone, since the terminal
@@ -468,11 +475,11 @@ when the server ends the session, and otherwise tells the server with
 
 | Later | Reserved now |
 |---|---|
-| Resume (D8) | **built** (resume slice; automatic and named resume, R3's reconnect, `-list`, `-kill` and the idle timeout in the sessions slice; the stable protocol, V1, in the versioning slice): the attach socket (`server.md` §2.6, §2.8), `ipc.Resume`, `bootstrap.Attach`, `client.Session.Reconnect`, `Hello`'s version range, `bootstrap.md` §9.2–§9.5 |
+| Resume (D8) | **built** (resume slice; automatic and named resume, R3's reconnect, `-list`, `-kill` and the idle timeout in the sessions slice; the stable protocol, V1, in the versioning slice): the attach socket (`server.md` §2.6, §2.8), `ipc.Resume`, `bootstrap.Attach`, `client.Session.Reconnect`, `Hello`'s protocol number, `bootstrap.md` §9.2–§9.5 |
 | Exclusive attach (D26) | **built** (resume slice) on `Hello.Attach`, `transport.KindRevoked`, the `Revoked` event |
 | Agent channel (D15, D25) | **built** (agent slice): `agent.md`, `internal/channel`, `internal/agent`, `Conn.SendChannel`/`RecvChannel`, `ipc.AgentConn`, `server.md` §2.7 |
 | Prediction (D12) | **built** (prediction slice): `prediction.md`, `internal/predict`, `Grid.EchoApplied`, the server's echo ack (`prediction.md` §3.1), `mosey -predict` |
 | Chaff (D11, O10) | **built** (chaff slice; the client's 64 B chaffing floor in the dequoin slice): `ssp.Chaffer`, `transport.Conn.SendChaff` and `ChaffArrived`, `ssp.md` §9.1 |
-| Auto-upload (D7) | Landed: `bootstrap.md` §4.7, `internal/install`; the release job attests every binary for `gh attestation verify` by hand (`bootstrap.md` §4.6); a client-side signature check is parked (PLAN O16) |
+| Auto-upload (D7) | Landed, and simplified 2026-11-15 to one cached file used only where the host has no mosey: `bootstrap.md` §4.7, `internal/install`; the release job attests every binary for `gh attestation verify` by hand (`bootstrap.md` §4.6); a client-side signature check is parked (PLAN O16) |
 | NAT traversal (O6) | packet type `0x05` |
 | macOS server (D22) | `pty_other.go`, `sandbox_other.go` return `ErrUnsupported` |

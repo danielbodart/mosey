@@ -18,7 +18,7 @@ every session has a name you can attach to with `-s`, and a client that
 loses its server for a while logs in again by itself to get its session
 back (see [Using it](#using-it)), and your ssh-agent comes along when your ssh config
 forwards it (see [Agent forwarding](#agent-forwarding)). Client and host
-need not run the same version, so upgrading never costs a session. While you type,
+need not run the same version: mosey uses whatever mosey the host has. While you type,
 both ends send cover traffic on a fixed tick, which hides the timing of
 keys within a run of typing (see [What it is](#what-it-is)). On a slow
 link your typing shows up at once, before the server echoes it (see
@@ -119,14 +119,14 @@ Trunk has no package (no release, no file): always pin a tag.
 
 ## Using it
 
-mosey copies itself over the first time if the host has none of its
-version (see [Zero install](#zero-install)). Then:
+mosey copies itself over the first time if the host has no mosey at all
+(see [Zero install](#zero-install)). Then:
 
 ```sh
 mosey host                 # resume your most recently detached session on host, or start a new one
 mosey -s NAME host         # attach to the session called NAME, taking it over; create it if missing
 mosey -new host            # always start a fresh session, with a generated name
-mosey -list host           # your sessions on host: name, attached or detached, since when, version
+mosey -list host           # your sessions on host: name, attached or detached, since when
 mosey -kill NAME host      # end the session called NAME (its shell gets SIGHUP)
 ```
 
@@ -169,11 +169,14 @@ the session back by itself. Nothing secret is ever saved to disk: each
 resume is a fresh SSH login and a fresh handshake
 ([docs/spec/bootstrap.md §9](docs/spec/bootstrap.md)).
 
-**Upgrading mosey never costs you a session.** A client and a host of
-different mosey versions work together: they agree on a protocol version
-both speak, and nothing refuses another version. A newer client resumes
-a session an older mosey started, and that session goes on running its
-own version; an upgrade takes effect in the sessions you start after it.
+**Versions don't matter; the protocol does.** As with ssh, a client and
+a host of different mosey versions work together: nothing compares
+versions. What they share is a protocol number, which is the stability
+promise; if the host's mosey speaks another one, mosey says so in one
+line (`HOST's mosey speaks protocol 2; this mosey speaks 1`) and stops.
+Upgrade the host's mosey with Nix or by replacing the binary; sessions
+you start after that use it, and one already running goes on with the
+binary that started it.
 
 ### Agent forwarding
 
@@ -213,13 +216,12 @@ or mosey session, where only chaff hides your typing rhythm.
 ## Zero install
 
 The server is the same `mosey` binary. On each connection `mosey HOST`
-looks on the host for
-`~/.cache/mosey/<version>/mosey`, then `mosey` on its `PATH`, in the same
-ssh login that starts the session. If neither is this version, it asks
-once per host:
+uses whatever mosey the host has, of any version: `mosey` on its `PATH`,
+or else `~/.cache/mosey/mosey`, found in the same ssh login that starts
+the session. Only if there is neither does it ask, once per host:
 
 ```
-mosey: HOST has no mosey 0.123.456. Copy this one (linux/amd64, 9.8 MB) to ~/.cache/mosey/0.123.456/ there? [y/N]
+mosey: HOST has no mosey. Copy this one (linux/amd64, 9.8 MB) to ~/.cache/mosey/ there? [y/N]
 ```
 
 and copies its own file over ssh. If the host is another platform (a Mac
@@ -231,9 +233,11 @@ platform from GitHub instead, and checks it against the release's
 the host the copy installs itself: it
 checks its own length and SHA-256, refuses to follow a symlink below
 `~/.cache` or to replace a file that isn't yours, and renames itself into
-place. Then the session starts. Copying its own version over is how a
-newer client brings its fixes to a host; a server of another version
-would also work (see above), and `-remote` uses whatever it is given.
+place. Then the session starts, and in it `mosey otherhost` finds that
+same copy, so you can hop on. The client never upgrades a host's mosey:
+it replaces only its own `~/.cache/mosey/mosey`, and only if that speaks
+another protocol (asking as before). A `mosey` on `PATH`, or one given
+with `-remote`, is used as it is.
 
 - `-upload=yes` copies without asking; `-upload=no` never copies.
 - `-remote PATH` runs that binary on the host instead, and copies nothing.

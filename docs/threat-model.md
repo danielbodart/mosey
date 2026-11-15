@@ -139,13 +139,13 @@ decapsulating what the other encapsulated to its one-shot key, so:
   first, then the session id, both one-shot public keys, the credential id,
   both receiver indices and every byte of both messages [S1 §3.1]. There
   is no algorithm negotiation to downgrade: the protocol name fixes every
-  cryptographic choice. What is negotiated, the protocol version (D8 V1:
-  each side's range, the highest common version), channel types (D15) and
-  attach mode (D26), is in the encrypted `Hello`, inside the transcript,
-  so an on-path attacker cannot push two releases down to an older
-  protocol version than both speak (`transport.md` §2.3, §3.6). Client and
-  server may be different releases; a pair with no version in common
-  fails at once, saying so, at both ends.
+  cryptographic choice. What the hellos carry, the protocol version (D8
+  V1: one number each side, which must be equal), channel types (D15)
+  and attach mode (D26), is in the encrypted `Hello`, inside the
+  transcript, so an on-path attacker cannot make the two sides disagree
+  about it (`transport.md` §2.3, §3.6). Client and server may be
+  different releases; a pair of different protocol numbers fails at
+  once, saying so, at both ends.
 - **Off-path flooding** (T1). msg1 carries the credential id in the clear;
   an unknown id is dropped with one map lookup (< 0.05 µs with 1000
   credentials outstanding [M S1 §2.2]), before any MAC. A known id with a
@@ -405,8 +405,8 @@ The resume itself (`bootstrap.md` §9.2, `server.md` §2.6):
   either (D9).
 - **What a resume does not do**: it does not reach a session whose proto
   has died (R17). It does cross versions (D8 V1): any release's client
-  attaches any release's session through the stable attach protocol
-  (`bootstrap.md` §9.2 step 5). The session goes on running the binary
+  attaches any release's session whose attach protocol the host's mosey
+  speaks (`bootstrap.md` §9.2 step 5). The session goes on running the binary
   that started it, so a fix on the host reaches the sessions started after
   it, not one already running: there is no live upgrade (D8 V1, Dan,
   2026-11-15).
@@ -713,8 +713,11 @@ execution (R4).
 - **Re-exec.** The spawner re-executes its own image. **Requirement on
   `server.md`:** exec `/proc/self/exe` on Linux rather than the path
   `os.Executable` returned, so the roles are the same file the spawner
-  is even if the path is replaced in between (D7's cache is user-writable;
-  this only matters as hygiene, since a same-uid writer is T12).
+  is even if the path is replaced in between. D7 itself replaces
+  `~/.cache/mosey/mosey` in place when a client of another protocol
+  needs it (`bootstrap.md` §4.7.7), so this is also what keeps a running
+  session on its own binary; against a same-uid writer it is only
+  hygiene (T12).
 - **seccomp's action follows D22**: KILL on amd64 and on arm64
   (`sandbox/action.go`). arm64 ran ERRNO until CI's arm64 KILL soak
   passed (run 43626969195; R13, now closed). The soak job (`server.md`
@@ -742,8 +745,12 @@ execution (R4).
 
 ### 4.13 Auto-upload (D7) — T5, T12, T13, and the release channel
 
-`bootstrap.md` §4.7. The client copies a build of its own version to a host
-that has none, and the copy then runs as the user there.
+`bootstrap.md` §4.7. The client uses whatever mosey the host has: `mosey`
+on `PATH`, else the cached copy `~/.cache/mosey/mosey`. Only where there is
+neither, or the cached copy speaks another protocol, does it copy a build
+there (its own file, or its own version's release asset), and the copy
+then runs as the user. Upgrading a host's mosey is Nix's or the user's,
+never the client's.
 
 - **What is sent** is the client's own running file, or, for another
   platform, the release asset of exactly the client's version, whose
@@ -776,13 +783,23 @@ that has none, and the copy then runs as the user there.
   or replace anything there. **T12** (same uid) can, as it can with any
   file the user runs: that is why the copy is never a trust anchor, for
   provenance or anything else [S7 §10].
-- **The probe** runs a cached copy only where the installer would have
-  written it: no symlink at `~/.cache/mosey`, its version directory or
-  the file, and all of them the user's (`bootstrap.md` §4.7.2). It asks
-  the copy its version and nothing more, so it cannot tell two builds
-  with the same version string apart, nor a copy that T12 replaced with
-  one that answers correctly; the install-time hash check is done on the
-  far side, by the copy itself, and catches damage, not substitution.
+- **The probe** runs `mosey` from the remote `PATH` as it is, as ssh
+  would run any command there: the host's own install, trusted as the
+  host's other programs are. It runs the cached copy only where the
+  installer would have written it: no symlink at `~/.cache/mosey` or the
+  file, and both, and `~/.cache`, the user's (`bootstrap.md` §4.7.2). It
+  asks the copy its protocol numbers and nothing more, so it cannot tell
+  a copy that T12 replaced with one that answers correctly; the
+  install-time hash check is done on the far side, by the copy itself,
+  and catches damage, not substitution. A server that answers with
+  another protocol is refused with both numbers named, never talked to
+  in a protocol it does not speak; the client replaces only the cached
+  copy, the one file it wrote, and only with consent.
+- **Hopping.** A session served from the cached copy, on a host with no
+  `mosey` on `PATH`, gets `~/.cache/mosey` first on its shell's `PATH`
+  (`server.md` §2.5). That directory is the user's alone and its one
+  file is the installer's, so this puts nothing on `PATH` that the user's
+  own sessions were not already running.
 - **The probe line** comes from the far host (T5). It is parsed strictly
   and fuzzed, and it chooses only which public build is sent. Nothing the
   far host says appears unfiltered in the consent question, which is made
@@ -791,12 +808,11 @@ that has none, and the copy then runs as the user there.
   (`-upload ask`); the answer is remembered in the client's state
   directory, 0600. A user who wants nothing copied says `-upload=no`.
 - **No secret** travels with the upload: its stdin is the binary, its
-  argv the version, hash and size. The one-shot key in the ClientLine
+  argv the hash and size. The one-shot key in the ClientLine
   sent to the probe is public by design (B3), and the same line is sent
   again after the upload because no launcher ever read it.
-- **Costs** to the far host: one file of at most 128 MiB per version, in the
-  user's own quota. Old versions are not yet removed (`bootstrap.md` §14
-  E).
+- **Costs** to the far host: one file of at most 128 MiB, in the user's
+  own quota, replaced in place rather than added to.
 
 ### 4.14 Chaff (D11, O10) — T2, T3
 
@@ -1067,7 +1083,7 @@ target (architecture §6).
 | A resume revokes the old client and erases its keys; the old client exits saying who took over; nothing secret is reused | `e2e`, `server` | netsim: a client vanishes and another attaches with a new credential for the same SID; the first gets `Revoked`; real sshd: `mosey -s NAME` takes over and the first exits 3 (`TestSessionsThroughRealSSH`) |
 | A background reconnect never takes a session another client holds (PLAN O15's placeholder, until Dan decides) | `server`, `e2e` | the launcher's holder rule (`TestReconnectTakesItsOwnSessionAndNeverAnothers`); netsim: a reconnect told `taken` exits 3 |
 | Only the user reaches the attach socket | `server` | the directory checks refuse group/other bits, a foreign owner and a symlink; a foreign uid is closed unanswered |
-| No protocol version is forced down; no version in common fails at once | `handshake`, `transport` | fake v2-capable peers in both directions agree on v1, two of them on v2; disjoint ranges fail at both ends with both ranges named |
+| A protocol mismatch fails at once, naming both numbers | `handshake`, `transport`, `bootstrap`, `server`, `e2e` | a peer of protocol 2 fails the handshake at both ends with both numbers named, in both directions; a bootstrap line of another version, a greeting of another attach protocol and a `PATH` mosey of another protocol each fail with both numbers |
 | Chaff hides keys within a run, in both directions, and idle costs nothing | `ssp` | one client datagram per 20 ms tick, all 64 B, ending 1–2 s after the last key; the server on its own grid at 64 B; an idle session sends no chaff; on every netsim profile the server's datagrams name at most 5% of keys and the LAN's wire at most 5% (`TestChaffHidesKeysOnEveryProfile`) |
 | End to end under every netsim profile | `e2e` | client and server sessions in process; real binaries over loopback through a throwaway sshd |
 | Only ssh's own bind is captured | `agent` | `FuzzCapture`; the unit list of `agent.md` §7: another pid, a bind as frame 2, no forwarding flag, a bad signature, a second connection, a byte after the answer, the deadline |
