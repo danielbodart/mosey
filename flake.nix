@@ -58,15 +58,16 @@
       go = pkgs: pkgs.go_1_27;
 
       # The Go module alone, so a change to the docs, the workflows or the VM
-      # tests does not rebuild and retest the binary.
+      # tests does not rebuild the binary.
       src = lib.fileset.toSource {
         root = ./.;
         fileset = lib.fileset.unions [ ./cmd ./internal ./go.mod ./go.sum ];
       };
 
-      # The suite is not run by the package but by checks.tests, from the
-      # same derivation with doCheck on, as in quoin: the VM tests and a
-      # host's system wait only for the compile.
+      # The package compiles and nothing else: the tests and the lint are
+      # mise run check's (CI's check job), which runs them where the
+      # end-to-end tests have an sshd and a tty, so the VM test and a host's
+      # system wait only for the compile.
       mkMosey = pkgs: (pkgs.buildGoModule.override { go = go pkgs; }) {
         pname = "mosey";
         inherit version src;
@@ -89,18 +90,9 @@
 
         ldflags = [ "-s" "-w" "-X" "main.version=${version}" ];
 
-        # `go test ./...`, every package, not only subPackages'. Off in the
-        # package; checks.tests turns it on. The tests that need what a
-        # build sandbox lacks skip cleanly: the end-to-end ones that need an
-        # sshd (there is none; and given one, sshd refuses the build user,
-        # whose shell does not exist), a non-loopback address or a tty. CI's
-        # check job runs those on a runner.
+        # buildGoModule would run `go test` here; the tests are mise run
+        # check's (see above).
         doCheck = false;
-        checkPhase = ''
-          runHook preCheck
-          go test ./...
-          runHook postCheck
-        '';
 
         meta = {
           description = "A remote terminal for bad networks: roams, survives lossy links, picks up where it left off";
@@ -138,50 +130,19 @@
       checks = forLinux (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          pkg = self.packages.${system}.mosey;
         in
         {
+          # Only what needs Nix to check: that the package builds, from the
+          # vendored modules with nixpkgs' Go, and the VM test. The tests,
+          # gofmt and vet for every platform are mise run check's (CI's
+          # check job, which a release needs), and building them here as
+          # well only ran them twice. The race detector is CI's race job,
+          # and the seccomp KILL soak its kill-soak job: both need what a
+          # build sandbox does not give (a C compiler for one, a user's
+          # systemd scope with a CPU quota for the other).
+
           # The build.
           inherit (self.packages.${system}) mosey;
-
-          # Every package's tests, from the package's own derivation and its
-          # vendored dependencies. The race detector is CI's race job (mise
-          # run race), and the seccomp KILL soak its kill-soak job: both
-          # need what a build sandbox does not give (a C compiler for one,
-          # a user's systemd scope with a CPU quota for the other).
-          tests = pkg.overrideAttrs (_: {
-            pname = "mosey-tests";
-            doCheck = true;
-          });
-
-          # Formatting as a gate rather than a habit.
-          gofmt = pkgs.runCommand "mosey-gofmt" { nativeBuildInputs = [ (go pkgs) ]; } ''
-            cd ${src}
-            unformatted=$(gofmt -l cmd internal)
-            if [ -n "$unformatted" ]; then
-              echo "not gofmt'd:" >&2
-              echo "$unformatted" >&2
-              exit 1
-            fi
-            touch $out
-          '';
-
-          # go vet for every platform a release ships for, as mise run lint
-          # does, from inside the package's build, where the module's
-          # dependencies already are.
-          govet = pkg.overrideAttrs (_: {
-            pname = "mosey-vet";
-            doCheck = true;
-            checkPhase = ''
-              runHook preCheck
-              for os in linux darwin; do
-                for arch in amd64 arm64; do
-                  GOOS=$os GOARCH=$arch go vet ./...
-                done
-              done
-              runHook postCheck
-            '';
-          });
 
           # D7's install path on real machines: a client VM runs mosey
           # against one server that has it and one that does not, which it

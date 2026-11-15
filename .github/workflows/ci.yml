@@ -127,17 +127,20 @@ jobs:
           if-no-files-found: error
 
   # What `nix flake check` checks, split across runners as in chase and
-  # quoin: the VM test of D7's install path and the package's own test run
-  # are each minutes, so each is a leg of its own, and `rest` builds every
-  # check the others do not name (so a check added to the flake is built
-  # without being added here), the package, the dev shell and the
-  # formatter.
+  # quoin: the VM test of D7's install path is minutes, so it is a leg of
+  # its own, and `rest` builds every check it does not name (so a check
+  # added to the flake is built without being added here), the package,
+  # the dev shell and the formatter. The checks are only what needs Nix:
+  # the package (from the vendored modules, with nixpkgs' Go, so a stale
+  # vendorHash fails here) and the VM test. The tests, gofmt and vet ran in
+  # the Nix sandbox too until they were dropped from the flake: check runs
+  # them all, with the end-to-end tests the sandbox has to skip.
   nix:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        check: [vm-install, tests, rest]
+        check: [vm-install, rest]
     env:
       # Empty where the repository has no such secret (a fork, or before
       # it is added): the cache is then read anonymously and nothing is
@@ -174,7 +177,7 @@ jobs:
       - name: the other checks and outputs
         if: matrix.check == 'rest'
         run: |
-          nix eval --json '.#checks.x86_64-linux' --apply 'cs: builtins.attrNames (removeAttrs cs [ "vm-install" "tests" ])' \
+          nix eval --json '.#checks.x86_64-linux' --apply 'cs: builtins.attrNames (removeAttrs cs [ "vm-install" ])' \
             | jq -r '.[] | ".#checks.x86_64-linux." + .' \
             | xargs nix build --print-build-logs --no-link \
                 .#packages.x86_64-linux.mosey .#devShells.x86_64-linux.default .#formatter.x86_64-linux
