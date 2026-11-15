@@ -12,9 +12,9 @@ on lossy links and picks up where it left off.
 The first slice works: `mosey HOST` bootstraps over your `ssh` and gives
 you an interactive shell over encrypted UDP, with the emulator sandboxed on
 the server, and copies itself to a host that doesn't have it (see
-[Zero install](#zero-install)). Sessions survive the client: `mosey -r HOST`
-resumes one from here or another device and takes it over (see
-[Using it](#using-it)), and your ssh-agent comes along when your ssh config
+[Zero install](#zero-install)). Sessions survive the client: a later
+`mosey HOST` picks a detached one up again, from here or another device
+(see [Using it](#using-it)), and your ssh-agent comes along when your ssh config
 forwards it (see [Agent forwarding](#agent-forwarding)). While you type,
 both ends send cover traffic on a fixed tick, which hides the timing of
 keys within a run of typing (see [What it is](#what-it-is)). On a slow
@@ -99,24 +99,40 @@ flake's `packages.<system>.mosey`.
 
 ## Using it
 
-mosey needs the same version of `mosey` on both ends, and copies itself
-over the first time if the host has none (see [Zero install](#zero-install)).
-Then:
+mosey copies itself over the first time if the host has none of its
+version (see [Zero install](#zero-install)). Then:
 
 ```sh
-mosey host                 # a new session: a login shell on host, over UDP
-mosey -r host              # resume your session on host, from here or another device
-mosey -r=SESSION host      # resume a particular one, when you have several
-mosey -list host           # your sessions on host, and whether anyone is attached
+mosey host                 # resume your most recently detached session on host, or start a new one
+mosey -s NAME host         # attach to the session called NAME, taking it over; create it if missing (landing)
+mosey -new host            # always start a fresh session, with a generated name (landing)
+mosey -list host           # your sessions on host: name, attached or detached, since when, version (names and versions landing)
+mosey -kill NAME host      # end the session called NAME (landing)
 ```
 
-A session lives until its shell exits. Closing the terminal, logging out or
-rebooting only detaches the client, and the session waits on the server for
-`mosey -r`. Resuming takes the session over: any client still attached is
-cut off and its keys are wiped. If it is awake within a minute of that, it
-exits saying who took over and when; one asleep longer (a closed laptop)
-is still cut off, but wakes to a session that never answers, with no word
-why.
+Plain `mosey host` never takes over a session that is attached somewhere
+else, so a second terminal to the same host gets a session of its own.
+Every session has a name; one you didn't name gets a generated one, such
+as `quiet-heron`. (Automatic resume and names are landing: today's build
+still resumes with `-r`, which `-s` replaces.)
+
+**The session lives until its shell exits.** Typing `exit` or Ctrl-D in
+the remote shell, or anything else that ends that shell, ends the
+session. Anything that happens on **your own machine**, the client, only
+detaches: closing the terminal window, logging out of your laptop,
+rebooting it, or the laptop crashing or losing its network. There is no
+detach key; closing the client's terminal is how you detach. The session
+then waits on the server, and the next plain `mosey host`, from this
+machine or another, picks it up again. While the client is still running
+it reconnects by itself after a dead spot (landing: if the network stays
+gone, it also logs in again over ssh in the background until it gets the
+session back, or exits saying the session has ended). A detached session
+is ended after 7 days unused (landing).
+
+Taking a session over with `-s` cuts off any client still attached and
+wipes its keys. If that client is awake within a minute, it exits saying
+who took over and when; one asleep longer (a closed laptop) is still cut
+off, but wakes to a session that never answers, with no word why.
 Nothing secret is ever saved to disk: each resume is a fresh SSH login and
 a fresh handshake ([docs/spec/bootstrap.md §9](docs/spec/bootstrap.md)).
 A client that just loses its network for a while needs none of this: it
