@@ -251,10 +251,16 @@ func (b *spawn) refused(e *bootstrap.RemoteError) error {
 	case bootstrap.CodeLine:
 		return fail(e, "the server could not read this client's request: a bug, please report it")
 	case bootstrap.CodeVersion:
-		// Only a line version the server cannot read: the software
-		// version is never refused (D8 V1). With one line version there
-		// is none older to send again at (§6.1), so this is a server from
-		// before the stable protocol, or a bug.
+		if e.Proto == bootstrap.Version {
+			// The line versions agree, so what was refused is this
+			// client's software version: only a server from before the
+			// stable protocol does that (D8 V1), which serves only its
+			// own release.
+			return fail(e, "the remote mosey %s predates the stable protocol and serves only clients of its own version: install %s there or pass -remote",
+				e.Detail, b.line.SoftwareVersion)
+		}
+		// A line version the server cannot read: with one line version
+		// there is none older to send again at (§6.1).
 		return fail(e, "the remote mosey %s cannot read this client's request (bootstrap protocol %d, it speaks %d)",
 			e.Detail, bootstrap.Version, e.Proto)
 	case bootstrap.CodeUnsupported:

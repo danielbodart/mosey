@@ -112,7 +112,9 @@ var EnvNames = []string{
 // ClientLine is what the client writes to ssh's stdin (§6.2). Marshal
 // always writes proto = Version.
 type ClientLine struct {
-	// SoftwareVersion is the client's build, for D7's equality check.
+	// SoftwareVersion is the client's build. Nothing compares it (D8
+	// V1): the probe uses it to find the client's own version on the
+	// host (§4.7.2), and the server's log records it (§6.2).
 	SoftwareVersion string
 	// Attach says which session (§6.2, §9.2); Name is AttachName's, or
 	// AttachNew's when the launcher has chosen it; SessionID is
