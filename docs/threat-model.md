@@ -137,11 +137,15 @@ decapsulating what the other encapsulated to its one-shot key, so:
   learns at most both bootstrap lines, which is T9: no harm.
 - **No misbinding, no downgrade.** The transcript hashes the protocol name
   first, then the session id, both one-shot public keys, the credential id,
-  both receiver indices and every byte of both messages [S1 §3.1]. Client
-  and server are the same binary at the same version (D7), so there is no
-  algorithm negotiation to downgrade. The only negotiated things, channel
-  types (D15) and attach mode (D26), are in the encrypted `Hello`, inside
-  the transcript.
+  both receiver indices and every byte of both messages [S1 §3.1]. There
+  is no algorithm negotiation to downgrade: the protocol name fixes every
+  cryptographic choice. What is negotiated, the protocol version (D8 V1:
+  each side's range, the highest common version), channel types (D15) and
+  attach mode (D26), is in the encrypted `Hello`, inside the transcript,
+  so an on-path attacker cannot push two releases down to an older
+  protocol version than both speak (`transport.md` §2.3, §3.6). Client and
+  server may be different releases; a pair with no version in common
+  fails at once, saying so, at both ends.
 - **Off-path flooding** (T1). msg1 carries the credential id in the clear;
   an unknown id is dropped with one map lookup (< 0.05 µs with 1000
   credentials outstanding [M S1 §2.2]), before any MAC. A known id with a
@@ -400,8 +404,48 @@ The resume itself (`bootstrap.md` §9.2, `server.md` §2.6):
   server cannot put an escape sequence on the user's terminal through
   either (D9).
 - **What a resume does not do**: it does not reach a session whose proto
-  has died (R17), and it does not cross versions (`bootstrap.md` §9.2
-  step 5).
+  has died (R17). It does cross versions (D8 V1): any release's client
+  attaches any release's session through the stable attach protocol, and
+  a session of a build from before it is passed over (`bootstrap.md`
+  §9.2 step 5).
+
+**Live upgrade** (D8 V2, `server.md` §2.8). A newer `mosey --serve`
+resuming a session of an older binary takes it over: the old spawner
+hands the newer one, over the attach socket, the pty master, a pidfd for
+the shell, the attach and agent listeners, the window size, a screen
+snapshot and the session's name and id, then it, its proto and its emu
+exit. What this does and does not change:
+
+- **Who can ask.** Only a process at the other end of the attach socket:
+  the 0700 directory and `SO_PEERCRED` at both ends (the old spawner
+  checks the requester's uid, the newer spawner the listener's) keep it to
+  the user's own processes, as for a resume. A process of the user gains
+  nothing it did not have: it could already resume the session with a
+  key of its own and type into the shell, signal the shell, and make
+  sockets in the user's directory. A hand-off to another uid is refused
+  before any fd leaves the spawner (`server.md` §12).
+- **Forward only.** The old session hands off only to a binary whose
+  version is newer than its own, and the launcher asks only then, so a
+  security fix, once on a host, cannot be undone by an older client's
+  attach; an older client attaches the newer session as it is.
+- **The upgrade fixes what runs, not what ran.** The keys of the old
+  proto go with it (it exits); the new proto mints a credential of its
+  own, and the client makes a new handshake with it (D8: nothing crypto
+  is carried). The screen snapshot crosses from proto-O to proto-N
+  through two spawners and is validated twice, by the newer spawner and
+  by the newer proto, with the fuzzed decoder the client uses; emu-N
+  parses only escape sequences mosey's own renderer wrote from that
+  validated grid. A compromised old proto can therefore hand the new
+  session a wrong picture, nothing more: the shell, the pty and the keys
+  are not its to give.
+- **The sandboxes are as before.** proto and emu run the same policies
+  (`server.md` §6.3); the new system calls (`pidfd_open`,
+  `pidfd_send_signal`, `poll` on a pidfd) are the spawner's, which is
+  unsandboxed and already owned the shell.
+- **A failed upgrade loses nothing.** Until the newer spawner has a
+  credential from its own proto, the old session is whole and resumes
+  serving; the launcher then attaches plainly (`server.md` §2.8,
+  "Aborts").
 
 ### 4.6 SSP bounds and compression (D11, D24) — T5, A9
 
@@ -621,7 +665,7 @@ trials; built with `GOEXPERIMENT=runtimesecret` and key generation inside
 
 | Role | Holds | Parses | Sandbox | A compromise gets |
 |---|---|---|---|---|
-| launcher, spawner | the pty master (spawner; kept so the shell outlives proto); no key, but for a moment the credential line (PSK included) on its way to stdout, wiped once written (§4.10) | `ClientLine` (from the user), proto's IPC messages | none, but `DUMPABLE=0` (§4.10): the spawner forks the login shell | the user |
+| launcher, spawner | the pty master (spawner; kept so the shell outlives proto), and after a live upgrade a pidfd for the shell; no key, but for a moment the credential line (PSK included) on its way to stdout, wiped once written (§4.10) | `ClientLine` (from the user), proto's IPC messages, and the attach protocol's hand-off from an older spawner of the user (§4.5) | none, but `DUMPABLE=0` (§4.10): the spawner forks the login shell | the user |
 | **proto** | keys, the UDP socket, the pty master | every datagram (pre-auth: header, lookup, AEAD, msg1), SSP, emu's `Update` and `Replies` | Landlock deny-all, seccomp TSYNC, `DUMPABLE=0` | **the user**: it can type into the shell (S4 red team: `pwned-ipc` created under every sandbox setting [M S4 §3.6]), and `sendto` anywhere from its socket |
 | **emu** | nothing: no key, no pty, no socket but its IPC | all program output (the VT parser) | Landlock deny-all, seccomp TSYNC, `DUMPABLE=0` | its own IPC. Its diffs pass `Grid.Apply`; its replies pass `ValidReply` |
 
@@ -1082,6 +1126,8 @@ target (architecture §6).
 | A resume revokes the old client and erases its keys; the old client exits saying who took over; nothing secret is reused | `e2e`, `server` | netsim: a client vanishes and another attaches with a new credential for the same SID; the first gets `Revoked`; real sshd: `mosey -s NAME` takes over and the first exits 3 (`TestSessionsThroughRealSSH`) |
 | A background reconnect never takes a session another client holds (PLAN O15's placeholder, until Dan decides) | `server`, `e2e` | the launcher's holder rule (`TestReconnectTakesItsOwnSessionAndNeverAnothers`); netsim: a reconnect told `taken` exits 3 |
 | Only the user reaches the attach socket | `server` | the directory checks refuse group/other bits, a foreign owner and a symlink; a foreign uid is closed unanswered |
+| A live upgrade keeps the shell and goes forward only; a hand-off to another uid is refused | `server`, `e2e` | real sshd, two builds: the newer resumes the older's session, the shell's pid and a variable survive, the old roles exit; the older build then attaches without downgrading it; a `HandoffRequest` from another uid or an older version is refused before any fd leaves; `FuzzHandoff` |
+| No protocol version is forced down; no version in common fails at once | `handshake`, `transport` | fake v2-capable peers in both directions agree on v1, two of them on v2; disjoint ranges fail at both ends with both ranges named |
 | Chaff hides keys within a run, in both directions, and idle costs nothing | `ssp` | one client datagram per 20 ms tick, all 64 B, ending 1–2 s after the last key; the server on its own grid at 64 B; an idle session sends no chaff; on every netsim profile the server's datagrams name at most 5% of keys and the LAN's wire at most 5% (`TestChaffHidesKeysOnEveryProfile`) |
 | End to end under every netsim profile | `e2e` | client and server sessions in process; real binaries over loopback through a throwaway sshd |
 | Only ssh's own bind is captured | `agent` | `FuzzCapture`; the unit list of `agent.md` §7: another pid, a bind as frame 2, no forwarding flag, a bad signature, a second connection, a byte after the answer, the deadline |

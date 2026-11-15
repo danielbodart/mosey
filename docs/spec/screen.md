@@ -402,9 +402,11 @@ can't desynchronise anything.
 
 A diff is a sequence of ops, each starting with an opcode byte. There is
 no header, no trailer and no padding. An empty diff (zero bytes) is the
-identity. The format is versioned by the handshake's hello, not inside
-the diff: both ends run the same binary [D7]. An unknown opcode is an
-error, never skipped.
+identity. The format is versioned by the protocol version the handshake
+agreed (`transport.md` §2.3, D8 V1), not inside the diff: this section is
+v1, and a later version adds ops under a number of its own, so the two
+ends may be different builds and still agree on every op they send. An
+unknown opcode is an error, never skipped.
 
 ### 5.3 Decoder state
 

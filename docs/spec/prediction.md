@@ -362,10 +362,12 @@ server's emulator does.
   `golang.org/x/text/width`: Wide and Fullwidth are 2; Narrow, Halfwidth
   and Neutral are 1; **Ambiguous is not predicted**, since terminals
   disagree on it. Code points not yet assigned are not predicted.
-- **Agreement with the server.** The client and the server are the same
-  build (D7), so the tables never skew between versions, only between the
-  two libraries. A test in `internal/emu` writes every code point the
-  client would predict (152,580 of them) into the server's emulator and
+- **Agreement with the server.** The client and the server are usually
+  the same build (D7's copy), so the tables skew only between the two
+  libraries. They may be different builds (D8 V1); a width that skews then
+  costs a wrong guess, which the server's own cells correct on the next
+  frame, never a wrong screen. A test in `internal/emu` writes every
+  code point the client would predict (152,580 of them) into the server's emulator and
   compares the cell it gets (`TestPredictionWidthsAgreeWithTheEmulator`).
   They agree on every one [M], so there is no list of exceptions; if a
   library update makes them differ, the test names the code points and
@@ -573,7 +575,9 @@ guess is taken back 660 ms after it was typed, the round trip plus the
   each frame the server's count at the time of the screen, which is what
   `EchoApplied` carries [D].
 - **No width-table identifier in the handshake.** Client and server are
-  one build (D7); the agreement test of §10 replaces the identifier.
+  usually one build (D7); the agreement test of §10 replaces the
+  identifier, and a skew between builds (D8 V1) is a misprediction the
+  next frame corrects.
 - **Single code points only.** No grapheme segmenter on the client path
   (§10).
 - **No drawn-cursor heuristic** (§9.3).

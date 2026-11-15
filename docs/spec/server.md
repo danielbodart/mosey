@@ -37,7 +37,7 @@ the same file, re-executed with a flag. A plain word never selects a role
 | argv | role | sandboxed | lives |
 |---|---|---|---|
 | `mosey --serve` | **launcher**: ssh's child. Reads the client's line, starts the spawner, relays the credential line, exits | no | seconds |
-| `mosey --serve=spawner` | **spawner**: binds UDP, opens the pty, starts the shell, starts and supervises proto and emu | no | the session |
+| `mosey --serve=spawner` | **spawner**: binds UDP, opens the pty, starts the shell, starts and supervises proto and emu; or adopts a running session from an older spawner (§2.8) | no | the session, or until a newer spawner takes it over (§2.8) |
 | `mosey --serve=proto` | **proto**: keys, UDP, transport, SSP, every protocol parser, the pty master, the reply grammar | Landlock + seccomp | the session |
 | `mosey --serve=emu` | **emu**: tuios.dev/vt and nothing else | Landlock + seccomp | until it dies; restarted |
 | `mosey --serve=version` | prints the version (D7's probe, `bootstrap.md` §4.7.2) | no | instant |
@@ -59,14 +59,16 @@ leader and `setsid(2)` fails with EPERM [kernel ABI]. S4 detached with
 fork is an exec: the launcher starts `mosey --serve=spawner` in a new
 session and exits once the credential is out. The spawner is then the
 parent of proto, emu and the shell for the whole session, which matters
-because `Pdeathsig` fires when the *parent* goes (S4 §3.2).
+because `Pdeathsig` fires when the *parent* goes (S4 §3.2). The one
+exception is a live upgrade (§2.8): the newer spawner adopts the shell it
+did not start, and holds a pidfd for it instead of being its parent.
 
 ### 1.2 What each role holds, and what its compromise costs
 
 | role | holds | parses (attacker-reachable) | if compromised |
 |---|---|---|---|
 | launcher | ssh's stdin, stdout, stderr | the `ClientLine` (from whoever controls the ssh session: the user) | nothing an ssh login does not already give |
-| spawner | the pty master (its own reference), the shell's pid, the children's pids, the log file | the `ClientLine` again; proto's three messages (§3.4); the roles' stderr lines (§6.4) | the user. It is never reachable from the network or from emu directly; only proto can reach its parser, and only with three fixed layouts |
+| spawner | the pty master (its own reference), the shell's pid (or, after a live upgrade, a pidfd for it), the children's pids, the log file | the `ClientLine` again; proto's messages (§3.4); the roles' stderr lines (§6.4); on the attach socket, a `HandoffRequest`, and when it adopts, an older spawner's hand-off (§2.8) | the user. It is never reachable from the network or from emu directly; only proto can reach its parser, and only with three fixed layouts |
 | proto | the session's keys, the UDP socket, the pty master, its IPC sockets | every datagram (pre-auth: a fixed header and stdlib AEAD; post-auth: SSP, the screen and input diffs), emu's messages, the spawner's messages | **the user**: it holds the pty master and can type into the shell (S4 §3.6, row C). The sandbox is defence in depth against logic bugs, not containment |
 | emu | its IPC socket, its stderr pipe | everything that reaches the screen (D9): the most attacker-reachable input mosey has | **contained** (S4 §3.6, row E): no file, no socket, no pty, no key, and no signal to any other process. The last holds on every kernel, with or without Landlock: seccomp alone denies `kill`, and filters `tgkill` to emu's own pid and `fcntl` to commands that cannot arm `O_ASYNC` (§6.3). It can feed proto screen diffs, which proto validates with the same decoder the client uses, and replies, which proto filters through §4. Worst case: wrong pixels on screen, a blank screen for a while (§5.2), and a few tokens of harmless reply-shaped text in a line being edited (§4.1, S4 §3.6) |
 
@@ -234,7 +236,7 @@ generation.
 
 | trigger | who sees it | what happens |
 |---|---|---|
-| the shell exits | spawner (`wait4`) | `ShellExit{status}` to proto, which drains the pty until EIO or T5, lets SSP deliver the final screen (until the client acks it, or T6), tells the client the session is over with `Conn.End(EndShellExited)` (`transport.md` §8.4) and sends `Exit{ShellExited}` |
+| the shell exits | spawner (`wait4`, or after a live upgrade `poll` on the shell's pidfd, §2.8) | `ShellExit{status}` to proto, which drains the pty until EIO or T5, lets SSP deliver the final screen (until the client acks it, or T6), tells the client the session is over with `Conn.End(EndShellExited)` (`transport.md` §8.4) and sends `Exit{ShellExited}` |
 | no client ever confirms a credential | proto | once every credential it minted has expired unconfirmed (`handshake.CredentialTTL`, 30 s [D20], from the last one minted) with no client ever attached, nothing can connect, so `Exit{NoClient}` |
 | the client detaches | proto (`transport.Ended`, or its connection failing) | **the session does not end** (D8, `bootstrap.md` §9.3): proto closes that connection, tells the spawner (`Detached`) and waits for a resume |
 | the client falls silent | proto (nothing authentic from it for `SilentAfter`, 15 s, `bootstrap.md` §9.2) | **the session does not end**: proto keeps the connection, since the client may be in a dead spot, and tells the spawner `Detached`, so a plain `mosey DEST` may take it (D8 R1); when the client is heard again proto says `Attached` again |
@@ -333,15 +335,17 @@ since it holds the keys.
   one message, not an IPC message. Peer → spawner, within T2: `ClientLine`
   (0x40), a resume, answered by `Ready` (0x41) or `Failed` (0x42), then
   close; or `Hangup` (0x43, `mosey -kill`), answered by the hangup of
-  §2.4 and then close, with nothing sent; or nothing (a lister closes).
+  §2.4 and then close, with nothing sent; or `HandoffRequest` (0x44), a
+  live upgrade (§2.8); or nothing (a lister closes). All of it is the
+  stable attach protocol (§2.8).
   The spawner reads with `recvmsg` and closes any fd that arrives, as on B
   (§3.1).
 - **What the spawner checks** of the `ClientLine`: it parses
   (`bootstrap.ParseClientLine`, whole and canonical), it is
   `resume:SID`, or a reconnect's `resume:SID:CREDID` (the launcher has
   chosen, under its lock, and checked any holder, `bootstrap.md` §9.2;
-  CREDID only labels the hold, §9.2.2), its `swver` is the spawner's, its SID is
-  the session's, and its public key is an X-Wing key (`agent` may be either: the
+  CREDID only labels the hold, §9.2.2), its SID is the session's (its
+  `swver` may be any version's, D8 V1), and its public key is an X-Wing key (`agent` may be either: the
   resuming client's own bootstrap triggered its own bind, and whether its
   connection carries the agent is the hello's business, `agent.md` §4.1)
   (`handshake.CheckPublicKey`). Then it sends proto `Resume` and waits up
@@ -359,7 +363,9 @@ since it holds the keys.
   [choice: a resume takes milliseconds; more are closed at once]; resumes
   reach proto one at a time, in order.
 - **Teardown** (§2.4) removes the socket and its directory first, so a
-  resume never reaches a session that is ending.
+  resume never reaches a session that is ending. A spawner that hands its
+  session over (§2.8) closes its copy of the listener without removing
+  anything: the socket is the newer spawner's from then on.
 
 ### 2.7 The agent socket (D25)
 
@@ -377,7 +383,116 @@ socket. `agent.md` §4 is its full rule; in short:
   own copy;
 - removed at teardown (§2.4), before anything else, and just before
   `attach.sock`, so that closing the attach socket can then remove the
-  session directory, which must be empty by then.
+  session directory, which must be empty by then. Like the attach socket
+  it passes to the newer spawner in a live upgrade (§2.8), so the
+  shell's `SSH_AUTH_SOCK` stays good for the shell's life.
+
+### 2.8 The attach protocol and live upgrade (D8 V1, V2)
+
+D8 V1: client and server of different mosey versions is normal; V2: a
+newer `mosey --serve` that resumes a session run by an older binary takes
+it over, so a security fix reaches a running shell. Both rest on one
+promise: **what crosses the attach socket is stable.** The launcher or
+lister that connects and the spawner that answers may be any two releases
+from the stable-protocol slice on.
+
+**The stability promise.** The attach protocol is the greeting
+(`bootstrap.md` §9.2.1) and the messages that follow it on an attach
+socket: `ClientLine` (0x40), `Ready` (0x41), `Failed` (0x42), `Hangup`
+(0x43) and the hand-off, 0x44 to 0x48 (§3.3), with §3.1's framing (one
+seqpacket message each, type byte first, `SCM_RIGHTS` for fds). This is
+**attach protocol v1**; the greeting's `arange` says which versions a
+session speaks (`1-1` now), and both sides use the highest version in
+both ranges, as the handshake does (`transport.md` §3.6). A later release
+may add types or fields only under a version of its own, keeps speaking
+v1 for as long as its range includes it, and never changes what a v1
+message means. Every other IPC type (§3.2) is private to one build: a
+spawner only ever exchanges them with its own proto and emu, and a
+launcher with the spawner it started from its own file.
+
+**Who asks for an upgrade.** The launcher, having taken a session
+(`bootstrap.md` §9.2), compares its own version with the session's
+(`bootstrap.CompareVersions`). Only if it is **newer** does it ask for a
+hand-off; equal, older or incomparable versions attach plainly (§2.6).
+The session checks the same rule from its side and refuses a hand-off to
+a binary that is not newer than its own, so a session is never
+downgraded, whichever side has a bug.
+
+**The steps**, and who holds what at each (layout C, D22):
+
+| step | who | does | holds afterwards |
+|---|---|---|---|
+| 0 | | a session of the older binary O runs | spawner-O: its pty master reference, the shell (its child), the attach and agent listeners. proto-O: keys, UDP socket, pty master. emu-O: its socket |
+| 1 | launcher-N (holding the lock, §9.2) | reads the greeting, takes the session, sees O is older, starts spawner-N (`--serve=spawner`, a session of its own, as for a new session) and sends it `Adopt` (0x49, B only) with the client's line rewritten to `resume:SID[:CREDID]` and the attach connection as its fd, then closes its own copy | launcher-N: nothing of the session |
+| 2 | spawner-N | checks the attach connection's peer uid (`SO_PEERCRED`: spawner-O, which made the listener) is its own, sends `HandoffRequest{1, its swver}` | the attach connection |
+| 3 | spawner-O | checks the peer's uid again (launcher-N, which connected), that the requester's version is newer than its own, that attach v1 is in its range, that no hand-off is under way and the shell runs; opens a pidfd for the shell (`pidfd_open`, Linux 5.3); sends proto-O `Freeze` | as step 0, plus the pidfd |
+| 4 | proto-O | stops reading and writing the pty: the reader parks once what it read has reached emu-O (a read deadline wakes it), the writer once its current write is done. Whatever the shell writes from then on stays in the pty's buffer for the next reader. It answers with `Snapshot`: emu-O's screen as a diff from 0×0 (`screen.md` §5), in fragments. It keeps its keys and its client, but touches the pty no more | unchanged; proto-O is frozen |
+| 5 | spawner-O | sends `HandoffState` with three fds (a reference to the pty master, the pidfd, the attach listener), `HandoffAgent` with the agent listener if there is one, then `HandoffScreen` fragments holding the snapshot | both spawners hold the master, the pidfd and the listeners; only spawner-O can wait for the shell |
+| 6 | spawner-N | validates all of it (below), binds a UDP socket of its own (§2.2), starts emu-N and proto-N exactly as for a new session (§2.3, the same sandboxes), and sends proto-N `Start` with the adopted flag, the session id, the resuming client's key, the size and the master, `EmuLink`, then `Seed` fragments holding the snapshot | spawner-N as step 5; proto-N: the new keys, the new UDP socket, the pty master |
+| 7 | proto-N | decodes the seed with the screen's validating decoder (the one the client uses, fuzzed), paints it into emu-N (escape sequences written by mosey's own renderer from the validated grid, so emu-N parses only what mosey wrote), and mints the credential for the client's key under the **same** session id | as step 6 |
+| 8 | spawner-N | checks the `Credential` as §3.4 does, and its session id; sends `HandoffTaken` | as step 6 |
+| 9 | spawner-O | on `HandoffTaken`: closes C, so proto-O exits and its keys go with it, waits for proto-O and emu-O (T7, T9, then SIGKILL), closes its copies of the master, the pidfd and the listeners **without** removing the sockets, closes the attach connection and exits. It never signals the shell. The kernel gives the shell, no longer anyone's child, to the nearest subreaper or init, which reaps it when it exits | spawner-O, proto-O, emu-O: gone |
+| 10 | spawner-N | sees the attach connection close (at most T2), takes over the listeners (accepting on them only now), watches the shell through the pidfd (`poll`: readable once it has exited) and signals it through it (`pidfd_send_signal`: a hangup, or the teardown's SIGKILL), holds the session for the new credential (§2.6) and sends `Ready` to launcher-N, which prints the credential line | spawner-N: the session, as spawner-O held it, with a pidfd for the shell in place of being its parent |
+
+The shell is the same process throughout, with the same pid, pty and
+environment; nothing it runs notices except a client that reattaches.
+Proto-O's client, if one was attached (a `-s NAME` takeover), is not
+sent REVOKED, since proto-O never learns who took over: it hears nothing
+more, and its reconnect (`bootstrap.md` §9.2.2) finds the session held
+by another credential and exits with `taken`, as D26 says. `SessionID`,
+the name, the start time and the state (`state`, `since`, `peer`) travel
+in `HandoffState`, so the greeting reads the same before and after.
+
+**What spawner-N checks** before it starts anything: the message layouts
+(§3.3, fuzzed); that the session id is the one its line names and the
+name an `sname`; the snapshot through `screen.Grid.Apply` from a 0×0 grid,
+at the size `HandoffState` gives; that fd 0 is a pty master (`TIOCGPTN`),
+fd 1 a pidfd for a live process whose pid is `HandoffState`'s (the
+`Pid:` line of `/proc/self/fdinfo`), and fd 2 a listening `SOCK_SEQPACKET`
+socket bound at this session's `attach.sock` path; and the agent listener,
+if sent, a listening socket at `agent.sock` beside it. Anything else is
+an abort.
+
+**Aborts.** Until `HandoffTaken` the old session is whole. If spawner-N
+finds anything wrong, or fails to start proto-N or emu-N, or proto-N
+mints nothing within T3, it closes the attach connection, kills what it
+started, closes its copies of the fds (never removing a socket) and tells
+launcher-N `Failed`. Spawner-O, seeing the connection close, or no
+`HandoffTaken` within T2 of its last fragment, sends proto-O `Thaw`,
+closes its pidfd and carries on as before. Launcher-N, told `Failed` by
+the spawner it adopted with, dials the session again and attaches it
+plainly (§2.6), so a failed upgrade costs the user nothing but the
+upgrade [D: V1's "never a lockout"]. A refusal by spawner-O (not newer,
+no pidfd, a hand-off under way, a frozen proto that does not answer
+within T3) is a `Failed` on the attach connection and ends the same way.
+One cost is accepted: if proto-N had read pty output before an abort,
+that output never reaches proto-O's screen [choice: an abort is a bug or
+a resource failure, and holding proto-N off the pty until `HandoffTaken`
+would let the shell block on a full pty for that long].
+
+**Bounds.** At most one hand-off per session at a time. The snapshot is
+at most `screen.MaxDiff` (48 MiB), in fragments of at most
+`ipc.MaxFragment`; every wait is bounded (T2 for the attach connection,
+T3 for proto's answers). A session whose proto-O cannot freeze (its
+writer stuck on a pty the program does not read) refuses within T3
+rather than hand off a screen it cannot vouch for.
+
+**What is not carried.** The snapshot is the visible screen, its modes,
+title and cursor (`screen.Grid`): scrollback, the main screen behind an
+alternate one, and emulator state the grid does not hold (scroll
+margins, tab stops, saved cursor, character sets, the kitty keyboard
+flags) start afresh in emu-N, as after an emulator rebuild (§5.2). A
+full-screen program redraws them the next time it repaints; the shell's
+exit status, which only the shell's parent can read, is reported to
+proto-N as 0 and logged as unknown.
+
+**Sandboxes.** proto and emu keep their policies unchanged (§6.3):
+`Freeze` and `Thaw` are a read deadline and a flag in proto, `Snapshot`
+and `Seed` ride C like `Update` rides E, and painting is ordinary
+`Output` to emu. The new system calls, `pidfd_open`, `pidfd_send_signal`
+and `poll` on a pidfd, are the spawner's, which is unsandboxed and
+already owned the shell. `threat-model.md` §4.5 says what the hand-off
+does and does not give a process of the user.
 
 ---
 
@@ -402,10 +517,12 @@ socket. `agent.md` §4 is its full rule; in short:
   [kernel ABI]; one that may get fds uses `recvmsg` and closes every fd
   of any message it refuses. A message that must carry fds and arrives
   with a different number is refused.
-- **Who reads with what.** spawner: `recvmsg` on B and C (closes any fds:
-  none are allowed in). proto: `recvmsg` on C (Start, EmuLink and
-  AgentConn carry fds),
-  `read` on E. emu: `read` on E. launcher: `read` on B.
+- **Who reads with what.** spawner: `recvmsg` on B (`Adopt` carries the
+  attach connection), C (closes any fds: none are allowed in) and the
+  attach socket. proto: `recvmsg` on C (Start, EmuLink and AgentConn
+  carry fds), `read` on E. emu: `read` on E. launcher, and a spawner
+  adopting a session, on the attach socket: `recvmsg` (`HandoffState`
+  and `HandoffAgent` carry fds); the launcher on B: `read`.
 - **Encoding.** Byte 0 is the type. Integers are unsigned big-endian
   unless marked `i32` (two's complement, big-endian). Each type has one
   fixed layout; a message is valid only if its length is exactly the
@@ -428,6 +545,9 @@ socket. `agent.md` §4 is its full rule; in short:
 | 0x04 | AgentConn | spawner → proto | 1 |
 | 0x05 | Resume | spawner → proto | 0 |
 | 0x06 | EmuPaused | spawner → proto | 0 |
+| 0x07 | Freeze | spawner → proto | 0 |
+| 0x08 | Thaw | spawner → proto | 0 |
+| 0x09 | Seed | spawner → proto | 0 |
 | 0x10 | Init | proto → emu | 0 |
 | 0x11 | Output | proto → emu | 0 |
 | 0x12 | Resize | proto → emu | 0 |
@@ -439,13 +559,24 @@ socket. `agent.md` §4 is its full rule; in short:
 | 0x32 | KillEmu | proto → spawner | 0 |
 | 0x33 | Attached | proto → spawner | 0 |
 | 0x34 | Detached | proto → spawner | 0 |
+| 0x35 | Snapshot | proto → spawner | 0 |
 | 0x40 | ClientLine | launcher → spawner | 0 |
 | 0x41 | Ready | spawner → launcher | 0 |
 | 0x42 | Failed | spawner → launcher | 0 |
 | 0x43 | Hangup | launcher (`--serve=kill`) → spawner | 0 |
+| 0x44 | HandoffRequest | attacher → session spawner | 0 |
+| 0x45 | HandoffState | session spawner → attacher | 3 |
+| 0x46 | HandoffAgent | session spawner → attacher | 1 |
+| 0x47 | HandoffScreen | session spawner → attacher | 0 |
+| 0x48 | HandoffTaken | attacher → session spawner | 0 |
+| 0x49 | Adopt | launcher → spawner (B only) | 1 |
 
 The high nibble names the direction, so a stray message is easy to spot
-in a trace. Unlisted types are refused.
+in a trace. Unlisted types are refused. **0x40 to 0x48 are the attach
+protocol** and are frozen as §2.8 says; on an attach socket the
+"launcher" end is whoever connected (a launcher, a lister, or a spawner
+adopting the session) and the "spawner" end the session. Everything else
+is private to one build.
 
 ### 3.3 Layouts
 
@@ -456,7 +587,7 @@ Offsets and lengths in bytes.
 | off | len | field | valid |
 |---|---|---|---|
 | 0 | 1 | type 0x01 | |
-| 1 | 1 | flags | 0 (reserved for D8: "attach to an existing pty") |
+| 1 | 1 | flags | bit 0: **adopted**, a live upgrade (§2.8): the pty already has a shell, the session id is given (the last row), and a `Seed` follows the first `EmuLink`. Other bits 0 |
 | 2 | 2 | cols | 1..`screen.MaxCols` |
 | 4 | 2 | rows | 1..`screen.MaxRows` |
 | 6 | 2 | port | 1..65535, the bound port |
@@ -464,8 +595,12 @@ Offsets and lengths in bytes.
 | 9 | 0, 4 or 16 | advertised address | §2.2; unmapped, not unspecified, no zone |
 | 9, 13 or 25 | 1216 | client public key | the X-Wing encapsulation key from the `ClientLine` [D20]; its length is `handshake`'s constant |
 | 1225, 1229 or 1241 | 1 + n | session name | its length n, 1..32, then the `sname` (`bootstrap.md` §6.2), which proto puts in every credential line it mints (§2.6 "The name") |
+| after the name | 0 or 16 | session id | only when adopted: the session's id, which proto mints under instead of drawing one; never all zero |
 
-Length 1227..1274. fds: exactly 2, `[0]` the UDP socket, `[1]`
+Length 1227..1290. An adopted proto counts the session as one a client
+has had: it never ends it for want of a client (§2.4, "no client ever
+confirms").
+ fds: exactly 2, `[0]` the UDP socket, `[1]`
 the pty master.
 
 **0x02 EmuLink** (spawner → proto). Once straight after `Start`, then
@@ -615,6 +750,63 @@ as `Credential`.
 only. Length 1. `mosey -kill` (`bootstrap.md` §9.5): the spawner hangs the
 shell up as for the idle timeout (§2.4) and closes the connection.
 
+**The live upgrade's messages** (§2.8). 0x44 to 0x48 are attach protocol
+v1 and frozen; the rest are private.
+
+**0x07 Freeze**, **0x08 Thaw** (spawner → proto): type only. Length 1.
+Freeze is answered by `Snapshot`; Thaw by nothing.
+
+**0x09 Seed** (spawner → proto) and **0x35 Snapshot** (proto → spawner):
+a screen diff from a 0×0 grid in fragments, laid out as `Update` (0x20):
+
+| off | len | field | valid |
+|---|---|---|---|
+| 1 | 1 | flags | bit 0 MORE; other bits 0 |
+| 2 | 1..`MaxFragment` − 1 | fragment | the next bytes of the diff |
+
+A diff ends at the first fragment without MORE, and is at most
+`screen.MaxDiff`; the receiver refuses one that runs over.
+
+**0x44 HandoffRequest** (attacher → session):
+
+| off | len | field | valid |
+|---|---|---|---|
+| 1 | 1 | version | the attach version the attacher chose, in both ranges; 1 |
+| 2 | 1 | n | 1..64 |
+| 3 | n | swver | the attacher's software version (`bootstrap.md` §6.1 grammar) |
+
+**0x45 HandoffState** (session → attacher), fds: `[0]` a pty master
+reference, `[1]` a pidfd for the shell, `[2]` the attach listener.
+
+| off | len | field | valid |
+|---|---|---|---|
+| 1 | 1 | version | as the request's |
+| 2 | 1 | flags | bit 0: a `HandoffAgent` follows; other bits 0 |
+| 3 | 16 | session id | not all zero |
+| 19 | 8 | started | unix seconds, below 10^12 |
+| 27 | 1 | state | 1 new, 2 attached, 3 detached (`bootstrap.md` §9.2.1) |
+| 28 | 8 | since | unix seconds, below 10^12 |
+| 36 | 2 | cols | 1..`screen.MaxCols` |
+| 38 | 2 | rows | 1..`screen.MaxRows` |
+| 40 | 4 | shell pid | 2..2^22 (`pid_max`'s ceiling) |
+| 44 | 4 | snapshot length | 1..`screen.MaxDiff`: the bytes the `HandoffScreen` fragments carry, in all |
+| 48 | 1 + 0, 4 or 16 (+ 2) | peer | family 0, 4 or 6, the address, and a port 1..65535 unless the family is 0 (as `Attached`) |
+| after | 1 + n | name | n 1..32, an `sname` |
+
+**0x46 HandoffAgent** (session → attacher): type only, with one fd, the
+agent listener.
+
+**0x47 HandoffScreen** (session → attacher): as `Seed`. The fragments
+carry exactly the length `HandoffState` gave; the last has MORE clear.
+
+**0x48 HandoffTaken** (attacher → session): type only. The session's
+answer is to go (§2.8 step 9) and close the connection.
+
+**0x49 Adopt** (launcher → spawner, on B, never on an attach socket),
+one fd, the attach connection to the session being upgraded: type, then
+the client's line rewritten as `resume:SID` or `resume:SID:CREDID`, as
+`ClientLine`.
+
 ### 3.4 What the spawner accepts from proto
 
 The spawner is unsandboxed, so its parser of proto's messages is the
@@ -631,6 +823,8 @@ one place a compromised proto could reach further. It accepts exactly:
 - `KillEmu`, any number, at most one per emu generation acted on.
 - `Attached` and `Detached`, any number (each is a fixed layout and
   changes only what the greeting says).
+- `Snapshot` fragments, only after it has sent `Freeze` and until the
+  last one, at most `screen.MaxDiff` in all (§2.8).
 
 Anything else (another type, a second `Credential`, a malformed
 message, any fd) is a violation: the spawner logs it, SIGKILLs proto,
@@ -1530,8 +1724,8 @@ it lands, with the duration and exec count in the commit message.
 - A resume through the socket, with stub proto: greeting, `ClientLine`,
   `Resume` forwarded, `Credential` checked (a different `sessionid`,
   `addr`, `port` or `swver` is a violation), `Ready` returned. A wrong
-  SID, another `swver`, `new` or a bad key is
-  `Failed`, and proto never hears of it.
+  SID, `new` or a bad key is `Failed`, and proto never hears of it; a
+  client of another `swver` is served (D8 V1).
 - A lister that closes after the greeting changes nothing.
 - The greeting follows `Attached` and `Detached`, says `attached` held by
   a resume's credential until its TTL (a reconnect's hold naming the
@@ -1544,6 +1738,33 @@ it lands, with the duration and exec count in the commit message.
   takes NAME whatever its state, else starts it; `new` always starts; R3's
   holder rule gives `session`, `taken` or the session; generated names
   never clash.
+- The launcher's version rule (§2.8): a newer launcher asks for a
+  hand-off, an equal, older or incomparable one attaches plainly; a
+  session of a build before the stable attach protocol is passed over.
+
+**live upgrade** (§2.8; `internal/server`, `internal/e2e`)
+- Through a real sshd, with two builds of `cmd/mosey` that differ only in
+  `-X main.version`: a session started by the older is resumed by the
+  newer. The shell is the same process (same pid) and a shell variable
+  set before is still set; the older spawner, proto and emu have exited
+  and the newer build's run the session; the client sees the whole
+  screen as it was. Then the older client resumes the upgraded session:
+  it attaches, and the session still runs the newer build (no
+  downgrade).
+- A session refuses a `HandoffRequest` from a peer of another uid (the
+  peer check is a function the test points at another uid), and from a
+  version that is not newer than its own; proto is never frozen, and no
+  fd leaves the spawner.
+- An abort before `HandoffTaken` (the adopting spawner closes the
+  connection) thaws proto-O, and the session goes on serving; the
+  launcher then attaches plainly.
+- `Session.Freeze` parks the pty reader and writer and returns the
+  screen; output written meanwhile is read after `Thaw`, none lost.
+- The paint: a grid painted into a fresh emulator reads back as the same
+  cells, cursor, title and modes.
+- `FuzzHandoff`: the attach protocol's messages from both ends, never a
+  panic, a round trip for whatever is accepted, every bound checked.
+
 - `Session`: a client silent for `SilentAfter` is reported `Detached`
   and, when heard again, `Attached`, without losing its connection.
 - `Session` (in process, netsim, synctest): a client vanishes without

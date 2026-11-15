@@ -161,7 +161,7 @@ offset  size   field
 
 | Field | Why it is like this |
 |---|---|
-| flags | One byte holds the three presence bits, so nothing needs a sentinel value [D]. Reserved bits must be zero: both ends always run the same build (D7), and a later change is negotiated in the handshake, so an unknown bit is a protocol error rather than something to skip [D]. |
+| flags | One byte holds the three presence bits, so nothing needs a sentinel value [D]. Reserved bits must be zero: the two ends may be different builds (D8 V1), but any change to this layout comes with a protocol version of its own, negotiated in the handshake (`transport.md` §2.3), so under v1 an unknown bit is a protocol error rather than something to skip [D]. |
 | ts | The paper puts a millisecond timestamp on every datagram [P §2.2]. Microseconds, because milliseconds would quantise a LAN round trip to 0 or 1 ms. 32 bits of microseconds wrap after 71 minutes, far beyond any round trip or hold time, and all arithmetic on them is mod 2^32 [D, S5 spec §2.4]. The clock is microseconds since the endpoint was made, read through `time` so `testing/synctest` drives it. |
 | echo | The paper's optional timestamp reply [P §2.2], absent when there is nothing to echo, which saves 4 bytes on most datagrams [D]. Its value is in §7.1. |
 | ack | In every datagram, not inside the instruction [D]. Acks then flow even in datagrams that carry only part of an instruction, and an instruction's bytes never depend on the ack, so a retransmission can repeat them exactly and the receiver can complete an instruction from fragments of two transmissions (§5). |
