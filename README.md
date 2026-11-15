@@ -18,8 +18,7 @@ every session has a name you can attach to with `-s`, and a client that
 loses its server for a while logs in again by itself to get its session
 back (see [Using it](#using-it)), and your ssh-agent comes along when your ssh config
 forwards it (see [Agent forwarding](#agent-forwarding)). Client and host
-need not run the same version, and a newer mosey takes a running session
-over in place, so upgrading never costs a session. While you type,
+need not run the same version, so upgrading never costs a session. While you type,
 both ends send cover traffic on a fixed tick, which hides the timing of
 keys within a run of typing (see [What it is](#what-it-is)). On a slow
 link your typing shows up at once, before the server echoes it (see
@@ -166,16 +165,9 @@ resume is a fresh SSH login and a fresh handshake
 
 **Upgrading mosey never costs you a session.** A client and a host of
 different mosey versions work together: they agree on a protocol version
-both speak, and nothing refuses another version. When a newer mosey
-resumes a session that an older one started, it takes the session over
-in place: the old server hands the newer one its terminal and screen and
-exits, and your shell keeps running, the same process with everything in
-it, now served by the new code, so a security fix reaches sessions that
-were already running. Upgrades only go forward: an older client attaches
-a newer session as it is. (Sessions started before this release can't
-be handed over; they stay resumable by their own version until their
-shell exits, and a plain `mosey HOST` that passes over one says so,
-naming the session and the version that can resume or end it.)
+both speak, and nothing refuses another version. A newer client resumes
+a session an older mosey started, and that session goes on running its
+own version; an upgrade takes effect in the sessions you start after it.
 
 ### Agent forwarding
 

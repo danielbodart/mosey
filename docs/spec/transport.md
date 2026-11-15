@@ -1228,12 +1228,7 @@ total   15 or 27 B (packet 45 or 57 B)
 ```
 
 The revoked client reports `transport.Revoked{By, At}`, says "session taken
-over from <addr> at <time>" and exits (D26). The address `0.0.0.0` with
-port 0 (`UnknownTaker`) says the server does not know who took over: a
-live upgrade revokes the old proto's client before the new client has
-connected (`server.md` §2.8 step 9), with `Listener.RevokeAll`, which
-sends all 4 copies at once, since that listener closes and keeps no
-tombstone. The client then names the session instead. Any other family value, or a
+over from <addr> at <time>" and exits (D26). Any other family value, or a
 wrong length, is ignored like any malformed body (§4.2).
 
 ### 8.4 Ending a session

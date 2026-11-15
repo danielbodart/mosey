@@ -6,8 +6,8 @@ lives in `internal/server` and is specified in `server.md`; this document
 says what the server must do *as seen from the SSH channel*.
 
 Decisions implemented here: D6 (start over SSH with the user's config), D7
-(one binary, auto-upload), D8 (resume; its stable protocol, V1, and live
-upgrade, V2, in §6 and §9.2), D20 (B3:
+(one binary, auto-upload), D8 (resume; its stable protocol, V1, in §6 and
+§9.2), D20 (B3:
 one-shot keys over stdin and stdout), D25 (agent bind capture, §8; the channel it feeds is `agent.md`), D26
 (exclusive attach). They are locked; where this text and PLAN.md disagree,
 PLAN.md wins and this file is the bug.
@@ -926,10 +926,6 @@ tested). Off: the bootstrap runs with `ForwardAgent=no`, the ClientLine says
   with an error that carries the number it saw (`*VersionError`, §10.1).
   The ErrorLine is the exception: its parser accepts any `proto`, since its
   whole grammar is frozen. A new field or a new value means a new version.
-  *One exception, recorded:* the sessions slice (D8 R1–R4) added `attach`
-  values and the CredentialLine's `name` under v1, because §6.4 then
-  still required the two ends to be one build, so no client and server of
-  the two grammars could meet.
 - **Stable from here on (D8 V1).** Since the stable-protocol slice the v1
   grammars of §6.2–§6.4 are frozen like the wire protocol: a client and a
   server of different releases meet as a matter of course (`-remote`, an
@@ -940,8 +936,8 @@ tested). Off: the bootstrap runs with `ForwardAgent=no`, the ClientLine says
   the newest line version it speaks; a server that cannot read it answers
   `MOSEY-ERROR P version` with P its own newest (§6.4), and a client that
   also speaks P sends its line again at P, in a new SSH login, once. Only
-  v1 exists, so today that retry has nothing to fall back to, and a
-  `version` refusal means a server older than this rule (§6.4). Fields marked
+  v1 exists, so today that retry has nothing to fall back to (§6.4).
+  Fields marked
   *reserved* below have a grammar now so a later slice can start accepting
   values without changing the grammar; a v1 server refuses them with
   `unsupported`.
@@ -1025,7 +1021,7 @@ public    = b64(1216)               ; 1622 characters
 
 | Field | Meaning |
 |---|---|
-| `swver` | the server's software version: the version of the proto that minted the credential, which after a live upgrade (§9.2 step 5) is the newer binary's. It may differ from the client's (D8 V1); it is for the log, and the spawner checks it is its own (§4.4 step 3) |
+| `swver` | the server's software version: the version of the proto that minted the credential, which for a resumed session is the binary that started it. It may differ from the client's (D8 V1); it is for the log, and the spawner checks it is its own (§4.4 step 3) |
 | `addr` | the server's address as SSH reached it: the third field of `SSH_CONNECTION`, parsed with `netip.ParseAddr`, unmapped (`Unmap`) and with any zone dropped. `-` if there is no `SSH_CONNECTION`, it does not parse as four fields, or the address is one the grammar forbids. Set by the spawner from its own environment; proto must copy it exactly (§4.4 step 3) |
 | `port` | the UDP port the spawner bound; likewise the spawner's, checked |
 | `credid` | `handshake.Credential.ID` [S1: 8 bytes, our choice] |
@@ -1091,11 +1087,10 @@ must agree on is negotiated, the bootstrap line's version here (§6.1) and
 the protocol version in the handshake (`transport.md` §2.3, §3.6). D7's
 probe still looks for the client's own version and copies it over if it
 is missing (§4.7): that is how a newer client brings its fixes to a host,
-not a condition for talking to it, and a session of an older binary is
-then upgraded in place when the newer client resumes it (§9.2 step 5).
-*Replaced:* until the stable-protocol slice the check was byte-for-byte
-equality, and a resume was checked against the session's version; both
-are gone, and with them "an upgrade ends resumability".
+not a condition for talking to it. The fixes take effect in the sessions
+started from then on; a session of an older binary goes on running that
+binary, and the newer client resumes it as it is (§9.2 step 5). There is
+no live upgrade (D8 V1, Dan, 2026-11-15).
 
 The ErrorLine carries the server's own `proto`, and the client prints both
 numbers when they differ.
@@ -1492,54 +1487,18 @@ The steps:
    launcher turns into `MOSEY-ERROR 1 internal -`.
 4. **Handshake and takeover** as §7 and §9.1: on confirmation every other
    transport of the session is revoked, and its client exits saying so.
-5. **Versions** (D8 V1, V2). Every session's greeting is in the stable
+5. **Versions** (D8 V1). Every session's greeting is in the stable
    form of §9.2.1, which any launcher of the stable-protocol slice or
    later reads in full, so a launcher chooses among the sessions of every
    version alike: an upgraded client's plain `mosey DEST` takes its
    detached session back, and `-s NAME` finds NAME, whichever binary runs
-   it. Having taken a session, the launcher compares versions
-   (`bootstrap.CompareVersions`: release and local versions, and
-   `flake.nix`'s build of a clean git checkout, are `MAJOR.COMMITS.PATCH`
-   and compare part by part as numbers; anything else, `dev` and the
-   flake's `MAJOR-unstable-DATE+REV` from a `github:` input or a dirty
-   tree above all, compares with nothing):
-   - **This launcher is newer** than the session: a **live upgrade**
-     (`server.md` §2.8). The launcher starts a spawner of its own binary
-     and hands it the attach connection; that spawner asks the session
-     for its state over the attach protocol (the pty master and the
-     shell, the window size, a screen snapshot, the session's name and
-     id), starts its own proto and emu from it, and mints the resuming
-     client's credential. The old spawner, proto and emu exit; the shell
-     runs on, served by the newer code, so a security fix reaches a
-     running session the next time anyone attaches to it. If the hand-off
-     fails before the old session lets go, the old session carries on as
-     it was and the launcher falls back to the plain attach below, so an
-     upgrade can never cost the user their session or lock them out.
-   - **Equal, older, or not comparable:** a plain attach, as steps 2–4
-     say, through the stable attach protocol. An older launcher never
-     downgrades a newer session: it does not ask for a hand-off, and a
-     session refuses to hand off to a binary that is not newer than its
-     own (`server.md` §2.8), so upgrades only go forward. The client and
-     the session's proto then negotiate their protocol version in the
-     handshake (`transport.md` §2.3).
-   A session of a build from before the stable-protocol slice (its
-   greeting has no attach range, §9.2.1) can be neither upgraded nor
-   attached across versions, since it still checks versions for
-   equality: it is listed with its version alone (§9.4) and passed over,
-   so a plain `mosey DEST` starts a new session beside it rather than
-   fail, and the old session is resumable by a client of its own version
-   until its shell exits. The launcher says so on stderr, once per such
-   session: `session NAME runs mosey V, which predates the stable
-   protocol and live upgrade: resume it with mosey V, or end it` (NAME
-   from the old greeting's fourth field when it is an `sname`). A
-   session whose attach range this build does not meet is passed over
-   the same way, with its range named. A passed-over session keeps its
-   name: a generated name avoids the names of every session that answered,
-   passed over or not, and `-s NAME` naming only a passed-over session is
-   refused with `internal` (§6.4) and, on stderr, `session NAME runs mosey
-   V, which this one cannot attach: resume it with mosey V, or end it,
-   before using its name`, rather than start a second session called NAME
-   beside it.
+   it. Nothing compares the two mosey versions: the launcher attaches the
+   session as steps 2–4 say, through the stable attach protocol
+   (`server.md` §2.8), and the session goes on running its own binary, so
+   an upgrade takes effect on new sessions. The client and the session's
+   proto then negotiate their protocol version in the handshake
+   (`transport.md` §2.3). A session whose greeting does not parse, or
+   whose attach range this build does not meet, is not chosen.
 6. **The size** in the ClientLine is not applied by the spawner (an
    unconfirmed attach must change nothing). The client sends its size as
    the first input event once connected (§6.2), which resizes the pty and
@@ -1584,21 +1543,15 @@ secret: it travels in the clear in msg1 (`transport.md` §3.4), and only
 the user's own processes can read a greeting. R3 uses it to tell "still
 held by me" from "held by someone else" (§9.2.2).
 
-**Frozen in full** (D8 V1). The first two fields (`MOSEY-SESSION` and
-`swver`) were always frozen, so a launcher of any version reads any
-session's version (`SessionLineVersion`, which accepts anything printable
-after the second space). Since the stable-protocol slice the whole line
-is: `arange` says which versions of the attach protocol (`server.md`
+**Frozen in full** (D8 V1). The whole line is stable across releases:
+`arange` says which versions of the attach protocol (`server.md`
 §2.8, the messages that follow the greeting) the session's spawner
 speaks, and the fields after it keep their v1 meaning in every later
 release. A later attach version adds what it needs in messages after the
 greeting, never in it, so `ParseSessionLine` reads the greeting of any
 session of any later version. A launcher attaches a session only if the
 two ranges meet, and uses the highest version in both (as
-`transport.md` §3.6 does). A greeting whose third field is not an
-`arange` (a 22-character session id) is from a build before this rule:
-`ParseSessionLine` refuses it and the launcher reads its version alone
-(§9.2 step 5). Both parsers are canonical and fuzzed. `MaxSessionLine` =
+`transport.md` §3.6 does). The parser is canonical and fuzzed. `MaxSessionLine` =
 256 bytes, also frozen, since every launcher reads the greeting into a
 buffer of that size [derived: the longest line is 13 + 64 + 7 + 22 + 32
 + 12 + 8 + 12 + 47 + 11, 9 spaces and LF = 238, with the 12-digit bound
@@ -1608,8 +1561,7 @@ on the times].
 
 While the client runs, a dead spot is ridden out by roaming (D21). Roaming
 cannot help when the server's half of the transport is gone or never
-hears the client again: proto replaced by a live upgrade (D8 V2), a NAT or
-firewall that drops the UDP flow for good while SSH still works, or a
+hears the client again: a NAT or firewall that drops the UDP flow for good while SSH still works, or a
 laptop asleep past the server's tombstone. So the client also resumes its
 own session, in the background, and never asks the user anything:
 
@@ -1668,13 +1620,10 @@ own session, in the background, and never asks the user anything:
 - **The swap.** Before it dials, the try checks the old transport is still
   silent: if anything authentic has arrived since the try began, roaming
   has won, the try is dropped and its credential expires unused (30 s,
-  §4.5), unless the old transport was revoked meanwhile. Otherwise it
-  dials. The confirmation revokes the old transport (D26), and so,
-  earlier, does a live upgrade the try's own login brings about
-  (`server.md` §2.8 step 9); a REVOKED (or a failure of the old
-  transport) arriving while this client's try is in flight, from its ssh
-  login to its handshake, is not a takeover: the client waits for the
-  try, and only if that fails exits as §9.1 says. On success the terminal stays raw and the
+  §4.5). Otherwise it dials. The confirmation revokes the old transport
+  (D26), and a REVOKED arriving on it while this client's own dial is in
+  flight is not a takeover: the client waits for its dial, and only if
+  that fails exits as §9.1 says. On success the terminal stays raw and the
   screen stays up; the new transport's SSP starts from scratch, so its
   first frame is the whole screen; prediction starts afresh; the size goes
   as the first input event again. Keystrokes typed during the silence that
@@ -1753,10 +1702,9 @@ oldest first, and exits 0:
 
 ```
 list-line = "MOSEY-LIST" SP "1" SP lname SP lstate SP lsince SP swver LF
-lname     = sname / "-"         ; "-": a session of a build before the stable
-                                ; attach protocol, whose name only it reads (§9.2 step 5)
-lstate    = "new" / "attached" / "detached" / "-"
-lsince    = dec / "-"           ; unix seconds of the last change of state
+lname     = sname
+lstate    = "new" / "attached" / "detached"
+lsince    = dec                 ; unix seconds of the last change of state
 ```
 
 The client reads ssh's stdout (at most 256 KiB), skips anything that is
@@ -1774,8 +1722,7 @@ NAME          STATE     SINCE                      VERSION
 quiet-heron   detached  2026-11-14T09:30:12+00:00  0.214.20261114
 ```
 
-`SINCE` is in the client's local zone, as §9.1's times are; `-` fields
-print as `?`. With no line it prints `no sessions on DEST`.
+`SINCE` is in the client's local zone, as §9.1's times are. With no line it prints `no sessions on DEST`.
 
 A lister sends no ClientLine; the spawner sees the connection close after
 its greeting and does nothing.
@@ -1918,14 +1865,10 @@ func ParseListLine([]byte) (ListLine, error)
 
 func MarshalSessionLine(SessionLine) []byte
 func ParseSessionLine([]byte) (SessionLine, error)
-// SessionLineVersion reads only the first two fields: the greeting of
-// any build, from before the stable attach protocol too.
-func SessionLineVersion([]byte) (string, error)
 
-// CompareVersions orders two software versions of the form
-// MAJOR.COMMITS.PATCH (§9.2 step 5): -1, 0 or 1, and ok false when
-// either is not of that form, such as "dev".
-func CompareVersions(a, b string) (cmp int, ok bool)
+// AttachVersion is the attach protocol version this build and a session
+// whose greeting is g use: the highest in both ranges, ok false if none.
+func AttachVersion(g SessionLine) (version int, ok bool)
 
 func MarshalClientLine(ClientLine) []byte
 func ParseClientLine([]byte) (ClientLine, error)
@@ -2182,8 +2125,7 @@ durations in the commit message; 10 s each in CI):
   input naming exactly that name; anything accepted has no line outside
   the grammar.
 - `FuzzParseSessionLine`: no panic; anything accepted re-marshals to the
-  identical bytes; `SessionLineVersion` agrees with it on every line it
-  accepts, and never panics on any input.
+  identical bytes.
 - `FuzzParseListLine`: no panic; anything accepted re-marshals to the
   identical bytes and every field it prints is printable ASCII with no
   space; `FuzzReadList` for the whole of `-list`'s output: at most
@@ -2268,8 +2210,7 @@ durations in the commit message; 10 s each in CI):
 | a hostile remote injects a session-bind after ssh's | §8's state machine: anything after ssh's own bind means no bind ([S3] E11) |
 | a live ControlMaster carries the bootstrap | always a fresh connection ([S3] E12, E12b) |
 | the user's config undoes a bootstrap option | ours come first; flags that beat `-o` are filtered (§2.1, §4.1) |
-| version skew between client and server | normal (D8 V1): the line's version is checked and the protocol version negotiated inside the authenticated handshake (`transport.md` §3.6), so no one on the path can push a pair down to an older version; an upgrade only goes forward (§9.2 step 5, `server.md` §2.8) |
-| an attacker plays the newer binary to take a session's pty master in a hand-off | the hand-off runs only on the attach socket, in the user's 0700 directory, with the peer's uid checked by `SO_PEERCRED` at both ends (`server.md` §2.8): only the user's own processes can ask, and they can already run anything as the user |
+| version skew between client and server | normal (D8 V1): the line's version is checked and the protocol version negotiated inside the authenticated handshake (`transport.md` §3.6), so no one on the path can push a pair down to an older version; a session runs the binary that started it until it ends (§9.2 step 5, `server.md` §2.8) |
 | a stolen client keeps the session | exclusive attach on any new confirmed login (§9.1, D26); its background reconnect never takes back a session another credential holds (§9.2.2) |
 | a hostile server prints escape sequences in `-list`'s names | the client parses each list line against a grammar of printable ASCII and lays out the table itself (§9.4, fuzzed) |
 | a hostile server sends a name that is not an `sname` | the CredentialLine refuses it (§6.3), so the client never prints one |
@@ -2286,11 +2227,10 @@ durations in the commit message; 10 s each in CI):
 
 ## 14. Open in this document
 
-A. **An upgraded client and an old session.** *Closed by D8 V1 and V2*
-   (§9.2 step 5): a newer launcher takes an older session over with a
-   live upgrade, and an older one attaches a newer session without
-   downgrading it. Sessions from before the stable-protocol slice are
-   passed over, as the interim rule did for every other version.
+A. **An upgraded client and an old session.** *Closed by D8 V1* (§9.2
+   step 5): a launcher of any version attaches a session of any version,
+   which goes on running its own binary; an upgrade takes effect on new
+   sessions.
 
 B. **The spawner's confirmation backstop** (§4.5): the `Attached`
    message and the CredentialTTL + 10 s rule are a requirement this
@@ -2367,9 +2307,9 @@ this file.
    session's version, which the spawner reports first on `attach.sock`,
    whose first message is frozen across versions; a `version` refusal on
    a resume does not trigger an upload. What an upgraded client does is
-   §14 question A, for the resume slice. *Superseded by D8 V1 and V2:*
-   nothing compares software versions any more, and a newer launcher
-   upgrades an older session in place (§6.4, §9.2 step 5).
+   §14 question A, for the resume slice. *Superseded by D8 V1:* nothing
+   compares software versions any more, and a launcher attaches a session
+   of any version as it is (§6.4, §9.2 step 5).
 5. **Loopback `addr` and the threat-model requirement (major). Fixed.**
    §7.2: a loopback `addr` is skipped unless the destination itself
    resolves only to loopback, and the client falls back to `hostname`.

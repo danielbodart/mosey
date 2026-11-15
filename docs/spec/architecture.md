@@ -7,9 +7,9 @@ shell end to end); resume and exclusive attach (D8, D26), agent
 forwarding (D15, D25), predictive echo (D12), chaff (D11) and auto-upload
 (D7) have landed on it since, each through hooks slice 1 reserved, so
 none changed a wire format or an interface below it (§7). The versioning
-slice (D8 V1, V2) then made the wire and the attach socket stable across
-releases: the hello carries a version range, and a newer server takes an
-older session over in place.
+slice (D8 V1) then made the wire and the attach socket stable across
+releases: the hello carries a version range, and a newer client attaches
+a session an older server runs.
 
 The interfaces themselves are Go, with doc comments, under `internal/`.
 Changing an exported signature another owner calls means agreeing it with
@@ -79,8 +79,7 @@ bootstrap                       ()              -- raw bytes; never handshake
 pty, sandbox, ipc, nocore       ()
 install                         (bootstrap)     -- the version and path rules only
 terminal                        ()
-server                          (all of the above but client, terminal) -- render only to paint
-                                                a live upgrade's validated snapshot into the new emu
+server                          (all of the above but client, terminal, render)
 client                          (all of the above but server, pty, sandbox, ipc, emu)
 cmd/mosey                       (client, server, install, bootstrap, terminal, nocore, predict)
 e2e                             (everything; tests only)
@@ -229,20 +228,9 @@ on every connection (`ssp.md` §1.3), so the first diff is the whole screen,
 and every per-connection count (`InputConsumed`, the echo ack and applied
 count, §3.8) starts at 0. A client that leaves sends `End(EndDetached)`;
 proto also reports a client silent for 15 s as detached (`SilentAfter`).
-A session may be of any version (D8 V1): if the launcher is newer than
-the session it took, it upgrades it in place (D8 V2, `server.md` §2.8):
-it starts a spawner of its own binary and hands it the attach connection
-(`ipc.Adopt`); that spawner asks the old one for the session
-(`HandoffRequest`), gets the pty master, a pidfd for the shell, the
-listeners and a screen snapshot (`HandoffState`, `HandoffAgent`,
-`HandoffScreen`; the old proto is `Freeze`d for it and answers with a
-`Snapshot`), starts its own proto (`Start` adopted, then `Seed`) and emu,
-and says `HandoffTaken` once its proto has minted; the old spawner stops
-accepting, has its proto revoke its client (`Revoke`), answers
-`HandoffReleased` (the commit is two-phase), and it, its proto and its
-emu exit while the shell runs on. An equal, older or
-incomparable launcher attaches plainly, so a session is never
-downgraded. The client and the session's proto negotiate the protocol
+A session may be of any version (D8 V1): the launcher attaches it
+through the stable attach protocol, and it goes on running its own
+binary. The client and the session's proto negotiate the protocol
 version in the handshake (each hello carries a range; `Conn.Protocol`).
 The session runs on until its shell exits, `mosey -kill` (`ipc.Hangup`)
 or 7 days detached (`IdleTimeout`), the last two a SIGHUP from the
@@ -406,14 +394,11 @@ which keeps a never-attached session waiting.
 **ipc.** `Pair()`, `Conn.Send(Message)`, `Conn.Recv()`; messages, with
 fixed layouts and a fuzzed `Parse` (`server.md` §3): launcher↔spawner
 `ClientLine`, `Ready`, `Failed`; spawner→proto `Start`, `EmuLink`,
-`ShellExit`, `EmuPaused`, `Resume`, `Freeze`, `Thaw`, `Seed`, `Revoke`;
-proto→spawner `Credential`, `Attached{Peer}`, `Detached`, `KillEmu`,
-`Exit`, `Snapshot`; proto→emu `Init`, `Output`, `Resize`, `Flush`;
-emu→proto `Update`, `Replies`; launcher→spawner `Adopt`; and the stable
-attach protocol (`server.md` §2.8) `ClientLine`, `Ready`, `Failed`,
-`Hangup`, `HandoffRequest`, `HandoffState`, `HandoffAgent`,
-`HandoffScreen`, `HandoffTaken`, `HandoffReleased`. `Start` gains `Adopted` and
-`SessionID`.
+`ShellExit`, `EmuPaused`, `Resume`; proto→spawner `Credential`,
+`Attached{Peer}`, `Detached`, `KillEmu`, `Exit`; proto→emu `Init`,
+`Output`, `Resize`, `Flush`; emu→proto `Update`, `Replies`; and the
+stable attach protocol (`server.md` §2.8) `ClientLine`, `Ready`,
+`Failed`, `Hangup`.
 
 **bootstrap.** As `bootstrap.md` §10.1: `ClientLine`, `CredentialLine`,
 `ErrorLine`, their `Marshal`/`Parse`, `ReadCredential(r)`, `Sanitize`,
@@ -423,12 +408,12 @@ attach protocol (`server.md` §2.8) `ClientLine`, `Ready`, `Failed`,
 `IsRelease`, `AssetName`, `ParseSums` and `CachePath`. The spawner
 uses `ParseClientLine`, `MarshalCredentialLine` and `MarshalErrorLine`.
 The resume slice adds `SessionLine` (the attach socket's greeting) with
-`MarshalSessionLine`, `ParseSessionLine` and `SessionLineVersion`, and
+`MarshalSessionLine` and `ParseSessionLine`, and
 `SSH.Role` for `--serve=list`; the sessions slice adds `Attach`,
 `ValidSessionName`, `ListLine` with `MarshalListLine`/`ParseListLine`,
 `CodeTaken`, `SSH.RoleArg` for `--serve=kill NAME` and `SSH.Batch`, and
 drops `AnySession` and `CodeAmbiguous`; the stable-protocol slice adds
-`SessionLine.AttachMin`/`AttachMax` and `CompareVersions`, and
+`SessionLine.AttachMin`/`AttachMax` and `AttachVersion`, and
 `CodeVersion` now means only a line version the server cannot read.
 
 **terminal.** `Terminal` (`Read`, `Write`, `Size`, `Resized`, `Raw`,
@@ -476,7 +461,7 @@ when the server ends the session, and otherwise tells the server with
 
 | Later | Reserved now |
 |---|---|
-| Resume (D8) | **built** (resume slice; automatic and named resume, R3's reconnect, `-list`, `-kill` and the idle timeout in the sessions slice; the stable protocol and live upgrade, V1 and V2, in the versioning slice): the attach socket (`server.md` §2.6, §2.8), `ipc.Resume`, the hand-off messages, `bootstrap.Attach`, `client.Session.Reconnect`, `Hello`'s version range, `bootstrap.md` §9.2–§9.5 |
+| Resume (D8) | **built** (resume slice; automatic and named resume, R3's reconnect, `-list`, `-kill` and the idle timeout in the sessions slice; the stable protocol, V1, in the versioning slice): the attach socket (`server.md` §2.6, §2.8), `ipc.Resume`, `bootstrap.Attach`, `client.Session.Reconnect`, `Hello`'s version range, `bootstrap.md` §9.2–§9.5 |
 | Exclusive attach (D26) | **built** (resume slice) on `Hello.Attach`, `transport.KindRevoked`, the `Revoked` event |
 | Agent channel (D15, D25) | **built** (agent slice): `agent.md`, `internal/channel`, `internal/agent`, `Conn.SendChannel`/`RecvChannel`, `ipc.AgentConn`, `server.md` §2.7 |
 | Prediction (D12) | **built** (prediction slice): `prediction.md`, `internal/predict`, `Grid.EchoApplied`, the server's echo ack (`prediction.md` §3.1), `mosey -predict` |

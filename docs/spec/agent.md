@@ -250,10 +250,8 @@ fixed when it started [derived].
 
 ### 4.2 proto
 
-Until the first client attaches to this proto (after a live upgrade,
-`server.md` §2.8, the first to attach to the newer proto: the session
-has had clients, but this proto has none yet), or for at most
-`AgentStartupHold` = 10 s [choice] from proto's start, proto holds each `AgentConn` (at most
+Until the first client attaches, or for at most `AgentStartupHold` = 10 s
+[choice] from proto's start, proto holds each `AgentConn` (at most
 `MaxAgentStreams` of them; any more are refused) and serves the held ones,
 as below, once that client is attached; those still held when the time is
 up are closed. The shell starts before the client has finished its
