@@ -790,14 +790,17 @@ func describe(st *os.ProcessState) string {
 // an ssh logout), then emu.
 func (s *spawner) teardown(why string) {
 	start := time.Now()
-	// First, so no resume reaches a session that is ending (server.md
-	// §2.6).
-	if s.attach != nil {
-		s.attach.Close()
-	}
+	// The sockets first, so no resume reaches a session that is ending
+	// (server.md §2.6). The agent socket goes before the attach socket
+	// because closing the attach listener removes the session's
+	// directory, which it can only do once agent.sock has left it
+	// (server.md §2.7).
 	if s.agent != nil {
 		s.agent.Close()
 		close(s.agentDone)
+	}
+	if s.attach != nil {
+		s.attach.Close()
 	}
 	if s.proto != nil {
 		if s.ctl != nil {

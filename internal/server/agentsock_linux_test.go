@@ -76,3 +76,23 @@ func TestAnythingAtTheAttesterPathCountsAsAnAttester(t *testing.T) {
 		t.Error("the unimplemented hand-off succeeded")
 	}
 }
+
+// Teardown leaves nothing of an agent session behind: the session's
+// directory goes with both its sockets (server.md §2.7, agent.md §4.1), so
+// empty directories do not pile up under the sessions directory.
+func TestTeardownRemovesTheDirectoryOfASessionWithTheAgent(t *testing.T) {
+	base := filepath.Join(runtimeDir(t), "mosey")
+	s := &spawner{log: discardLog()}
+	var err error
+	if s.attach, err = listenAttach(base, [16]byte{1}); err != nil {
+		t.Fatal(err)
+	}
+	if s.agent, err = listenAgent(s.attach.dir); err != nil {
+		t.Fatal(err)
+	}
+	s.agentDone = make(chan struct{})
+	s.teardown("test")
+	if _, err := os.Stat(s.attach.dir); !os.IsNotExist(err) {
+		t.Errorf("the session's directory outlived teardown: %v", err)
+	}
+}

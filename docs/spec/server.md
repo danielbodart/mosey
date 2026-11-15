@@ -360,8 +360,9 @@ socket. `agent.md` §4 is its full rule; in short:
   then, unless the host has an attester (`agent.md` §4.3, which refuses
   the connection until the hand-off exists), the spawner sends it to
   proto as `AgentConn` (§3.3) and closes its own copy;
-- removed with the session directory at teardown (§2.4), before anything
-  else, as `attach.sock` is.
+- removed at teardown (§2.4), before anything else, and just before
+  `attach.sock`, so that closing the attach socket can then remove the
+  session directory, which must be empty by then.
 
 ---
 
