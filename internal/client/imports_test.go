@@ -1,6 +1,8 @@
 package client_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,7 +19,8 @@ var clientPath = []string{
 }
 
 // provenanceModules are sigstore-go and the modules it brings, which the
-// client reaches only through internal/provenance, to verify a downloaded
+// client may reach only through internal/provenance (the test checks
+// that no other client package imports them, directly or not), to verify a downloaded
 // release's Sigstore bundle (D7, DEPENDENCIES.md). None of them parses an
 // escape sequence. They are named one by one, as modules, so that a
 // module sigstore-go starts to depend on in some later version fails
@@ -121,34 +124,106 @@ func TestTheClientPathImportsNoEscapeParser(t *testing.T) {
 		"vendor/golang.org/x/",
 	}, pkgs...)
 	for _, goos := range []string{"linux", "darwin"} {
-		cmd := exec.Command(gobin, append([]string{"list", "-deps"}, pkgs...)...)
-		cmd.Env = append(os.Environ(), "GOOS="+goos)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("go list for %s: %v\n%s", goos, err, out)
+		graph := importGraph(t, gobin, goos, pkgs)
+		// What the client path reaches without going through
+		// internal/provenance, and what it reaches through it: only the
+		// second may use provenanceModules, so that no other client
+		// package can start importing grpc or go-openapi unnoticed.
+		var direct []string
+		for _, p := range pkgs {
+			if p != mosey+"provenance" {
+				direct = append(direct, p)
+			}
 		}
-	deps:
-		for _, dep := range strings.Fields(string(out)) {
-			for _, f := range forbidden {
-				if strings.HasPrefix(dep, f) {
-					t.Errorf("%s: the client path depends on %s", goos, dep)
-					continue deps
+		for _, c := range []struct {
+			from    []string
+			through bool
+		}{{direct, false}, {[]string{mosey + "provenance"}, true}} {
+			stop := ""
+			if !c.through {
+				stop = mosey + "provenance"
+			}
+		deps:
+			for _, dep := range graph.reach(c.from, stop) {
+				for _, f := range forbidden {
+					if strings.HasPrefix(dep, f) {
+						t.Errorf("%s: the client path depends on %s", goos, dep)
+						continue deps
+					}
 				}
-			}
-			if first, _, _ := strings.Cut(dep, "/"); !strings.Contains(first, ".") && first != "vendor" {
-				continue // the standard library
-			}
-			for _, a := range allowed {
-				if dep == a || strings.HasPrefix(dep, a) && strings.HasSuffix(a, "/") {
-					continue deps
+				if first, _, _ := strings.Cut(dep, "/"); !strings.Contains(first, ".") && first != "vendor" {
+					continue // the standard library
 				}
-			}
-			for _, m := range provenanceModules {
-				if dep == m || strings.HasPrefix(dep, m+"/") {
-					continue deps
+				for _, a := range allowed {
+					if dep == a || strings.HasPrefix(dep, a) && strings.HasSuffix(a, "/") {
+						continue deps
+					}
 				}
+				if c.through {
+					for _, m := range provenanceModules {
+						if dep == m || strings.HasPrefix(dep, m+"/") {
+							continue deps
+						}
+					}
+					t.Errorf("%s: internal/provenance depends on %s, which is not on the allowed list", goos, dep)
+					continue
+				}
+				t.Errorf("%s: the client path depends on %s other than through internal/provenance, and it is not on the allowed list", goos, dep)
 			}
-			t.Errorf("%s: the client path depends on %s, which is not on the allowed list", goos, dep)
 		}
 	}
+}
+
+// imports is a package graph: each package's direct imports.
+type imports map[string][]string
+
+// importGraph is what go list says pkgs and everything they depend on
+// import, for goos.
+func importGraph(t *testing.T, gobin, goos string, pkgs []string) imports {
+	t.Helper()
+	cmd := exec.Command(gobin, append([]string{"list", "-deps", "-json=ImportPath,Imports"}, pkgs...)...)
+	cmd.Env = append(os.Environ(), "GOOS="+goos)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list for %s: %v\n%s", goos, err, stderr.Bytes())
+	}
+	g := imports{}
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for dec.More() {
+		var p struct {
+			ImportPath string
+			Imports    []string
+		}
+		if err := dec.Decode(&p); err != nil {
+			t.Fatalf("reading go list's output for %s: %v", goos, err)
+		}
+		g[p.ImportPath] = p.Imports
+	}
+	return g
+}
+
+// reach is every package reachable from roots, roots included, without
+// going into stop (which is left out too, unless it is a root).
+func (g imports) reach(roots []string, stop string) []string {
+	seen := map[string]bool{}
+	var out []string
+	var walk func(string)
+	walk = func(p string) {
+		if seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+		for _, q := range g[p] {
+			if q != stop {
+				walk(q)
+			}
+		}
+	}
+	for _, r := range roots {
+		walk(r)
+	}
+	return out
 }
