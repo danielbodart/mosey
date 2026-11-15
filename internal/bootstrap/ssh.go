@@ -222,9 +222,13 @@ func wrap(script string) string {
 // its version (Dan, 2026-11-15: whatever mosey the host has): if it
 // speaks another protocol, the bootstrap line or the handshake says so.
 // Otherwise the cached copy, ~/.cache/mosey/mosey, is a candidate only if
-// neither ~/.cache/mosey nor the file is a symlink and both, and
-// ~/.cache, are the user's: the installer's own rules (§4.7.7), so the
-// probe never runs a file from a place it would refuse to write. It is
+// neither ~/.cache/mosey nor the file is a symlink, both and ~/.cache are
+// the user's, and neither they nor the home may be written by its group
+// or others (ls -ld's mode string, the one portable way /bin/sh has to
+// read a mode; one ls cannot read counts as writable): the installer's
+// own rules (§4.7.7), so the probe never
+// runs a file from a place it would refuse to write, and nobody else can
+// swap the file between the checks and the exec. It is
 // asked --serve=protocol with stdin on /dev/null (the ClientLine waiting
 // there is the launcher's) and stderr dropped, and exec'd as flag (the
 // launcher's --serve, or a role's) only if it says exactly protocol.
@@ -236,8 +240,9 @@ func probeCommand(protocol, flag string) string {
 		protocol = "-"
 	}
 	return wrap(`if command -v mosey >/dev/null 2>&1; then exec mosey ` + flag + `; fi; ` +
-		`c="$HOME/.cache/mosey"; f="$c/mosey"; ` +
-		`if test -h "$c" || test -h "$f"; then :; ` +
+		`c="$HOME/.cache/mosey"; f="$c/mosey"; w=; ` +
+		`for d in "$HOME/" "$HOME/.cache/" "$c/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; ` +
+		`if test -h "$c" || test -h "$f" || test -n "$w"; then :; ` +
 		`elif test -O "$HOME/.cache" && test -O "$c" && test -O "$f" && ` +
 		`[ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "` + protocol + `" ]; then exec "$f" ` + flag + `; fi; ` +
 		`s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); ` +

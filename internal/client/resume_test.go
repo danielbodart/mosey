@@ -137,11 +137,12 @@ func listHost(t *testing.T) (ssh, home, ran string) {
 	dir, home := t.TempDir(), t.TempDir()
 	ssh = filepath.Join(dir, "ssh")
 	ran = filepath.Join(dir, "ran")
+	// The probe reads the cache's modes with ls (§4.7.2).
 	script := `#!/bin/sh
 if [ "$1" = -G ]; then printf 'hostname far.example\nuser me\nport 22\n'; exit 0; fi
 echo ran >> '` + ran + `'
 for last in "$@"; do :; done
-HOME='` + home + `' PATH=/usr/bin:/bin exec /bin/sh -c "$last"
+HOME='` + home + `' PATH='` + toolsOnly(t, "uname", "ls") + `' exec /bin/sh -c "$last"
 `
 	if err := os.WriteFile(ssh, []byte(script), 0o755); err != nil {
 		t.Fatal(err)

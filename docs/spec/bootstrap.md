@@ -602,7 +602,7 @@ The remote command (one argument, as §4.1; `B H` is the client's
 now `1 1`):
 
 ```
-exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; c="$HOME/.cache/mosey"; f="$c/mosey"; if test -h "$c" || test -h "$f"; then :; elif test -O "$HOME/.cache" && test -O "$c" && test -O "$f" && [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
+exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; c="$HOME/.cache/mosey"; f="$c/mosey"; w=; for d in "$HOME/" "$HOME/.cache/" "$c/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; if test -h "$c" || test -h "$f" || test -n "$w"; then :; elif test -O "$HOME/.cache" && test -O "$c" && test -O "$f" && [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
 ```
 
 - **`PATH` first** (Dan, 2026-11-15). A `mosey` on the remote `PATH` is
@@ -615,9 +615,15 @@ exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; 
   never replaces a file it did not install.
 - **Otherwise the cached copy**, `~/.cache/mosey/mosey`, under the
   installer's rules (§4.7.7): neither `~/.cache/mosey` nor the file is a
-  symlink (`test -h`), and they and `~/.cache` (which may be one) are the
-  user's (`test -O`, which follows a link), so the probe never runs a file
-  from a place the installer would refuse to write. It is asked
+  symlink (`test -h`); they and `~/.cache` (which may be one) are the
+  user's (`test -O`, which follows a link); and neither the home,
+  `~/.cache` nor `~/.cache/mosey` may be written by its group or others
+  (the group and other `w` of `ls -ld`'s mode string, which POSIX fixes
+  and is the one portable way `/bin/sh` has to read a mode; a directory
+  `ls` cannot read counts as writable). So the probe never runs a file
+  from a place the installer would refuse to write, and nobody but the
+  user (or root) can swap the file between the checks and the exec. It
+  is asked
   `--serve=protocol` (server.md §1), with stdin on `/dev/null` (the
   ClientLine waiting on stdin is the launcher's) and stderr dropped, and
   exec'd only if it prints exactly the client's own answer. Its software
@@ -644,9 +650,9 @@ exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; 
   refuses a newline inside quotes), so every login shell of §4.1 passes it
   to `/bin/sh` unchanged [shells: run under each in §12's test].
 - **Cost.** In the everyday case one exec of `/bin/sh` on top of slice
-  1's command; with only the cached copy, one more of `mosey
-  --serve=protocol` (a Go binary's start, a few milliseconds). No extra
-  round trip.
+  1's command; without one on `PATH`, three of `ls` and, with a cached
+  copy, one of `mosey --serve=protocol` (a Go binary's start, a few
+  milliseconds). No extra round trip.
 
 **The probe line**, read by `ReadCredential` (§6.5) like the other lines of
 ours and fuzzed with them:

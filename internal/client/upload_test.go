@@ -424,7 +424,7 @@ func TestRunCopiesThenStartsOnceMore(t *testing.T) {
 if [ "$1" = -G ]; then printf 'hostname far.example\nuser me\nport 22\n'; exit 0; fi
 echo ran >> '` + h.dir + `/ran'
 for last in "$@"; do :; done
-HOME='` + h.home + `' PATH='` + toolsOnly(t, "uname", "mkdir", "mktemp", "cat", "chmod", "rm", "cp") + `' exec /bin/sh -c "$last"
+HOME='` + h.home + `' PATH='` + toolsOnly(t, "uname", "mkdir", "mktemp", "cat", "chmod", "rm", "cp", "ls") + `' exec /bin/sh -c "$last"
 `
 		os.WriteFile(h.ssh, []byte(script), 0o755)
 		self := `#!/bin/sh

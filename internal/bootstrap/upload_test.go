@@ -269,29 +269,40 @@ func writeMosey(t *testing.T, path, answer, name string) {
 // ProbeLine that parses, exit 0.
 func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 	const ours = "1 1"
-	needTools(t, remotePath(), "uname", "cat")
+	needTools(t, remotePath(), "uname", "cat", "ls")
 	for _, shell := range shells(t) {
 		for _, c := range []struct {
 			name   string
 			cache  string // the cached copy's answer; "-" for none
 			path   string // the PATH mosey's answer; "-" for none
 			served string // which ran, or "" for a probe line
-			link   string // "dir": ~/.cache/mosey is a symlink; "file": the file is
+			// link: "dir", ~/.cache/mosey is a symlink; "file", the file
+			// is; or a directory ("", ".cache", ".cache/mosey") and the
+			// mode it is given after the copy is written.
+			link string
+			mode os.FileMode
 		}{
-			{"PATH", "-", ours, "path", ""},
+			{"PATH", "-", ours, "path", "", 0},
 			// Dan, 2026-11-15: whatever mosey the host has. PATH's is not
 			// asked anything: a mismatch is the bootstrap's to report.
-			{"PATH of another protocol", "-", "2 2", "path", ""},
-			{"PATH first", ours, ours, "path", ""},
-			{"cache", ours, "-", "cache", ""},
-			{"cache of another protocol", "1 2", "-", "", ""},
-			{"cache that answers nothing", "", "-", "", ""},
+			{"PATH of another protocol", "-", "2 2", "path", "", 0},
+			{"PATH first", ours, ours, "path", "", 0},
+			{"cache", ours, "-", "cache", "", 0},
+			{"cache of another protocol", "1 2", "-", "", "", 0},
+			{"cache that answers nothing", "", "-", "", "", 0},
 			// The installer's rules hold for the probe too: a cache it
 			// would refuse to write is not run from.
-			{"symlinked cache directory", ours, "-", "", "dir"},
-			{"symlinked cache directory, PATH", ours, ours, "path", "dir"},
-			{"symlinked cached file", ours, "-", "", "file"},
-			{"nothing", "-", "-", "", ""},
+			{"symlinked cache directory", ours, "-", "", "dir", 0},
+			{"symlinked cache directory, PATH", ours, ours, "path", "dir", 0},
+			{"symlinked cached file", ours, "-", "", "file", 0},
+			// Nor is a directory on the way that others may write, which
+			// the installer refuses too (bootstrap.md §4.7.7).
+			{"cache directory others may write", ours, "-", "", ".cache/mosey", 0o707},
+			{"cache directory its group may write", ours, "-", "", ".cache/mosey", 0o770},
+			{"~/.cache its group may write", ours, "-", "", ".cache", 0o770},
+			{"home its group may write", ours, "-", "", "", 0o770},
+			{"cache directory others may read", ours, "-", "cache", ".cache/mosey", 0o755},
+			{"nothing", "-", "-", "", "", 0},
 		} {
 			home, bin := t.TempDir(), t.TempDir()
 			if c.cache != "-" {
@@ -314,6 +325,11 @@ func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 					}
 				default:
 					writeMosey(t, filepath.Join(home, ".cache", "mosey", "mosey"), c.cache, "cache")
+					if c.mode != 0 {
+						if err := os.Chmod(filepath.Join(home, c.link), c.mode); err != nil {
+							t.Fatal(err)
+						}
+					}
 				}
 			}
 			if c.path != "-" {

@@ -135,7 +135,7 @@ func sameFile(t *testing.T, a, b string) bool {
 func tools(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, tool := range []string{"uname", "mkdir", "mktemp", "cat", "chmod", "rm"} {
+	for _, tool := range []string{"uname", "mkdir", "mktemp", "cat", "chmod", "rm", "ls"} {
 		path, err := exec.LookPath(tool)
 		if err != nil {
 			t.Skipf("no %s", tool)
