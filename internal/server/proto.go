@@ -467,6 +467,9 @@ func (s *Session) Run(ctx context.Context) error {
 	noClient := time.NewTimer(handshake.CredentialTTL)
 	defer noClient.Stop()
 	attachedOnce := s.Adopted
+	// firstAttach is this proto's first client, adopted or not: agent
+	// connections the shell made meanwhile wait for it (serveAgents).
+	firstAttached := false
 	var cur *attachment
 	var gone <-chan error
 	// The attached client's silence (bootstrap.md §9.2): check fires when
@@ -525,8 +528,9 @@ func (s *Session) Run(ctx context.Context) error {
 			}
 			cur = s.attach(parent, c)
 			gone = cur.gone
-			if !attachedOnce {
+			if !firstAttached {
 				close(s.firstAttach)
+				firstAttached = true
 			}
 			attachedOnce = true
 			noClient.Stop()

@@ -146,3 +146,88 @@ func TestALiveUpgradeKeepsTheShellAndOnlyGoesForward(t *testing.T) {
 		return !running(pid) && len(roles(newer, "spawner")) == 0 && len(roles(older, "spawner")) == 0
 	})
 }
+
+// A chain of live upgrades, with an agent and a takeover (server.md
+// §2.8), through a real sshd and three builds:
+//   - the oldest build's session forwards the agent; the middle build
+//     takes it over with -s NAME while the first client is attached, so
+//     that client is told at once that the session was taken over
+//     (D26), and the agent socket the shell knows still reaches an agent;
+//   - the newest build then resumes it with a plain mosey, upgrading a
+//     session that was itself adopted: a second hand-off, from a spawner
+//     that is not the shell's parent and holds only a pidfd for it;
+//   - the shell is the same process throughout, and exit ends it all.
+func TestAChainOfUpgradesKeepsTheShellAndTheAgentAndTellsATakenOverClient(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	agentKeys := startAgent(t)
+	agentKeys.add(agentKeys.key)
+	s := startSSHDWith(t, sshdOptions{allowAgent: true, clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"})
+	a, b, c := buildMosey(t, "0.1.1"), buildMosey(t, "0.2.1"), buildMosey(t, "0.3.1")
+	defer func() {
+		if t.Failed() {
+			t.Logf("server logs:\n%s", sessionLogs(s))
+		}
+	}()
+
+	first := startAgentClient(t, "the oldest client", a, s, agentKeys)
+	first.shows("$")
+	first.typeLine("KEPT=chain; echo shell-pid-$$; ssh-add -l")
+	first.shows(agentKeyComment)
+	m := shellPid.FindStringSubmatch(screenOf([]byte(first.screen.String()), 100, 30))
+	if m == nil {
+		t.Fatal("no shell pid on the screen")
+	}
+	pid, _ := strconv.Atoi(m[1])
+	name := first.name()
+
+	// A takeover that is also an upgrade: the attached oldest client is
+	// told now, not after its silence timeout.
+	second := startAgentClient(t, "the middle client", b, s, agentKeys, "-s", name)
+	second.shows("shell-pid-" + m[1])
+	if status := first.exits(); status != 3 {
+		t.Errorf("the taken-over client exited %d, not 3; log:\n%s", status, first.log())
+	}
+	first.shows("session " + name + " taken over by another client")
+	second.typeLine("ssh-add -l; echo middle-$KEPT-$$")
+	second.shows("middle-chain-" + m[1])
+	if strings.Count(screenOf([]byte(second.screen.String()), 100, 30), agentKeyComment) < 2 {
+		t.Errorf("the agent socket did not survive the first upgrade:\n%s", screenOf([]byte(second.screen.String()), 100, 30))
+	}
+	waitFor(t, "the oldest build's roles to exit", func() bool {
+		return len(roles(a, "spawner"))+len(roles(a, "proto"))+len(roles(a, "emu")) == 0
+	})
+	second.cmd.Process.Signal(syscall.SIGHUP)
+	if status := second.exits(); status != 0 {
+		t.Fatalf("the middle client exited %d after SIGHUP", status)
+	}
+
+	// The second hand-off is from an adopted spawner.
+	middle := roles(b, "spawner")
+	if len(middle) != 1 {
+		t.Fatalf("the middle build runs spawners %v", middle)
+	}
+	third := startAgentClient(t, "the newest client", c, s, agentKeys)
+	third.shows("middle-chain-" + m[1])
+	third.typeLine("echo newest-$KEPT-$$; ssh-add -l")
+	third.shows("newest-chain-" + m[1])
+	waitFor(t, "the middle build's roles to exit", func() bool {
+		return len(roles(b, "spawner"))+len(roles(b, "proto"))+len(roles(b, "emu")) == 0
+	})
+	if !running(pid) {
+		t.Fatal("the shell did not survive the second upgrade")
+	}
+	if len(roles(c, "spawner")) != 1 || len(roles(c, "proto")) != 1 {
+		t.Error("the newest build does not serve the session")
+	}
+	if strings.Count(screenOf([]byte(third.screen.String()), 100, 30), agentKeyComment) < 3 {
+		t.Error("the agent socket did not survive the second upgrade")
+	}
+
+	third.typeLine("exit")
+	if status := third.exits(); status != 0 {
+		t.Errorf("the newest client exited %d after exit; log:\n%s", status, third.log())
+	}
+	waitFor(t, "every process of the session to end", func() bool {
+		return !running(pid) && len(roles(c, "spawner")) == 0
+	})
+}

@@ -1781,6 +1781,11 @@ it lands, with the duration and exec count in the commit message.
   screen as it was. Then the older client resumes the upgraded session:
   it attaches, and the session still runs the newer build (no
   downgrade).
+- A chain of upgrades end to end (three builds, an agent): the middle
+  build takes the oldest's session over with `-s NAME` while its client
+  is attached, which is told at once it was taken over; the newest then
+  upgrades the adopted session (a spawner holding only a pidfd for the
+  shell); the shell and its agent socket work throughout.
 - A session refuses a `HandoffRequest` from a peer of another uid (the
   peer check is a function the test points at another uid), and from a
   version that is not newer than its own; proto is never frozen, and no
