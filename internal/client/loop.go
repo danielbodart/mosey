@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/netip"
 	"sync/atomic"
 	"time"
 
@@ -100,9 +101,16 @@ type loop[L inputLog, R any] struct {
 	reconnect      func(ctx context.Context, holder [8]byte, dial func() bool) (link[L, R], error)
 	reconnectAfter time.Duration
 	backoff        func(n int) time.Duration
-	// dialing is set while a try's handshake is in flight: a REVOKED or a
-	// failure on the old link then is the try's own doing (§9.2.2).
-	dialing atomic.Bool
+	// dialing is set while a try is in flight, from its ssh login to its
+	// handshake: a REVOKED or a failure on the old link then is most
+	// likely the try's own doing (§9.2.2). The handshake's confirmation
+	// revokes the old link; so, earlier, does a live upgrade the try's
+	// login brings about, when the old binary hands the session over
+	// (server.md §2.8 step 9). revokedInTry says a REVOKED came during
+	// the try, which is then not dropped for the old link being heard:
+	// that link is gone.
+	dialing      atomic.Bool
+	revokedInTry atomic.Bool
 }
 
 // link is what loop runs over one transport, all of which a reconnect
@@ -284,15 +292,14 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 			trying = true
 			l.log.Info("no word from the server; reconnecting in the background", "silent", time.Since(heard).Round(time.Millisecond), "try", tries+1)
 			heardFn, holder := l.heard, l.holder
+			l.revokedInTry.Store(false)
+			l.dialing.Store(true)
 			go func() {
 				// dial is asked just before the handshake: a try whose old
-				// link has been heard since it began is dropped.
+				// link has been heard since it began is dropped, unless
+				// that link has been revoked meanwhile.
 				dial := func() bool {
-					if heardFn().After(heard) {
-						return false
-					}
-					l.dialing.Store(true)
-					return true
+					return !heardFn().After(heard) || l.revokedInTry.Load()
 				}
 				lk, err := l.reconnect(ctx, holder, dial)
 				results <- attempt[L, R]{lk, err}
@@ -417,14 +424,20 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 		case ev := <-l.events:
 			switch ev := ev.(type) {
 			case transport.Revoked:
+				by := ev.By
+				if by == transport.UnknownTaker {
+					// A live upgrade's: nobody to name (transport.md §8.3).
+					by = netip.AddrPort{}
+				}
 				if l.dialing.Load() {
-					// Very likely this client's own new transport (D26);
-					// a takeover only if that dial fails.
-					pending = &TakenOverError{By: ev.By, At: ev.At}
+					// Very likely this client's own try (D26); a takeover
+					// only if the try fails.
+					l.revokedInTry.Store(true)
+					pending = &TakenOverError{By: by, At: ev.At}
 					l.events = nil // the old link has nothing more to say
 					continue
 				}
-				return &TakenOverError{By: ev.By, At: ev.At}
+				return &TakenOverError{By: by, At: ev.At}
 			case transport.Ended:
 				l.log.Info("the server ended the session", "reason", ev.Reason)
 				return errSessionEnded

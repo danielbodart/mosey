@@ -262,6 +262,43 @@ func TestARevokedClientIsToldWhoTookOverAndWhen(t *testing.T) {
 	})
 }
 
+// A session handed to a newer binary (server.md §2.8) revokes its client
+// with nobody named, and sends every sealed copy at once, since the
+// listener closes with it and keeps no tombstone: the client still hears
+// when the first copies are lost.
+func TestRevokeAllTellsTheClientWithNobodyNamedAndEveryCopyAtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s := newSetup(t, 20*time.Millisecond)
+		first, firstServer, _ := s.connect(clientAddr.String())
+		const revokedSize = 30 + 15 // an IPv4 REVOKED frame
+		var copies int
+		s.net.setTap(func(p memPacket) []memPacket {
+			if p.to == clientAddr && len(p.data) == revokedSize {
+				copies++
+				if copies < 4 {
+					return nil // the first three are lost
+				}
+			}
+			return []memPacket{p}
+		})
+		s.l.RevokeAll()
+		s.l.Close()
+		time.Sleep(time.Second)
+		var revoked []Revoked
+		for _, ev := range events(first) {
+			if r, ok := ev.(Revoked); ok {
+				revoked = append(revoked, r)
+			}
+		}
+		if copies != 4 || len(revoked) != 1 || revoked[0].By != UnknownTaker {
+			t.Fatalf("%d copies sent, revocations %+v; want 4, and one by %v", copies, revoked, UnknownTaker)
+		}
+		if _, err := firstServer.Recv(context.Background()); !errors.Is(err, ErrRevoked) {
+			t.Errorf("the revoked connection's Recv on the server: %v", err)
+		}
+	})
+}
+
 // TestARevokedClientsLaterPacketsDrawAtMostThreeCopies: the first REVOKED
 // is lost, so the old client carries on sending; its packets reach the
 // tombstone, which answers with the three copies sealed before the keys

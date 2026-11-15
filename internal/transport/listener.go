@@ -354,7 +354,7 @@ func (l *Listener) confirm(pc *pending, pkt []byte, from netip.AddrPort) {
 	now := time.Now()
 	for other := range l.conns {
 		if other.sid == c.sid {
-			other.revoke(l, from, now)
+			other.revoke(l, from, now, false)
 		}
 	}
 	l.conns[c] = struct{}{}

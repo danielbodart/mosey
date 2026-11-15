@@ -1696,10 +1696,13 @@ own session, in the background, and never asks the user anything:
 - **The swap.** Before it dials, the try checks the old transport is still
   silent: if anything authentic has arrived since the try began, roaming
   has won, the try is dropped and its credential expires unused (30 s,
-  §4.5). Otherwise it dials. The confirmation revokes the old transport
-  (D26), and a REVOKED arriving on it while this client's own dial is in
-  flight is not a takeover: the client waits for its dial, and only if
-  that fails exits as §9.1 says. On success the terminal stays raw and the
+  §4.5), unless the old transport was revoked meanwhile. Otherwise it
+  dials. The confirmation revokes the old transport (D26), and so,
+  earlier, does a live upgrade the try's own login brings about
+  (`server.md` §2.8 step 9); a REVOKED (or a failure of the old
+  transport) arriving while this client's try is in flight, from its ssh
+  login to its handshake, is not a takeover: the client waits for the
+  try, and only if that fails exits as §9.1 says. On success the terminal stays raw and the
   screen stays up; the new transport's SSP starts from scratch, so its
   first frame is the whole screen; prediction starts afresh; the size goes
   as the first input event again. Keystrokes typed during the silence that
