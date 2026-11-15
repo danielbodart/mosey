@@ -131,9 +131,10 @@ line to ssh's stdout and exits, which lets ssh exit.
 
 Sandbox setup order in proto and emu (S4 §5.4): wrap the inherited fds,
 `PR_SET_DUMPABLE=0`, Landlock deny-all, seccomp with TSYNC, then read
-input. seccomp's action is KILL on amd64 and ERRNO on arm64 until an arm64
-soak under KILL passes (D22); the KILL soak is CI's `kill-soak` job
-(server.md §9), and the policies are tested by the BPF interpreter for
+input. seccomp's action is KILL on amd64 and on arm64 (D22; arm64 was
+ERRNO until its CI soak passed, run 43626969195). The KILL soak, CI's
+`kill-soak` job on both architectures (server.md §9), keeps it safe across
+Go upgrades and policy changes, and the policies are tested by the BPF interpreter for
 amd64 and arm64.
 
 The proto↔emu boundary carries screen diffs in the same format the client

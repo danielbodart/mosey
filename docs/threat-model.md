@@ -119,8 +119,11 @@ decapsulating what the other encapsulated to its one-shot key, so:
   authentication at key confirmation, server authentication and secrecy
   in both directions (including the server's 0.5-RTT data) all hold. Only
   msg1's authenticity fails, which is by design: msg1 is answered, never
-  trusted [S1 §3]. `TestB3LeakedStdoutCannotImpersonate` runs the attack
-  [S1 §TL;DR]. The sanity model `b3_noss2_sanity`, which drops msg2's KEM
+  trusted [S1 §3]. S1's `TestB3LeakedStdoutCannotImpersonate` ran the
+  attack [S1 §TL;DR]; in mosey `handshake`'s
+  `TestALeakedCredentialLineCannotImpersonateTheClient` and `transport`'s
+  `TestALeakedCredentialLineCannotConnectAndForgeriesOnlyDelayTheClient`
+  do. The sanity model `b3_noss2_sanity`, which drops msg2's KEM
   secret, finds the attack, so the model can see it [S1 §3].
 - **Forward secrecy and no long-term keys.** Both KEM keys are made for one
   handshake and erased after it (§4.10). Model `b3`: with the PSK leaked
@@ -187,13 +190,18 @@ data: type(1)=0x04 | receiver index(4) | counter(8) | AEAD_ChaCha20Poly1305(kind
   **only then** `Commit` the window, promote keys, update path state, and
   act on the frame. A packet that fails any step changes **no state at
   all**: not the window, not the peer address, not RTT, not timers.
-  Evidence: `TestForgedPacketDoesNotAdvanceWindow`, `TestBTamperEveryByte`,
-  `FuzzSessionOpen` (97.8M execs, 0 failures) [S1 §1.2, §7];
-  `ssp.TestAuthenticateFirst` flips every bit of a datagram and checks no
-  state moved [S5 §6].
+  Evidence in the spikes: S1's `TestForgedPacketDoesNotAdvanceWindow`,
+  `TestBTamperEveryByte` and `FuzzSessionOpen` (97.8M execs, 0 failures)
+  [S1 §1.2, §7], and S5's `TestAuthenticateFirst`, which flips every bit
+  of a datagram and checks no state moved [S5 §6]. In mosey: `transport`'s
+  `TestEveryTamperedByteOfADataPacketIsRefusedAndChangesNothing`,
+  `TestAPacketToAReservedIndexIsDroppedAndChangesNothing` and `FuzzReceive`
+  (a refused datagram changes neither the window, the keys, the epoch,
+  the peer, the amplification counters nor any rekey or path state).
 - **Replay** (T3). RFC 6479 ring-of-blocks window of 1984 counters
   [S1 §8; RFC 6479], checked against a map-based reference by
-  `FuzzReplayWindow` (66.1M execs) [S1 §7]. In netsim, replaying every
+  S1's `FuzzReplayWindow` (66.1M execs) [S1 §7], and in mosey by
+  `replay`'s `FuzzWindow` and `TestTheWindowAgreesWithTheReferenceOnRandomSchedules`. In netsim, replaying every
   datagram 300 ms later was rejected in full with no latency cost
   [M S5 §6]; a replayed genuine command ran exactly once [M S4 §3.7].
 - **Nonce uniqueness.** Each direction has its own key, the counter is the
@@ -660,10 +668,11 @@ execution (R4).
   `os.Executable` returned, so the roles are the same file the spawner
   is even if the path is replaced in between (D7's cache is user-writable;
   this only matters as hygiene, since a same-uid writer is T12).
-- **seccomp's action follows D22**: KILL on amd64, ERRNO on arm64 until
-  a CI arm64 soak passes (R13). amd64 runs KILL in every build since the
-  soak job (`server.md` §9) went into `ci.yml`; `TestReleaseAction`
-  keeps it so.
+- **seccomp's action follows D22**: KILL on amd64 and on arm64
+  (`sandbox/action.go`). arm64 ran ERRNO until CI's arm64 KILL soak
+  passed (run 43626969195; R13, now closed). The soak job (`server.md`
+  §9) runs on both architectures for every change that could break an
+  allow-list, and `TestReleaseAction` keeps the release action KILL.
 
 ### 4.12 Denial of service — T1, T3, T4
 
@@ -885,7 +894,7 @@ with Dan.
 
 | # | Risk | Who | Why it is accepted | Mitigation in place / planned |
 |---|---|---|---|---|
-| **R1** | **Compression length side channel** (CRIME/BREACH class). AEAD hides content, not length. Output the attacker influences (a log line, chat, a web page in a terminal browser) compressed in the same frame as a secret on screen lets an on-path observer test guesses by datagram size | T2 + T4 together | D24: compression is always on. Mosh 1.4.0 compresses every update with no padding [M S5 mosh-compression]. Flate cuts screen bytes to 0.35x [M S5 §8] | Per frame, never across frames. **The acknowledged screen is never a preset dictionary**: it puts the whole screen in the compressor's window, so the secret need not even be in the changed cells, and it is the leakiest variant [S5 §8]. Padding and dictionary (O12) are decided in `ssp.md` §9.2: no dictionary ever, and every SSP datagram padded on its whole sealed plaintext to at least 64 bytes from the server and 16 from the client, with Padmé (PURBs, PoPETs 2019) above and the D5 limit as a cap. That keeps 88% of flate's saving and makes every keystroke echo, ack and heartbeat from the server one size [M S5 padding.md]. Padding blunts the leak and does not close it: an attacker can still add filler to push a frame across a Padmé boundary and count samples, at most 8 bits per frame up to 64 KiB [M S5 padding.md]. That residual leak is accepted, owned by **ssp**; timing is chaff's (O10). A frame under 32 B never compressed smaller, so small frames go raw [M S5 §8] |
+| **R1** | **Compression length side channel** (CRIME/BREACH class). AEAD hides content, not length. Output the attacker influences (a log line, chat, a web page in a terminal browser) compressed in the same frame as a secret on screen lets an on-path observer test guesses by datagram size | T2 + T4 together | D24: compression is always on. Mosh 1.4.0 compresses every update with no padding [M S5 mosh-compression]. Flate cuts screen bytes to 0.35x [M S5 §8] | Per frame, never across frames. **The acknowledged screen is never a preset dictionary**: it puts the whole screen in the compressor's window, so the secret need not even be in the changed cells, and it is the leakiest variant [S5 §8]. Padding and dictionary (O12) are decided in `ssp.md` §9.2: no dictionary ever, and every SSP datagram padded on its whole sealed plaintext to at least 64 bytes from the server and 40 from the client (`ssp.md` §9.2), with Padmé (PURBs, PoPETs 2019) above and the D5 limit as a cap. That keeps 88% of flate's saving and makes every keystroke echo, ack and heartbeat from the server one size [M S5 padding.md]. Padding blunts the leak and does not close it: an attacker can still add filler to push a frame across a Padmé boundary and count samples, at most 8 bits per frame up to 64 KiB [M S5 padding.md]. That residual leak is accepted, owned by **ssp**; timing is chaff's (O10). A frame under 32 B never compressed smaller, so small frames go raw [M S5 §8] |
 | **R2** | **Keystroke timing, what chaff leaves.** Chaff (§4.14) hides which ticks carry keys within a run of typing; an on-path observer still sees when a run starts, when it ends to within 1–2 s, gaps longer than that, and keys whose datagram grows past the floor because earlier keys are unacknowledged (2.0–5.0% of keys on the LAN and spike-free profiles, 12.3% on the LTE trace, 9–50% on the hotel, train and HSR profiles with netsim's per-packet spikes; a T3 can cause pile-ups at will by stalling the path) | T2, T3 | Making every client datagram as big as the largest pile-up costs on every tick; 40 B is the §9.2 floor (O12), and a 64 B floor while chaffing cut the LTE trace's 10.3% by size to 6.2% for 35% more client bytes [M `ssp.md` §9.1.5] | 20 ms tick both ways, random linger, server chaff, early acks on the tick so keys are acknowledged sooner; no echo-ack-only server frames while the pty has echo off (D11; prediction slice), so the end of a run does not name the last key of a password |
 | **R3** | **No rekey on idleness** (D20). The keys in memory after a burst of typing protected that burst until the next 120 s rekey | T8 | Decided in D20 | Exposure is bounded by `RekeyAfter` + `KeepPrevFor` (≤ 130 s) **provided the 120 s timer runs on epoch age and fires on any send, SSP heartbeats included** (`transport.md` §6.2 does this); and, whatever an on-path attacker does to rekey frames, by `RejectAfterTime` + `KeepPrevFor` (≤ 190 s), because no data is sealed under keys older than 180 s (§4.3) |
 | **R4** | **A compromised proto is the user.** It holds the pty master and the keys | T7 | Inherent: whatever reads the network and writes the pty can type into the shell (S4 red team: every layout with a key holder) | proto's pre-auth surface is a fixed header, a map lookup and the standard library's AEAD; everything else needs the keys. Every parser is fuzzed. Landlock + seccomp stop the likely Go bug class (confused deputy) from reaching files, sockets or other processes directly. It can still `sendto` anywhere from its socket: seccomp cannot filter `sockaddr` |
@@ -897,13 +906,13 @@ with Dan.
 | **R10** | **Metadata**: the 5-tuple, the port range 60000–61000, the 3 s heartbeat and datagram sizes reveal that a mosey session exists, when it is active, and how much the screen changes | T2 | UDP state sync is the product; hiding traffic shape is out of scope | The receiver index changes each rekey, so the header doesn't link epochs [S1 §1.1] |
 | **R11** | **Screen spoofing**: a hostile program can draw anything, including a fake mosey status line, a title naming another host, or link text that differs from its URI; and it can **write** the clipboard (pastejacking) | T4 | D27 allows OSC 52 writes and OSC 8 by decision; this is what any terminal does | Clipboard read never; writes capped at 64 KiB; links only http, https, mailto; title bidi controls stripped |
 | **R12** | **Unvalidated addresses get up to 3x** what came from them, including the 0.5-RTT output to an unconfirmed msg1 source (~3.6 KB) | T1 spoofing | RFC 9000's factor; S5 measured 2.96x as the worst case in practice | [M S5 §6] |
-| **R13** | **seccomp in ERRNO mode** on arm64 until a real-hardware soak passes (D22). (amd64 runs KILL, §4.11): a compromised role gets EPERM and carries on probing instead of dying | T6, T7 | KILL with an incomplete allow-list kills a healthy process (a missing `pread64` hid for 60 s [M S4 §3.5]); the denials themselves are identical, so containment holds | The policy exists and is tested by the BPF interpreter for amd64 and arm64; the CI KILL soak (≥ 120 s per Go upgrade and architecture, under a CPU quota) turns KILL on |
+| **R13** | *Closed: arm64 runs KILL since CI run 43626969195, as amd64 always did (§4.11).* Was: **seccomp in ERRNO mode** on arm64 until a real-hardware soak passes (D22): a compromised role gets EPERM and carries on probing instead of dying | T6, T7 | KILL with an incomplete allow-list kills a healthy process (a missing `pread64` hid for 60 s [M S4 §3.5]); the denials themselves are identical, so containment holds | The policy exists and is tested by the BPF interpreter for amd64 and arm64; the CI KILL soak (≥ 120 s per Go upgrade and architecture, under a CPU quota) turned KILL on, and now guards it |
 | **R14** | **`crypto/hpke` is outside the 2025 Trail of Bits audit** | all | Composing X-Wing ourselves is closer to writing our own crypto (D19) | Recorded in `DEPENDENCIES.md`; part of the external review before 1.0 (PLAN §6.5) |
 | **R15** | **tuios is young, mostly one author**, and has no bound on OSC 8 link storage | T4 | Best candidate by a wide margin (S2); fork if upstream stalls (D23) | Pinned; fuzzed; the emu sandbox and its memory limits (512 MiB cgroup, 1 GiB `RLIMIT_DATA`; R18) contain it; upstream fixes listed in S2 |
 | **R16** | **Fuzzing so far is minutes, not hours** (S1: 38.5 min across targets; S2: 15–20 min per target) | all | Spikes, not production | Every attacker-reachable parser has a target, each run for minutes locally before it lands and 10 s in CI; continuous fuzzing before 1.0 (PLAN §6.5) |
 | **R17** | **A proto that dies ends the session**: resume brings back a client that went away, not a proto that crashed, so the shell is hung up | T7, bugs | Restarting proto on the same pty is a later slice (`server.md` §5.4) | When proto exits the spawner hangs up the pty, so no unreachable shell is left running |
 | **R19** | **The forwarded agent is usable by the far host** while a client with the agent is attached: any program running as the user there (or root) can ask for signatures, and can learn the public keys | T5, A1's holder | That is what agent forwarding is, under `ssh -A` too; D25 forwards only when the user's ssh config or `-A` says so | Off by default as in ssh. Agents that judge requests do so as under `ssh -A`: confirmation (`ssh-add -c`), destination constraints (`ssh-add -h`, which the replayed bind makes work [S3 E8]), quoin-signer's galley questions. Detaching ends every agent channel; a session started without the agent has no socket. The lengths of agent requests are padded as SSP's are (R1's rule), not hidden |
-| **R18** | **Without a systemd user manager, emu's memory bound is `RLIMIT_DATA` alone**: 1 GiB per session instead of 512 MiB, counted in address space rather than charged memory, with swap not excluded | T4, T6 | Many hosts have no user manager (non-systemd distributions, containers, sshd without PAM [S4 §3.10]); refusing to run there would rule them out for no security gain, since `RLIMIT_DATA` is still a hard bound | `RLIMIT_DATA` set by emu on itself before its sandbox, not raisable (no `setrlimit`/`prlimit64` in its policy); the spawner logs once that the cgroup is missing; if neither limit can be set, emu does not start (§4.8). `TestEmuMemoryLimitRestartsEmu` checks S2's link flood is stopped (`server.md` §6.3) |
+| **R18** | **Without a systemd user manager, emu's memory bound is `RLIMIT_DATA` alone**: 1 GiB per session instead of 512 MiB, counted in address space rather than charged memory, with swap not excluded | T4, T6 | Many hosts have no user manager (non-systemd distributions, containers, sshd without PAM [S4 §3.10]); refusing to run there would rule them out for no security gain, since `RLIMIT_DATA` is still a hard bound | `RLIMIT_DATA` set by emu on itself before its sandbox, not raisable (no `setrlimit`/`prlimit64` in its policy); the spawner logs once that the cgroup is missing; if neither limit can be set, emu does not start (§4.8). Whether 1 GiB stops S2's link flood is **not yet tested**: `TestEmuMemoryLimitRestartsEmu` (`server.md` §6.3, §12) is still to be written. What is tested is that the spawner recognises the out-of-memory death (`TestOutOfMemoryIsRecognisedOnAnyLineNotJustTheLast`) and rebuilds a killed emu (`TestTheSpawnerRunsASessionAndRebuildsEmu`) |
 
 ## 6. Who can do what (slice 1)
 
@@ -939,7 +948,7 @@ Y = can, . = cannot, given the mechanisms above.
 | RekeyAfter | 120 s | [D20]; WireGuard REKEY_AFTER_TIME |
 | Server's rekey backstop | `RekeyAfter` + 10 s = 130 s | [`transport.md` §6.2, ours] |
 | RekeyAfterMessages (D20's "N packets") | 2^60 | WireGuard REKEY_AFTER_MESSAGES [`transport.md` §6.2] |
-| RejectAfterTime: nothing but rekey frames sealed under older keys | 180 s | WireGuard REJECT_AFTER_TIME; §4.3 (a requirement `transport.md` does not yet meet) |
+| RejectAfterTime: nothing but rekey frames sealed under older keys | 180 s | WireGuard REJECT_AFTER_TIME; §4.3. `transport.RejectAfterTime`, tested by `TestBlockingOnlyTheRekeyFramesStallsTheTerminalUntilTheyGetThrough` |
 | RekeyRetry (INIT and confirmation resends) | 1 s | [S1 ours, untuned] |
 | Reject after messages | 2^64 − 2^13 − 1 | WireGuard REJECT_AFTER_MESSAGES [S1] |
 | Forged packets per key before rekey or close | < 2^36 | [RFC 9001 §6.6] ChaCha20-Poly1305 integrity limit |
@@ -971,7 +980,7 @@ target (architecture §6).
 
 | Property | Package | Test (names say what is true) |
 |---|---|---|
-| A rejected packet changes no state | `transport` | `FuzzOpen` invariant; a forged and a bit-flipped packet move neither the window nor the peer |
+| A rejected packet changes no state | `transport` | `FuzzReceive` invariant; a forged and a bit-flipped packet move neither the window nor the peer |
 | Replay window agrees with a reference | `replay` | `FuzzWindow` against a map |
 | A leaked stdout line cannot impersonate either side | `handshake` | a test that gives the attacker the whole `CredentialLine` and fails to confirm |
 | msg1, msg2, rekey halves ≤ 1200 B; msg2 ≤ msg1 | `handshake`, `transport` | size assertions over every hello the code can produce |
@@ -990,8 +999,8 @@ target (architecture §6).
 | The bootstrap ssh forwards nothing | `bootstrap` | `ssh -G` on the exact command line with a config setting `ForwardX11`, `ForwardX11Trusted`, `LocalForward`, `RemoteForward`, `DynamicForward`, `Tunnel`, `PermitLocalCommand` and `LocalCommand`: every effective value is off (skipped if no `ssh`) |
 | No process holding a secret can dump core | `client`, `server` | each role checks `PR_GET_DUMPABLE` is 0 and, where required, `RLIMIT_CORE` is 0 before its first key; a forced SIGABRT of the client leaves no core |
 | A worst-case screen is delivered | `ssp`, `screen`, `e2e` | the largest diff the encoder can emit at 1000 × 500 with 64-byte random clusters is ≤ `MaxDiff`, and is delivered and applied under netsim |
-| emu is restarted when hung, dead or over its memory | `server` | a silent emu produces `KillEmu{deadline}` after T4; a killed one comes back through `EmuLink`; S2's link flood hits the limit under `RLIMIT_DATA` alone |
-| `ValidReply` admits only fixed templates | `server` | `FuzzValidReply`: anything accepted contains no CR, LF or free C0 |
+| emu is restarted when hung, dead or over its memory | `server` | a silent emu produces `KillEmu{deadline}` after T4; a killed one comes back through `EmuLink`; S2's link flood hits the limit under `RLIMIT_DATA` alone (**not yet tested**: see R18) |
+| `ValidReply` admits only fixed templates | `server` | `FuzzSplitReplies`: no token holds a C0 byte but its leading ESC and terminator, and every token `ValidReply` accepts is one of the shapes; `TestForgedRepliesAreRefused` |
 | Each role's policy allows exactly its list | `sandbox` | the BPF interpreter, amd64 and arm64 |
 | emu under its sandbox cannot open, connect, exec, create sockets or signal another process | `sandbox` (linux) | a red-team battery run inside the sandboxed role, as S4's, plus `tgkill` at a sibling and `fcntl(F_SETOWN)` + `O_ASYNC`, with Landlock's signal scope off |
 | A resume revokes the old client and erases its keys; the old client exits saying who took over; nothing secret is reused | `e2e`, `server` | netsim: a client vanishes and another attaches with a new credential for the same SID; the first gets `Revoked`; real sshd: `mosey -r` takes over and the first exits 3 |
@@ -1055,8 +1064,10 @@ them.
    (§4.11, §6 T6). *Fixed.* Requirement on `server.md` §6.3 to
    argument-filter `tgkill` to the process's own tgid and `fcntl` to the
    runtime's commands with `O_ASYNC` clear (no `F_SETOWN`, `F_SETOWN_EX`,
-   `F_SETSIG`), and both attacks added to the red-team battery. `server.md`
-   §6.3 does not yet have these filters.
+   `F_SETSIG`), and both attacks added to the red-team battery. *Resolved
+   in code:* `internal/sandbox/bpf.go` filters both, tested by
+   `TestTgkillOnlyAtTheRolesOwnPid` and
+   `TestFcntlOnlyWithCommandsThatCannotArmASignal`.
 5. **No memory bound without a cgroup** (§4.8, §6, §7). *Fixed:* stale
    text. `server.md` §6.3 already sets `RLIMIT_DATA` 1 GiB in emu on every
    host, with the cgroup as an extra limit where a user manager exists.

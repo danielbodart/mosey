@@ -80,8 +80,9 @@ jobs:
   # under seccomp Kill, carrying a busy session for 150 s inside a scope
   # with a CPU quota (so the runtime's pread64 of cpu.max runs), on amd64
   # and on arm64 hardware, so every Go upgrade, dependency bump and policy
-  # change is soaked on both before it can release. The binaries' default
-  # action stays Errno until this job has been green (sandbox/action.go).
+  # change is soaked on both before it can release. The binaries run Kill
+  # on both architectures (sandbox/action.go); this job is what keeps that
+  # safe, so a release waits on it.
   kill-soak:
     strategy:
       fail-fast: false

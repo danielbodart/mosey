@@ -757,7 +757,8 @@ from the bytes it sent, which it can see:
   final byte lands in the next request is answered there), capped at
   `MaxReplyTokens` = 8 [derived: the most answers a program asks for in
   one write that we know of is vim's start-up probe, a handful; to be
-  confirmed by `TestReplyAllowanceCoversRealPrograms`, §12]. A `Resize`
+  confirmed by `TestReplyAllowanceCoversRealPrograms`, §12, not yet
+  written]. A `Resize`
   or `Init` request's allowance is 0: tuios answers nothing to either.
 - Proto runs the tokens through §4.2 in order; each one it accepts uses
   one unit of allowance, and once it is used up the rest are dropped and
@@ -1225,8 +1226,9 @@ cell, gigabytes at the clamp):
   memory` and exit 2, which the spawner classifies as a memory death
   (§5.2). It works with no systemd and on any Linux. Whether 1 GiB
   leaves tuios enough at the clamp (S2: about 86 MiB for both screens at
-  1000x500) and still stops S2's link flood is
-  `TestEmuMemoryLimitRestartsEmu` (§12).
+  1000x500) and still stops S2's link flood is for
+  `TestEmuMemoryLimitRestartsEmu` (§12), which is **not yet written**:
+  until it is, that is untested.
 - **No emu runs unbounded** (threat-model.md §4.8). `RLIMIT_DATA` is
   the limit every host has, so it is required, not best effort: if
   `prlimit64` fails, the spawner SIGKILLs that emu before proto ever
@@ -1303,7 +1305,7 @@ is its threads of control and the ordering rules the IPC imposes:
 | `MaxOutput` | 16384 B | ipc | [derived] |
 | `MaxReplies` | 4096 B | ipc | [derived from S2] |
 | `MaxReplyToken` | 256 B | server | [derived] |
-| `MaxReplyTokens`: reply allowance per request | introducers in this `Output` and the one before, at most 8 | server | [derived; `TestReplyAllowanceCoversRealPrograms`] |
+| `MaxReplyTokens`: reply allowance per request | introducers in this `Output` and the one before, at most 8 | server | [derived; `TestReplyAllowanceCoversRealPrograms`, not yet written] |
 | `screen.MaxDiff`: one `Update` run, reassembled | 48 MiB | proto | [`screen.md` §5.12] |
 | `ReplyQueue` | 64 KiB, drop when full | server | [S2, reply flood] |
 | `MaxClientLine` | 4096 B | ipc, bootstrap | [`bootstrap.md` §6.2] |
@@ -1324,7 +1326,7 @@ is its threads of control and the ordering rules the IPC imposes:
 | `EmuCooldown`: pause once the budget is spent | 60 s, then a fresh budget; never ends the session | spawner | [derived: the budget window; §5.2] |
 | emu `MemoryMax` | 512 MiB | spawner | [D23] |
 | emu `MemorySwapMax` | 0 | spawner | [derived] |
-| emu `RLIMIT_DATA` | 1 GiB, set by `prlimit64`, required | spawner | [derived; `TestEmuMemoryLimitRestartsEmu`] |
+| emu `RLIMIT_DATA` | 1 GiB, set by `prlimit64`, required | spawner | [derived; `TestEmuMemoryLimitRestartsEmu`, not yet written] |
 | scrollback budget | 1,000,000 cells | proto → emu (`Init`) | [D23] |
 | `MaxLog` | 1 MiB per session | spawner | [derived] |
 | `MaxLogLine` | 4096 B | spawner | [derived] |
@@ -1538,7 +1540,8 @@ it lands, with the duration and exec count in the commit message.
   split as `ESC` | `[6n` across two `Output`s, and as `ESC [6` | `n`,
   is answered; a `Resize` gets none. Dropped tokens are not violations
   and never reach the reply queue.
-- `TestReplyAllowanceCoversRealPrograms`: the start-up query bursts of
+- `TestReplyAllowanceCoversRealPrograms` (**not yet written**): the
+  start-up query bursts of
   vim, fish, neovim and Claude Code, recorded once into testdata, fed
   through tuios and the allowance: every answer reaches the reply
   queue. If one does not, `MaxReplyTokens` is raised with the recording
@@ -1647,12 +1650,15 @@ it lands, with the duration and exec count in the commit message.
 - `TestServeBootstrap`: run `mosey --serve` from a built binary, write
   a `ClientLine`, read one credential line, see the launcher exit while
   the spawner lives on, then connect and get a prompt.
-- `TestEmuMemoryLimitRestartsEmu`: S2's 2 KiB-link flood at the clamp
+- `TestEmuMemoryLimitRestartsEmu` (**not yet written**; R18 in the
+  threat model says so): S2's 2 KiB-link flood at the clamp
   kills emu through `RLIMIT_DATA` (and through the cgroup where a user
   manager exists), emu is restarted, the session goes on.
-- `TestCompromisedEmuCannotTypeIntoTheShell`: an emu built with a test
-  hook sends S4's forged replies; no file appears, and the forged
-  messages are logged as refused.
+- `TestCompromisedEmuCannotTypeIntoTheShell` (**not yet written**): an
+  emu built with a test hook sends S4's forged replies; no file appears,
+  and the forged messages are logged as refused. Until it is, the fake
+  emu's `TestTheReplyAllowanceBoundsWhatEmuCanType` and
+  `TestForgedRepliesAreRefused` cover proto's side.
 - `TestKillSoak` (§9), skipped unless `MOSEY_SOAK` is set.
 - Before the transport exists, three tests cover what they can without
   it: `TestTheEmuRoleRunsTuiosUnderKill` runs the real emu role (tuios)

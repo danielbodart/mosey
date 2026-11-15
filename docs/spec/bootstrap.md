@@ -41,8 +41,9 @@ SSH does three jobs and then gets out of the way:
 
 B3 needs SSH to be **authentic, not confidential**: a recorder, `script(1)`
 or a bastion log that captures both lines cannot use them to impersonate
-either side ([S1] §5, ProVerif `b3_stdout_leak`,
-`TestB3LeakedStdoutCannotImpersonate`). Nothing in either line is secret in
+either side ([S1] §5, ProVerif `b3_stdout_leak`, S1's
+`TestB3LeakedStdoutCannotImpersonate`; in mosey
+`TestALeakedCredentialLineCannotImpersonateTheClient`). Nothing in either line is secret in
 the sense that matters. The PSK is in the clear on purpose: it is defence in
 depth and the key of the msg1 DoS filter, not an authenticator.
 

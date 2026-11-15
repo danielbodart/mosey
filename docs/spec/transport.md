@@ -219,7 +219,8 @@ receiver of msg1 or msg2 works on a copy of the symmetric state and keeps
 it only once the whole message has authenticated and its hello parsed. A
 message that fails anywhere leaves the receiver exactly as it was (S1
 §1.2, tested by `TestBWrongCredentialsLeaveStateUntouched` and
-`TestBTamperEveryByte` in the spike).
+`TestBTamperEveryByte` in the spike; in mosey by `handshake`'s
+`FuzzReadMsg1` and `FuzzReadMsg2`).
 
 ### 3.4 Bootstrap inputs
 
@@ -1362,7 +1363,9 @@ Beyond the general rules in `architecture.md` §6:
   and changes no state.
 - **Leaked stdout**: an attacker holding the whole credential line cannot
   complete a confirmed connection, and the genuine client still can (the
-  spike's `TestB3LeakedStdoutCannotImpersonate`), including when the
+  spike's `TestB3LeakedStdoutCannotImpersonate`; here
+  `TestALeakedCredentialLineCannotConnectAndForgeriesOnlyDelayTheClient`),
+  including when the
   attacker sends 4 or more forged msg1s within one round trip of the
   genuine one, so the genuine pending is evicted after its msg2 went out:
   the client's msg1 resend is re-answered, it takes the new msg2 and
