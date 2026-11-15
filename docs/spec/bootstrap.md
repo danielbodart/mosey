@@ -1656,11 +1656,15 @@ own session, in the background, and never asks the user anything:
   §9.1. Every other failure (ssh exiting 255, a timeout, no mosey of this
   version, `internal`, a handshake that does not complete) is logged and
   tried again after the backoff.
-- **Open (PLAN O15).** A try never takes a session another client holds:
-  D26 says only an explicit `-s` takes over, and a stolen laptop that
-  wakes must not take its session back. The other answer, a try that
-  takes over as `-s` does, is one branch in the launcher (`reconnect` in
-  `internal/server/choose.go`). Listed for Dan.
+- **Open (PLAN O15), a placeholder awaiting Dan.** Until he decides, a
+  try never takes a session another client holds: D26 says only an
+  explicit `-s` takes over, and a stolen laptop that wakes must not take
+  its session back. The other answer, a try that takes over as `-s`
+  does, is one switch in the launcher (`reconnectTakesBack` in
+  `internal/server/choose.go`), and both settings are tested. A try names
+  its session by SID, not by name, so it never attaches a newer session
+  that reused the name after the old one ended; that this meets R3's "by
+  name" is also Dan's to confirm.
 
 ### 9.3 How long a session lives (D8 R4)
 

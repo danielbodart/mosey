@@ -57,7 +57,7 @@ func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate 
 			return choice{err: &LaunchError{Code: bootstrap.CodeSession, Text: "no such session"}}
 		}
 		if cl.HasHolder {
-			return reconnect(cl.Holder, sessions[i], i)
+			return reconnect(reconnectTakesBack, cl.Holder, sessions[i], i)
 		}
 		return choice{take: i}
 	}
@@ -68,13 +68,22 @@ func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate 
 	return fresh()
 }
 
+// reconnectTakesBack is PLAN O15, which is open for Dan: whether R3's
+// background reconnect that finds its session held by another client
+// takes it back, as -s NAME would, or exits as taken over. This is a
+// PLACEHOLDER awaiting his decision, not one: the code has to do
+// something meanwhile, and false is what D26's text says ("only an
+// explicit `mosey -s NAME HOST` takes over"). Dan's answer is this one
+// switch.
+const reconnectTakesBack = false
+
 // reconnect is R3's rule (bootstrap.md §9.2.2): a client reconnecting in
-// the background takes its session only if it is detached or still held
-// by the credential the client last had; one any other credential holds
-// was taken over, and the client is told when. Taking it back instead
-// (PLAN O15, open for Dan) would be `return choice{take: i}` here.
-func reconnect(mine [bootstrap.CredentialIDSize]byte, s bootstrap.SessionLine, i int) choice {
-	if s.State == bootstrap.SessionDetached || s.HasHolder && s.Holder == mine {
+// the background takes its session if it is detached or still held by
+// the credential the client last had. One any other credential holds was
+// taken over: with takeBack it is taken back anyway, and otherwise the
+// client is told when it was taken (PLAN O15).
+func reconnect(takeBack bool, mine [bootstrap.CredentialIDSize]byte, s bootstrap.SessionLine, i int) choice {
+	if takeBack || s.State == bootstrap.SessionDetached || s.HasHolder && s.Holder == mine {
 		return choice{take: i}
 	}
 	since := strconv.FormatInt(s.Since.Unix(), 10)

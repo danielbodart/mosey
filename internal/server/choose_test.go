@@ -101,7 +101,7 @@ func TestNamedAndNewSessionsAreChosenAsTheSpecSays(t *testing.T) {
 // R3's reconnect takes its session only when it is detached or still held
 // by the reconnecting client's own credential; one another credential
 // holds is `taken`, with when; one that has gone is `session`
-// (bootstrap.md §9.2.2, PLAN O15's interim).
+// (bootstrap.md §9.2.2; PLAN O15's placeholder, reconnectTakesBack).
 func TestReconnectTakesItsOwnSessionAndNeverAnothers(t *testing.T) {
 	mine := [8]byte{7}
 	reconnecting := bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: [16]byte{1}, Holder: mine, HasHolder: true}
@@ -128,6 +128,11 @@ func TestReconnectTakesItsOwnSessionAndNeverAnothers(t *testing.T) {
 		if says != c.want {
 			t.Errorf("%s: %s, want %s", name, says, c.want)
 		}
+	}
+	// PLAN O15's other answer, which is Dan's to choose, is the one
+	// switch: a try then takes back what another client holds.
+	if c := reconnect(true, mine, held(session("work", 1, bootstrap.SessionAttached, 1), 8), 0); c.err != nil || c.start || c.take != 0 {
+		t.Errorf("with reconnectTakesBack: %+v, not a takeover", c)
 	}
 	gone := choose(reconnecting, []bootstrap.SessionLine{session("other", 2, bootstrap.SessionDetached, 1)}, fixedName)
 	if gone.err == nil || gone.err.Code != bootstrap.CodeSession {
