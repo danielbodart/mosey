@@ -1536,8 +1536,9 @@ it lands, with the duration and exec count in the commit message.
 - The greeting follows `Attached` and `Detached`, says `attached` held by
   a resume's credential until its TTL (a reconnect's hold naming the
   reconnecting client's credential), and carries the name.
-- `Hangup` and the idle timeout (short, injected) send the shell SIGHUP,
-  and an attach resets the idle timer.
+- `Hangup` and the idle timeout (short, injected) send the shell SIGHUP;
+  the idle clock, on virtual time, runs only while detached, and an
+  attach stops it.
 - The launcher's choice (`bootstrap.md` §9.2): `auto` takes the newest
   detached and never an attached one, else starts a named session; `name`
   takes NAME whatever its state, else starts it; `new` always starts; R3's

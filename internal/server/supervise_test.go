@@ -6,9 +6,52 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 )
+
+// The idle clock runs only while the session is detached, an attach stops
+// it, and each detach starts it from zero (D8 R4, bootstrap.md §9.3), on
+// virtual time.
+func TestTheIdleClockRunsOnlyWhileDetachedAndAnAttachStopsIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newIdleClock(IdleTimeout)
+		defer c.attached()
+		fired := func() bool {
+			synctest.Wait()
+			select {
+			case <-c.C():
+				return true
+			default:
+				return false
+			}
+		}
+		time.Sleep(2 * IdleTimeout)
+		if fired() {
+			t.Fatal("fired before the session ever detached")
+		}
+		c.detached()
+		time.Sleep(IdleTimeout - time.Second)
+		c.attached()
+		time.Sleep(2 * IdleTimeout)
+		if fired() {
+			t.Fatal("fired for a session whose client came back")
+		}
+		c.detached()
+		time.Sleep(IdleTimeout - time.Second)
+		c.attached()
+		c.detached()
+		time.Sleep(IdleTimeout - time.Second)
+		if fired() {
+			t.Fatal("a second detach did not start the clock from zero")
+		}
+		time.Sleep(time.Second)
+		if !fired() {
+			t.Fatal("did not fire after the whole timeout detached")
+		}
+	})
+}
 
 // emu restarts (server.md §5.2): 50 ms, doubling to 5 s, reset after 60 s
 // alive; the eleventh start in 60 s is not made, and the spawner pauses

@@ -24,6 +24,30 @@ const (
 	HangupGrace = 10 * time.Second
 )
 
+// idleClock is D8 R4's idle timeout (bootstrap.md §9.3): it runs while
+// the session is detached, from the moment it became so, and an attach
+// stops it. It is its own type so that rule is tested in a synctest
+// bubble, on virtual time (D18), apart from the spawner's processes.
+type idleClock struct {
+	after time.Duration
+	t     *time.Timer
+}
+
+func newIdleClock(after time.Duration) *idleClock {
+	t := time.NewTimer(after)
+	t.Stop()
+	return &idleClock{after: after, t: t}
+}
+
+// C fires once the session has been detached for the whole timeout.
+func (c *idleClock) C() <-chan time.Time { return c.t.C }
+
+// detached starts the clock from zero.
+func (c *idleClock) detached() { c.t.Reset(c.after) }
+
+// attached stops it.
+func (c *idleClock) attached() { c.t.Stop() }
+
 // emu restarts (server.md §5.2, from S4 §3.8's supervisor): wait 50 ms
 // before the first restart, doubling to at most 5 s, back to 50 ms once an
 // emu has lived 60 s; at most 10 starts in any 60 s. When the budget is

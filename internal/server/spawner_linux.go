@@ -631,9 +631,8 @@ func (s *spawner) supervise(ctx context.Context) error {
 	defer backstopTimer.Stop()
 	// idle runs while the session is detached (D8 R4); hungUp is the
 	// grace a hung-up shell has to exit before the teardown.
-	idle := time.NewTimer(s.cfg.IdleTimeout)
-	idle.Stop()
-	defer idle.Stop()
+	idle := newIdleClock(s.cfg.IdleTimeout)
+	defer idle.attached()
 	var hungUp <-chan time.Time
 	var restart <-chan time.Time
 	var nextReason ipc.EmuEnd
@@ -662,7 +661,7 @@ func (s *spawner) supervise(ctx context.Context) error {
 				s.teardown(reason)
 				return nil
 			}
-		case <-idle.C:
+		case <-idle.C():
 			s.log.Info("detached for the idle timeout; hanging the shell up", "after", s.cfg.IdleTimeout)
 			hungUp = s.hangup()
 		case <-s.hangups:
@@ -772,12 +771,12 @@ func (s *spawner) supervise(ctx context.Context) error {
 					attached = true
 					backstopTimer.Stop()
 				}
-				idle.Stop()
+				idle.attached()
 				s.setAttached(m.Credential, m.Peer)
 				s.log.Info("a client attached", "peer", m.Peer, "credential", fmt.Sprintf("%x", m.Credential))
 			case ipc.Detached:
 				s.setDetached()
-				idle.Reset(s.cfg.IdleTimeout)
+				idle.detached()
 				s.log.Info("the client detached")
 			case ipc.Credential:
 				if len(s.pending) == 0 {

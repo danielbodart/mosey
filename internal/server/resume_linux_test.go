@@ -530,17 +530,14 @@ func (ss *stubSession) shellHungUp(within time.Duration) bool {
 	}
 }
 
-// A session detached for the idle timeout has its shell hung up, and an
-// attach in time stops the clock (D8 R4, bootstrap.md §9.3). The timeout
-// is injected short; nothing measures how long anything took.
-func TestADetachedSessionIsHungUpAfterTheIdleTimeoutAndAnAttachStopsTheClock(t *testing.T) {
+// A session detached for the idle timeout has its shell hung up (D8 R4,
+// bootstrap.md §9.3): the spawner's wiring of the idle clock, whose rule
+// (an attach stops it) TestTheIdleClockRunsOnlyWhileDetachedAndAnAttachStopsIt
+// checks on virtual time. The timeout is injected short, and nothing here
+// asserts that something did not happen within some real time (D18).
+func TestADetachedSessionIsHungUpAfterTheIdleTimeout(t *testing.T) {
 	sid := [16]byte{0x5e, 8}
-	ss := startStubSessionWith(t, sid, SpawnerConfig{Version: stubVersion, IdleTimeout: time.Second}, 0)
-	ss.send(ipc.Detached{})
-	ss.send(ipc.Attached{Credential: [8]byte{1}})
-	if ss.shellHungUp(3 * time.Second) {
-		t.Fatalf("hung up a session whose client came back\nlog:\n%s", ss.log.String())
-	}
+	ss := startStubSessionWith(t, sid, SpawnerConfig{Version: stubVersion, IdleTimeout: 100 * time.Millisecond}, 0)
 	ss.send(ipc.Detached{})
 	if !ss.shellHungUp(30 * time.Second) {
 		t.Fatalf("the idle session's shell was not hung up\nlog:\n%s", ss.log.String())
