@@ -233,6 +233,14 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	if want := "session work runs mosey v0, which predates the stable protocol and live upgrade: resume it with mosey v0, or end it"; !strings.Contains(errs, want) {
 		t.Errorf("stderr %q does not say %q", errs, want)
 	}
+	// -s with the passed-over session's name is refused, never a second
+	// session of that name beside it.
+	named := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachName, Name: "work", Cols: 80, Rows: 24, Public: key})
+	out, _, err = run(named)
+	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeInternal ||
+		!strings.Contains(err.Error(), "session work runs mosey v0, which this one cannot attach") {
+		t.Errorf("-s work with only a v0 session called work: %v, %q; want a refusal naming it", err, out)
+	}
 	// R3's reconnect of a session that is not there.
 	gone := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume,
 		SessionID: [16]byte{0x77}, Holder: [8]byte{1}, HasHolder: true, Cols: 80, Rows: 24, Public: key})

@@ -19,17 +19,24 @@ type choice struct {
 
 // choose is §9.2's table, a pure function so every row is tested without
 // processes: sessions are the greetings of the sessions this launcher can
-// attach, and generate makes a name none of them has.
+// attach, passed maps the name of each session it passed over (step 5: a
+// version whose attach protocol it does not speak) to that session's
+// mosey version, and generate makes a name none of either has.
 //
 // Sessions of every version are chosen alike (D8 V1, §9.2 step 5): an
 // upgraded client's plain `mosey HOST` takes its detached session back,
 // and -s NAME finds NAME, whichever binary runs it. Whether taking it is
 // a live upgrade is the launcher's next step, not this choice.
-func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate func(taken map[string]bool) string) choice {
+func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, passed map[string]string, generate func(taken map[string]bool) string) choice {
 	fresh := func() choice {
+		// A passed-over session still has its name: a new one must not
+		// share it, or -list would show two and -kill NAME be ambiguous.
 		taken := map[string]bool{}
 		for _, s := range sessions {
 			taken[s.Name] = true
+		}
+		for name := range passed {
+			taken[name] = true
 		}
 		return choice{start: true, name: generate(taken)}
 	}
@@ -46,6 +53,14 @@ func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate 
 		// new session of that name.
 		if i := newest(sessions, func(s bootstrap.SessionLine) bool { return s.Name == cl.Name }); i >= 0 {
 			return choice{take: i}
+		}
+		if v, ok := passed[cl.Name]; ok {
+			// NAME exists but this launcher cannot attach it: starting
+			// another NAME beside it would make two, so it refuses, and
+			// says which mosey can (the passOver line on stderr already
+			// has). `internal` is §6.4's code for "stderr says why".
+			return choice{err: &LaunchError{Code: bootstrap.CodeInternal,
+				Text: "session " + cl.Name + " runs mosey " + v + ", which this one cannot attach: resume it with mosey " + v + ", or end it, before using its name"}}
 		}
 		return choice{start: true, name: cl.Name}
 	case bootstrap.AttachResume:

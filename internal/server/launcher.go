@@ -106,16 +106,22 @@ func (l *Launcher) run(ctx context.Context) error {
 	defer lock.Close()
 	var sessions []bootstrap.SessionLine
 	var conns []liveSession
+	passed := map[string]string{}
 	for _, s := range liveSessions(base) {
 		g, ok := attachable(s.greeting)
 		if !ok {
-			l.passOver(s.greeting)
+			if name, v, ok := passedOver(s.greeting); ok {
+				l.passOver(name, v, s.greeting)
+				if name != "" {
+					passed[name] = v
+				}
+			}
 			s.f.Close()
 			continue
 		}
 		sessions, conns = append(sessions, g), append(conns, s)
 	}
-	c := choose(cl, sessions, GenerateName)
+	c := choose(cl, sessions, passed, GenerateName)
 	for i, s := range conns {
 		if c.start || c.err != nil || i != c.take {
 			s.f.Close()
@@ -306,24 +312,36 @@ func attachable(greeting []byte) (bootstrap.SessionLine, bool) {
 // passOver tells the user, on ssh's stderr, of a session this launcher
 // cannot attach, which -list shows but a plain mosey would silently pass
 // over (bootstrap.md §9.2 step 5): it says which release can.
-func (l *Launcher) passOver(greeting []byte) {
-	v, err := bootstrap.SessionLineVersion(greeting)
-	if err != nil {
-		return
-	}
+func (l *Launcher) passOver(name, v string, greeting []byte) {
 	if g, err := bootstrap.ParseSessionLine(greeting); err == nil {
 		fmt.Fprintf(l.Stderr, "mosey --serve: session %s runs mosey %s, whose attach protocol (%d-%d) this one does not speak: resume it with mosey %s\n",
 			g.Name, v, g.AttachMin, g.AttachMax, v)
 		return
 	}
-	name := "of yours"
-	// A greeting from before the stable protocol: MOSEY-SESSION swver
-	// sid name started state since peer holder.
-	if f := bytes.Fields(greeting); len(f) == 9 && bootstrap.ValidSessionName(string(f[3])) {
-		name = string(f[3])
+	if name == "" {
+		name = "of yours"
 	}
 	fmt.Fprintf(l.Stderr, "mosey --serve: session %s runs mosey %s, which predates the stable protocol and live upgrade: resume it with mosey %s, or end it\n",
 		name, v, v)
+}
+
+// passedOver reads what a session this launcher cannot attach still says
+// of itself: its mosey version, and its name when there is a valid one,
+// from a current greeting or from the fourth field of one from before the
+// stable protocol (MOSEY-SESSION swver sid name started state since peer
+// holder). ok is false if the greeting has no version at all.
+func passedOver(greeting []byte) (name, v string, ok bool) {
+	v, err := bootstrap.SessionLineVersion(greeting)
+	if err != nil {
+		return "", "", false
+	}
+	if g, err := bootstrap.ParseSessionLine(greeting); err == nil {
+		return g.Name, v, true
+	}
+	if f := bytes.Fields(greeting); len(f) == 9 && bootstrap.ValidSessionName(string(f[3])) {
+		return string(f[3]), v, true
+	}
+	return "", v, true
 }
 
 // resume is the launcher's part of taking a session (bootstrap.md §9.2

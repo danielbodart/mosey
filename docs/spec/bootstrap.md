@@ -1590,8 +1590,13 @@ The steps:
    protocol and live upgrade: resume it with mosey V, or end it` (NAME
    from the old greeting's fourth field when it is an `sname`). A
    session whose attach range this build does not meet is passed over
-   the same way, with its range named. A generated name still avoids the names of
-   every session that answered.
+   the same way, with its range named. A passed-over session keeps its
+   name: a generated name avoids the names of every session that answered,
+   passed over or not, and `-s NAME` naming only a passed-over session is
+   refused with `internal` (§6.4) and, on stderr, `session NAME runs mosey
+   V, which this one cannot attach: resume it with mosey V, or end it,
+   before using its name`, rather than start a second session called NAME
+   beside it.
 6. **The size** in the ClientLine is not applied by the spawner (an
    unconfirmed attach must change nothing). The client sends its size as
    the first input event once connected (§6.2), which resizes the pty and
