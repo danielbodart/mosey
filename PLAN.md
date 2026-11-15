@@ -89,6 +89,7 @@ Everything from the first version of this section (O1–O9) was settled on
 | O13 | Reconnect interval (D8 R3) | **Open**, for the build to settle with a [D] or [M] citation: how long without an authenticated packet before the client starts retrying resume over a fresh SSH login, and the backoff between tries. It must never ask the user anything. |
 | O14 | Idle timeout of a detached session (D8 R4) | **Default 7 days** [D] (Dan, 2026-11-15), then SIGHUP to the shell. **Open:** make it configurable only if that is cheap; otherwise it stays a constant. |
 | O15 | A background reconnect (D8 R3) that finds its session attached elsewhere | **Open, for Dan.** A client asleep through a `-s` takeover wakes, hears nothing, and starts R3's retries by name. If a retry takes over as `-s` does, it steals the session back from whoever took it; if it attaches only a detached session, it should exit with D26's "session taken over" message. The build must not pick between these on its own. |
+| O16 | sigstore-go's size and reach (D7, S1) | **Open, for Dan.** Verifying release bundles (D7 as amended) roughly doubles the binary (+110%) and links sigstore-go's ~65 modules into every server role, proto and emu included, although only the client calls it. Accept that, or keep the verifier where only the client links it (a helper binary, or server roles built without it, at the cost of D7's one file that is both). The S1 slice landed without this decision; it is not taken as made. Measurement and alternatives: `DEPENDENCIES.md`, sigstore-go. |
 
 ## 4. Clean-room rules (D3)
 
