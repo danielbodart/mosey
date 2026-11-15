@@ -210,9 +210,13 @@ ack, all under the current epoch's keys. SSP is unaware.
 
 ### 3.6 Resume and attach (D8, D26)
 
-`mosey -r` bootstraps through ssh as in §3.1, but its `ClientLine` is a
-resume: the launcher finds the session's `attach.sock` (`server.md` §2.6),
-reads the spawner's greeting, and sends the line. The spawner checks it
+Every `mosey host` bootstraps through ssh as in §3.1; its `ClientLine`
+says which session (`auto`, `new`, `name:NAME`, or R3's
+`resume:SID:CREDID`, `bootstrap.md` §9.2). The launcher, holding an
+`flock` on `R/mosey/lock`, reads the greetings of every `attach.sock`
+(`server.md` §2.6) and chooses: a new session (`server.Choose`; the line
+goes to a spawner of its own as `new:NAME`), or an existing one, whose
+spawner it sends the line as `resume:SID`. The spawner checks it
 and sends proto `ipc.Resume`; proto mints a new credential for the new
 client's one-shot key and the line goes back up ssh as usual. The new
 client's handshake carries `Hello.Attach`; when `Listener.Accept` returns
@@ -222,8 +226,14 @@ one the screen goes to and keystrokes come from. SSP starts from scratch
 on every connection (`ssp.md` §1.3), so the first diff is the whole screen,
 and every per-connection count (`InputConsumed`, the echo ack and applied
 count, §3.8) starts at 0. A client that leaves sends `End(EndDetached)`;
-the session runs on until its shell exits. `mosey -list` reads the
-greetings of the user's sessions and attaches to none.
+proto also reports a client silent for 15 s as detached (`SilentAfter`).
+The session runs on until its shell exits, `mosey -kill` (`ipc.Hangup`)
+or 7 days detached (`IdleTimeout`), the last two a SIGHUP from the
+spawner. `mosey -list` reads the greetings and prints `MOSEY-LIST` lines,
+which the client parses and lays out. A running client that hears nothing
+for 15 s resumes its own session in the background (R3): its `loop`
+swaps in the new transport, endpoint and prediction without leaving raw
+mode (`client.Session.Reconnect`).
 
 ### 3.7 The agent channel (D15, D25)
 
@@ -390,22 +400,27 @@ emu→proto `Update`, `Replies`.
 `IsRelease`, `AssetName`, `ParseSums` and `CachePath`. The spawner
 uses `ParseClientLine`, `MarshalCredentialLine` and `MarshalErrorLine`.
 The resume slice adds `SessionLine` (the attach socket's greeting) with
-`MarshalSessionLine`, `ParseSessionLine` and `SessionLineVersion`,
-`AnySession`, `CodeAmbiguous`, and `SSH.Role` for `--serve=list`.
+`MarshalSessionLine`, `ParseSessionLine` and `SessionLineVersion`, and
+`SSH.Role` for `--serve=list`; the sessions slice adds `Attach`,
+`ValidSessionName`, `ListLine` with `MarshalListLine`/`ParseListLine`,
+`CodeTaken`, `SSH.RoleArg` for `--serve=kill NAME` and `SSH.Batch`, and
+drops `AnySession` and `CodeAmbiguous`.
 
 **terminal.** `Terminal` (`Read`, `Write`, `Size`, `Resized`, `Raw`,
 `Restore`); `Open(in, out)` leaves the mode alone, since the terminal
 stays cooked for ssh's prompts until the handshake is done.
 
 **client.** `Run(ctx, Options{SSH, Version, Terminal, Stderr, Log,
-Getenv, Resume, SessionID, Upload, Ask, Releases})` for the binary, and
-`List(ctx, ListOptions)` for `-list`; `Session{Conn, Server, Credential, Key,
-Terminal, Log, Capabilities}.Run(ctx)` for after the bootstrap, which the
-netsim end-to-end test drives; it returns nil when the server ends the
-session, and otherwise tells the server with `End` before it returns.
-Errors are `*Failure`,
-`*TakenOverError`, `*DetachedError` (exit 0) and `*bootstrap.UsageError`;
-`ExitStatus` maps them.
+Getenv, Attach, Name, Upload, Ask, Releases})` for the binary,
+`List(ctx, ListOptions)` for `-list` and `Kill(ctx, KillOptions)` for
+`-kill`; `Session{Conn, Server, Credential, Name, Key, Terminal, Log,
+Capabilities, Reconnect}.Run(ctx)` for after the bootstrap, which the
+netsim end-to-end test drives; `Reconnect`, if set, is R3's try (the
+binary's runs a `Batch` bootstrap with `resume:SID:CREDID`). It returns nil
+when the server ends the session, and otherwise tells the server with
+`End` before it returns. Errors are `*Failure`, `*TakenOverError`,
+`*DetachedError` (exit 0), `*GoneError` (R3 found no session) and
+`*bootstrap.UsageError`; `ExitStatus` maps them.
 
 ## 6. Tests
 

@@ -236,7 +236,10 @@ generation.
 |---|---|---|
 | the shell exits | spawner (`wait4`) | `ShellExit{status}` to proto, which drains the pty until EIO or T5, lets SSP deliver the final screen (until the client acks it, or T6), tells the client the session is over with `Conn.End(EndShellExited)` (`transport.md` §8.4) and sends `Exit{ShellExited}` |
 | no client ever confirms a credential | proto | once every credential it minted has expired unconfirmed (`handshake.CredentialTTL`, 30 s [D20], from the last one minted) with no client ever attached, nothing can connect, so `Exit{NoClient}` |
-| the client detaches | proto (`transport.Ended`, or its connection failing) | **the session does not end** (D8, `bootstrap.md` §9.3): proto closes that connection, tells the spawner (`Detached`) and waits for a resume. There is no idle timeout |
+| the client detaches | proto (`transport.Ended`, or its connection failing) | **the session does not end** (D8, `bootstrap.md` §9.3): proto closes that connection, tells the spawner (`Detached`) and waits for a resume |
+| the client falls silent | proto (nothing authentic from it for `SilentAfter`, 15 s, `bootstrap.md` §9.2) | **the session does not end**: proto keeps the connection, since the client may be in a dead spot, and tells the spawner `Detached`, so a plain `mosey DEST` may take it (D8 R1); when the client is heard again proto says `Attached` again |
+| detached for `IdleTimeout` (7 days, D8 R4) | spawner (a timer from the last `Detached`, stopped by each `Attached`) | the spawner hangs the shell up: SIGHUP to the shell's pid and to the pty's foreground process group (`TIOCGPGRP` on its master), as a hangup does; the shell's exit is then the first row. If the shell has not exited `HangupGrace` (10 s) later, the teardown below |
+| `mosey -kill NAME` | spawner (`Hangup` on the attach socket, §2.6) | as the idle timeout |
 | another client attaches | proto (`Listener.Accept`) | **the session does not end**: the listener revokes the old connection (D26, `transport.md` §8.3) and proto serves the new one |
 | emu's restart budget is spent | spawner (§5.2) | **the session does not end.** The spawner pauses restarts for `EmuCooldown`, tells proto (`EmuPaused`), and tries again; the shell and proto live on. An emu failure never ends a session (§5.2) |
 | proto exits or dies | spawner (`wait4`) | the session ends: with proto gone nothing holds the keys or the screen, and the resume slice does not restart it (§5.4). The spawner's own reference to the pty master is kept for a later slice that does |
@@ -327,19 +330,30 @@ since it holds the keys.
   its own [S1 `resume.go`]. The directory's mode already keeps other users
   out; this is defence in depth.
 - **The exchange.** Spawner → peer: the greeting (`bootstrap.md` §9.2.1),
-  one message, not an IPC message. Peer → spawner: `ClientLine` (0x40),
-  within T2, or nothing (a lister closes). Spawner → peer: `Ready` (0x41)
-  or `Failed` (0x42), then close. The spawner reads with `recvmsg` and
-  closes any fd that arrives, as on B (§3.1).
+  one message, not an IPC message. Peer → spawner, within T2: `ClientLine`
+  (0x40), a resume, answered by `Ready` (0x41) or `Failed` (0x42), then
+  close; or `Hangup` (0x43, `mosey -kill`), answered by the hangup of
+  §2.4 and then close, with nothing sent; or nothing (a lister closes).
+  The spawner reads with `recvmsg` and closes any fd that arrives, as on B
+  (§3.1).
 - **What the spawner checks** of the `ClientLine`: it parses
-  (`bootstrap.ParseClientLine`, whole and canonical), it is a resume, its
-  `swver` is the spawner's, its SID is the session's or `AnySession`,
-  and its public key is an X-Wing key (`agent` may be either: the
+  (`bootstrap.ParseClientLine`, whole and canonical), it is a bare
+  `resume:SID` (the launcher has chosen, under its lock, and checked any
+  holder, `bootstrap.md` §9.2), its `swver` is the spawner's, its SID is
+  the session's, and its public key is an X-Wing key (`agent` may be either: the
   resuming client's own bootstrap triggered its own bind, and whether its
   connection carries the agent is the hello's business, `agent.md` §4.1)
   (`handshake.CheckPublicKey`). Then it sends proto `Resume` and waits up
   to T3 for the `Credential`, which it checks as in §3.4, and also that
-  its `sessionid` is the session's.
+  its `sessionid` is the session's. Once it has sent `Ready` the greeting
+  says `attached`, held by that credential, for `handshake.CredentialTTL`
+  unless an `Attached` or `Detached` comes first (`bootstrap.md` §9.2
+  "The lock").
+- **The name.** The spawner takes the session's name from its first
+  `ClientLine`, which the launcher has made `new:NAME`; a first line
+  without a name is refused. The name is in every greeting and in the
+  log; proto never needs it, but the credential line carries it, so
+  `Start` gives it to proto to print (§3.3).
 - **Bounds.** At most `MaxAttachConns` = 4 connections are served at once
   [choice: a resume takes milliseconds; more are closed at once]; resumes
   reach proto one at a time, in order.
@@ -427,6 +441,7 @@ socket. `agent.md` §4 is its full rule; in short:
 | 0x40 | ClientLine | launcher → spawner | 0 |
 | 0x41 | Ready | spawner → launcher | 0 |
 | 0x42 | Failed | spawner → launcher | 0 |
+| 0x43 | Hangup | launcher (`--serve=kill`) → spawner | 0 |
 
 The high nibble names the direction, so a stray message is easy to spot
 in a trace. Unlisted types are refused.
@@ -447,8 +462,9 @@ Offsets and lengths in bytes.
 | 8 | 1 | family | 0 (no advertised address: the line's `-`), 4 or 6 |
 | 9 | 0, 4 or 16 | advertised address | §2.2; unmapped, not unspecified, no zone |
 | 9, 13 or 25 | 1216 | client public key | the X-Wing encapsulation key from the `ClientLine` [D20]; its length is `handshake`'s constant |
+| 1225, 1229 or 1241 | 1 + n | session name | its length n, 1..32, then the `sname` (`bootstrap.md` §6.2), which proto puts in every credential line it mints (§2.6 "The name") |
 
-Length 1225, 1229 or 1241. fds: exactly 2, `[0]` the UDP socket, `[1]`
+Length 1227..1274. fds: exactly 2, `[0]` the UDP socket, `[1]`
 the pty master.
 
 **0x02 EmuLink** (spawner → proto). Once straight after `Start`, then
@@ -548,7 +564,7 @@ tokens proto passes on is bounded by the request's reply allowance
 **0x30 Credential** (proto → spawner): type, then the credential line,
 1..`MaxCredentialLine` bytes including its final `\n`.
 `MaxCredentialLine` = 2048 [`bootstrap.md` §6.3: the longest line is
-1829 bytes].
+1862 bytes].
 
 **0x31 Exit** (proto → spawner): type; code (1): 1 ShellExited, 3
 NoClient, 5 Error (2 was ClientClosed and is refused since the resume
@@ -563,12 +579,14 @@ deadline (T4 passed with a request outstanding), 2 violation (§5.3).
 Length 6. A generation other than the current one is ignored (the
 request crossed a restart), not refused.
 
-**0x33 Attached** (proto → spawner): type; family (1): 0 (the client's
-address is not yet validated), 4 or 6; then for 4 or 6 the address (4 or
-16 bytes, unmapped, not unspecified) and the port (2, not 0). Length 2, 8
-or 20. Proto sends it each time a client confirms a credential, with the
-connection's validated address if it has one. It is what the greeting's
-`attached`, `since` and `peer` say (§2.6). The spawner keeps a
+**0x33 Attached** (proto → spawner): type; the credential id (8) the
+connection was made with; family (1): 0 (the client's address is not yet
+validated), 4 or 6; then for 4 or 6 the address (4 or 16 bytes, unmapped,
+not unspecified) and the port (2, not 0). Length 10, 16 or 28. Proto sends
+it each time a client confirms a credential, with the connection's
+validated address if it has one, and again when a client it had reported
+silent (§2.4) is heard. It is what the greeting's `attached`, `since`,
+`peer` and `holder` say (§2.6). The spawner keeps a
 backstop of `handshake.CredentialTTL` + 10 s from the `Ready`, restarted by
 each `Resume` it forwards (`bootstrap.md` §4.5): if no `Attached` has
 come by then it ends the session itself, so a proto that hangs before its
@@ -577,8 +595,10 @@ own `Exit{NoClient}` leaves no shell running for nobody. The first
 
 **0x34 Detached** (proto → spawner): type only. Length 1. Proto sends it
 when the attached connection ends with no other taking its place: the
-client's END (`detached`), or the connection or its SSP failing. The
-greeting says `detached` from then until the next `Attached`.
+client's END (`detached`), or the connection or its SSP failing; and when
+the attached client has been silent for `SilentAfter` (§2.4). The greeting
+says `detached` from then until the next `Attached`, and the spawner's
+idle timer runs from it.
 
 **0x40 ClientLine** (launcher → spawner): type, then the line as read
 from stdin including its `\n`, 1..`MaxClientLine` bytes.
@@ -589,6 +609,10 @@ as `Credential`.
 
 **0x42 Failed** (spawner → launcher): type, then 1..512 bytes, each
 0x20–0x7E.
+
+**0x43 Hangup** (launcher → spawner, on the attach socket only): type
+only. Length 1. `mosey -kill` (`bootstrap.md` §9.5): the spawner hangs the
+shell up as for the idle timeout (§2.4) and closes the connection.
 
 ### 3.4 What the spawner accepts from proto
 
@@ -1320,6 +1344,10 @@ is its threads of control and the ordering rules the IPC imposes:
 | T9: emu after E closes | 1 s | spawner | [derived] |
 | `MaxAttachConns`: attach-socket connections served at once | 4 | spawner | [choice] §2.6 |
 | greeting deadline (launcher, lister) | 2 s | launcher | [choice] `bootstrap.md` §11 |
+| `SilentAfter`: a silent client counts as detached | 15 s | proto | [D] `bootstrap.md` §9.2: five 3 s heartbeats (D11) |
+| `IdleTimeout`: a detached session is hung up | 7 days | spawner | [D] Dan, D8 R4 |
+| `HangupGrace`: SIGHUP, then the teardown | 10 s | spawner | [choice] `bootstrap.md` §9.3 |
+| a resume's hold on the greeting | `handshake.CredentialTTL`, 30 s | spawner | [derived] `bootstrap.md` §9.2 |
 | emu restart backoff | 50 ms, ×2, ≤ 5 s; reset after 60 s alive | spawner | [S4 §3.8] |
 | emu restart budget | 10 per 60 s | spawner | [S4 §3.8] |
 | `EmuCooldown`: pause once the budget is spent | 60 s, then a fresh budget; never ends the session | spawner | [derived: the budget window; §5.2] |
@@ -1501,10 +1529,20 @@ it lands, with the duration and exec count in the commit message.
 - A resume through the socket, with stub proto: greeting, `ClientLine`,
   `Resume` forwarded, `Credential` checked (a different `sessionid`,
   `addr`, `port` or `swver` is a violation), `Ready` returned. A wrong
-  SID, another `swver`, `new` or a bad key is `Failed`, and
-  proto never hears of it. `AnySession` is accepted.
+  SID, another `swver`, `new`, a resume with a holder, or a bad key is
+  `Failed`, and proto never hears of it.
 - A lister that closes after the greeting changes nothing.
-- The greeting follows `Attached` and `Detached`.
+- The greeting follows `Attached` and `Detached`, says `attached` held by
+  a resume's credential until its TTL, and carries the name.
+- `Hangup` and the idle timeout (short, injected) send the shell SIGHUP,
+  and an attach resets the idle timer.
+- The launcher's choice (`bootstrap.md` §9.2): `auto` takes the newest
+  detached and never an attached one, else starts a named session; `name`
+  takes NAME whatever its state, else starts it; `new` always starts; R3's
+  holder rule gives `session`, `taken` or the session; generated names
+  never clash.
+- `Session`: a client silent for `SilentAfter` is reported `Detached`
+  and, when heard again, `Attached`, without losing its connection.
 - `Session` (in process, netsim, synctest): a client vanishes without
   END and a new one attaches with a second credential for the same SID:
   the new one gets the whole screen and its keys reach the shell, the old

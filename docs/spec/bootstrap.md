@@ -76,7 +76,7 @@ enter raw mode, run Session
 ## 2. The command line the client accepts
 
 ```
-mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-r | -r=SESSION | -list] [-- SSH-OPTION...] DESTINATION
+mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-- SSH-OPTION...] DESTINATION
 ```
 
 - `DESTINATION` is passed to ssh unchanged: `host`, `user@host`, an alias
@@ -95,9 +95,18 @@ mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-r | -r=SESS
   They may be given as mosey flags or among the SSH options; the last one
   given wins, as in ssh ([ssh]: `ssh -A -a` resolves to `forwardagent no`,
   `ssh -a -A` to `yes`).
-- `-r` resumes the user's one session on DESTINATION; `-r=SESSION`
-  resumes that one, named by its 32 hex digits; `-list` lists the
-  sessions there and exits (§9.2, §9.4). They exclude each other.
+- With none of the next four, `mosey DESTINATION` resumes the user's
+  most recently detached session there, or starts a new one if none is
+  detached (D8 R1, §9.2). There is no resume flag.
+- `-s NAME` attaches to the session called NAME, taking it over if
+  another client has it (D26), and starts it under that name if there is
+  none (D8 R2). NAME is §6.2's `sname`: 1 to 32 letters, digits, `-`,
+  `_` and `.`, starting with a letter or digit; anything else is a usage
+  error.
+- `-new` always starts a new session, with a generated name.
+- `-list` lists the sessions there and exits (§9.4); `-kill NAME` ends
+  session NAME (§9.5). The four exclude each other. The old `-r` and
+  `-r=SESSION` are gone: `-s` replaces them.
 - `SSH-OPTION`s after `--` are filtered (§2.1) and passed to both ssh
   invocations.
 
@@ -547,22 +556,23 @@ flake makes) runs slice 1's `mosey --serve`, with no probe and no upload,
 and the log says why.
 
 **The probe and the roles.** Every command that runs a server role probes:
-`mosey DEST` (the launcher, `--serve`), `mosey -r DEST` (the launcher
-again, with a resume ClientLine) and `mosey -list DEST` (`--serve=list`,
-§9.4). The probe runs the matching binary with that command's flag, so a
-host whose only mosey is the one D7 put in `~/.cache/mosey/V/` is found by
-all three. **Only `mosey DEST` uploads.** When the probe answers
-`MOSEY-PROBE`:
+`mosey DEST`, `mosey -s NAME DEST` and `mosey -new DEST` (the launcher,
+`--serve`, each with its own ClientLine `attach`, §9.2), R3's background
+reconnect (the launcher again), `mosey -list DEST` (`--serve=list`, §9.4)
+and `mosey -kill NAME DEST` (`--serve=kill`, §9.5). The probe runs the
+matching binary with that command's flag, so a host whose only mosey is
+the one D7 put in `~/.cache/mosey/V/` is found by all of them. **Only the
+three that the user typed to get a session upload.** When the probe
+answers `MOSEY-PROBE`:
 
 | Command | What the client does |
 |---|---|
-| `mosey DEST` | §4.7.3–§4.7.8: ask, copy, start again |
-| `mosey -r DEST`, `mosey -r=SID DEST` | nothing is copied: `mosey: no mosey V on DEST, so no session of it to resume: a session started by another version is resumed with that version's mosey`, exit 1. A session runs the version that started it (§9.2 step 5), so a copy of `V` could never serve a session that `V` did not start, and a host with no `V` has no session of `V`. |
-| `mosey -list DEST` | nothing is copied: `mosey: no mosey V on DEST, so no sessions of it: mosey DEST starts one, copying mosey there`, exit 1. Listing is not a reason to install anything. |
+| `mosey DEST`, `mosey -s NAME DEST`, `mosey -new DEST` | §4.7.3–§4.7.8: ask, copy, start again |
+| R3's background reconnect (§9.2.2) | nothing is copied and nothing is asked (D8 R3): the attempt fails, is logged, and is tried again after the backoff |
+| `mosey -list DEST`, `mosey -kill NAME DEST` | nothing is copied: `mosey: no mosey V on DEST, so no sessions of it: mosey DEST starts one, copying mosey there`, exit 1. Listing or ending is not a reason to install anything. |
 
-Sessions of an older version on a host that has none of `V` are listed and
-resumed by that version's client, as §9.2 step 5 already says for a host
-that has both.
+Sessions of another version on a host are listed and resumed as §9.2
+says.
 
 `~/.cache` is literal: the remote's `XDG_CACHE_HOME` is not consulted. The
 probe, the upload and the installer must agree on one path without a round
@@ -967,7 +977,11 @@ tested). Off: the bootstrap runs with `ForwardAgent=no`, the ClientLine says
   CredentialLine whose version field is not `1`, before reading the rest,
   with an error that carries the number it saw (`*VersionError`, §10.1).
   The ErrorLine is the exception: its parser accepts any `proto`, since its
-  whole grammar is frozen. A new field or a new value means a new version. Fields marked
+  whole grammar is frozen. A new field or a new value means a new version.
+  *One exception, recorded:* the sessions slice (D8 R1–R4) added `attach`
+  values and the CredentialLine's `name` under v1, because §6.4 still
+  required the two ends to be one build, so no client and server of the
+  two grammars could meet. Fields marked
   *reserved* below have a grammar now so a later slice can start accepting
   values without changing the grammar; a v1 server refuses them with
   `unsupported`.
@@ -986,7 +1000,13 @@ swver   = 1*64( ALPHA / DIGIT / "." / "_" / "+" / "-" )   ; "dev" or "0.123.2026
 client-line = "MOSEY-CLIENT" SP proto SP swver SP attach SP agent
               SP cols SP rows SP env SP public LF
 proto   = dec                       ; = 1
-attach  = "new" / "resume:" b64(16) ; resume: §9.2; all-zero SID = AnySession
+attach  = "auto"                    ; R1: the newest detached session, else a new one (§9.2)
+        / "new"                     ; -new: a new session with a generated name
+        / "name:" sname             ; -s NAME: NAME, taken over if attached, else started
+        / "new:" sname              ; launcher → spawner only: start a session called sname
+        / "resume:" b64(16)         ; launcher → attach socket: take over session SID
+          [":" b64(8)]              ; R3: ... only if it is detached or held by this credential
+sname   = (ALPHA / DIGIT) 0*31(ALPHA / DIGIT / "-" / "_" / ".")
 agent   = "no" / "yes"              ; D25, §8
 cols    = dec                       ; 1..65535
 rows    = dec                       ; 1..65535
@@ -1004,15 +1024,16 @@ public  = b64(1216)                 ; 1622 characters
 |---|---|
 | `proto` | `bootstrap.Version` |
 | `swver` | the client's software version (`main.version`), for D7's equality check (§6.4) |
-| `attach` | `new`: start a session. `resume:SID`: attach to session SID, or with the all-zero SID (`AnySession`) to the user's one session (D8, §9.2) |
+| `attach` | which session (D8, §9.2): `auto` for a plain `mosey DEST`, `new` for `-new`, `name:NAME` for `-s NAME`, and `resume:SID:CREDID` for R3's background reconnect, naming the session and the credential this client last held it with. `new:NAME` and a bare `resume:SID` are what the launcher, having chosen, hands the session's spawner (§9.2); a launcher refuses `new:NAME` from a client with `line`. The all-zero SID is refused: no session has it |
 | `agent` | whether the client will forward an agent (D25). The server needs it at spawn time to give the shell an `SSH_AUTH_SOCK` (`agent.md` §4.1) and, for `new` and resume alike, to trigger ssh's bind (§8). Slice 1 sent `no` only and refused `yes` with `unsupported agent`; the agent slice accepts both |
 | `cols`, `rows` | the client terminal's size; a terminal that reports 0 is sent as 80×24. The server clamps it (D23, `screen.ClampSize`). The client sends its size again as the first userinput event after connecting, in case it changed during the bootstrap |
 | `env` | the client's locale and terminal variables, from the allow-list only. A variable that is unset, empty, longer than 64 bytes or holds a byte outside `vchar` is left out (logged at debug), never escaped. The server gives the locale variables to the shell; what it does with `TERM` and `COLORTERM` is `server.md`'s (the shell's `TERM` describes the server's emulator, not the client's terminal) |
 | `public` | the client's one-shot X-Wing encapsulation key, `OneShotKey.PublicKey()`, 1216 bytes [S1, measured from `crypto/hpke`] |
 
-Size: at most 3027 bytes [derived: the fixed fields and their 8 spaces come
-to 1749 with a 64-byte swver and a resume attach; env at most 1277 (156
-bytes of names, 17 × 65 for `=` and value, 16 commas); LF 1]. **`MaxClientLine` = 4096**
+Size: at most 3039 bytes [derived: the fixed fields and their 8 spaces come
+to 1761 with a 64-byte swver and the longest attach, `resume:SID:CREDID`
+at 41 bytes; env at most 1277 (156 bytes of names, 17 × 65 for `=` and
+value, 16 commas); LF 1]. **`MaxClientLine` = 4096**
 [derived: the next power of two, so the server's read bound is fixed and
 generous].
 
@@ -1031,12 +1052,13 @@ MOSEY-CLIENT 1 0.214.20261114093012 new no 211 58 COLORTERM=truecolor,LANG=en_GB
 
 ```
 cred-line = "MOSEY-CONNECT" SP proto SP swver SP addr SP port
-            SP credid SP sessionid SP psk SP public LF
+            SP credid SP sessionid SP name SP psk SP public LF
 addr      = "-" / ipv4 / ipv6       ; netip.Addr.String() form, no zone, never 4-in-6;
                                     ; not unspecified, multicast or 255.255.255.255
 port      = dec                     ; 1..65535
 credid    = b64(8)                  ; 11 characters
 sessionid = b64(16)                 ; 22 characters
+name      = sname                   ; §6.2, 1..32 characters
 psk       = b64(32)                 ; 43 characters
 public    = b64(1216)               ; 1622 characters
 ```
@@ -1048,6 +1070,7 @@ public    = b64(1216)               ; 1622 characters
 | `port` | the UDP port the spawner bound; likewise the spawner's, checked |
 | `credid` | `handshake.Credential.ID` [S1: 8 bytes, our choice] |
 | `sessionid` | `Credential.SessionID`, 16 bytes; names the session for resume (D8) and the logs |
+| `name` | the session's name (D8 R2): the one the user gave with `-s`, or the one the launcher generated. The client shows it and keeps it, in memory only, for R3. Its grammar is letters, digits and `-_.`, so it is safe to print as it is |
 | `psk` | `Credential.PSK`, 32 bytes [S1] |
 | `public` | `Credential.ServerPublic`, the server's one-shot X-Wing key, 1216 bytes [S1] |
 
@@ -1061,8 +1084,8 @@ and `ff00::/8` (`IsMulticast`), and the limited broadcast
 belong to the grammar and the fuzzer; the checks that need the client's own
 interfaces or config are §7.2's.
 
-Size: at most 1829 bytes [derived: 13 + 1 + 64 + 39 (longest IPv6 text) +
-5 + 11 + 22 + 43 + 1622, 8 spaces, LF]. **`MaxCredentialLine` = 2048**
+Size: at most 1862 bytes [derived: 13 + 1 + 64 + 39 (longest IPv6 text) +
+5 + 11 + 22 + 32 + 43 + 1622, 9 spaces, LF]. **`MaxCredentialLine` = 2048**
 [derived].
 
 The client turns it into a `handshake.Credential` (ID, SessionID, PSK,
@@ -1095,8 +1118,8 @@ generic message below, with the code shown in it). The codes v1 defines:
 | `line` | the stdin line is malformed or not alone | `-` | `mosey: the server could not read this client's request: a bug, please report it` |
 | `version` | the ClientLine's `proto` is not the server's, **or** its `swver` is not byte-for-byte the server's (for a resume, the session's, §9.2 step 5) | the server's (or session's) `swver` | new: `mosey: the remote mosey is version D, this is V: install V there or pass -remote` (D7 slice: upload, retry once). Resume: `mosey: the session runs version D; this is V: resume it with mosey D, or end it from a new session` |
 | `unsupported` | a reserved value the server does not yet accept (slice 1 sent it for `agent=yes`; no v1 value is reserved now) | the field's name | `mosey: the remote mosey can't do F yet` |
-| `session` | `resume:SID` names no session of this user that answers, or `AnySession` finds none (§9.2) | `-` | `mosey: no session to resume on DEST` |
-| `ambiguous` | `AnySession` finds more than one session (§9.2) | their count | `mosey: N sessions on DEST: name one with -r=SESSION (mosey -list DEST shows them)` |
+| `session` | `resume:SID…` names no session of this user that answers (§9.2) | `-` | R3's reconnect (§9.2.2): `mosey: session NAME on DEST has ended: its shell exited, or the host restarted` |
+| `taken` | R3's `resume:SID:CREDID` finds its session held by another credential than CREDID: another client has taken it over (§9.2.2, D26) | when that client attached, in unix seconds | `mosey: session NAME taken over by another client at TIME` (exit 3, as §9.1) |
 | `internal` | the server failed to start the session; stderr says why | `-` | `mosey: the server failed to start (see above)` |
 | any other word | a later server's code | any | `mosey: the server refused: CODE (see above)` |
 
@@ -1372,7 +1395,7 @@ process of the user's can set its own.
 
 ---
 
-## 9. Exclusive attach and resume (D26, D8)
+## 9. Sessions: exclusive attach, resume, names, lifetime (D26, D8)
 
 ### 9.1 Exclusive attach (D26)
 
@@ -1385,6 +1408,10 @@ credentials of the session are not cancelled; they expire by their TTL
 (30 s), and if one is confirmed it takes over in turn: each came from an
 SSH login, and each SSH login is the user.
 
+Which commands may take over is §9.2's: only `mosey -s NAME DEST`, and
+R3's reconnect of a session its own client still holds (§9.2.2). A plain
+`mosey DEST` never takes an attached session (D8 R1, D26).
+
 For a `new` attach there is nothing to revoke. The kicked client, on the
 `transport.Revoked` event, restores the terminal and prints
 
@@ -1396,82 +1423,122 @@ mosey: session taken over from ADDR:PORT at 2026-11-14T09:30:12+00:00
 RFC 3339 to the second), then exits with status 3. It does not reconnect:
 this is the "cut off a stolen client" property of D26.
 
-**The limit of that message.** The kicked client learns why only from a
+**The limit of that message.** The kicked client learns of it from a
 REVOKED frame, and the server keeps those for the tombstone's 60 s
 (`transport.md` §8.3). A client that sends nothing in that minute, a
 laptop asleep while the session is resumed from a phone, wakes to
-silence: its keys are gone on the server, so it probes on a stale screen
-and never prints the message. Its keys are useless to anyone either way,
-so the cut-off itself holds; only the explanation is lost. A longer-lived
-signal is open question D (§14).
+silence. Its keys are useless to anyone either way, so the cut-off itself
+holds. Since the sessions slice it still learns why: after `ReconnectAfter`
+of silence it tries to reconnect (§9.2.2), the launcher answers `taken`
+because another credential holds the session, and the client prints
+`mosey: session NAME taken over by another client at TIME` and exits 3.
+That message lacks the address, which the ErrorLine's frozen grammar
+cannot carry (§6.4).
 
-### 9.2 Resume (D8)
+### 9.2 Resume and names (D8 R1, R2)
 
 Resume is a new SSH login and a new handshake whose credential is vouched
 for by that login; nothing transport- or crypto-related is ever kept on
 disk, by either side (D8; [S1] §1.4). It covers a client that is gone: a
 reboot, a crash, a closed terminal, a laptop left behind, another device.
-A dead spot *within* one client's life needs no resume: the transport keeps
+A dead spot *within* one client's life is roaming's: the transport keeps
 its keys through any outage and the path follows the client (D21), so the
-same client carries on once packets flow again (`transport.md` §7).
+same client carries on once packets flow again (`transport.md` §7); only
+when that cannot work does the running client resume (§9.2.2).
 
-**The client's command line** [choice: the simplest that covers a reboot
-and a second device without the client keeping state]:
+**Session state lives only on the remote host** (D8). The client keeps no
+list of sessions and no id on disk: the greetings of §9.2.1 are the only
+record, so a second device sees exactly what the first would.
 
-| Command | ClientLine `attach` | Server picks |
+**Names** (D8 R2). Every session has one, `sname` (§6.2): 1 to 32
+letters, digits, `-`, `_` and `.`, starting with a letter or digit,
+compared byte for byte. It is the user's, given with `-s NAME`, or
+generated by the launcher as `ADJECTIVE-NOUN` from two word lists of 64
+of mosey's own (`server.GenerateName`), so 4096 names: a draw that
+clashes with a session that answers is drawn again, up to 32 times, after
+which the name gets `-` and four hex digits [choice]. The name travels in
+the CredentialLine (§6.3), so the client can say it, and in the greeting
+(§9.2.1), so a launcher can find it.
+
+**The commands** (D8 R1, R2):
+
+| Command | ClientLine `attach` | What the launcher does, holding the lock |
 |---|---|---|
-| `mosey DEST` | `new` | a new session, always, as Mosh does: a plain `mosey DEST` never takes over anything |
-| `mosey -r DEST` | `resume:` + 22 `A`s (the all-zero SID, **`AnySession`**) | the user's one session on that host; none is `session`, several is `ambiguous` (below) |
-| `mosey -r=SID DEST` | `resume:SID` | session SID, given as its 32 hex digits (as `-list` shows them) |
-| `mosey -list DEST` | none: runs `mosey --serve=list` (§9.4) | |
+| `mosey DEST` | `auto` | of the sessions that are `detached` (below), the one with the newest `since`, taken with `resume:SID`; if none is detached, a new session with a generated name, `new:NAME`. It never takes a session that is `new` or `attached` |
+| `mosey -s NAME DEST` | `name:NAME` | session NAME whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
+| `mosey -new DEST` | `new` | a new session with a generated name, `new:NAME` |
+| R3's reconnect | `resume:SID:CREDID` | §9.2.2 |
+| `mosey -list DEST` | none: `--serve=list` (§9.4) | |
+| `mosey -kill NAME DEST` | none: `--serve=kill NAME` (§9.5) | |
 
-The all-zero SID is never drawn for a session (proto redraws it; the
-chance is 2^-128), so `AnySession` is a value of §6.2's grammar, not a
-new grammar. The client keeps no list of sessions: the server's is the
-only one, so a second device sees exactly what the first would.
+**What counts as detached.** A greeting says `detached` when its last
+client said it was leaving (END `detached`, §9.3), when that client's
+connection failed, or when proto has heard nothing authentic from it for
+**`SilentAfter` = 15 s** [D: five of D11's 3 s heartbeats, the same
+interval after which the client itself stops relying on roaming alone,
+§9.2.2]. The last is what lets R1 give a session back after the client's
+machine crashed, lost power or rebooted without a word: by the time it
+runs `mosey DEST` again the session reads `detached`. A silent client that
+is heard again (the dead spot ended) is `attached` again with no resume;
+if a plain `mosey DEST` from elsewhere took the session meanwhile, the
+returning client finds itself revoked (§9.1). The greeting's `since` is
+the moment of the last change, so "most recently detached" is the newest
+`since` among the detached.
 
-1. **Client.** It bootstraps exactly as §4–§7 with a fresh one-shot key
-   and `attach=resume:SID`. Its `cols`/`rows` are its own terminal's.
-2. **Launcher.** It checks the protocol version as for `new`, but **not**
-   its own `swver` (step 5), and triggers ssh's bind before printing the
-   line as for `new` (§4.4 step 4, §8) when `agent=yes`: the resuming
-   client captures its own bind from its own SSH login. It finds the
-   session's attach socket, `R/mosey/SID-HEX/attach.sock` (`server.md`
-   §2.6 says what `R` is and how the directory is checked), and connects.
-   For `AnySession` it connects to every `R/mosey/*/attach.sock` and keeps
-   those that answer with a greeting: none is `MOSEY-ERROR 1 session -`,
-   more than one is `MOSEY-ERROR 1 ambiguous N` (N their count, in
-   decimal), exactly one is the session. A named SID with no socket, or
-   one that does not answer, is `MOSEY-ERROR 1 session -`.
+**The lock.** Choosing and starting are one step per host and user: the
+launcher takes an exclusive `flock` on `R/mosey/lock` (made `0600` with
+`O_NOFOLLOW` in `R/mosey`, which is checked first as `server.md` §2.6
+says) before it reads any greeting, and holds it until it has the
+credential line or has failed. Waiting for it is bounded by T2 (15 s), and
+`flock` lets go when its holder exits, so a launcher that dies leaves no
+lock behind. Two `mosey DEST` started together, a terminal restoring its
+tabs, therefore never choose the same detached session, and two
+`-s NAME` never start two sessions called NAME. A launcher that took a
+session has its spawner's word that a credential is out for it: from
+then until that credential's TTL (30 s) has passed, the greeting says
+`attached` with that credential as its holder (§9.2.1) even before its
+client confirms, so the next launcher does not choose it too. If nobody
+confirms in that time the greeting says again what it said before.
+
+The steps:
+
+1. **Client.** It bootstraps exactly as §4–§7 with a fresh one-shot key and
+   its `attach`. Its `cols`/`rows` are its own terminal's.
+2. **Launcher.** It checks the protocol version as for any line, and
+   triggers ssh's bind before printing the line (§4.4 step 4, §8) when
+   `agent=yes`, so a resuming client captures its own bind from its own
+   SSH login. It takes the lock, connects to every `R/mosey/*/attach.sock`
+   (`server.md` §2.6 says what `R` is and how the directories are
+   checked), keeps those that answer with a greeting within 2 s, and
+   chooses as the table says. To start a session it rewrites the line's
+   `attach` as `new:NAME` and goes on as §4.4 does, starting a spawner of
+   its own. To take one it closes every other connection, rewrites the
+   line's `attach` as `resume:SID` and sends it to that session's spawner.
+   A `new:NAME` or the all-zero SID from a client is `MOSEY-ERROR 1 line -`.
 3. **Spawner.** The session's spawner owns the socket. It checks the
    peer's uid with `SO_PEERCRED` [S1 `resume.go`], sends its greeting
    (§9.2.1), and reads the launcher's `ClientLine` (0x40). It parses it
-   again (it trusts no other process's parse), checks `swver` against its
-   own and the SID against its own (or `AnySession`), and checks the
+   again (it trusts no other process's parse) and checks it is
+   `resume:SID` for its own SID, `swver` against its own, and that the
    client's public key is an X-Wing key. It forwards the key to proto
    (`Resume`, 0x05), and proto mints a credential for the **same SID**
    with the usual TTL (30 s) and cap (2 unused, the oldest evicted and
    logged). The credential comes back as `Credential` (0x30); the spawner
    checks it as at bootstrap (§4.4 step 3), and that its `sessionid` is
-   the session's, and sends it to the launcher in `Ready` (0x41), which
-   prints it exactly as for `new`. Any failure is `Failed` (0x42), which
-   the launcher turns into `MOSEY-ERROR 1 internal -`.
+   the session's, marks the session held by it (the lock paragraph above)
+   and sends it to the launcher in `Ready` (0x41), which prints it exactly
+   as for a new session. Any failure is `Failed` (0x42), which the
+   launcher turns into `MOSEY-ERROR 1 internal -`.
 4. **Handshake and takeover** as §7 and §9.1: on confirmation every other
    transport of the session is revoked, and its client exits saying so.
-5. **Versions** (§6.4 "Whose version"). The first thing the spawner sends
-   is its greeting, whose first two fields are frozen (§9.2.1); the
-   launcher compares the ClientLine's `swver` with the session's and, on
-   a mismatch, prints `MOSEY-ERROR 1 version SESSIONVER` and exits 1
-   without sending anything. The client, having asked for a resume, does
-   not upload (§6.4).
-
-   **An upgraded client and an old session** (§14 question A, decided
-   [choice]): an upgrade ends resumability. The client says `the session
-   runs version SESSIONVER; this is V: resume it with mosey SESSIONVER, or
-   end it from a new session`, and keeps no old builds. Keeping old
-   client builds locally would make a client that runs code nobody is
-   using any more the one that holds the keys, for a case that ends at
-   the session's next `exit`. Listed for Dan.
+5. **Versions** (§6.4 "Whose version"). A greeting's fields after its
+   first two are read only by its own version (§9.2.1), so a launcher
+   chooses only among sessions of the client's own version: one of
+   another version is not taken by `mosey DEST`, not found by `-s NAME`,
+   and listed with its version alone (§9.4). The stable-protocol and
+   live-upgrade decisions (D8 V1, V2) replace this, and with it the
+   version check on a taken session's greeting, which can no longer
+   refuse anything a launcher chose.
 6. **The size** in the ClientLine is not applied by the spawner (an
    unconfirmed attach must change nothing). The client sends its size as
    the first input event once connected (§6.2), which resizes the pty and
@@ -1490,20 +1557,28 @@ The first message the spawner sends on an attach socket, one seqpacket
 message of printable ASCII (§6.1's rules), **not** an IPC message:
 
 ```
-session-line = "MOSEY-SESSION" SP swver SP sessionid SP started SP state
-               SP since SP peer LF
+session-line = "MOSEY-SESSION" SP swver SP sessionid SP name SP started
+               SP state SP since SP peer SP holder LF
 sessionid    = b64(16)
+name         = sname            ; §6.2
 started      = dec              ; unix seconds the session started
 state        = "new" / "attached" / "detached"
 since        = dec              ; unix seconds of the last change of state
 peer         = "-" / addrport   ; netip.AddrPort.String() of the last attached
                                 ; client, unmapped, no zone; "-" if none known
+holder       = "-" / b64(8)     ; the credential id that holds the session
 ```
 
 `new` is a session no client has attached to yet; `attached` one whose
-last client is (as far as the server knows: a client that vanished
-without saying so still counts) attached; `detached` one whose last
-client said it was leaving, or whose connection failed.
+client is attached, or for which a resume's credential is out and not yet
+expired (§9.2 "The lock"); `detached` one whose last client said it was
+leaving, whose connection failed, or which proto has not heard from for
+`SilentAfter` (§9.2). `holder` is the id of the credential the attached
+connection was made with, or the one the pending resume was minted with,
+and `-` when the session is `new` or `detached`. A credential id is not
+secret: it travels in the clear in msg1 (`transport.md` §3.4), and only
+the user's own processes can read a greeting. R3 uses it to tell "still
+held by me" from "held by someone else" (§9.2.2).
 
 **The first two fields are frozen forever** (`MOSEY-SESSION` and
 `swver`), so a launcher of any version can read any session's version:
@@ -1511,37 +1586,111 @@ client said it was leaving, or whose connection failed.
 the second space. The rest is this version's, parsed by `ParseSessionLine`
 only when the versions are equal. Both parsers are canonical and fuzzed.
 `MaxSessionLine` = 256 bytes [derived: the longest line is 13 + 64 + 22 +
-20 + 8 + 20 + 47 + 6 spaces + LF = 201].
+32 + 12 + 8 + 12 + 47 + 11, 8 spaces and LF = 230, with the 12-digit
+bound on the times].
 
-### 9.3 How long a session lives
+#### 9.2.2 Reconnect (D8 R3)
 
-[choice, listed for Dan] **A session lives until its shell exits.**
+While the client runs, a dead spot is ridden out by roaming (D21). Roaming
+cannot help when the server's half of the transport is gone or never
+hears the client again: proto replaced by a live upgrade (D8 V2), a NAT or
+firewall that drops the UDP flow for good while SSH still works, or a
+laptop asleep past the server's tombstone. So the client also resumes its
+own session, in the background, and never asks the user anything:
+
+- **When.** Once no authentic packet has arrived for **`ReconnectAfter` =
+  15 s** [D: five of D11's 3 s heartbeats; the server's `SilentAfter` is
+  the same, so each side gives up on the other at about the same moment],
+  the client starts trying, while it goes on sending on the old transport.
+- **Each try** is a whole bootstrap (§4–§7) with a fresh one-shot key and
+  `attach = resume:SID:CREDID`: SID the session's, CREDID the credential
+  its current transport was made with. Its ssh runs with `-o
+  BatchMode=yes` (ssh_config(5): no passphrase, password or host-key
+  question is put; a login that would need one fails), its stderr goes to
+  the client's log and never to the screen, nothing is copied over
+  (§4.7.1), and the agent's bind is captured afresh, so the new transport
+  forwards this login's agent. A try that has not dialled within
+  `ReconnectTry` = 60 s [D: twice the 30 s credential TTL, the longest a
+  healthy try can need] is abandoned.
+- **Backoff.** The first try starts at 15 s of silence; after a failed try
+  the next waits 2 s, doubling to at most 60 s [D: a try is one SSH
+  login; 60 s keeps a day-long outage to about 1440 of them, and puts a
+  working session at most a minute after the network returns when
+  roaming cannot]. It starts from 2 s again once the session hears from
+  the server.
+- **The launcher's answer** to `resume:SID:CREDID`, under the lock: no
+  session SID that answers is `MOSEY-ERROR 1 session -`. A session that is
+  `detached`, or whose `holder` is CREDID, is taken as §9.2 step 2 says:
+  the second case is a path broken one way only (the server still hears
+  the client, so it never went `detached`), and the takeover revokes this
+  client's own old transport. A session any other credential holds is
+  `MOSEY-ERROR 1 taken SINCE`, SINCE its greeting's `since`.
+- **The swap.** Before it dials, the try checks the old transport is still
+  silent: if anything authentic has arrived since the try began, roaming
+  has won, the try is dropped and its credential expires unused (30 s,
+  §4.5). Otherwise it dials. The confirmation revokes the old transport
+  (D26), and a REVOKED arriving on it while this client's own dial is in
+  flight is not a takeover: the client waits for its dial, and only if
+  that fails exits as §9.1 says. On success the terminal stays raw and the
+  screen stays up; the new transport's SSP starts from scratch, so its
+  first frame is the whole screen; prediction starts afresh; the size goes
+  as the first input event again. Keystrokes typed during the silence that
+  the server had not acknowledged are dropped [choice: the old proto may
+  or may not have written them to the pty, and sending them again could
+  type them twice].
+- **How it ends.** `session`: the client restores the terminal, prints
+  `mosey: session NAME on DEST has ended: its shell exited, or the host
+  restarted` and exits 1 [choice: it cannot tell which]. `taken`: `mosey:
+  session NAME taken over by another client at TIME` and exit 3, as
+  §9.1. Every other failure (ssh exiting 255, a timeout, no mosey of this
+  version, `internal`, a handshake that does not complete) is logged and
+  tried again after the backoff.
+- **Open (PLAN O15).** A try never takes a session another client holds:
+  D26 says only an explicit `-s` takes over, and a stolen laptop that
+  wakes must not take its session back. The other answer, a try that
+  takes over as `-s` does, is one branch in the launcher (`reconnect` in
+  `internal/server/choose.go`). Listed for Dan.
+
+### 9.3 How long a session lives (D8 R4)
 
 | The session | Ends when |
 |---|---|
 | has never had a client | every credential minted for it has expired unconfirmed (§4.5: 30 s after the last one), or the spawner's backstop fires |
-| has had a client | its shell exits; or the spawner is signalled; or proto dies (§9.2 step 8). **Never** because its client went away |
+| has had a client | its shell exits: `exit`, Ctrl-D, or anything else that ends it; or `mosey -kill NAME DEST` (§9.5); or it has been `detached` for **`IdleTimeout` = 7 days** [D, Dan 2026-11-15]; or the spawner is signalled; or proto dies (§9.2 step 8). **Never** because its client went away |
 
+`-kill` and the idle timeout hang the shell up: the spawner sends SIGHUP
+to the shell and to the pty's foreground process group, as a hangup does
+[kernel ABI, tty hangup], and the shell's exit then ends the session the
+usual way (`server.md` §2.4), so an attached client is told (END
+`shell exited`) and exits 0. A shell that ignores SIGHUP is hung up for
+good after `HangupGrace` = 10 s [choice]: the teardown closes the last pty
+master, then SIGKILLs it after T8.
+
+The idle time counts from the moment the session became `detached`
+(§9.2), and each attach resets it. **Configurability** (PLAN O14): it is a
+constant. A per-session value would need a ClientLine field and a host
+one a server config file, neither of them cheap; `SpawnerConfig` has a
+field for tests.
+
+There is **no detach key**: whatever the user types goes to the shell.
 A client that goes away says so if it can: on a signal (SIGTERM, SIGHUP:
 a closed terminal, a logout, a shutdown) or the end of its terminal's
 input, it sends END with reason `detached` (`transport.md` §8.4), puts the
 terminal back, prints
 
 ```
-mosey: detached from session SID-HEX; resume with: mosey -r=SID-HEX DEST
+mosey: detached from session NAME; resume it with: mosey -s NAME DEST
 ```
 
-and exits 0. The server marks the session `detached` and keeps it. A client
-that cannot say so (power loss, a crash, a network that never comes back)
-leaves the session `attached` to a connection nobody holds, which the next
-resume revokes.
+and exits 0. The server marks the session `detached` and keeps it. A
+client that cannot say so (power loss, a crash, a network that never comes
+back) leaves the session `attached` until proto has heard nothing for
+`SilentAfter`, and then `detached`, so the next plain `mosey DEST` takes
+it (§9.2).
 
-There is **no idle timeout** for a detached session, as there is none for
-Mosh's server or a tmux session: a session is resumable for as long as its
-shell runs, and `exit` in the shell is how it ends. `mosey -list` (§9.4)
-shows what is still running. The hazards of §4.5 ("Known hazard") apply
-unchanged: with logind's `KillUserProcesses=yes` the session dies with the
-SSH login that started it.
+The hazards of §4.5 ("Known hazard") apply unchanged: with logind's
+`KillUserProcesses=yes` the session dies with the SSH login that started
+it.
 
 ### 9.4 Listing sessions
 
@@ -1550,23 +1699,51 @@ command (§4.1, its last argument `exec /bin/sh -c 'exec SERVER
 --serve=list'`, or with no `-remote` §4.7.2's probe running
 `--serve=list`, which finds the copy in `~/.cache/mosey/V/`), with stdin
 closed. A probe that answers `MOSEY-PROBE` is reported as §4.7.1 says,
-not shown as a list, and nothing is copied. The
-server connects to every attach socket as the launcher does for
-`AnySession`, reads each greeting, and prints one line per session that
-answered, oldest first, then exits 0:
+not shown as a list, and nothing is copied. The server connects to every
+attach socket as the launcher does (without the lock: it chooses
+nothing), reads each greeting, prints one line per session that answered,
+oldest first, and exits 0:
 
 ```
-SESSION                           STATE     SINCE                 PEER                 VERSION
-0f3a…(32 hex digits)              detached  2026-11-14T09:30:12Z  192.0.2.7:50123      0.214.20261114
+list-line = "MOSEY-LIST" SP "1" SP lname SP lstate SP lsince SP swver LF
+lname     = sname / "-"         ; "-": another version's session (§9.2 step 5)
+lstate    = "new" / "attached" / "detached" / "-"
+lsince    = dec / "-"           ; unix seconds of the last change of state
 ```
 
-or `no sessions`. The text is for people: the client does not parse it,
-it copies ssh's stdout to its own through the §6.5 filter (D9), so a
-hostile server can print only harmless text. The client then adds
-`resume one with: mosey -r=SESSION DEST`.
+The client reads ssh's stdout (at most 256 KiB), skips anything that is
+not a `MOSEY-` line (a login shell's chatter, §6.5), and parses each
+`MOSEY-LIST` line with `ParseListLine`: canonical, at most `MaxListLine` =
+160 bytes [derived: 10 + 1 + 32 + 8 + 12 + 64, 5 spaces and LF = 133],
+and fuzzed, since a hostile server writes it. At most `MaxListed` = 1024
+lines are shown [choice]; a line that does not parse is not shown, and
+the client says how many it dropped. Every field it prints is from a
+grammar of printable ASCII with no space, so the table the client lays out
+itself cannot carry an escape sequence (D9):
+
+```
+NAME          STATE     SINCE                      VERSION
+quiet-heron   detached  2026-11-14T09:30:12+00:00  0.214.20261114
+```
+
+`SINCE` is in the client's local zone, as §9.1's times are; `-` fields
+print as `?`. With no line it prints `no sessions on DEST`.
 
 A lister sends no ClientLine; the spawner sees the connection close after
 its greeting and does nothing.
+
+### 9.5 Ending a session
+
+`mosey -kill NAME DEST` runs `mosey --serve=kill NAME` like `-list` (the
+name is an `sname`, which needs no quoting in any shell, §4.1). The server
+finds the session called NAME among those that answer, as `-list` does,
+and after its greeting sends it `Hangup` (0x43, `server.md` §2.6); the
+spawner hangs the shell up (§9.3), and closes the connection once it has
+sent the signals. The server prints nothing and exits 0, and the client
+says `mosey: ended session NAME on DEST`. With no session called NAME the
+server prints `MOSEY-ERROR 1 session -` and exits 1, and the client says
+`mosey: no session called NAME on DEST` and exits 1. Any other failure is
+reported as `-list`'s are.
 
 ---
 
@@ -1579,15 +1756,17 @@ its greeting and does nothing.
 | ssh cannot start | `mosey: running PROGRAM: ERR` | 1 |
 | `ErrNoLine`, ssh exit 255 | (ssh has already said why on stderr) `mosey: ssh to DEST failed` | 1 |
 | `ErrNoLine`, ssh exit 126/127 (`ErrNoServer`, with `-remote`) | `mosey: no mosey at SERVER on DEST: install it there or pass -remote` | 1 |
-| ProbeLine (`ErrNoServer`, no `-remote`) | the upload of §4.7, and its messages; for `-r` and `-list`, §4.7.1's messages and no upload | 1 |
+| ProbeLine (`ErrNoServer`, no `-remote`) | the upload of §4.7, and its messages; for `-list` and `-kill`, §4.7.1's messages and no upload; for R3's reconnect, a log line and another try | 1 |
 | `ErrNoLine`, other exit | `mosey: the remote mosey exited with status N` | 1 |
 | `ErrBadLine` | `mosey: DEST sent a malformed mosey line` | 1 |
 | `ErrBadAddr` | §7.2 | 1 |
 | ErrorLine | per §6.4 | 1 |
 | Dial timeout | §7.3 | 1 |
-| taken over | §9.1 | 3 |
+| taken over (REVOKED, or R3's `taken`) | §9.1, §9.2.2 | 3 |
+| R3's reconnect finds no session | §9.2.2 | 1 |
 | detached (a signal, or the terminal's input ended) | §9.3 | 0 |
-| `-list` | the server's list (§9.4), filtered | 0, or 1 if ssh failed |
+| `-list` | the table of §9.4, laid out by the client | 0, or 1 if ssh failed |
+| `-kill` | §9.5 | 0, or 1 if there is no such session or ssh failed |
 | shell exited | none | 0 |
 
 Errors are values (§10.1), matched with `errors.Is`/`errors.As` in
@@ -1612,8 +1791,11 @@ const (
 // ClientLine is §6.2. Marshal always writes proto = Version.
 type ClientLine struct {
 	SoftwareVersion string            // swver
-	Resume          bool              // attach: false = "new"
-	SessionID       [16]byte          // attach = resume:SID, when Resume
+	Attach          Attach            // AttachNew (the zero value), AttachAuto, AttachName, AttachResume
+	Name            string            // "name:NAME", or "new:NAME" ("" is plain "new")
+	SessionID       [16]byte          // "resume:SID"
+	Holder          [8]byte           // "resume:SID:CREDID", when HasHolder (R3)
+	HasHolder       bool
 	Agent           bool              // agent
 	Cols, Rows      uint16            // 1..65535
 	Env             map[string]string // allow-listed names only; Marshal sorts
@@ -1627,9 +1809,13 @@ type CredentialLine struct {
 	Port            uint16
 	CredentialID    [8]byte
 	SessionID       [16]byte
+	Name            string // sname
 	PSK             [32]byte
 	Public          []byte // 1216 bytes
 }
+
+// ValidSessionName is §6.2's sname.
+func ValidSessionName(string) bool
 
 // ErrorLine is §6.4; Detail "" is "-".
 type ErrorLine struct {
@@ -1643,25 +1829,41 @@ const (
 	CodeVersion     = "version"
 	CodeUnsupported = "unsupported"
 	CodeSession     = "session"
-	CodeAmbiguous   = "ambiguous"
+	CodeTaken       = "taken" // R3: another credential holds the session (§9.2.2)
 	CodeInternal    = "internal"
 )
-
-// AnySession is the SessionID of a resume that asks for the user's one
-// session (§9.2); no session is ever given it.
-var AnySession [16]byte
 
 // SessionLine is §9.2.1, the spawner's greeting on its attach socket.
 type SessionLine struct {
 	SoftwareVersion string
 	SessionID       [16]byte
+	Name            string
 	Started         time.Time // to the second
 	State           SessionState // New, Attached, Detached
 	Since           time.Time
 	Peer            netip.AddrPort // the zero AddrPort is "-"
+	Holder          [8]byte        // HasHolder false is "-"
+	HasHolder       bool
 }
 
 const MaxSessionLine = 256
+
+// ListLine is §9.4: one session as --serve=list prints it, and the
+// client parses it; Name "" and State 0 are "-", Since zero is "-".
+type ListLine struct {
+	Name            string
+	State           SessionState
+	Since           time.Time
+	SoftwareVersion string
+}
+
+const (
+	MaxListLine = 160
+	MaxListed   = 1024
+)
+
+func MarshalListLine(ListLine) []byte
+func ParseListLine([]byte) (ListLine, error)
 
 func MarshalSessionLine(SessionLine) []byte
 func ParseSessionLine([]byte) (SessionLine, error)
@@ -1751,7 +1953,9 @@ type SSH struct {
 	Server       string // the remote mosey binary, §4.1's charset; "" is §4.7's probe
 	Version      string // this client's swver, for the probe (§4.7.2)
 	AgentCapture string // the capture socket (§8); "" is ForwardAgent=no
-	Role         string // "" runs --serve; "list" runs --serve=list (§9.4)
+	Role         string // "" runs --serve; "list" --serve=list (§9.4); "kill" --serve=kill RoleArg (§9.5)
+	RoleArg      string // kill's session name, an sname
+	Batch        bool   // -o BatchMode=yes: R3's background reconnect never asks (§9.2.2)
 }
 
 func (s SSH) Check() error // §2 and §4.1: destination and Server rules
@@ -1796,8 +2000,8 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Name | Value | Provenance |
 |---|---|---|
 | `bootstrap.Version` | 1 | ours |
-| `MaxClientLine` | 4096 B | [derived] §6.2: at most 3027 B used |
-| `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1829 B used |
+| `MaxClientLine` | 4096 B | [derived] §6.2: at most 3039 B used |
+| `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1862 B used |
 | `MaxErrorLine` | 128 B, frozen | [derived] §6.4: at most 100 B used |
 | Session with no confirmed credential | ends after `handshake.CredentialTTL` (30 s) | [derived] §4.5 |
 | Spawner backstop (requirement on server.md) | CredentialTTL + 10 s | [choice] §4.5 |
@@ -1832,9 +2036,19 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Default size when the terminal says 0 | 80×24 | [choice]; the VT100's |
 | stderr filter line cut | 1024 B | [choice] |
 | Taken-over exit status | 3 | ours |
-| `MaxSessionLine` | 256 B | [derived] §9.2.1: at most 201 B used |
+| `MaxSessionLine` | 256 B | [derived] §9.2.1: at most 230 B used |
 | Greeting deadline (launcher, lister) | 2 s per socket | [choice]: the spawner answers at once; a hung one is skipped, not waited on |
-| Detached session lifetime | until its shell exits | [choice] §9.3 |
+| Session name (`sname`) | 1–32 B of letters, digits, `-_.` | [choice] §6.2: safe unquoted in any shell and on any terminal |
+| Generated name | `ADJECTIVE-NOUN`, 64 × 64 words; 32 draws, then `-` and 4 hex digits | [choice] §9.2 |
+| Launcher lock wait | T2, 15 s | [derived] §9.2 |
+| `SilentAfter` (server: a silent client counts as detached) | 15 s | [D] §9.2: five 3 s heartbeats (D11) |
+| `ReconnectAfter` (client: R3 starts) | 15 s | [D] §9.2.2: the same five heartbeats (PLAN O13) |
+| R3 backoff | 2 s, doubling, at most 60 s | [D] §9.2.2 (PLAN O13) |
+| `ReconnectTry` (one R3 try, to the dial) | 60 s | [D] §9.2.2: twice the credential TTL |
+| `IdleTimeout` (a detached session's shell is hung up) | 7 days | [D] Dan, 2026-11-15 (D8 R4); a constant (PLAN O14) |
+| `HangupGrace` (SIGHUP, then the teardown) | 10 s | [choice] §9.3 |
+| `MaxListLine`, `MaxListed` | 160 B, 1024 lines | [derived] §9.4: at most 133 B used; [choice] |
+| R3: no session | exit 1 | [choice] §9.2.2 |
 
 ---
 
@@ -1943,6 +2157,10 @@ durations in the commit message; 10 s each in CI):
 - `FuzzParseSessionLine`: no panic; anything accepted re-marshals to the
   identical bytes; `SessionLineVersion` agrees with it on every line it
   accepts, and never panics on any input.
+- `FuzzParseListLine`: no panic; anything accepted re-marshals to the
+  identical bytes and every field it prints is printable ASCII with no
+  space; `FuzzReadList` for the whole of `-list`'s output: at most
+  `MaxListed` rows, none longer than its fields allow.
 
 **End to end, `internal/e2e`:**
 
@@ -1974,14 +2192,23 @@ durations in the commit message; 10 s each in CI):
   `spikes/s3-agent-bind/harness` does. Never the system sshd, `~/.ssh`,
   the user's agent, or a live service. Runs the real binaries over loopback
   UDP to an interactive shell and back.
-- **Resume through real sshd** (§9.2), same harness, with sshd's
+- **Sessions through real sshd** (§9), same harness, with sshd's
   `SetEnv XDG_RUNTIME_DIR=` a throwaway directory so the attach sockets
-  live under the test: a first client starts a session and sets a shell
-  variable; a second (`-r`) takes it over, sees the variable's value
-  echoed by the same shell, and the first exits 3 saying it was taken
-  over; the second, sent SIGHUP, detaches (exit 0) and the session stays
-  (`-list` shows it `detached`); a third (`-r=SID`) resumes it and ends it
-  with `exit`, after which nothing of the session is running.
+  live under the test (`TestSessionsThroughRealSSH`): a first plain client
+  starts a session and sets a shell variable; a second plain client, the
+  first still attached, gets a new session of its own; the first, sent
+  SIGHUP, detaches and says its name; a third plain client resumes that
+  session (the variable is still set); `-s NAME` takes it over and the
+  third exits 3; `-new` starts a third session; `-list` shows every name
+  and state; `-kill NAME` ends one, whose client exits 0; and `exit` in
+  the last ends it, after which nothing of it is running.
+- **Reconnect, R3** (§9.2.2), on netsim in virtual time
+  (`TestAClientWhosePathDiesReconnectsByItselfAndKeepsItsScreen`,
+  `TestAReconnectThatFindsTheSessionGoneEndsWithAMessage`,
+  `TestAReconnectThatFindsTheSessionTakenEndsAsTakenOver`), and the
+  client loop's swap under synctest with fakes (`internal/client`).
+- **The idle timeout** (§9.3), with an injected short `IdleTimeout`, on
+  the spawner with a stub proto (`internal/server`).
 - **Auto-upload through the real sshd** (§4.7), with the remote's `HOME`
   a temporary directory (the throwaway sshd's `SetEnv HOME=`), no
   `-remote`, and a version nothing on the remote `PATH` can have: the
@@ -2011,7 +2238,9 @@ durations in the commit message; 10 s each in CI):
 | a live ControlMaster carries the bootstrap | always a fresh connection ([S3] E12, E12b) |
 | the user's config undoes a bootstrap option | ours come first; flags that beat `-o` are filtered (§2.1, §4.1) |
 | version skew between client and server | exact equality, refused before anything starts (§6.4, D7) |
-| a stolen client keeps the session | exclusive attach on any new confirmed login (§9.1, D26) |
+| a stolen client keeps the session | exclusive attach on any new confirmed login (§9.1, D26); its background reconnect never takes back a session another credential holds (§9.2.2) |
+| a hostile server prints escape sequences in `-list`'s names | the client parses each list line against a grammar of printable ASCII and lays out the table itself (§9.4, fuzzed) |
+| a hostile server sends a name that is not an `sname` | the CredentialLine refuses it (§6.3), so the client never prints one |
 | a hostile remote steers the client's UDP at a broadcast, multicast or local address | grammar refuses unspecified, multicast, limited broadcast; §7.2 refuses local directed broadcast and loopback for a non-loopback destination (threat-model §4.9) |
 | a compromised proto chooses where the client sends UDP | the spawner checks `addr`, `port`, `swver` against its own (§4.4 step 3) |
 | failed bootstraps pile up detached shells | a session with no confirmed credential ends after CredentialTTL (§4.5) |
@@ -2054,12 +2283,13 @@ E. **Old versions in `~/.cache/mosey`** (§4.7.7). Under D10 each upgrade
    (question A) would then upload that version again, so pruning waits
    for the resume slice's answer to A.
 
-D. **Telling a client taken over long ago** (§9.1). [listed for Dan] The
-   REVOKED frames last 60 s, so a client asleep through a takeover never
-   learns of it. One answer: a tombstone that lasts as long as the
-   session, keyed by the old indices, its frames sealed under the old
-   receive keys before they are erased; the cost is a few hundred bytes
-   per takeover for the session's life, and a bound on how many are kept.
+D. **Telling a client taken over long ago** (§9.1). *Answered by the
+   sessions slice*: R3's reconnect hears `taken` from the launcher and
+   says so (§9.2.2), without the address.
+
+F. **A background reconnect that finds its session held by another
+   client** (PLAN O15, §9.2.2). For Dan: it exits as taken over today;
+   it could take the session back as `-s` does.
 
 ---
 

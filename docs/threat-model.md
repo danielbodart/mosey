@@ -7,8 +7,9 @@ mechanism defends, and which risks are accepted. It grows with the slices
 shell end to end, copying mosey to the host first if it has none (D7,
 §4.13), with the user's ssh-agent forwarded over a typed channel and
 OpenSSH's bind replayed when their ssh config forwards it (D25, §4.15), and
-`mosey -r host` takes a running session over from wherever the user can SSH
-from (§4.5); while the user types, both ends send cover traffic on a fixed
+a plain `mosey host` resumes the user's most recently detached session,
+and `mosey -s NAME host` takes a named one over, from wherever the user
+can SSH from (§4.5); while the user types, both ends send cover traffic on a fixed
 tick (§4.14); and the client draws its guess at the echo of easy keys at
 once, judged against the server's cells (§4.16). Items marked **[later]** describe the
 slice that brings them, so slice 1 reserves the right hooks and claims
@@ -338,9 +339,41 @@ by carrying the challenge to the real client and relabelling the answer
 A new attach revokes every other transport of the session and wipes its
 keys; the kicked client exits with "session taken over from <addr> at
 <time>". Only this turns "SSH in again" into recovery from a stolen client
-[S1 §3.1, review item 3]: `mosey -r host` from any device the user can
-SSH from cuts the stolen one off, and its keys are erased on the server
-at once (`transport.md` §8.3).
+[S1 §3.1, review item 3]: `mosey -s NAME host` from any device the user
+can SSH from cuts the stolen one off, and its keys are erased on the
+server at once (`transport.md` §8.3). A plain `mosey host` takes only a
+session that reads `detached` (`bootstrap.md` §9.2), which includes one
+whose client has been silent for 15 s: a stolen laptop in a dead spot can
+lose its session that way too, which is the point.
+
+**The stolen client's own reconnect** (D8 R3, `bootstrap.md` §9.2.2). A
+running client that hears nothing for 15 s resumes its session over a
+fresh SSH login, by itself. That login needs whatever the user's ssh
+needs (a key, an agent), so a thief with the laptop and an unlocked key
+could already SSH in; what the rule adds is that the reconnect names the
+credential it last held, and the launcher gives it the session only if
+that credential still holds it or the session is detached. A session
+taken over by `-s` is held by another credential, so the stolen client is
+told `taken` and exits; it never takes the session back by itself. A
+thief who runs `mosey -s NAME host` by hand can, as they could SSH in.
+That a credential id is not secret does not weaken this: it is in the
+clear in every msg1 (`transport.md` §3.4), but naming it only matters to
+a launcher reached through an SSH login of the user.
+
+**Names and the lock.** Session names are chosen and checked by the
+launcher, which runs as the user, under an `flock` on `R/mosey/lock` in
+the user's 0700 directory (the file `O_NOFOLLOW`, 0600). Another user can
+neither take the lock nor see the names. A name is an `sname` (letters,
+digits, `-_.`), so it is safe in the ssh command line of `-kill`, in the
+greeting, the credential line and on the client's terminal.
+
+**Lifetime.** A session ends when its shell exits, on `mosey -kill NAME`
+(a `Hangup` over the attach socket, from a process of the user), or 7
+days after it became detached (D8 R4); the last two send the shell SIGHUP
+from the spawner, which already owned it, so no new privilege is used.
+The idle timeout bounds how long a forgotten session, with whatever its
+shell holds (an unlocked `sudo` timestamp, a forwarded agent socket that
+no client serves), stays on a host.
 
 The resume itself (`bootstrap.md` §9.2, `server.md` §2.6):
 
@@ -356,10 +389,16 @@ The resume itself (`bootstrap.md` §9.2, `server.md` §2.6):
   to disk, by either side (D8).
 - **The spawner's new input.** It now parses a `ClientLine` from any
   process of the user that connects to the socket (the same fuzzed,
-  canonical parser as at bootstrap) and two more fixed-layout messages from
-  proto (`Attached` with an address, `Detached`); it forwards only an
-  X-Wing key it has checked. Proto's new input is `Resume`, a fixed-length
-  key.
+  canonical parser as at bootstrap), `Hangup` (type only), and two more
+  fixed-layout messages from proto (`Attached` with a credential id and an
+  address, `Detached`); it forwards only an X-Wing key it has checked.
+  Proto's new input is `Resume`, a fixed-length key, and `Start`'s name,
+  which it only copies into the credential line the spawner checks.
+- **The client's new input.** The CredentialLine's `name` (an `sname`,
+  refused otherwise) and `-list`'s lines (`ParseListLine`, canonical and
+  fuzzed), from which the client lays out the table itself, so a hostile
+  server cannot put an escape sequence on the user's terminal through
+  either (D9).
 - **What a resume does not do**: it does not reach a session whose proto
   has died (R17), and it does not cross versions (`bootstrap.md` §9.2
   step 5).
@@ -1040,7 +1079,8 @@ target (architecture §6).
 | `ValidReply` admits only fixed templates | `server` | `FuzzSplitReplies`: no token holds a C0 byte but its leading ESC and terminator, and every token `ValidReply` accepts is one of the shapes; `TestForgedRepliesAreRefused` |
 | Each role's policy allows exactly its list | `sandbox` | the BPF interpreter, amd64 and arm64 |
 | emu under its sandbox cannot open, connect, exec, create sockets or signal another process | `sandbox` (linux) | a red-team battery run inside the sandboxed role, as S4's, plus `tgkill` at a sibling and `fcntl(F_SETOWN)` + `O_ASYNC`, with Landlock's signal scope off |
-| A resume revokes the old client and erases its keys; the old client exits saying who took over; nothing secret is reused | `e2e`, `server` | netsim: a client vanishes and another attaches with a new credential for the same SID; the first gets `Revoked`; real sshd: `mosey -r` takes over and the first exits 3 |
+| A resume revokes the old client and erases its keys; the old client exits saying who took over; nothing secret is reused | `e2e`, `server` | netsim: a client vanishes and another attaches with a new credential for the same SID; the first gets `Revoked`; real sshd: `mosey -s NAME` takes over and the first exits 3 (`TestSessionsThroughRealSSH`) |
+| A background reconnect never takes a session another client holds | `server`, `e2e` | the launcher's holder rule (`TestReconnectTakesItsOwnSessionAndNeverAnothers`); netsim: a reconnect told `taken` exits 3 |
 | Only the user reaches the attach socket | `server` | the directory checks refuse group/other bits, a foreign owner and a symlink; a foreign uid is closed unanswered |
 | Chaff hides keys within a run, in both directions, and idle costs nothing | `ssp` | one client datagram per 20 ms tick, all 64 B, ending 1–2 s after the last key; the server on its own grid at 64 B; an idle session sends no chaff; on every netsim profile the server's datagrams name at most 5% of keys and the LAN's wire at most 5% (`TestChaffHidesKeysOnEveryProfile`) |
 | End to end under every netsim profile | `e2e` | client and server sessions in process; real binaries over loopback through a throwaway sshd |
