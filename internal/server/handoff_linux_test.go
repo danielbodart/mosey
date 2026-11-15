@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -422,5 +424,123 @@ func TestALauncherAttachesTheSessionAsItIsWhenTheUpgradeFails(t *testing.T) {
 	case <-shell.done:
 		t.Fatal("the shell ended with the failed upgrade")
 	default:
+	}
+}
+
+// An agent connection made once the hand-off has begun (proto frozen)
+// is not the old spawner's to take: it waits in the agent socket's
+// backlog, and the newer spawner, which gets the listener, accepts it.
+// Accepted by the old one it would go to a proto about to be revoked, or
+// be closed as the old spawner lets go, and the shell's ssh-add would
+// fail (server.md §2.8).
+func TestAnAgentConnectionDuringAHandoffWaitsForTheNewerSpawner(t *testing.T) {
+	sid := [16]byte{0x4a, 5}
+	ss := startStubSessionSetUp(t, sid, SpawnerConfig{Version: handoffSessionVersion, IdleTimeout: IdleTimeout}, 0,
+		func(s *spawner) {
+			var err error
+			if s.agent, err = listenAgent(s.attach.dir); err != nil {
+				t.Fatal(err)
+			}
+			s.agentConns, s.agentDone = make(chan *os.File), make(chan struct{})
+		})
+	shell := ss.s.shell
+	t.Cleanup(func() { shell.signal(9) })
+	conn := ss.ask("0.2.1")
+	if m := ss.recv(); m != (ipc.Freeze{}) {
+		t.Fatalf("proto got %T, not Freeze", m)
+	}
+	ssh, err := net.Dial("unix", ss.s.agent.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ssh.Close()
+	ss.send(ipc.Snapshot{Fragment: snapshotOf("agent")})
+
+	st := recvFrom(t, conn).(ipc.HandoffState)
+	defer st.PTY.Close()
+	defer st.Pidfd.Close()
+	defer st.Listener.Close()
+	ag, ok := recvFrom(t, conn).(ipc.HandoffAgent)
+	if !ok || !st.Agent {
+		t.Fatal("no agent listener")
+	}
+	defer ag.Listener.Close()
+	recvFrom(t, conn) // the screen
+	if err := conn.Send(ipc.HandoffTaken{}); err != nil {
+		t.Fatal(err)
+	}
+	if m := recvFrom(t, conn); m != (ipc.HandoffReleased{}) {
+		t.Fatalf("the answer to HandoffTaken: %#v", m)
+	}
+	if m := ss.recv(); m != (ipc.Revoke{}) {
+		t.Errorf("proto got %T, not Revoke", m)
+	}
+	select {
+	case <-ss.ended:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the old spawner did not go\nlog:\n%s", ss.log.String())
+	}
+
+	// The newer spawner's turn: the connection is there to accept.
+	ag.Listener.SetReadDeadline(time.Now().Add(10 * time.Second))
+	newer := &agentListener{f: ag.Listener}
+	f, err := newer.Accept()
+	if err != nil {
+		t.Fatalf("the connection made during the hand-off is not in the backlog: %v", err)
+	}
+	defer f.Close()
+	if _, err := ssh.Write([]byte("list")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 4)
+	if _, err := io.ReadFull(f, got); err != nil || string(got) != "list" {
+		t.Errorf("the newer spawner reads %q (%v) from it, not the request", got, err)
+	}
+}
+
+// A hand-off that is not taken starts the agent socket accepting again,
+// and a connection made while it was paused reaches proto.
+func TestAnAgentConnectionDuringAnAbandonedHandoffReachesProto(t *testing.T) {
+	sid := [16]byte{0x4a, 6}
+	ss := startStubSessionSetUp(t, sid, SpawnerConfig{Version: handoffSessionVersion, IdleTimeout: IdleTimeout}, 0,
+		func(s *spawner) {
+			var err error
+			if s.agent, err = listenAgent(s.attach.dir); err != nil {
+				t.Fatal(err)
+			}
+			s.agentConns, s.agentDone = make(chan *os.File), make(chan struct{})
+		})
+	conn := ss.ask("0.2.1")
+	if m := ss.recv(); m != (ipc.Freeze{}) {
+		t.Fatalf("proto got %T, not Freeze", m)
+	}
+	ssh, err := net.Dial("unix", ss.s.agent.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ssh.Close()
+	ss.send(ipc.Snapshot{Fragment: snapshotOf("agent")})
+	st := recvFrom(t, conn).(ipc.HandoffState)
+	st.PTY.Close()
+	st.Pidfd.Close()
+	st.Listener.Close()
+	recvFrom(t, conn).(ipc.HandoffAgent).Listener.Close()
+	recvFrom(t, conn) // the screen
+	conn.Close()      // the newer spawner gives up
+
+	if m := ss.recv(); m != (ipc.Thaw{}) {
+		t.Fatalf("proto got %T, not Thaw", m)
+	}
+	ac, ok := ss.recv().(ipc.AgentConn)
+	if !ok {
+		t.Fatal("proto got no agent connection after the thaw")
+	}
+	defer ac.Conn.Close()
+	if _, err := ssh.Write([]byte("list")); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, 4)
+	if _, err := io.ReadFull(ac.Conn, got); err != nil || string(got) != "list" {
+		t.Errorf("proto reads %q (%v) from it, not the request", got, err)
 	}
 }

@@ -191,6 +191,12 @@ type spawner struct {
 	agent      *agentListener
 	agentConns chan *os.File
 	agentDone  chan struct{}
+	// agentParked and agentGo pause serveAgent for a live upgrade
+	// (pauseAgent): serveAgent says on the first that it has stopped
+	// accepting, and waits on the second to start again.
+	agentParked chan struct{}
+	agentGo     chan struct{}
+	agentPaused bool
 	// resumes carries each resume the attach socket has checked to the
 	// supervision loop, which forwards it to proto; pending is those
 	// forwarded and not yet answered, in order (proto answers in order).
@@ -697,6 +703,7 @@ func (s *spawner) supervise(ctx context.Context) error {
 		go s.serveAttach()
 	}
 	if s.agent != nil {
+		s.agentParked, s.agentGo = make(chan struct{}), make(chan struct{}, 1)
 		go s.serveAgent()
 	}
 	// An adopted session has had clients (server.md §2.8): no backstop,
@@ -808,12 +815,7 @@ func (s *spawner) supervise(ctx context.Context) error {
 				return nil
 			}
 		case f := <-s.agentConns:
-			// proto serves it or closes it; the spawner keeps no copy.
-			err := s.ctl.Send(ipc.AgentConn{Conn: f})
-			f.Close()
-			if err != nil {
-				s.log.Warn("handing proto an agent connection", "err", err)
-			}
+			s.passAgentConn(f)
 		case j := <-s.handoffs:
 			snapDue = s.startHandoff(j)
 		case <-snapDue:

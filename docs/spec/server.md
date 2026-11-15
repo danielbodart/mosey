@@ -425,7 +425,7 @@ downgraded, whichever side has a bug.
 | 0 | | a session of the older binary O runs | spawner-O: its pty master reference, the shell (its child), the attach and agent listeners. proto-O: keys, UDP socket, pty master. emu-O: its socket |
 | 1 | launcher-N (holding the lock, §9.2) | reads the greeting, takes the session, sees O is older, starts spawner-N (`--serve=spawner`, a session of its own, as for a new session) and sends it `Adopt` (0x49, B only) with the client's line rewritten to `resume:SID[:CREDID]` and the attach connection as its fd, then closes its own copy | launcher-N: nothing of the session |
 | 2 | spawner-N | checks the attach connection's peer uid (`SO_PEERCRED`: spawner-O, which made the listener) is its own, sends `HandoffRequest{1, its swver}` | the attach connection |
-| 3 | spawner-O | checks the peer's uid again (launcher-N, which connected), that the requester's version is newer than its own, that attach v1 is in its range, that no hand-off is under way and the shell runs; opens a pidfd for the shell (`pidfd_open`, Linux 5.3); sends proto-O `Freeze` | as step 0, plus the pidfd |
+| 3 | spawner-O | checks the peer's uid again (launcher-N, which connected), that the requester's version is newer than its own, that attach v1 is in its range, that no hand-off is under way and the shell runs; opens a pidfd for the shell (`pidfd_open`, Linux 5.3); stops accepting on the agent listener, so a connection the shell makes from now on waits in its backlog for whichever spawner ends up with the session (spawner-N at step 10, or spawner-O again on an abort); sends proto-O `Freeze` | as step 0, plus the pidfd |
 | 4 | proto-O | stops reading and writing the pty: the reader parks once what it read has reached emu-O (a read deadline wakes it), the writer once its current write is done. Whatever the shell writes from then on stays in the pty's buffer for the next reader. It answers with `Snapshot`: emu-O's screen as a diff from 0×0 (`screen.md` §5), in fragments. It keeps its keys and its client, but touches the pty no more | unchanged; proto-O is frozen |
 | 5 | spawner-O | sends `HandoffState` with three fds (a reference to the pty master, the pidfd, the attach listener), `HandoffAgent` with the agent listener if there is one, then `HandoffScreen` fragments holding the snapshot | both spawners hold the master, the pidfd and the listeners; only spawner-O can wait for the shell |
 | 6 | spawner-N | validates all of it (below), binds a UDP socket of its own (§2.2), starts emu-N and proto-N exactly as for a new session (§2.3, the same sandboxes), and sends proto-N `Start` with the adopted flag, the session id, the resuming client's key, the size and the master, `EmuLink`, then `Seed` fragments holding the snapshot | spawner-N as step 5; proto-N: the new keys, the new UDP socket, the pty master |
@@ -475,8 +475,8 @@ ends what it started (closes C-N and waits for proto-N, T7, and emu-N,
 T9, then SIGKILL), then closes its copies of the fds (never removing a
 socket), and only then the attach connection, and tells launcher-N
 `Failed`. Spawner-O, seeing the connection close, or no `HandoffTaken`
-within T2 of its last fragment, sends proto-O `Thaw`, closes its pidfd
-and carries on as before; proto-N is gone by then, so the pty never has
+within T2 of its last fragment, sends proto-O `Thaw`, closes its pidfd,
+accepts on the agent listener again and carries on as before; proto-N is gone by then, so the pty never has
 two readers. Launcher-N, told `Failed` by
 the spawner it adopted with, dials the session again and attaches it
 plainly (§2.6), so a failed upgrade costs the user nothing but the
@@ -488,7 +488,10 @@ that output never reaches proto-O's screen: the user gets the session
 back whole, but its screen may miss what the shell wrote during the
 attempt, until the next repaint [choice: an abort is a bug or a resource
 failure, and holding proto-N off the pty until `HandoffReleased` would
-let the shell block on a full pty for that long].
+let the shell block on a full pty for that long]. So is a second: an
+agent connection spawner-O accepted before step 3 is proto-O's, and is
+cut when proto-O goes at step 9; one the shell makes after waits in the
+backlog (step 3) and is served by whichever spawner has the session.
 
 **Bounds.** At most one hand-off per session at a time. The snapshot is
 at most `screen.MaxDiff` (48 MiB), in fragments of at most
@@ -1803,8 +1806,14 @@ it lands, with the duration and exec count in the commit message.
   another session's id, a pipe or a pidfd where the pty master goes, a
   pidfd for another process or a pty master in its place, another
   session's listener or a pty master in its place, a screen of another
-  size or length than said, an attach listener for the agent's; and
-  every fd it was sent is closed again.
+  size or length than said, an attach listener for the agent's, or a
+  message other than the one due (an agent listener for the state or
+  the screen, a second state for the agent listener); and every fd it
+  was sent is closed again.
+- An agent connection made once proto-O is frozen is accepted by
+  neither proto-O nor spawner-O: after a taken hand-off it is in the
+  backlog of the listener spawner-N got, and after an abort it reaches
+  proto-O.
 - A failed upgrade (an adopter that takes the state and dies) thaws the
   session, and the launcher says so and attaches it as it is, the shell
   untouched.

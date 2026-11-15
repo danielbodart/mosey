@@ -178,8 +178,10 @@ func (s *spawner) startHandoff(j *handoffJob) <-chan time.Time {
 	if err != nil {
 		return fail(fmt.Errorf("a pidfd for the shell: %w", err))
 	}
+	s.pauseAgent()
 	if err := s.ctl.Send(ipc.Freeze{}); err != nil {
 		pidfd.Close()
+		s.resumeAgent()
 		return fail(fmt.Errorf("asking proto to freeze: %w", err))
 	}
 	j.pidfd, j.shellPID = pidfd, s.shell.pid()
@@ -257,6 +259,7 @@ func (s *spawner) abandonHandoff() {
 	}
 	s.job.pidfd.Close()
 	s.job = nil
+	s.resumeAgent()
 	s.log.Info("the hand-off was not taken; the session carries on")
 }
 
