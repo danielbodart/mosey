@@ -666,13 +666,22 @@ func (e *encoder) state() {
 		}
 		e.out = append(e.out, opModes, m0, byte(m.Mouse), byte(m.MouseEncoding), m.KittyKeyboard)
 	}
-	if to.EchoOff != from.EchoOff || to.EchoAck != from.EchoAck {
+	if to.EchoOff != from.EchoOff || to.EchoAck != from.EchoAck || to.EchoApplied != from.EchoApplied {
 		var f byte
 		if to.EchoOff {
 			f = 1
 		}
+		// The applied count goes as its distance past the ack: one byte
+		// in the usual case, and never below it (screen.md §5.6). A grid
+		// some caller built with the two the wrong way round sends the
+		// ack as the applied count too, rather than a diff Apply refuses.
+		ahead := uint64(0)
+		if to.EchoApplied > to.EchoAck {
+			ahead = to.EchoApplied - to.EchoAck
+		}
 		e.out = append(e.out, opEcho, f)
 		e.out = binary.AppendUvarint(e.out, to.EchoAck)
+		e.out = binary.AppendUvarint(e.out, ahead)
 	}
 	if to.Bell != from.Bell {
 		e.out = append(e.out, opBell)

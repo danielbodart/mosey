@@ -819,7 +819,13 @@ func (d *decoder) echo() error {
 	if err != nil {
 		return err
 	}
-	d.out.EchoOff, d.out.EchoAck = flags == 1, ack
+	// ack + ahead must fit: the applied count is never below the ack, and
+	// never wraps (screen.md §5.6).
+	ahead, err := d.varint("ECHO ahead", ^uint64(0)-ack)
+	if err != nil {
+		return err
+	}
+	d.out.EchoOff, d.out.EchoAck, d.out.EchoApplied = flags == 1, ack, ack+ahead
 	return nil
 }
 

@@ -130,6 +130,8 @@ item 4).
     0..1, and `KittyKeyboard` 0..31 (the five progressive-enhancement
     flags).
   - `Rebuilt.Reason` is in 0..3.
+  - `EchoAck ≤ EchoApplied` (the ECHO op can't encode anything else,
+    §5.6).
 
 ### 2.3 Version 0
 

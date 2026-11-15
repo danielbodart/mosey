@@ -394,7 +394,7 @@ func check(g *screen.Grid, diff []byte, resize bool, cols, rows int) error {
 	if c, r := g.Size(); c != cols || r != rows {
 		return violated("screen %dx%d, not %dx%d", c, r, cols, rows)
 	}
-	if g.EchoOff || g.EchoAck != 0 || g.Rebuilt != (screen.Rebuilt{}) || g.InputConsumed != 0 {
+	if g.EchoOff || g.EchoAck != 0 || g.EchoApplied != 0 || g.Rebuilt != (screen.Rebuilt{}) || g.InputConsumed != 0 {
 		return violated("proto's own fields set")
 	}
 	if g.Bell < bell || g.Clipboard.Seq < clip.Seq ||

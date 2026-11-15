@@ -261,7 +261,9 @@ func TestEachRuleOfTheFormatRefusesWhatBreaksIt(t *testing.T) {
 		"MODES reserved bits":                 {0x54, 0x20, 0, 0, 0},
 		"MODES mouse 4":                       {0x54, 0, 4, 0, 0},
 		"MODES kitty 32":                      {0x54, 0, 0, 0, 32},
-		"ECHO reserved bits":                  {0x55, 0x02, 0},
+		"ECHO reserved bits":                  {0x55, 0x02, 0, 0},
+		"ECHO without ahead":                  {0x55, 0x00, 0},
+		"ECHO applied past uint64":            cat([]byte{0x55, 0x00}, uv(^uint64(0)), uv(1)),
 		"REBUILT reason 4":                    {0x58, 1, 4},
 		"CONSUMED twice":                      {0x59, 1, 0x59, 2},
 		"reserved state opcode 0x5a":          {0x5a},
@@ -403,7 +405,7 @@ func TestStateOpsRoundTrip(t *testing.T) {
 	to := from.Clone()
 	to.Title = "漢字 — vim"
 	to.Modes = screen.Modes{AppCursorKeys: true, AppKeypad: true, BracketedPaste: true, FocusEvents: true, AltScreen: true, Mouse: screen.MouseAll, MouseEncoding: screen.MouseSGR, KittyKeyboard: 31}
-	to.EchoOff, to.EchoAck, to.InputConsumed = true, 1<<40, 1<<50
+	to.EchoOff, to.EchoAck, to.EchoApplied, to.InputConsumed = true, 1<<40, 1<<40+3, 1<<50
 	to.Bell = 7
 	to.Clipboard = screen.Clipboard{Seq: 3, Data: []byte("\x1b]52;c;?\x07")}
 	to.Rebuilt = screen.Rebuilt{Seq: 2, Reason: screen.RebuiltMemory}
@@ -444,5 +446,19 @@ func TestRoundTripsOfGeneratedGrids(t *testing.T) {
 		roundTrip(t, a, b)
 		roundTrip(t, screen.NewGrid(0, 0), b)
 		roundTrip(t, b, b)
+	}
+}
+
+func TestTheAppliedCountCostsOneByteInTheUsualCase(t *testing.T) {
+	from := base80x24()
+	to := from.Clone()
+	to.EchoAck, to.EchoApplied = 300, 300
+	if d := roundTrip(t, from, to); !bytes.Equal(d, unhex(t, "55 00 AC 02 00")) {
+		t.Fatalf("got % x", d)
+	}
+	to2 := to.Clone()
+	to2.EchoApplied = 302
+	if d := roundTrip(t, to, to2); !bytes.Equal(d, unhex(t, "55 00 AC 02 02")) {
+		t.Fatalf("got % x", d)
 	}
 }

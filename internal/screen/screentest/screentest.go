@@ -199,6 +199,7 @@ func (s *Source) State(g *screen.Grid) {
 	if s.N(4) == 0 {
 		g.EchoOff = s.Bool()
 		g.EchoAck = uint64(s.N(1 << 16))
+		g.EchoApplied = g.EchoAck + uint64(s.N(1<<8))
 		g.InputConsumed = uint64(s.N(1 << 16))
 	}
 	if s.N(4) == 0 {

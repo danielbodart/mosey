@@ -29,12 +29,16 @@ type Grid struct {
 	Modes Modes
 	// EchoOff is set while the shell's pty has echo off in canonical mode
 	// (!ECHO && ICANON), as at a password prompt. The client neither
-	// predicts nor logs keys while it is set (D12, a later slice; carried
-	// from slice 1 so the format need not change).
+	// predicts nor logs keys while it is set (D12, prediction.md §3).
 	EchoOff bool
-	// EchoAck is the newest keystroke the program has had for at least
-	// 50 ms (paper §3.2), for prediction (D12, a later slice).
+	// EchoAck is the number of the newest input event the program has had
+	// for at least 50 ms (paper §3.2): prediction judges its guesses for
+	// events up to it against this screen (prediction.md §3).
 	EchoAck uint64
+	// EchoApplied is how many input events the pty had taken when this
+	// screen was taken, prediction's R. It is at least EchoAck, which the
+	// diff format guarantees by sending the difference (prediction.md §3).
+	EchoApplied uint64
 	// InputConsumed is the index in the client's input stream up to which
 	// the server has written events to the pty: the client's input flow
 	// control (docs/spec/ssp.md §10.1). A client treats a value above its
@@ -182,7 +186,7 @@ func (g *Grid) Clone() *Grid {
 func (g *Grid) Equal(other *Grid) bool {
 	if g.cols != other.cols || g.rows != other.rows ||
 		g.Cursor != other.Cursor || g.Title != other.Title || g.Modes != other.Modes ||
-		g.EchoOff != other.EchoOff || g.EchoAck != other.EchoAck ||
+		g.EchoOff != other.EchoOff || g.EchoAck != other.EchoAck || g.EchoApplied != other.EchoApplied ||
 		g.InputConsumed != other.InputConsumed || g.Bell != other.Bell ||
 		g.Rebuilt != other.Rebuilt || g.Clipboard.Seq != other.Clipboard.Seq ||
 		!bytes.Equal(g.Clipboard.Data, other.Clipboard.Data) {
@@ -240,6 +244,9 @@ func (g *Grid) Valid() error {
 	}
 	if g.Modes.Mouse > MouseAll || g.Modes.MouseEncoding > MouseSGR || g.Modes.KittyKeyboard > maxKittyFlags {
 		return fmt.Errorf("G8: modes %+v", g.Modes)
+	}
+	if g.EchoApplied < g.EchoAck {
+		return fmt.Errorf("G8: echo applied %d below echo ack %d", g.EchoApplied, g.EchoAck)
 	}
 	if g.Rebuilt.Reason > RebuiltOther {
 		return fmt.Errorf("G8: rebuilt reason %d", g.Rebuilt.Reason)

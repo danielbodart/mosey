@@ -109,7 +109,7 @@ func shown(g *screen.Grid) *screen.Grid {
 	}
 	w.Modes.AltScreen = true
 	w.Modes.KittyKeyboard = 0
-	w.EchoOff, w.EchoAck, w.InputConsumed, w.Rebuilt = false, 0, 0, screen.Rebuilt{}
+	w.EchoOff, w.EchoAck, w.EchoApplied, w.InputConsumed, w.Rebuilt = false, 0, 0, 0, screen.Rebuilt{}
 	return w
 }
 

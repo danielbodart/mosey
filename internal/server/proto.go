@@ -118,11 +118,18 @@ type Session struct {
 	// consumed is how many of ep's input events the pty has taken: per
 	// connection, since each client's stream starts at 0 (ssp.md §1.3).
 	consumed uint64
-	replies  []byte
-	dropped  int
-	cols     int
-	rows     int
-	holding  bool
+	// echo is ep's echo ack and applied count, published the screen
+	// before published, and echoTimer the echo-ack publish owed
+	// (prediction.md §3.1), all per connection like consumed.
+	echo      echoTracker
+	published *screen.Grid
+	echoTimer *time.Timer
+	echoArmed bool
+	replies   []byte
+	dropped   int
+	cols      int
+	rows      int
+	holding   bool
 	// broken is an endpoint whose client broke the input protocol, for
 	// the main loop to drop.
 	broken chan *ssp.Endpoint[*screen.Grid, *userinput.Stream]
@@ -382,6 +389,11 @@ func (s *Session) Run(ctx context.Context) error {
 	// and the pty reader and writer (closing the master wakes the poller).
 	s.closeAll()
 	wg.Wait()
+	s.mu.Lock()
+	if s.echoTimer != nil {
+		s.echoTimer.Stop()
+	}
+	s.mu.Unlock()
 	switch {
 	case errors.Is(cause, errShellExited):
 		return nil
@@ -442,6 +454,7 @@ func (s *Session) attach(parent context.Context, c *transport.Conn) *attachment 
 	}
 	s.mu.Lock()
 	s.ep, s.consumed = ep, 0
+	s.echo, s.published = echoTracker{}, nil
 	s.mux = a.mux
 	s.mu.Unlock()
 	s.wake(s.switched)
@@ -547,6 +560,14 @@ func (s *Session) deliverFinal(a *attachment) {
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	for {
+		// The echo-ack publish may still follow the final screen by up to
+		// EchoAckDelay (prediction.md §3.1): the screen to see acknowledged
+		// is whichever was published last.
+		s.mu.Lock()
+		if s.ep == ep && s.published != nil {
+			final = s.published
+		}
+		s.mu.Unlock()
 		if acked, _ := ep.Acked(); final != nil && acked.Equal(final) {
 			return
 		}
@@ -562,7 +583,8 @@ func (s *Session) deliverFinal(a *attachment) {
 }
 
 // publish hands SSP the screen as it is now, with proto's own fields:
-// the echo-off bit (D12) and the input consumed (ssp.md §10.1). If the
+// the echo-off bit, the echo ack and the applied count (D12,
+// prediction.md §3.1) and the input consumed (ssp.md §10.1). If the
 // emulator held the screen under synchronised output, it asks again once
 // SyncHold has passed (screen.md §6.3), so a program that opens mode 2026
 // and never closes it freezes its screen only briefly. It returns the
@@ -583,6 +605,10 @@ func (s *Session) publish() *screen.Grid {
 	}
 	s.mu.Lock()
 	g.InputConsumed = s.consumed
+	if s.ep == ep {
+		s.echo.fields(g, s.published, time.Now())
+		s.published = g
+	}
 	s.cols, s.rows = g.Size()
 	arm := held && !s.holding
 	if arm {
@@ -706,6 +732,7 @@ func (s *Session) writePTY(ctx context.Context) error {
 			if len(events) > 0 {
 				ev := events[0]
 				if len(ev.Keys) > 0 {
+					s.echoOffChanged(ep)
 					if _, err := s.Terminal.Write(ev.Keys); err != nil {
 						if ctx.Err() != nil {
 							return nil
@@ -716,6 +743,7 @@ func (s *Session) writePTY(ctx context.Context) error {
 					s.resize(ev.Resize.Cols, ev.Resize.Rows)
 				}
 				applied++
+				s.wrote(ep, applied)
 				unpublished += encodedLen(ev)
 				// Published once it has moved ConsumedStep, so ordinary
 				// typing never costs a frame of its own (ssp.md §10.1).
@@ -755,6 +783,73 @@ func (s *Session) writePTY(ctx context.Context) error {
 		case <-s.repliesIn:
 		case <-s.switched:
 		}
+	}
+}
+
+// wrote notes that the pty has taken ep's first applied events, for the
+// echo ack, and owes an echo-ack publish EchoAckDelay from now
+// (prediction.md §3.1 rules 1 and 3).
+func (s *Session) wrote(ep *ssp.Endpoint[*screen.Grid, *userinput.Stream], applied uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ep != ep {
+		return
+	}
+	s.echo.wrote(applied, time.Now())
+	if !s.echoArmed {
+		s.armEcho()
+	}
+}
+
+// armEcho sets the timer for the next echo-ack publish, if one is owed.
+// The caller holds mu.
+func (s *Session) armEcho() {
+	d, ok := s.echo.due(time.Now())
+	if !ok {
+		return
+	}
+	s.echoArmed = true
+	if s.echoTimer == nil {
+		s.echoTimer = time.AfterFunc(d, s.echoTick)
+		return
+	}
+	s.echoTimer.Reset(d)
+}
+
+// echoTick is the echo-ack publish (rule 3): the ack moves, unless echo is
+// off (rule 4), and with it the screen SSP has to send. Then the next one
+// is armed, if more writes are waiting their 50 ms.
+func (s *Session) echoTick() {
+	select {
+	case <-s.done:
+		return
+	default:
+	}
+	s.mu.Lock()
+	s.echoArmed = false
+	s.mu.Unlock()
+	s.publish()
+	s.mu.Lock()
+	if !s.echoArmed {
+		s.armEcho()
+	}
+	s.mu.Unlock()
+}
+
+// echoOffChanged publishes before a key is written if the pty's echo-off
+// bit is not the one last published: a program may turn echo off after
+// the screen with its prompt was taken, and the client must stop
+// predicting before the password, not after (prediction.md §3.1 rule 6).
+func (s *Session) echoOffChanged(ep *ssp.Endpoint[*screen.Grid, *userinput.Stream]) {
+	off, err := s.Terminal.EchoOff()
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	stale := s.ep == ep && s.published != nil && s.published.EchoOff != off
+	s.mu.Unlock()
+	if stale {
+		s.publish()
 	}
 }
 
