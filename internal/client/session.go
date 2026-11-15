@@ -47,6 +47,9 @@ type Session struct {
 	Predict predict.Mode
 	// Name is the session's (D8 R2), for the messages it ends with.
 	Name string
+	// Destination is the host as the user typed it, for the messages;
+	// "" names the server by its address.
+	Destination string
 	// Reconnect, if set, is R3 (bootstrap.md §9.2.2): after
 	// ReconnectAfter of silence the session calls it, in the background,
 	// for a fresh bootstrap that resumes this same session naming holder,
@@ -116,7 +119,7 @@ func (s *Session) Run(ctx context.Context) error {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	conn, err := dial(ctx, log, s.Conn, s.Server, &s.Credential, s.Key, s.Agent != nil)
+	conn, err := dial(ctx, log, s.Conn, s.Server, s.Destination, &s.Credential, s.Key, s.Agent != nil)
 	if err != nil {
 		return err
 	}
@@ -238,7 +241,7 @@ func (s *Session) reconnect(log *slog.Logger) func(context.Context, [8]byte, fun
 			r.Conn.Close()
 			return link[*userinput.Stream, *screen.Grid]{}, errAbandoned
 		}
-		conn, err := dial(tctx, log, r.Conn, r.Server, &r.Credential, r.Key, r.Agent != nil)
+		conn, err := dial(tctx, log, r.Conn, r.Server, s.Destination, &r.Credential, r.Key, r.Agent != nil)
 		if err != nil {
 			return link[*userinput.Stream, *screen.Grid]{}, err
 		}
@@ -249,7 +252,7 @@ func (s *Session) reconnect(log *slog.Logger) func(context.Context, [8]byte, fun
 // dial runs the handshake (bootstrap.md §7.3) within the credential's
 // life: after CredentialTTL the server has forgotten it anyway. It offers
 // the agent channel when the client forwards one.
-func dial(ctx context.Context, log *slog.Logger, pc net.PacketConn, server netip.AddrPort, cred *handshake.Credential, key *handshake.OneShotKey, agent bool) (*transport.Conn, error) {
+func dial(ctx context.Context, log *slog.Logger, pc net.PacketConn, server netip.AddrPort, dest string, cred *handshake.Credential, key *handshake.OneShotKey, agent bool) (*transport.Conn, error) {
 	// Nothing needs the key or the PSK once the handshake is over, however
 	// it went: a resume makes new ones (D8).
 	defer key.Wipe()
@@ -274,6 +277,15 @@ func dial(ctx context.Context, log *slog.Logger, pc net.PacketConn, server netip
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return nil, fail(err, "no reply from %s over UDP: is UDP port %d open?", server, server.Port())
+	}
+	var ve *handshake.IncompatibleVersionError
+	if errors.As(err, &ve) {
+		// D8 V1: one number each side, both named (transport.md §3.6).
+		host := dest
+		if host == "" {
+			host = server.String()
+		}
+		return nil, fail(err, "%s's mosey speaks handshake protocol %d; this mosey speaks %d", host, ve.Remote, ve.Local)
 	}
 	return nil, fail(err, "connecting to %s over UDP: %v", server, err)
 }

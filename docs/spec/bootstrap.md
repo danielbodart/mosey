@@ -598,7 +598,7 @@ trip to ask, and D7 names this one.
 #### 4.7.2 The probe
 
 The remote command (one argument, as §4.1; `B H` is the client's
-`--serve=protocol` answer, `bootstrap.Version` and `handshake.Protocol`,
+`--serve=protocol` answer, `bootstrap.Version` and `handshake.ProtocolVersion`,
 now `1 1`):
 
 ```
@@ -1277,7 +1277,7 @@ over UDP: is UDP port PORT open?` (the classic firewall case). Then
 
 Only after Dial succeeds does the client put the terminal in raw mode and
 start `client.Session` (§4.3: ssh's prompts need a cooked terminal). The
-Hello it sends: `Protocol` = `handshake.Protocol`, `Channels` = `{Terminal}`,
+Hello it sends: `Protocol` = `handshake.ProtocolVersion`, `Channels` = `{Terminal}`,
 plus `Agent` when §5 says on and §8 captured and pinned a bind, `Attach` =
 `Exclusive` (D26: the only mode in v1). So with the agent on, Dial waits
 for the capture's final state (§4.3), which costs nothing when the bind

@@ -87,7 +87,7 @@ func TestPacketsAreTheSizesTheSpecSays(t *testing.T) {
 		var seen map[int]int
 		s.net.locked(func() { seen = maps.Clone(sizes) })
 		for size, want := range map[int]string{
-			1171: "msg1", 1151: "msg2", 31: "keepalive", 1232: "full terminal packet",
+			1170: "msg1", 1150: "msg2", 31: "keepalive", 1232: "full terminal packet",
 			642: "REKEY_INIT half", 1154: "REKEY_RESP",
 		} {
 			if seen[size] == 0 {

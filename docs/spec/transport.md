@@ -117,7 +117,7 @@ the open item in `architecture.md` §4 (S1's msg1 measured 1208 with a
   2026-11-15). A client and a server of different mosey releases is
   normal and must work: nothing in the handshake or the bootstrap looks
   at a software version (`bootstrap.md` §6.4). Each side's hello carries
-  the **one** protocol version it speaks, `handshake.Protocol`, and the
+  the **one** protocol version it speaks, `handshake.ProtocolVersion`, and the
   two must be equal (§3.6). This document is **v1**, and is the promise:
   every release that says 1 speaks exactly this. A change a v1 peer
   could not follow is a new number, and two peers of different numbers

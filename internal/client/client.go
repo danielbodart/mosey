@@ -152,6 +152,7 @@ func Run(ctx context.Context, o Options) error {
 		Agent:        b.forward,
 		Predict:      o.Predict,
 		Name:         line.Name,
+		Destination:  o.SSH.Destination,
 		Reconnect:    reconnector(o, line.SessionID),
 	}
 	// The Session has its own copy, which dial wipes once msg1 is built

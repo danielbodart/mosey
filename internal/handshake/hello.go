@@ -9,15 +9,18 @@ import (
 // msg1 and msg2 (transport.md §3.6). Its parser is strict: anything it
 // accepts survives a round trip unchanged, which its fuzz target checks.
 //
-// The grammar is deliberately small, 4 bytes and one per channel type, so
+// The grammar is deliberately small, 3 bytes and one per channel type, so
 // that msg1 fits D5's 1200 bytes (S1's 42-byte hello put it at 1208):
 //
-//	min(1) | max(1) | attach(1) | count(1) | channel types(count), strictly increasing
+//	protocol(1) | attach(1) | count(1) | channel types(count), strictly increasing
+//
+// The protocol byte comes first and stays first in every version, so a
+// peer of any version can read it before the rest and say why it cannot
+// go on (D8 V1).
 type Hello struct {
-	// Min and Max are the protocol versions this side speaks (D8 V1,
-	// transport.md §2.3): both sides take the highest version in both
-	// ranges (Negotiate). 0 is invalid, and Min <= Max.
-	Min, Max uint8
+	// Protocol is the one protocol version this side speaks (D8 V1,
+	// transport.md §2.3): the two sides' must be equal. 0 is invalid.
+	Protocol uint8
 	// Channels are the channel types this side supports (D15): the terminal
 	// in v1, the agent next, port forwarding later. Strictly increasing.
 	Channels []ChannelType
@@ -43,35 +46,23 @@ const (
 )
 
 const (
-	// MinProtocol and MaxProtocol are the protocol versions this build
-	// speaks (D8 V1): v1 is transport.md as it stands. A later version
-	// raises MaxProtocol and keeps MinProtocol for as long as it can still
-	// speak v1; raising MinProtocol is a decision of its own.
-	MinProtocol = 1
-	MaxProtocol = 1
-	// MaxChannels bounds the channel list, which keeps msg1 at most 1186
+	// ProtocolVersion is the one protocol version this build speaks (D8 V1): v1
+	// is transport.md as it stands, and the number is the stability
+	// promise. A change a v1 peer could not follow takes a new number;
+	// there is no range and no negotiation (Dan, 2026-11-15).
+	ProtocolVersion = 1
+	// MaxChannels bounds the channel list, which keeps msg1 at most 1185
 	// bytes (transport.md §3.5).
 	MaxChannels = 16
-	helloFixed  = 4
+	helloFixed  = 3
 )
 
-// Negotiate is the protocol version two hellos agree on: the highest
-// version both ranges hold, and ok false when they hold none in common
-// (transport.md §3.6). Both sides compute it from the same two hellos.
-func Negotiate(a, b Hello) (version uint8, ok bool) {
-	v := min(a.Max, b.Max)
-	if v == 0 || v < max(a.Min, b.Min) {
-		return 0, false
-	}
-	return v, true
-}
-
-// IncompatibleVersionError is an authentic peer with no protocol version
-// in common with this side (D8 V1): the error names both ranges, so a
-// user can tell which end to upgrade. errors.Is(err, ErrIncompatible).
+// IncompatibleVersionError is an authentic peer of another protocol
+// version (D8 V1): the error names both numbers, so a user can tell which
+// end to change. errors.Is(err, ErrIncompatible).
 type IncompatibleVersionError struct {
-	// Local and Remote are this side's range and the peer's, as min, max.
-	Local, Remote [2]uint8
+	// Local and Remote are this side's protocol and the peer's.
+	Local, Remote uint8
 	// Client says whether this side is the client, for the wording.
 	Client bool
 }
@@ -81,11 +72,22 @@ func (e *IncompatibleVersionError) Error() string {
 	if e.Client {
 		me, peer = "client", "server"
 	}
-	return fmt.Sprintf("no protocol version in common: this %s speaks %d..%d, the %s %d..%d",
-		me, e.Local[0], e.Local[1], peer, e.Remote[0], e.Remote[1])
+	return fmt.Sprintf("the %s speaks protocol %d; this %s speaks %d", peer, e.Remote, me, e.Local)
 }
 
 func (e *IncompatibleVersionError) Unwrap() error { return ErrIncompatible }
+
+// otherProtocol is the protocol byte of an encoded hello when it names a
+// version other than mine, read before anything else so a hello of
+// another version is named as such however the rest of it looks
+// (transport.md §3.6). An empty hello, or protocol 0, is not another
+// version but a malformed hello, which ParseHello refuses.
+func otherProtocol(b []byte, mine uint8) (uint8, bool) {
+	if len(b) == 0 || b[0] == 0 || b[0] == mine {
+		return 0, false
+	}
+	return b[0], true
+}
 
 // Supports says whether h lists channel type c.
 func (h Hello) Supports(c ChannelType) bool {
@@ -96,8 +98,8 @@ func (h Hello) Supports(c ChannelType) bool {
 // check refuses what ParseHello would refuse, so the encoder and the parser
 // accept the same language.
 func (h Hello) check() error {
-	if h.Min == 0 || h.Max < h.Min {
-		return fmt.Errorf("%w: hello versions %d..%d", ErrMalformed, h.Min, h.Max)
+	if h.Protocol == 0 {
+		return fmt.Errorf("%w: hello protocol 0", ErrMalformed)
 	}
 	if len(h.Channels) == 0 || len(h.Channels) > MaxChannels {
 		return fmt.Errorf("%w: %d channel types in a hello", ErrMalformed, len(h.Channels))
@@ -110,12 +112,12 @@ func (h Hello) check() error {
 	return nil
 }
 
-// MarshalHello encodes h canonically. h must be valid (a version range
-// 1 <= Min <= Max, 1 to 16 strictly increasing channel types); the handshake constructors
-// check that before they get here.
+// MarshalHello encodes h canonically. h must be valid (a protocol of at
+// least 1, 1 to 16 strictly increasing channel types); the handshake
+// constructors check that before they get here.
 func MarshalHello(h Hello) []byte {
 	b := make([]byte, 0, helloFixed+len(h.Channels))
-	b = append(b, h.Min, h.Max, byte(h.Attach), byte(len(h.Channels)))
+	b = append(b, h.Protocol, byte(h.Attach), byte(len(h.Channels)))
 	for _, c := range h.Channels {
 		b = append(b, byte(c))
 	}
@@ -130,11 +132,11 @@ func ParseHello(b []byte) (Hello, error) {
 	if len(b) < helloFixed {
 		return Hello{}, fmt.Errorf("%w: hello of %d bytes", ErrMalformed, len(b))
 	}
-	count := int(b[3])
+	count := int(b[2])
 	if len(b) != helloFixed+count {
 		return Hello{}, fmt.Errorf("%w: hello of %d bytes for %d channel types", ErrMalformed, len(b), count)
 	}
-	h := Hello{Min: b[0], Max: b[1], Attach: AttachMode(b[2]), Channels: make([]ChannelType, count)}
+	h := Hello{Protocol: b[0], Attach: AttachMode(b[1]), Channels: make([]ChannelType, count)}
 	for i, c := range b[helloFixed:] {
 		h.Channels[i] = ChannelType(c)
 	}
@@ -144,10 +146,10 @@ func ParseHello(b []byte) (Hello, error) {
 	return h, nil
 }
 
-// answer is the server's hello for a client's: its own version range,
-// the client's attach mode, and the channel types both support, in order.
+// answer is the server's hello for a client's: its own protocol, the
+// client's attach mode, and the channel types both support, in order.
 func (h Hello) answer(client Hello) Hello {
-	out := Hello{Min: h.Min, Max: h.Max, Attach: client.Attach}
+	out := Hello{Protocol: h.Protocol, Attach: client.Attach}
 	for _, c := range client.Channels {
 		if h.Supports(c) {
 			out.Channels = append(out.Channels, c)
@@ -170,13 +172,9 @@ func (client Hello) acceptable() error {
 }
 
 // agrees is the client's policy for the server's answer: a subset of what
-// it offered, including the terminal, with its own attach mode, and a
-// protocol version in common. The last is checked first, since a server
-// of a version with nothing in common may say anything else too.
+// it offered, including the terminal, with its own attach mode. The
+// protocol is checked before the hello is parsed (ReadMsg2).
 func (server Hello) agrees(offered Hello) error {
-	if _, ok := Negotiate(offered, server); !ok {
-		return &IncompatibleVersionError{Local: [2]uint8{offered.Min, offered.Max}, Remote: [2]uint8{server.Min, server.Max}, Client: true}
-	}
 	for _, c := range server.Channels {
 		if !offered.Supports(c) {
 			return fmt.Errorf("%w: the server chose channel type %d, which was not offered", ErrIncompatible, c)

@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -243,8 +242,8 @@ func (l *Listener) handleMsg1(pkt []byte, from netip.AddrPort) {
 		if p.Version == 0 {
 			// Answered so the client learns why (transport.md §3.6); its
 			// confirmation is refused below.
-			l.e.log.Info("answered a client with no protocol version in common", "from", from,
-				"client", fmt.Sprintf("%d..%d", p.Hello.Min, p.Hello.Max))
+			l.e.log.Info("answered a client of another protocol", "from", from,
+				"client", p.Hello.Protocol, "server", handshake.ProtocolVersion)
 		}
 		pc = &pending{p: p, ks: newKeyset(&p.Keys, time.Now()), root: p.Keys.Root,
 			addrs: map[netip.AddrPort]*budget{}}

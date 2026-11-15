@@ -23,7 +23,7 @@ const (
 	// WireVersion is the second byte of msg1 and msg2: the layout of the
 	// two messages, tied to the protocol name, so another is never
 	// answered. What changes between releases is the protocol version,
-	// negotiated in the hello (D8 V1, transport.md §2.3).
+	// one number in the hello (D8 V1, transport.md §2.3).
 	WireVersion = 0x01
 
 	msg1Header = 1 + 1 + 8 + 4 // type, version, cred_id, idx_C
@@ -33,13 +33,13 @@ const (
 )
 
 // Msg1Size is the size of a msg1 whose hello offers channels channel types:
-// 1170 + channels, so 1171 to 1186 bytes.
+// 1169 + channels, so 1170 to 1185 bytes.
 func Msg1Size(channels int) int {
 	return msg1Header + EncapsulationSize + helloFixed + channels + tagSize + mac1Size
 }
 
 // Msg2Size is the size of a msg2 whose hello names channels channel types:
-// 1150 + channels, so 1151 to 1166 bytes.
+// 1149 + channels, so 1150 to 1165 bytes.
 func Msg2Size(channels int) int {
 	return msg2Header + EncapsulationSize + helloFixed + channels + tagSize
 }
@@ -127,7 +127,7 @@ func NewInitiator(cred Credential, key *OneShotKey, hello Hello, idxC uint32) (*
 	i := &Initiator{sk: sk, idxC: idxC, offered: hello}
 	var err error
 	secretDo(func() {
-		i.msg1, i.afterC1, err = buildMsg1(&cred, key.public, hello, idxC)
+		i.msg1, i.afterC1, err = buildMsg1(&cred, key.public, MarshalHello(hello), idxC)
 	})
 	if err != nil {
 		i.Wipe()
@@ -140,13 +140,14 @@ func NewInitiator(cred Credential, key *OneShotKey, hello Hello, idxC uint32) (*
 // clientPublic, and the symmetric state after c1. It needs no private key:
 // that is only needed to read msg2, which is the point of B3. It does not
 // check idxC, so the tests can build the msg1 a buggy or hostile client
-// would.
-func buildMsg1(cred *Credential, clientPublic []byte, hello Hello, idxC uint32) ([]byte, symmetric, error) {
+// would, and takes the hello encoded, so they can build one of a later
+// layout too.
+func buildMsg1(cred *Credential, clientPublic []byte, hello []byte, idxC uint32) ([]byte, symmetric, error) {
 	st := initialState(cred.SessionID, clientPublic, cred.ServerPublic, &cred.PSK)
 	macKey := mac1Key(cred.SessionID, &cred.PSK)
 	defer clear(macKey[:])
 
-	msg := make([]byte, 0, Msg1Size(len(hello.Channels)))
+	msg := make([]byte, 0, Msg1Size(len(hello)-helloFixed))
 	msg = append(msg, TypeMsg1, WireVersion)
 	msg = append(msg, cred.ID[:]...)
 	msg = binary.LittleEndian.AppendUint32(msg, idxC)
@@ -160,7 +161,7 @@ func buildMsg1(cred *Credential, clientPublic []byte, hello Hello, idxC uint32) 
 	st.mixHash(enc)
 	st.mixKey(ss)
 	clear(ss)
-	msg = append(msg, st.encryptAndHash(MarshalHello(hello))...)
+	msg = append(msg, st.encryptAndHash(hello)...)
 	msg = append(msg, mac1(&macKey, msg)...)
 	return msg, st, nil
 }
@@ -173,8 +174,8 @@ func buildMsg1(cred *Credential, clientPublic []byte, hello Hello, idxC uint32) 
 // the transport's tests can play that attacker against the real listener.
 func ForgeMsg1(cred Credential, clientPublic []byte, idxC uint32) ([]byte, error) {
 	defer cred.Wipe()
-	hello := Hello{Min: MinProtocol, Max: MaxProtocol, Channels: []ChannelType{ChannelTerminal}}
-	msg, st, err := buildMsg1(&cred, clientPublic, hello, idxC)
+	hello := Hello{Protocol: ProtocolVersion, Channels: []ChannelType{ChannelTerminal}}
+	msg, st, err := buildMsg1(&cred, clientPublic, MarshalHello(hello), idxC)
 	st.wipe()
 	return msg, err
 }
@@ -221,6 +222,13 @@ func (i *Initiator) ReadMsg2(msg2 []byte) (Keys, Hello, error) {
 		plain, aerr := st.decryptAndHash(msg2[msg2Header+EncapsulationSize:])
 		if aerr != nil {
 			err = aerr
+			return
+		}
+		// The protocol byte first, before the rest is parsed: a server of
+		// another version may lay the rest out differently, and the user
+		// is owed both numbers, not "malformed" (transport.md §3.6).
+		if p, other := otherProtocol(plain, i.offered.Protocol); other {
+			err = &IncompatibleVersionError{Local: i.offered.Protocol, Remote: p, Client: true}
 			return
 		}
 		if server, err = ParseHello(plain); err != nil {
@@ -384,22 +392,25 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 			err = aerr
 			return
 		}
-		if client, err = ParseHello(plain); err != nil {
-			return
-		}
-		answer := r.hello.answer(client)
-		if v, ok := Negotiate(client, r.hello); ok {
+		var answer Hello
+		if p, other := otherProtocol(plain, r.hello.Protocol); other {
+			// Another protocol: the client knows the PSK, so it is the
+			// genuine client of another build. Its hello is not parsed
+			// further (a later version may lay it out differently); it is
+			// answered with this server's whole hello, so that it learns
+			// why and says so, and the pending, with version 0, can never
+			// be confirmed (D8 V1: no silent lockout).
+			client = Hello{Protocol: p}
+			answer = Hello{Protocol: r.hello.Protocol, Channels: r.hello.Channels}
+		} else {
+			if client, err = ParseHello(plain); err != nil {
+				return
+			}
 			if err = client.acceptable(); err != nil {
 				return
 			}
-			version = v
-		} else {
-			// No version in common: the client knows the PSK, so it is the
-			// genuine client of an incompatible build. It is answered with
-			// this server's whole hello, so that it learns why and says so,
-			// and the pending can never be confirmed (D8 V1: no silent
-			// lockout).
-			answer = Hello{Min: r.hello.Min, Max: r.hello.Max, Attach: client.Attach, Channels: r.hello.Channels}
+			answer = r.hello.answer(client)
+			version = client.Protocol
 		}
 
 		// Every check has passed: only now draw idx_S, which msg2 and so

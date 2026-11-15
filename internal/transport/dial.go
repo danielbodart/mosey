@@ -195,8 +195,8 @@ func (hs *clientHandshake) onMsg2(c *Conn, pkt []byte, from netip.AddrPort) {
 	keys.Wipe()
 	hs.accepted = bytes.Clone(pkt)
 	c.channels = slices.Clone(server.Channels)
-	// ReadMsg2 has checked there is one (handshake.Negotiate).
-	c.version, _ = handshake.Negotiate(hs.offered, server)
+	// ReadMsg2 has checked it is ours (transport.md §3.6).
+	c.version = server.Protocol
 	hs.established = true
 	c.sendFrame(KindKeepalive, keepaliveAnswer)
 }

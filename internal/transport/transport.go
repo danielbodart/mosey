@@ -206,8 +206,8 @@ type Stats struct {
 // (agent.md §4); a connection carries what both offered (transport.md
 // §4.4).
 var (
-	clientHello = handshake.Hello{Min: handshake.MinProtocol, Max: handshake.MaxProtocol, Channels: []handshake.ChannelType{handshake.ChannelTerminal}, Attach: handshake.Exclusive}
-	serverHello = handshake.Hello{Min: handshake.MinProtocol, Max: handshake.MaxProtocol, Channels: []handshake.ChannelType{handshake.ChannelTerminal, handshake.ChannelAgent}, Attach: handshake.Exclusive}
+	clientHello = handshake.Hello{Protocol: handshake.ProtocolVersion, Channels: []handshake.ChannelType{handshake.ChannelTerminal}, Attach: handshake.Exclusive}
+	serverHello = handshake.Hello{Protocol: handshake.ProtocolVersion, Channels: []handshake.ChannelType{handshake.ChannelTerminal, handshake.ChannelAgent}, Attach: handshake.Exclusive}
 )
 
 // Recv returns the next authentic terminal payload, handling every other
