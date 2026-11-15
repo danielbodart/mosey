@@ -72,7 +72,11 @@ copies it to a host of another platform (D7 as amended 2026-11-15, S1;
   bytes (+10.9 MB, +110%); darwin/arm64 9,147,314 → 19,868,082 (+10.7 MB,
   +117%). Every auto-upload copies the larger file, so the release fetch
   deadline went from 5 to 10 minutes (`bootstrap.md` §11). This is the
-  heaviest dependency mosey has.
+  heaviest dependency mosey has. **Open, Dan's call:** whether a binary
+  twice the size, with these modules linked into every server role too
+  (proto and emu included), is acceptable, or whether the verifier
+  should live where only the client links it (see **Risk** below). The
+  S1 slice went ahead without that decision; it is not taken as made.
 - **What it brings:** about 65 modules on the client's path, every one
   named in `internal/client`'s import test (`provenanceModules`), so a
   module a later sigstore-go adds fails that test until someone has
@@ -103,7 +107,9 @@ copies it to a host of another platform (D7 as amended 2026-11-15, S1;
   all, gated by the whole of CI. If its size or reach becomes a problem,
   the verifier could move to a separate helper binary that the client
   runs only for a cross-platform copy, at the cost of a second file to
-  ship (Dan's call, not taken).
+  ship; or the server roles could be built without it, at the cost of
+  mosey no longer being one file that is both (D7's auto-upload copies
+  the client's own file). Neither is taken: see **Cost** above.
 
 ### `golang.org/x/crypto` v0.59.0
 
