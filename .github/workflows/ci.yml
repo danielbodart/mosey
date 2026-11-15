@@ -27,10 +27,10 @@ permissions:
 # Commits reach trunk one push at a time, and every run starts every job, so
 # without this a burst of pushes queued a dozen runs' jobs behind each
 # other for the runner limit, each to test a commit the next one replaces.
-# Nothing is lost: the newer run releases everything since the last tag
-# (scripts/release-due.sh diffs against the tag, not the previous commit,
-# and the notes list every commit since it), so the green tip of trunk is
-# what gets released.
+# Nothing is lost: the newer run releases everything since the last
+# release (scripts/release-due.sh diffs against the commit the last tag
+# released, not the previous commit, and the notes list every commit since
+# it), so the green tip of trunk is what gets released.
 #
 # The cancellation must never stop a release half-way: a release whose
 # tag exists without all its binaries, or whose binaries are not all
@@ -328,28 +328,45 @@ jobs:
           path: upload/mosey-darwin-arm64/
           if-no-files-found: error
 
-  # What `nix flake check` checks, split across runners as in chase and
-  # quoin: the VM test of D7's install path is minutes, so it is a leg of
-  # its own, and `rest` builds every check it does not name (so a check
-  # added to the flake is built without being added here), the package,
-  # the dev shell and the formatter. The checks are only what needs Nix:
-  # the package (from the vendored modules, with nixpkgs' Go, so a stale
-  # vendorHash fails here) and the VM test. The tests, gofmt and vet ran in
-  # the Nix sandbox too until they were dropped from the flake: check runs
-  # them all, with the end-to-end tests the sandbox has to skip.
+  # What needs Nix to check, split across runners as in chase and quoin.
+  # The flake's package is a release's binary, not a build from source
+  # (flake.nix says why): it exists only where nix/release.json does, which
+  # on GitHub is a release tag's own commit. So each leg first makes this
+  # checkout a release of the binaries this run's build job made,
+  # scripts/nix-local-release.sh: it writes and stages nix/release.json for
+  # them, as the release job will, and adds each binary to the store at the
+  # path fetchurl would download it to, which is content-addressed, so only
+  # the file whose hash release.json names can stand there and nothing is
+  # fetched. The VM test thus runs the very binary this run releases,
+  # through the same release.json, fetchurl and install a pinned tag uses,
+  # and no flake output exists only for CI. (The alternatives were an
+  # --impure build reading the binary's path from the environment, or a
+  # flake input overridden with --override-input; both are a second way
+  # into the package that a tag never takes.)
+  #
+  # The VM test of D7's install path is minutes, so it is a leg of its own;
+  # `rest` evaluates the flake as trunk has it (no release.json: no package,
+  # no checks) and then as a release has it, on every system, builds the
+  # package, the dev shell and the formatter, and builds every check the
+  # other legs do not name (so a check added to the flake is built without
+  # being added here). The tests, gofmt and vet are check's.
+  #
+  # Nothing is pushed to Cachix any more: there is no source build to
+  # cache, and the binary comes from the release. The danielbodart cache's
+  # CACHIX_AUTH_TOKEN secret is still set on the repository, unused.
   nix:
+    needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         check: [vm-install, rest]
-    env:
-      # Empty where the repository has no such secret (a fork, or before
-      # it is added): the cache is then read anonymously and nothing is
-      # pushed.
-      CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
     steps:
+      # The whole history: scripts/version.sh counts it, to name the
+      # binaries' version as the build job did.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       # install-nix-action gives the runner's /dev/kvm to the build user, so
       # the VM test runs under KVM rather than emulated.
@@ -359,14 +376,20 @@ jobs:
             experimental-features = nix-command flakes
             system-features = nixos-test benchmark big-parallel kvm
 
-      # The danielbodart cache, read-only here: the free tier is 5 GB, so
-      # only mosey's own package is pushed, by the rest leg's last step,
-      # never a VM test's closure.
-      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+      - name: The flake as trunk has it, evaluated
+        if: matrix.check == 'rest'
+        run: nix flake check --no-build
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: danielbodart
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          skipPush: true
+          path: artifacts
+          pattern: mosey-*
+
+      - name: This run's binaries as the flake's release
+        run: |
+          V="$(scripts/version.sh)"
+          scripts/release-assets.sh "$V" release artifacts
+          scripts/nix-local-release.sh "$V" release
 
       - name: nix build .#checks.x86_64-linux.${{ matrix.check }}
         if: matrix.check != 'rest'
@@ -384,17 +407,12 @@ jobs:
             | xargs nix build --print-build-logs --no-link \
                 .#packages.x86_64-linux.mosey .#devShells.x86_64-linux.default .#formatter.x86_64-linux
 
-      # The other systems the flake offers (aarch64-linux, aarch64-darwin)
-      # are evaluated, not built: no runner here is either, and an
-      # evaluation error is what a change to the flake most often breaks.
+      # The other systems the flake offers are evaluated, not built: no
+      # runner here is any of them, and an evaluation error is what a change
+      # to the flake most often breaks.
       - name: the other systems, evaluated
         if: matrix.check == 'rest'
         run: scripts/nix-eval-systems.sh
-
-      # The package a host installs, from the rest leg, which builds it.
-      - name: Push mosey's package to Cachix
-        if: matrix.check == 'rest' && env.CACHIX_AUTH_TOKEN != '' && github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
-        run: nix build --no-link --print-out-paths .#mosey | cachix push danielbodart
 
   # CONTINUOUS RELEASE (D10). Trunk-based: every push to trunk that passes
   # every job above and changed what a release is built from since the last
@@ -410,10 +428,12 @@ jobs:
   #
   # Unlike those, which ship through Nix and release only a tag, a mosey
   # release carries its binaries, because D7 copies them onto hosts that
-  # have no Nix. The assets are fixed by docs/spec/bootstrap.md §4.6, and the
-  # auto-upload slice computes their URLs from them, so do not rename them:
+  # have no Nix, and Nix installs those same binaries (flake.nix). The
+  # assets are fixed by docs/spec/bootstrap.md §4.6, and the auto-upload
+  # slice computes their URLs from them, so do not rename them:
   #
-  #   tag      v<V>, V = scripts/version.sh (major.commit-count.run-number)
+  #   tag      v<V>, V = scripts/version.sh (major.commit-count.run-number),
+  #            on a commit of its own (below)
   #   binary   mosey-<V>-<os>-<arch>, os in linux/darwin, arch in amd64/arm64
   #            (Go's names), the bare static executable the build job made
   #   sums     SHA256SUMS, sha256sum(1) format, one line per binary
@@ -427,10 +447,26 @@ jobs:
   # build job stamped every one from the same commit and run number, so
   # they agree, and the check keeps it so.
   #
+  # THE TAG'S OWN COMMIT. flake.nix's package is the release's binary,
+  # fetched, and a flake fetched as github:danielbodart/mosey/v<V> sees its
+  # commit but not its tag, so the version and each asset's URL and hash
+  # must be in the tagged tree: nix/release.json (scripts/release-json.sh).
+  # It is committed, by github-actions[bot], as a one-commit child of the
+  # released trunk commit, and only the tag v<V> is pushed, pointing at that
+  # child; trunk never gets the commit. Agents and a push loop commit to
+  # local trunk all the time, and a bot commit on origin/trunk would make
+  # every local trunk diverge on every release; a tag on no branch does
+  # not, needs no [skip ci], since a tag push starts no run here, and cannot
+  # race anyone's push to trunk. So the last release is the tag's parent,
+  # not an ancestor tag (scripts/last-release.sh, which release-due and the
+  # notes ask). The child's workflows are its parent's, so the GITHUB_TOKEN
+  # rule below about workflows applies to it as it would to the parent.
+  #
   # The derived version makes every run a unique, monotonic release, so two
   # pushes cannot collide on a tag. A re-run of a run keeps its run number:
-  # re-running one whose release was already made fails at gh release
-  # create, which never overwrites a release.
+  # re-running one whose release was already made fails at the tag's push,
+  # which never moves a tag, or at gh release create, which never
+  # overwrites a release.
   release:
     needs: [check, race, fuzz-targets, fuzz, kill-soak, build, nix]
     if: >-
@@ -477,7 +513,8 @@ jobs:
     steps:
       # fetch-depth: 0 because the minor is the commit count, which
       # scripts/version.sh REFUSES to count in a shallow clone; fetch-tags so
-      # the previous tag resolves, for release-due and the notes below.
+      # the previous tags, and the commits they name off trunk, are here,
+      # for release-due and the notes below.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ !failure() }}
         with:
@@ -560,26 +597,54 @@ jobs:
         with:
           subject-path: release/mosey-${{ steps.due.outputs.version }}-darwin-arm64
 
-      # Notes from the COMMITS since the last release. Trunk-based means
-      # direct pushes and no pull requests, so GitHub's PR-based
-      # --generate-notes would come out empty. On the first release there is
-      # no prior tag, so fall back to the head commit rather than dumping the
-      # whole history.
-      - name: Create GitHub Release
+      # Notes from the COMMITS since the last release, written before this
+      # release's tag exists, so the last release is the one before it.
+      # Trunk-based means direct pushes and no pull requests, so GitHub's
+      # PR-based --generate-notes would come out empty. On the first release
+      # there is no prior tag, so fall back to the head commit rather than
+      # dumping the whole history.
+      - name: Release notes
         if: ${{ !failure() && steps.due.outputs.version != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          V: ${{ steps.due.outputs.version }}
         run: |
-          PREV="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
-          if [ -n "$PREV" ]; then
-            git log "$PREV..HEAD" --pretty='- %s (%h)' > notes.md
+          if read -r _ prev < <(scripts/last-release.sh); then
+            git log "$prev..$GITHUB_SHA" --pretty='- %s (%h)' > notes.md
           else
-            { echo 'First automated release.'; echo; git log -1 --pretty='- %s (%h)'; } > notes.md
+            { echo 'First automated release.'; echo; git log -1 --pretty='- %s (%h)' "$GITHUB_SHA"; } > notes.md
           fi
           {
             echo
             echo "Static binaries for linux and darwin on amd64 and arm64, each with a GitHub build attestation."
             echo "To check what you downloaded: sha256sum --ignore-missing -c SHA256SUMS, and gh attestation verify FILE --repo danielbodart/mosey"
+            echo "With Nix: nix run github:danielbodart/mosey/v$V -- HOST"
           } >> notes.md
-          gh release create "v$V" --title "v$V" --notes-file notes.md --target "$GITHUB_SHA" release/*
+        env:
+          V: ${{ steps.due.outputs.version }}
+
+      # The tag, on its own commit (see the top of this job): nix/release.json
+      # for the binaries laid out above, committed on a detached HEAD whose
+      # parent is the commit this run tested, and only the tag pushed.
+      - name: Tag v<V> on a child commit holding nix/release.json
+        if: ${{ !failure() && steps.due.outputs.version != '' }}
+        env:
+          V: ${{ steps.due.outputs.version }}
+        run: |
+          git checkout -q --detach "$GITHUB_SHA"
+          mkdir -p nix
+          scripts/release-json.sh "$V" release/SHA256SUMS > nix/release.json
+          cat nix/release.json
+          git add nix/release.json
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -m "Release v$V" \
+              -m "nix/release.json, for flake.nix: the release's version and each binary's URL and hash. This commit is on no branch; only the tag v$V names it."
+          git tag "v$V"
+          git push -q origin "refs/tags/v$V"
+
+      # The release, on the tag just pushed (--verify-tag: never one GitHub
+      # would make itself, on trunk).
+      - name: Create GitHub Release
+        if: ${{ !failure() && steps.due.outputs.version != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.due.outputs.version }}
+        run: gh release create "v$V" --verify-tag --title "v$V" --notes-file notes.md release/*

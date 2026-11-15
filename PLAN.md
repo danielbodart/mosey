@@ -142,8 +142,10 @@ request). The decisions are in §2. Gaps they left:
 2. `docs/threat-model.md` grows with the slices.
 3. Release pipeline (D10) from the first commit. Then use it daily, on
    trains. (Done: CI releases every green trunk commit to GitHub Releases,
-   with a flake and a NixOS VM test of the install path; the race detector
-   runs in CI.)
+   with a NixOS VM test of the install path; the race detector runs in CI.
+   The flake's package is the release binary, not a source build, named by
+   `nix/release.json` on a tag-only child commit, bootstrap.md §4.6: Dan,
+   2026-11-15.)
 4. Anything quoin needs for remote approvals over mosey is a quoin change,
    made on quoin's side in its own session; mosey has no quoin-specific code
    and waits on nothing from quoin (D28).

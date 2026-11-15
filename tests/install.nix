@@ -1,7 +1,8 @@
 # D7's install path, on real machines: alice on client runs `mosey HOST`
 # through the system ssh, as a user would, against two hosts.
 #
-# - server has mosey on its PATH (the package from this flake): a whole
+# - server has mosey on its PATH (the flake's package, which is a release
+#   binary: on a tag the release's own, in CI the one its run built): a whole
 #   session runs over real UDP between the VMs, with the server's roles
 #   sandboxed as released (seccomp KILL, Landlock), and what alice types
 #   in it reaches server's shell.
@@ -13,14 +14,14 @@
 #
 # Throwaway keys, made in the store for this test alone; nothing here reads
 # a real key, agent or known_hosts.
-{ self }:
+{ mosey }:
 { lib, hostPkgs, ... }:
 
 let
   pkgs = hostPkgs;
-  system = pkgs.stdenv.hostPlatform.system;
-  mosey = self.packages.${system}.mosey;
-  # Where D7 installs this build on a host that has none.
+  # Where D7 installs this build on a host that has none: under the
+  # version the package has from nix/release.json, which is what the
+  # binary says it is (scripts/release-assets.sh checks).
   cached = "/home/alice/.cache/mosey/${mosey.version}/mosey";
 
   keys = pkgs.runCommand "mosey-install-test-keys" { nativeBuildInputs = [ pkgs.openssh ]; } ''

@@ -1,8 +1,7 @@
 # The toolchain and the tasks CI and people call. Go is pinned to the patch,
 # as in gokit and quoin, so CI and a laptop compile with the same compiler;
 # its major.minor is the one nixpkgs' go_1_27 has on nixos-26.05, which
-# flake.nix builds with, so both channels compile with the same language
-# version. The weekly update moves each tool's patch; a new minor moves by
+# flake.nix's dev shell offers to anyone without mise. The weekly update moves each tool's patch; a new minor moves by
 # hand, with the nixpkgs attribute.
 [tools]
 go = "1.27.3"
@@ -16,7 +15,7 @@ CGO_ENABLED = "0"
 
 [tasks.check]
 description = "Lint, unit tests, the runtimesecret build's checks, shellcheck, actionlint and the scripts' tests: the dev loop and CI's fast job"
-depends = ["lint", "test", "secret", "shellcheck", "actionlint", "actions-pinned", "scripts-test", "vendor-hash-check"]
+depends = ["lint", "test", "secret", "shellcheck", "actionlint", "actions-pinned", "scripts-test"]
 
 # Vetted for both operating systems and both architectures every release
 # ships for (D10), so a Linux-only call outside a _linux.go file fails here
@@ -43,22 +42,6 @@ run = '''
 export GOEXPERIMENT=runtimesecret
 for arch in amd64 arm64; do GOOS=linux GOARCH=$arch go vet ./... || exit 1; done
 go test ./internal/handshake ./internal/transport ./internal/client ./internal/server
-'''
-
-# flake.nix pins the hash of the vendored modules, and that set changes not
-# only when go.sum does but when code first imports another package of a
-# module already required (the agent slice's x/crypto/ssh did, with go.sum
-# untouched, and every Nix leg went red while check stayed green). So check
-# builds the vendored modules whenever the Go source or the flake moves.
-# Without nix there is nothing to build it with, and it says so; CI's Nix
-# legs still catch it.
-[tasks.vendor-hash-check]
-description = "flake.nix's vendorHash matches the modules the code imports (needs nix; skipped without)"
-sources = ["cmd/**/*.go", "internal/**/*.go", "go.mod", "go.sum", "flake.nix", "flake.lock"]
-outputs = { auto = true }
-run = '''
-command -v nix >/dev/null || { echo "vendor-hash-check: no nix here, skipped"; exit 0; }
-nix build --no-link .#mosey.goModules || { echo "vendor-hash-check: flake.nix's vendorHash is stale: run scripts/vendor-hash.sh" >&2; exit 1; }
 '''
 
 [tasks.test]
@@ -111,11 +94,12 @@ description = "The static mosey binary for linux and darwin on amd64 and arm64, 
 run = "scripts/build.sh"
 
 # What counts as a release's input (the source, the Go pin, the build and
-# version scripts, flake.nix) is listed, and argued, in the script.
+# version scripts, flake.nix) is listed, and argued, in the script; the
+# last release is its tag's parent (scripts/last-release.sh).
 [tasks.release-due]
 description = "Exit 0, printing true, if anything a release is built from changed since the last release tag; else print false and exit 1"
 run = "scripts/release-due.sh"
 
 [tasks.scripts-test]
-description = "The release scripts' own tests, against a throwaway repository"
-run = "scripts/release-due-test.sh"
+description = "The release scripts' own tests, against a throwaway repository and a known SHA256SUMS"
+run = ["scripts/release-due-test.sh", "scripts/release-json-test.sh"]

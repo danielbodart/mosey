@@ -15,11 +15,13 @@
 #   VERSION scripts/version.sh   what the binary says it is
 #   scripts/build.sh             how it is built (ldflags, -trimpath, D20's
 #                                GOEXPERIMENT)
-#   flake.nix                    what a Nix consumer pinning the tag builds
+#   flake.nix                    how a Nix consumer pinning the tag
+#                                installs the release's binary
 #
 # and, from mise.toml, only the Go pin: a bump of shellcheck or actionlint
 # changes no binary. flake.lock (a consumer follows its own nixpkgs), the
-# docs, the spikes, the VM tests and the workflows are not released.
+# docs, the spikes, the VM tests and the workflows are not released, nor is
+# nix/release.json, which a release adds on its tag's own commit.
 set -euo pipefail
 unset CDPATH
 shopt -s inherit_errexit
@@ -30,7 +32,10 @@ paths=(cmd internal go.mod go.sum VERSION scripts/version.sh scripts/build.sh fl
 
 due() { echo true; exit 0; }
 
-last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null) || due
+# The trunk commit the last release was made from, which is the parent of
+# its tag's commit, not the tag's own commit (scripts/last-release.sh):
+# that adds nix/release.json, which is the release's output, not its input.
+read -r _ last < <(scripts/last-release.sh) || due
 
 [ -z "$(git diff --name-only "$last" HEAD -- "${paths[@]}")" ] || due
 

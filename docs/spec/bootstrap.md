@@ -491,6 +491,24 @@ exactly this [choice]:
   and its hash is the line of
   `https://github.com/danielbodart/mosey/releases/download/v<V>/SHA256SUMS`
   whose second field is that name.
+- **The tag's commit, and `nix/release.json`** (Dan, 2026-11-15). The
+  tag `v<V>` does not name the released trunk commit but a commit of its
+  own, made by `github-actions[bot]`, whose one parent is that trunk
+  commit and which adds one file, `nix/release.json`:
+  `{"version": V, "assets": {SYSTEM: {"url": …, "hash": "sha256-<SRI>"}}}`
+  for the Nix systems `x86_64-linux`, `aarch64-linux`, `x86_64-darwin`
+  and `aarch64-darwin` (`linux-amd64`, `linux-arm64`, `darwin-amd64`,
+  `darwin-arm64`), each URL the asset above and each hash its
+  `SHA256SUMS` line in SRI form (`scripts/release-json.sh`). Only the tag
+  is pushed; no branch has the commit. `flake.nix`'s package is that
+  asset, fetched and installed as `bin/mosey` with version `V`, so
+  `github:danielbodart/mosey/v<V>` gives the release's own binary (a
+  flake sees its commit, never its tag, so the version has to be in the
+  tree); on trunk there is no file and no package. The last release
+  before a commit is the newest tag whose parent (or, for the tags made
+  before this, whose own commit) is its ancestor
+  (`scripts/last-release.sh`), and `scripts/release-due.sh` diffs from
+  that parent.
 
 **How the release job makes them.** After laying the binaries out and
 checking their versions, it attests each binary in a step of its own
@@ -673,8 +691,8 @@ goes when a macOS server lands.
   `MAJOR.MINOR.PATCH` with each part a decimal of at most 9 digits, no
   leading zero, and `PATCH` ≥ 1 (CI's run number) [derived from
   `scripts/version.sh`: a local build's patch is a 14-digit timestamp, a
-  flake build's is its commit's 14-digit time or its version says
-  `unstable`, a plain `go build` says `dev`]. Anything
+  plain `go build` says `dev`; the flake installs a release's binary, so
+  its version is a release's]. Anything
   else is a development build: `mosey: this is a development build (V) and
   DEST is OS/ARCH, which it cannot copy itself to: build mosey for OS/ARCH
   and pass -remote, or put it at ~/.cache/mosey/V/mosey there`.

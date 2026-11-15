@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Tests scripts/release-due.sh against a throwaway repository: which changes
-# since the last release tag make a release, and which do not. Run by
-# mise run check (the scripts-test task).
+# Tests scripts/release-due.sh (and scripts/last-release.sh, which it asks)
+# against a throwaway repository: which changes since the last release make
+# a release, and which do not, with the release tagged as CI tags it, on a
+# child of the released trunk commit that adds nix/release.json, or as it
+# was tagged before, on the trunk commit itself. Run by mise run check (the
+# scripts-test task).
 set -euo pipefail
 unset CDPATH
 
-src=$(cd "$(dirname "$0")" && pwd)/release-due.sh
+src=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -17,13 +20,16 @@ export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
 failures=0
 fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
 
-# A repository whose one commit is tagged as a release.
+# A repository whose one commit is released, its tag as CI makes it: a
+# commit of its own, on no branch, whose parent is the trunk commit and
+# which adds nix/release.json (ci.yml's release job). `fresh old` tags the
+# trunk commit itself, as releases were tagged before.
 fresh() {
     rm -rf "$work/repo"
     mkdir -p "$work/repo/scripts" "$work/repo/internal/x" "$work/repo/docs"
     cd "$work/repo"
     git init -q -b trunk
-    cp "$src" scripts/release-due.sh
+    cp "$src/release-due.sh" "$src/last-release.sh" scripts/
     printf '[tools]\ngo = "1.27.3"\nshellcheck = "0.11.0"\n\n[env]\nCGO_ENABLED = "0"\n' > mise.toml
     echo 0 > VERSION
     echo 'package x' > internal/x/x.go
@@ -32,14 +38,33 @@ fresh() {
     echo lock > flake.lock
     git add -A
     git commit -qm base
-    git tag v0.1.1
+    if [ "${1:-}" = old ]; then
+        git tag v0.1.1
+    else
+        release v0.1.1
+    fi
+}
+
+# release TAG: tags HEAD's release as CI does, on a child commit holding
+# nix/release.json, and leaves trunk checked out where it was.
+release() {
+    git checkout -q --detach
+    mkdir -p nix
+    echo "{\"version\": \"${1#v}\"}" > nix/release.json
+    # Even a release.json that names a file a release is built from must
+    # not count: release-due diffs from the tag's parent.
+    echo 'package x // as the tag sees it' > internal/x/x.go
+    git add -A
+    git commit -qm "Release $1"
+    git tag "$1"
+    git checkout -q trunk
 }
 
 # expect WANT DESCRIPTION: release-due.sh's output and status agree with WANT.
 expect() {
     local want=$1 what=$2 out status=0
     git add -A
-    git commit -qm "$what"
+    git commit -qm "$what" "${@:3}"
     out=$(scripts/release-due.sh) || status=$?
     case $want in
     true) [ "$out" = true ] && [ $status -eq 0 ] || fail "$what: want a release, got '$out' (exit $status)" ;;
@@ -73,6 +98,36 @@ fresh
 git tag -d v0.1.1 >/dev/null
 echo docs2 > docs/a.md
 expect true "no release tag yet"
+
+fresh
+expect false "nothing since the release (an empty commit)" --allow-empty
+
+fresh old
+echo docs2 > docs/a.md
+expect false "the docs, since a release tagged on trunk itself"
+
+fresh old
+echo 'package x // changed' > internal/x/x.go
+expect true "the Go source, since a release tagged on trunk itself"
+
+# A tagged-on-trunk release, then a tagged-on-a-child one: the newer is the
+# last, so only what changed since it counts.
+fresh old
+echo 'package x // changed' > internal/x/x.go
+git commit -qam "source"
+release v0.2.7
+echo docs2 > docs/a.md
+expect false "the docs, since the newer of an old-style and a new-style release"
+
+# A release made from a commit after HEAD (trunk checked out behind it) is
+# not HEAD's last release.
+fresh
+echo 'package x // changed' > internal/x/x.go
+git commit -qam "source"
+release v0.2.9
+git checkout -q --detach HEAD~1
+echo docs2 > docs/a.md
+expect false "the docs, behind a later release"
 
 if [ $failures -gt 0 ]; then
     exit 1

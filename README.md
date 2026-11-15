@@ -108,8 +108,14 @@ The platforms are `linux-amd64`, `linux-arm64`, `darwin-amd64` and
 `darwin-arm64`. The names are fixed
 ([docs/spec/bootstrap.md §4.6](docs/spec/bootstrap.md)), because mosey
 fetches them itself to copy the right one onto a host of another
-platform. With Nix, `nix run github:danielbodart/mosey -- HOST`, or the
-flake's `packages.<system>.mosey`.
+platform.
+
+With Nix, pin a release tag: `nix run github:danielbodart/mosey/v<V> --
+HOST`, or `inputs.mosey.url = "github:danielbodart/mosey/v<V>"` and the
+flake's `packages.<system>.mosey`. The package is that release's own
+binary, fetched by the hash in the tag's `nix/release.json`, not a build
+from source, so it is the file `SHA256SUMS` and the attestation vouch for.
+Trunk has no package (no release, no file): always pin a tag.
 
 ## Using it
 
@@ -249,9 +255,14 @@ mise run build    # the static mosey binary for linux and darwin, amd64 and arm6
 mise run race     # the tests under the race detector (needs a C compiler)
 ```
 
-or with Nix: `nix build` for the package, `nix flake check` for the
-package and the VM test of the install path, and `nix develop` for a shell
-with the tools (the tests and the lint are `mise run check`'s).
+and `nix develop` for a shell with the tools if you have Nix but not
+mise. The flake does not build mosey: its package is a release's binary
+(see [Installing](#installing)). To run the VM test of the install path on
+binaries you built, make them the flake's release, as CI does:
+`mise run build`, `scripts/release-assets.sh V rel` with `V` what they say
+they are, `scripts/nix-local-release.sh V rel`, then
+`nix build .#checks.x86_64-linux.vm-install` (and unstage
+`nix/release.json` after).
 
 CI runs all of that on every push, plus 10 seconds of every fuzz target
 (in four shards), the slow tests, and 150-second soaks of the server

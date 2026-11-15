@@ -456,6 +456,13 @@ when the server ends the session, and otherwise tells the server with
   binaries over loopback UDP, bootstrapped through a throwaway unprivileged
   sshd on 127.0.0.1 with throwaway keys and agent, as
   `spikes/s3-agent-bind/harness` does, skipped cleanly if `sshd` is absent.
+- **The install path on NixOS VMs** (`tests/install.nix`, CI's
+  `vm-install`). `flake.nix` does not build mosey: its package is a
+  release's binary, named by the `nix/release.json` a release's tag adds on
+  a child commit (`bootstrap.md` §4.6). CI's nix job makes the binaries its
+  own build job made the flake's release (`scripts/nix-local-release.sh`),
+  so the VM test runs the very file the run releases, through the same
+  package a pinned tag gives.
 
 ## 7. Hooks reserved for later slices
 
