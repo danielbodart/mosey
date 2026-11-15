@@ -1280,11 +1280,10 @@ spawner's **argv** can: `/proc/PID/cmdline` of the session's spawner is
 exactly `mosey` (any path), then `--serve=spawner`. The spawner is the
 parent of the login shell (`server.md` §2.5), so a program inside the
 session finds it as an ancestor; the local client's argv[1] is never a
-`--serve` flag (§2). This is a documented fact of the process shape, not
-a contract with any particular tool (D28): the spawner's argv[1] stays
-`--serve=spawner` and the spawner never rewrites its argv or comm, and
-whatever a tool does with that is the tool's own affair. A forged argv
-proves nothing, since any process of the user's can set its own.
+`--serve` flag (§2). This describes the process shape as built; it is
+not a promise to any tool that it stays so (D28), and what a tool does
+with it is the tool's own affair. A forged argv proves nothing, since any
+process of the user's can set its own.
 
 ---
 
@@ -2033,9 +2032,8 @@ this file.
 11. **Telling a mosey session by its processes, and the `mosey-server`
     comm (major).** §8 says that under D7 no process is named
     `mosey-server`, and that the spawner's argv (`--serve=spawner`) is
-    what marks a session, which mosey does not change or rewrite. Setting
+    what marks a session as built. Setting
     the comm to `mosey-server` with `PR_SET_NAME`, as the review
     suggests, is not taken: D7 as settled says no process has that name.
-    Since D28's amendment (2026-11-15) this is a documented fact, not a
-    contract with any particular tool; what a tool does with it is its
-    own affair.
+    Since D28's amendment (2026-11-15) this describes the current process
+    shape only, with no promise to any tool that it stays so.
