@@ -110,6 +110,13 @@ func startStubSession(t *testing.T, sid [16]byte) *stubSession {
 // credential's TTL).
 func startStubSessionWith(t *testing.T, sid [16]byte, cfg SpawnerConfig, hold time.Duration) *stubSession {
 	t.Helper()
+	return startStubSessionSetUp(t, sid, cfg, hold, nil)
+}
+
+// startStubSessionSetUp is startStubSessionWith with setUp run on the
+// spawner before it starts supervising, for what a test must set first.
+func startStubSessionSetUp(t *testing.T, sid [16]byte, cfg SpawnerConfig, hold time.Duration, setUp func(*spawner)) *stubSession {
+	t.Helper()
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = IdleTimeout
 	}
@@ -149,11 +156,15 @@ func startStubSessionWith(t *testing.T, sid [16]byte, cfg SpawnerConfig, hold ti
 		proto: proto, shell: shell, ready: true,
 		sid: sid, name: stubName, started: now, state: bootstrap.SessionNew, since: now,
 		resumes: make(chan resumeRequest), hangups: make(chan struct{}, 1), holdTTL: hold,
+		handoffs: make(chan *handoffJob), handoffOutcome: make(chan bool, 1),
 	}
 	if s.attach, err = listenAttach(filepath.Join(runtime, "mosey"), sid); err != nil {
 		t.Fatal(err)
 	}
 	s.readCtl()
+	if setUp != nil {
+		setUp(s)
+	}
 	ss := &stubSession{t: t, s: s, proto: stub, protoCmd: proto.cmd, protoIn: protoW,
 		runtime: runtime, log: log, ended: make(chan struct{})}
 	go func() {

@@ -449,8 +449,10 @@ name an `sname`; the snapshot through `screen.Grid.Apply` from a 0×0 grid,
 at the size `HandoffState` gives; that fd 0 is a pty master (`TIOCGPTN`),
 fd 1 a pidfd for a live process whose pid is `HandoffState`'s (the
 `Pid:` line of `/proc/self/fdinfo`), and fd 2 a listening `SOCK_SEQPACKET`
-socket bound at this session's `attach.sock` path; and the agent listener,
-if sent, a listening socket at `agent.sock` beside it. Anything else is
+socket bound at this session's `attach.sock` path (as `getsockname` gives
+it: the `.tmp` name it was bound under before its rename, §2.6); and the
+agent listener, if sent, a listening `SOCK_STREAM` socket at `agent.sock`
+beside it. Anything else is
 an abort.
 
 **Aborts.** Until `HandoffTaken` the old session is whole. If spawner-N

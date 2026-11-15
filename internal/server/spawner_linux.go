@@ -100,8 +100,17 @@ func RunSpawner(ctx context.Context, ipcFD *os.File, cfg SpawnerConfig) error {
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = IdleTimeout
 	}
-	s := &spawner{cfg: cfg, start: newStarter(), log: slog.New(slog.DiscardHandler)}
+	s := newSpawner(cfg)
 	return s.run(ctx, ipcFD)
+}
+
+// newSpawner is a spawner with its channels made, before it knows whether
+// it starts a session or adopts one.
+func newSpawner(cfg SpawnerConfig) *spawner {
+	return &spawner{
+		cfg: cfg, start: newStarter(), log: slog.New(slog.DiscardHandler),
+		handoffs: make(chan *handoffJob), handoffOutcome: make(chan bool, 1),
+	}
 }
 
 // child is a running role or shell.
@@ -115,6 +124,34 @@ type child struct {
 	oom atomic.Bool
 	// cgroup is emu's scope's cgroup directory, if it has one.
 	cgroup string
+	// pidfd, for a shell adopted in a live upgrade (server.md §2.8), is
+	// how it is watched and signalled: the spawner is not its parent, so
+	// cmd is nil and its exit status is not ours to read.
+	pidfd    *os.File
+	pidfdPid int
+}
+
+// pid is the child's process id.
+func (c *child) pid() int {
+	if c.pidfd != nil {
+		return c.pidfdPid
+	}
+	return c.cmd.Process.Pid
+}
+
+// signal sends sig, through the pidfd for an adopted shell, so a pid that
+// has been reused can never be hit.
+func (c *child) signal(sig syscall.Signal) error {
+	if c.pidfd != nil {
+		raw, err := c.pidfd.SyscallConn()
+		if err != nil {
+			return err
+		}
+		var serr error
+		raw.Control(func(fd uintptr) { serr = unix.PidfdSendSignal(int(fd), sig, nil, 0) })
+		return serr
+	}
+	return c.cmd.Process.Signal(sig)
 }
 
 type spawner struct {
@@ -180,6 +217,22 @@ type spawner struct {
 	// holdTTL is how long a resume holds the greeting; zero is
 	// handshake.CredentialTTL. Tests shorten it.
 	holdTTL time.Duration
+
+	// A live upgrade (server.md §2.8). handoffs carries a checked
+	// HandoffRequest from the attach socket to the supervision loop, and
+	// handoffOutcome whether the newer spawner took the session; job is
+	// the hand-off under way, snapping whether its snapshot is still
+	// coming from proto, and lateSnapshot whether the rest of one the
+	// loop gave up on is to be dropped. adopted is a session this
+	// spawner took from an older one. peerCheck, if set, is the uid check
+	// on a hand-off's connection in place of samePeer: a test hook.
+	handoffs       chan *handoffJob
+	handoffOutcome chan bool
+	job            *handoffJob
+	snapping       bool
+	lateSnapshot   bool
+	adopted        bool
+	peerCheck      func(fd int) error
 }
 
 // resumeRequest is a checked resume on its way to proto: the client's key,
@@ -231,6 +284,11 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	m, err := s.launcher.Recv()
 	if err != nil {
 		return fmt.Errorf("waiting for the client's line: %w", err)
+	}
+	if ad, ok := m.(ipc.Adopt); ok {
+		// A live upgrade of a session of an older binary (server.md §2.8).
+		s.launcher.File().SetReadDeadline(time.Time{})
+		return s.adopt(ctx, ad)
 	}
 	lineMsg, ok := m.(ipc.ClientLine)
 	if !ok {
@@ -305,40 +363,12 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 		return fmt.Errorf("handing proto its fds: %w", err)
 	}
 
-	var line []byte
 	// The credential line passes through, and is wiped however this ends
 	// (threat-model.md §4.10).
+	line, err := s.awaitCredential(ctx)
 	defer func() { clear(line) }()
-	timeout := time.After(T3)
-	for line == nil {
-		select {
-		case ev := <-s.ctlMsgs:
-			if ev.err != nil {
-				return fmt.Errorf("proto: %w", ev.err)
-			}
-			switch m := ev.m.(type) {
-			case ipc.Credential:
-				if err := checkCredential(m.Line, s.advertised, port, s.cfg.Version, s.name); err != nil {
-					s.violation(err)
-					return errors.New("proto sent a bad credential")
-				}
-				line = m.Line
-			case ipc.Exit:
-				return fmt.Errorf("proto: %s", m.Reason)
-			case ipc.KillEmu:
-				// Before the session starts there is nothing to rebuild for.
-				return errors.New("emu failed at start")
-			default:
-				s.violation(fmt.Errorf("%T before the credential", m))
-				return errors.New("proto broke the protocol")
-			}
-		case st := <-s.proto.done:
-			return fmt.Errorf("proto ended at start: %s", describe(st))
-		case <-timeout:
-			return errors.New("proto sent no credential in time")
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	if err != nil {
+		return err
 	}
 
 	// The credential names the session, so its attach socket can be made
@@ -387,6 +417,43 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	s.launcher = nil
 	s.ready = true
 	return nil
+}
+
+// awaitCredential waits up to T3 for proto's first Credential and checks
+// it (§3.4): at a session's start, and at a live upgrade's.
+func (s *spawner) awaitCredential(ctx context.Context) ([]byte, error) {
+	timeout := time.After(T3)
+	for {
+		select {
+		case ev := <-s.ctlMsgs:
+			if ev.err != nil {
+				return nil, fmt.Errorf("proto: %w", ev.err)
+			}
+			switch m := ev.m.(type) {
+			case ipc.Credential:
+				if err := checkCredential(m.Line, s.advertised, s.port, s.cfg.Version, s.name); err != nil {
+					clear(m.Line)
+					s.violation(err)
+					return nil, errors.New("proto sent a bad credential")
+				}
+				return m.Line, nil
+			case ipc.Exit:
+				return nil, fmt.Errorf("proto: %s", m.Reason)
+			case ipc.KillEmu:
+				// Before the session starts there is nothing to rebuild for.
+				return nil, errors.New("emu failed at start")
+			default:
+				s.violation(fmt.Errorf("%T before the credential", m))
+				return nil, errors.New("proto broke the protocol")
+			}
+		case st := <-s.proto.done:
+			return nil, fmt.Errorf("proto ended at start: %s", describe(st))
+		case <-timeout:
+			return nil, errors.New("proto sent no credential in time")
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // readCtl reads proto's messages into ctlMsgs, for the bootstrap and then
@@ -626,13 +693,21 @@ func (s *spawner) supervise(ctx context.Context) error {
 	if s.agent != nil {
 		go s.serveAgent()
 	}
-	attached := false
+	// An adopted session has had clients (server.md §2.8): no backstop,
+	// and it is detached, so its idle clock runs, until one attaches.
+	attached := s.adopted
 	backstopTimer := time.NewTimer(backstop)
 	defer backstopTimer.Stop()
 	// idle runs while the session is detached (D8 R4); hungUp is the
 	// grace a hung-up shell has to exit before the teardown.
 	idle := newIdleClock(s.cfg.IdleTimeout)
 	defer idle.attached()
+	if s.adopted {
+		backstopTimer.Stop()
+		idle.detached()
+	}
+	// snapDue is when a hand-off gives up waiting for proto's Snapshot.
+	var snapDue <-chan time.Time
 	var hungUp <-chan time.Time
 	var restart <-chan time.Time
 	var nextReason ipc.EmuEnd
@@ -676,9 +751,17 @@ func (s *spawner) supervise(ctx context.Context) error {
 			}
 		case st := <-shellDone:
 			shellDone = nil
+			code := status(st)
+			if s.shell.pidfd != nil {
+				// Adopted (server.md §2.8): only the shell's parent can
+				// read how it ended.
+				code = 0
+				s.log.Info("the shell exited; its status is its first spawner's to know")
+			} else {
+				s.log.Info("the shell exited", "status", describe(st))
+			}
 			s.shell = nil
-			s.log.Info("the shell exited", "status", describe(st))
-			if err := s.ctl.Send(ipc.ShellExit{Status: status(st)}); err != nil {
+			if err := s.ctl.Send(ipc.ShellExit{Status: code}); err != nil {
 				s.teardown("the shell exited")
 				return nil
 			}
@@ -725,6 +808,18 @@ func (s *spawner) supervise(ctx context.Context) error {
 			if err != nil {
 				s.log.Warn("handing proto an agent connection", "err", err)
 			}
+		case j := <-s.handoffs:
+			snapDue = s.startHandoff(j)
+		case <-snapDue:
+			snapDue = nil
+			s.log.Warn("proto did not freeze for a hand-off in time")
+			s.snapshotLate()
+		case taken := <-s.handoffOutcome:
+			if taken {
+				s.handedOff()
+				return nil
+			}
+			s.abandonHandoff()
 		case r := <-s.resumes:
 			if err := s.ctl.Send(ipc.Resume{ClientPublic: r.public}); err != nil {
 				s.log.Warn("forwarding a resume to proto", "err", err)
@@ -778,6 +873,16 @@ func (s *spawner) supervise(ctx context.Context) error {
 				s.setDetached()
 				idle.detached()
 				s.log.Info("the client detached")
+			case ipc.Snapshot:
+				done, err := s.snapshotFragment(m)
+				if err != nil {
+					s.violation(err)
+					continue
+				}
+				if done {
+					snapDue = nil
+					s.job.ready <- nil
+				}
 			case ipc.Credential:
 				if len(s.pending) == 0 {
 					s.violation(errors.New("a Credential nobody asked for"))
@@ -815,8 +920,8 @@ func (s *spawner) hangup() <-chan time.Time {
 	if s.shell == nil {
 		return nil
 	}
-	pid := s.shell.cmd.Process.Pid
-	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
+	pid := s.shell.pid()
+	if err := s.shell.signal(syscall.SIGHUP); err != nil {
 		s.log.Warn("SIGHUP to the shell", "err", err)
 	}
 	if s.master != nil {
@@ -911,7 +1016,7 @@ func waitOrKill(c *child, grace time.Duration) {
 		return
 	case <-time.After(grace):
 	}
-	c.cmd.Process.Kill()
+	c.signal(syscall.SIGKILL)
 	select {
 	case <-c.done:
 	case <-time.After(grace):

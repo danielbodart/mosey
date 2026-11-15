@@ -85,6 +85,11 @@ func (s *spawner) serveResume(f *os.File) error {
 		}
 		return nil
 	}
+	if req, ok := m.(ipc.HandoffRequest); ok {
+		// A newer binary asks for the session (server.md §2.8).
+		f.SetReadDeadline(time.Time{})
+		return s.serveHandoff(conn, f, req)
+	}
 	refuse := func(err error) error {
 		conn.Send(ipc.Failed{Text: printableASCII(err.Error(), ipc.MaxFailed)})
 		return err

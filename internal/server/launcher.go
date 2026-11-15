@@ -128,13 +128,102 @@ func (l *Launcher) run(ctx context.Context) error {
 		return l.start(ctx, bootstrap.MarshalClientLine(cl), cl)
 	}
 	taken := conns[c.take]
-	defer taken.f.Close()
+	defer func() { taken.f.Close() }()
 	// A reconnect keeps its holder (resume:SID:CREDID): the spawner holds
 	// the session for that client while the new credential is out, so the
 	// same client's next try still finds it its own (bootstrap.md §9.2.2).
 	to := cl
 	to.Attach, to.SessionID, to.Name = bootstrap.AttachResume, sessions[c.take].SessionID, ""
-	return l.resume(ctx, taken.f, taken.greeting, bootstrap.MarshalClientLine(to), cl)
+	resumeLine := bootstrap.MarshalClientLine(to)
+	if l.upgrades(sessions[c.take]) {
+		// A live upgrade (D8 V2, server.md §2.8): this binary is newer
+		// than the session's, so a spawner of this binary takes it over.
+		err := l.upgrade(ctx, taken.f, resumeLine, cl)
+		var silent *silentError
+		if err == nil || errors.As(err, &silent) {
+			return err
+		}
+		// The old session is whole (it thaws once the hand-off's
+		// connection closes), so it is attached as it is: a failed
+		// upgrade never costs the session (§2.8, "Aborts").
+		fmt.Fprintf(l.Stderr, "mosey --serve: the live upgrade failed (%s); attaching the session as it is\n", printableASCII(err.Error(), 200))
+		f, greeting, err := dialAttach(taken.dir)
+		if err != nil {
+			return fmt.Errorf("the session after a failed upgrade: %w", err)
+		}
+		taken.f = f
+		return l.resume(ctx, f, greeting, resumeLine, cl)
+	}
+	return l.resume(ctx, taken.f, taken.greeting, resumeLine, cl)
+}
+
+// upgrades says whether taking session g is a live upgrade: this launcher
+// is newer than the session (bootstrap.md §9.2 step 5). Equal, older and
+// incomparable versions (dev) attach plainly, so a session never goes
+// back to an older binary (D8 V2).
+func (l *Launcher) upgrades(g bootstrap.SessionLine) bool {
+	cmp, ok := bootstrap.CompareVersions(l.Version, g.SoftwareVersion)
+	return ok && cmp > 0 && l.Self != ""
+}
+
+// TUpgrade bounds the wait for an adopting spawner's Ready: a session's
+// start (T2) plus proto's freeze (T3) [derived].
+const TUpgrade = T2 + T3
+
+// upgrade starts a spawner of this binary to adopt the session at the
+// other end of f, an attach connection already greeted (server.md §2.8
+// step 1), and prints the credential line it answers with. f is the
+// adopter's from here: this launcher closes its own copy.
+func (l *Launcher) upgrade(ctx context.Context, f *os.File, line []byte, cl bootstrap.ClientLine) error {
+	ours, theirs, err := ipc.Pair()
+	if err != nil {
+		return err
+	}
+	conn, err := ipc.NewConn(ours, ipc.Launcher, ipc.Spawner)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	cmd := &exec.Cmd{
+		Path:        l.Self,
+		Args:        []string{l.Self, "--serve=spawner"},
+		Env:         l.Env,
+		ExtraFiles:  []*os.File{theirs},
+		SysProcAttr: &syscall.SysProcAttr{Setsid: true},
+	}
+	if err := cmd.Start(); err != nil {
+		theirs.Close()
+		return fmt.Errorf("starting the spawner: %w", err)
+	}
+	theirs.Close()
+	go cmd.Wait()
+	err = conn.Send(ipc.Adopt{Line: line, Conn: f})
+	f.Close()
+	if err != nil {
+		cmd.Process.Kill()
+		return fmt.Errorf("handing the spawner the session: %w", err)
+	}
+	conn.File().SetReadDeadline(time.Now().Add(TUpgrade))
+	m, err := conn.Recv()
+	if err != nil {
+		// Nothing from the adopter: it may yet have taken the session,
+		// so it is left to finish or fail on its own rather than killed
+		// with a shell in its hands.
+		return fmt.Errorf("the adopting spawner did not answer: %w", err)
+	}
+	switch m := m.(type) {
+	case ipc.Ready:
+		l.trigger(ctx, cl)
+		_, err := l.Stdout.Write(m.Line)
+		clear(m.Line)
+		if err != nil {
+			return &silentError{fmt.Errorf("writing the credential line: %w", err)}
+		}
+		return nil
+	case ipc.Failed:
+		return errors.New(m.Text)
+	}
+	return fmt.Errorf("the adopting spawner sent %T", m)
 }
 
 // start is a new session: the spawner, started in a session of its own,
@@ -274,10 +363,12 @@ func (l *Launcher) getenv(name string) string {
 	return ""
 }
 
-// liveSession is a session whose spawner answered with a greeting.
+// liveSession is a session whose spawner answered with a greeting, and
+// the directory its attach socket is in.
 type liveSession struct {
 	f        *os.File
 	greeting []byte
+	dir      string
 }
 
 // liveSessions connects to every session under base that answers. A
@@ -296,11 +387,12 @@ func liveSessions(base string) []liveSession {
 		if !isSessionDirName(e.Name()) {
 			continue
 		}
-		f, greeting, err := dialAttach(filepath.Join(base, e.Name()))
+		dir := filepath.Join(base, e.Name())
+		f, greeting, err := dialAttach(dir)
 		if err != nil {
 			continue
 		}
-		live = append(live, liveSession{f, greeting})
+		live = append(live, liveSession{f, greeting, dir})
 	}
 	return live
 }
