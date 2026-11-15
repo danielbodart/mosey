@@ -37,6 +37,17 @@ const (
 	// train's spikes, so a late or lost chaff frame does not end its mode
 	// in the middle of a run of typing (§9.1.2) [D].
 	serverLinger = time.Second
+
+	// clientChaffSize is the sealed size of the client's chaff, and so the
+	// least any client datagram is padded to while it chaffs (§9.1.1). It
+	// is the server's floor, 64, not the client's 40: Dan's decision of
+	// 2026-11-15 [D], from the measured train profile (§9.1.5), where it
+	// cut the keys exposed by size from 50% to 7% for 35% more client bytes
+	// while typing, and nothing when idle.
+	clientChaffSize = 64
+	// serverChaffSize is the server's: its floor (§9.2), which its echoes
+	// already have.
+	serverChaffSize = serverPadFloor
 )
 
 // chaffing is an endpoint's §9.1 state.
@@ -46,7 +57,7 @@ type chaffing struct {
 	// tick is chaffTick; tests that measure other ticks set it (§9.1.5).
 	tick time.Duration
 	// size is the sealed size of a chaff frame, and the least any datagram
-	// is padded to while chaffing: this side's padding floor (§9.1.1).
+	// is padded to while chaffing: this side's chaff size (§9.1.1).
 	size int
 	// until is when the mode ends: the endpoint chaffs while now is
 	// before it.

@@ -138,7 +138,7 @@ func NewEndpoint[L State[L], R State[R]](d Datagrams, cfg Config, local L, remot
 	e.sent[0] = e.pending
 	e.re.limits = e.lim
 	if c, ok := d.(Chaffer); ok {
-		e.ch = chaffing{c: c, tick: chaffTick, size: e.padFloor()}
+		e.ch = chaffing{c: c, tick: chaffTick, size: e.chaffSize()}
 	}
 	if cfg.Role == Server {
 		e.collection = serverCollection
@@ -243,8 +243,8 @@ func (e *Endpoint[L, R]) pass(payload []byte) (time.Time, error) {
 
 // tick is one tick of the grid while chaffing (§9.1.1): whatever §6.3 has
 // due, else an owed ack, early, since a datagram goes this tick anyway,
-// else one CHAFF frame the size of this side's padding floor, so that it
-// looks like a keystroke or an echo.
+// else one CHAFF frame of this side's chaff size, which every datagram is
+// padded to while chaffing, so that it looks like a keystroke or an echo.
 func (e *Endpoint[L, R]) tick(now time.Time) error {
 	before := len(e.queue)
 	if err := e.send(now); err != nil {
@@ -578,13 +578,21 @@ func (e *Endpoint[L, R]) pad(d *datagram, now time.Time) {
 	d.pad = paddedLen(u, floor, e.cfg.FrameOverhead+e.cfg.MaxPayload) - u
 }
 
-// padFloor is this side's F (§9.2), which is also the size of its chaff
-// (§9.1.1).
+// padFloor is this side's F (§9.2) when it is not chaffing.
 func (e *Endpoint[L, R]) padFloor() int {
 	if e.cfg.Role == Server {
 		return serverPadFloor
 	}
 	return clientPadFloor
+}
+
+// chaffSize is the size of this side's chaff, and its floor while it
+// chaffs (§9.1.1).
+func (e *Endpoint[L, R]) chaffSize() int {
+	if e.cfg.Role == Server {
+		return serverChaffSize
+	}
+	return clientChaffSize
 }
 
 // nextWake is when send next has something to do, short of a payload

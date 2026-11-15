@@ -18,9 +18,9 @@ func TestAChaffFrameIsTheSizeAskedForAndSignalsThePeerWithoutReachingRecv(t *tes
 			}
 			return []memPacket{p}
 		})
-		// 40 is the client's padding floor (ssp.md §9.2): the chaff must be
-		// the size of a keystroke's sealed plaintext.
-		if err := client.SendChaff(40); err != nil {
+		// 64 is the client's chaff size (ssp.md §9.1.1): the chaff must be
+		// the size of a keystroke's sealed plaintext while chaffing.
+		if err := client.SendChaff(64); err != nil {
 			t.Fatal(err)
 		}
 		select {
@@ -28,8 +28,8 @@ func TestAChaffFrameIsTheSizeAskedForAndSignalsThePeerWithoutReachingRecv(t *tes
 		case <-time.After(time.Second):
 			t.Fatal("the server was not told the chaff arrived")
 		}
-		if got := read(s.net, &sizes); len(got) != 1 || got[0] != 40+headerSize+16 {
-			t.Errorf("chaff went out as %v; want one datagram of the 40-byte sealed plaintext plus %d", got, headerSize+16)
+		if got := read(s.net, &sizes); len(got) != 1 || got[0] != 64+headerSize+16 {
+			t.Errorf("chaff went out as %v; want one datagram of the 64-byte sealed plaintext plus %d", got, headerSize+16)
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()

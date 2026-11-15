@@ -101,12 +101,59 @@ func TestWhileTheUserTypesTheClientSendsOneDatagramPerTickAllOfOneSize(t *testin
 			if !onGrid(first, d.at) {
 				t.Errorf("a datagram went %v after the first key, off the %v grid", d.at.Sub(first), chaffTick)
 			}
-			if d.sealed() != clientPadFloor {
-				t.Errorf("a datagram (chaff %v) of %d bytes; while typing every one is %d", d.chaff > 0, d.sealed(), clientPadFloor)
+			if d.sealed() != clientChaffSize {
+				t.Errorf("a datagram (chaff %v) of %d bytes; while typing every one is %d", d.chaff > 0, d.sealed(), clientChaffSize)
 			}
 		}
 		if got := p.typed(); len(got) != 40 {
 			t.Errorf("the server has %d of the 40 keys", len(got))
+		}
+	})
+}
+
+// The client's 64-byte size holds only while it chaffs (§9.1.1, Dan's
+// decision of 2026-11-15): its acks and heartbeats before the user types
+// and after the chaff ends go at its floor of 40 (§9.2), so being idle
+// costs no more than it did.
+func TestTheClientPadsTo64WhileItChaffsAnd40WhenNotTyping(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := chaffingPair(t, 30*time.Millisecond, true)
+		time.Sleep(4 * time.Second)
+		first, _ := p.typeIrregularly(3, 10)
+		time.Sleep(8 * time.Second)
+
+		var end time.Time
+		sends := p.cEnd.sends(t)
+		for _, d := range sends {
+			if d.chaff > 0 {
+				end = d.at
+			}
+		}
+		if end.IsZero() {
+			t.Fatal("the client never chaffed")
+		}
+		var before, during, after int
+		for _, d := range sends {
+			switch {
+			case d.at.Before(first):
+				before++
+				if d.sealed() != clientPadFloor {
+					t.Errorf("a datagram of %d bytes before the user typed; the floor is %d", d.sealed(), clientPadFloor)
+				}
+			case !d.at.After(end):
+				during++
+				if d.sealed() != clientChaffSize {
+					t.Errorf("a datagram (chaff %v) of %d bytes while chaffing; want %d", d.chaff > 0, d.sealed(), clientChaffSize)
+				}
+			default:
+				after++
+				if d.sealed() != clientPadFloor {
+					t.Errorf("a datagram of %d bytes after the chaff ended; the floor is %d", d.sealed(), clientPadFloor)
+				}
+			}
+		}
+		if before == 0 || during == 0 || after == 0 {
+			t.Errorf("%d datagrams before typing, %d while chaffing, %d after; want some of each", before, during, after)
 		}
 	})
 }

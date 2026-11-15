@@ -34,7 +34,9 @@ const (
 // keystroke echo one size and keeps 88% of flate's saving. On the client,
 // S5's 16 bytes of input plus the ~24 bytes of framing a keystroke carries
 // (frame kind, SSP header, versions, trailer), so every keystroke is one
-// size too (§9.2). Padmé rounds everything above the floor.
+// size too (§9.2). Padmé rounds everything above the floor. While an
+// endpoint chaffs the floor is its chaff size instead (chaff.go, §9.1.1),
+// so the client's 40 holds only when it is idle or not typing.
 const (
 	serverPadFloor = wire.PadFloor
 	clientPadFloor = 40

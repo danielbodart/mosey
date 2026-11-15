@@ -137,8 +137,8 @@ func (p plainSim) Recv(ctx context.Context) ([]byte, error) { return p.d.Recv(ct
 type chaffVariant struct {
 	name string
 	tick time.Duration
-	// clientSize, if set, is the client's chaff size in place of its
-	// padding floor.
+	// clientSize, if set, is the client's chaff size in place of
+	// clientChaffSize.
 	clientSize                 int
 	clientChaffs, serverChaffs bool
 }
@@ -304,7 +304,7 @@ func runChaff(t *testing.T, seed uint64, profile netsim.Profile, calm bool, v ch
 		r.toServer = append(r.toServer, got[i].Sub(typed[i]))
 		r.toEcho = append(r.toEcho, echoed[i].Sub(typed[i]))
 	}
-	r.clientSize = clientPadFloor
+	r.clientSize = clientChaffSize
 	if v.clientSize > 0 {
 		r.clientSize = v.clientSize
 	}
@@ -425,7 +425,9 @@ func TestMeasureChaffTicks(t *testing.T) {
 	for _, ms := range []int{10, 20, 30, 50} {
 		variants = append(variants, chaffVariant{name: fmt.Sprintf("both, %d ms", ms), tick: time.Duration(ms) * time.Millisecond, clientChaffs: true, serverChaffs: true})
 	}
-	for _, size := range []int{48, 64} {
+	// The client's chaff size was 40, its floor, until Dan chose 64 from
+	// the train profile (§9.1.5); the smaller sizes stay for comparison.
+	for _, size := range []int{40, 48} {
 		variants = append(variants, chaffVariant{name: fmt.Sprintf("both, 20 ms, client %d B", size), tick: 20 * time.Millisecond, clientSize: size, clientChaffs: true, serverChaffs: true})
 	}
 	var out strings.Builder
