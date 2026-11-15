@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
+	"github.com/danielbodart/mosey/internal/provenance"
+	"github.com/danielbodart/mosey/internal/provenance/provenancetest"
 )
 
 // uploadHost is a fake far host for the copier: an ssh stand-in that runs
@@ -190,15 +192,17 @@ func TestTheInstallersRefusalReachesTheUser(t *testing.T) {
 	}
 }
 
-// release is a local HTTPS server playing GitHub's release downloads.
+// release is a local HTTPS server playing GitHub's release downloads,
+// with a virtual Sigstore playing the release workflow's attestations.
 type release struct {
 	srv   *httptest.Server
 	files map[string][]byte
 	hits  []string
+	sig   *provenancetest.Sigstore
 }
 
 func newRelease(t *testing.T, files map[string][]byte) *release {
-	r := &release{files: files}
+	r := &release{files: files, sig: provenancetest.New(t)}
 	r.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		r.hits = append(r.hits, req.URL.Path)
 		if req.URL.Path == "/redirect/v0.4.2/SHA256SUMS" {
@@ -216,6 +220,12 @@ func newRelease(t *testing.T, files map[string][]byte) *release {
 	return r
 }
 
+// attested is the bundle the release workflow publishes for content,
+// unless a says otherwise.
+func (r *release) attested(t *testing.T, content []byte, a provenancetest.Attestation) []byte {
+	return r.sig.Bundle(t, sha256.Sum256(content), a)
+}
+
 func sums(lines map[string][]byte) []byte {
 	var b strings.Builder
 	for name, content := range lines {
@@ -231,16 +241,18 @@ func (h *uploadHost) foreignCopier(r *release, base string) *copier {
 	c.http = r.srv.Client()
 	c.http.CheckRedirect = httpsOnly
 	c.release = r.srv.URL + base
+	c.provenance = r.sig.Verifier
 	return c
 }
 
-func TestAnotherPlatformGetsItsReleaseCheckedAgainstSHA256SUMS(t *testing.T) {
+func TestAnotherPlatformGetsItsReleaseCheckedAgainstSHA256SUMSAndItsProvenance(t *testing.T) {
 	h := newUploadHost(t)
 	asset := []byte(installer + "# linux/amd64\n")
 	r := newRelease(t, map[string][]byte{
 		"/v0.4.2/mosey-0.4.2-linux-amd64": asset,
 		"/v0.4.2/SHA256SUMS":              sums(map[string][]byte{"mosey-0.4.2-linux-amd64": asset, "mosey-0.4.2-darwin-arm64": []byte("x")}),
 	})
+	r.files["/v0.4.2/mosey-0.4.2-linux-amd64.sigstore.json"] = r.attested(t, asset, provenancetest.Attestation{})
 	if err := h.foreignCopier(r, "").copy(context.Background(), linux); err != nil {
 		t.Fatal(err)
 	}
@@ -269,8 +281,60 @@ func TestABadReleaseIsRefusedBeforeAnythingIsSent(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			h := newUploadHost(t)
 			r := newRelease(t, c.files)
+			if _, ok := r.files["/v0.4.2/mosey-0.4.2-linux-amd64"]; ok {
+				r.files["/v0.4.2/mosey-0.4.2-linux-amd64.sigstore.json"] = r.attested(t, asset, provenancetest.Attestation{})
+			}
 			err := h.foreignCopier(r, c.base).copy(context.Background(), linux)
 			if err == nil || !strings.Contains(err.Error(), c.says) {
+				t.Errorf("got %v", err)
+			}
+			if h.sshRan() {
+				t.Error("ssh ran")
+			}
+		})
+	}
+}
+
+// S1 (D7): a release whose bundle is missing, or names another workflow,
+// or another file, is refused, and nothing reaches the far host. The
+// binary and SHA256SUMS agree in every case: only the bundle is wrong.
+func TestAReleaseWithoutTheWorkflowsProvenanceIsRefused(t *testing.T) {
+	asset := []byte(installer)
+	for _, c := range []struct {
+		name   string
+		bundle func(r *release) []byte
+		says   string
+	}{
+		{"missing bundle", nil, "mosey-0.4.2-linux-amd64.sigstore.json: no Sigstore bundle"},
+		{"wrong identity", func(r *release) []byte {
+			return r.attested(t, asset, provenancetest.Attestation{Identity: "https://github.com/someone/mosey/.github/workflows/ci.yml@refs/heads/trunk"})
+		}, "verifying the Sigstore bundle"},
+		{"wrong digest", func(r *release) []byte {
+			return r.attested(t, []byte("another build"), provenancetest.Attestation{})
+		}, "verifying the Sigstore bundle"},
+		{"wrong issuer", func(r *release) []byte {
+			return r.attested(t, asset, provenancetest.Attestation{Issuer: "https://accounts.google.com"})
+		}, "verifying the Sigstore bundle"},
+		{"another Sigstore", func(*release) []byte {
+			return provenancetest.New(t).Bundle(t, sha256.Sum256(asset), provenancetest.Attestation{})
+		}, "verifying the Sigstore bundle"},
+		{"garbage", func(*release) []byte { return []byte("{") }, "parsing the Sigstore bundle"},
+		{"oversized", func(*release) []byte { return bytes.Repeat([]byte(" "), provenance.MaxBundle+1) }, "over"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newUploadHost(t)
+			r := newRelease(t, map[string][]byte{
+				"/v0.4.2/mosey-0.4.2-linux-amd64": asset,
+				"/v0.4.2/SHA256SUMS":              sums(map[string][]byte{"mosey-0.4.2-linux-amd64": asset}),
+			})
+			if c.bundle != nil {
+				r.files["/v0.4.2/mosey-0.4.2-linux-amd64.sigstore.json"] = c.bundle(r)
+			}
+			err := h.foreignCopier(r, "").copy(context.Background(), linux)
+			if err == nil || !strings.Contains(err.Error(), c.says) {
+				t.Errorf("got %v", err)
+			}
+			if c.name != "oversized" && (err == nil || !strings.Contains(err.Error(), "is not shown to come from mosey's release workflow")) {
 				t.Errorf("got %v", err)
 			}
 			if h.sshRan() {

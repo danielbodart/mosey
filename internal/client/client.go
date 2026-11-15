@@ -14,6 +14,7 @@ import (
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/predict"
+	"github.com/danielbodart/mosey/internal/provenance"
 	"github.com/danielbodart/mosey/internal/render"
 	"github.com/danielbodart/mosey/internal/terminal"
 )
@@ -53,6 +54,10 @@ type Options struct {
 	// with HTTP the client that trusts it.
 	Releases string
 	HTTP     *http.Client
+	// Provenance checks a downloaded release's Sigstore bundle
+	// (bootstrap.md §4.7.4); nil is provenance.Default, the embedded
+	// trusted root. Tests give one that trusts a virtual Sigstore.
+	Provenance *provenance.Verifier
 	// Self reads this client's own file; nil reads the running image.
 	Self func() ([]byte, error)
 	// Predict is -predict: when predictive local echo is drawn (D12).
