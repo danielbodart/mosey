@@ -5,6 +5,9 @@ package e2e
 import (
 	"context"
 	"io"
+	"log/slog"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -104,27 +107,79 @@ func (m *mishearer) EchoOff() (bool, error) {
 // predicting is a session on the slow path with the mishearer for a
 // shell, the client predicting as it does by default (adaptive).
 type predicting struct {
-	t    *testing.T
-	user *userTerminal
-	prog *mishearer
+	t      *testing.T
+	user   *userTerminal
+	prog   *mishearer
+	client <-chan error
+	stats  *statsLog
+	end    sync.Once
+}
+
+// statsLog keeps the client's prediction stats, which it logs as it
+// leaves: how a test sees what the engine did, not only what it drew.
+type statsLog struct {
+	mu    sync.Mutex
+	stats string
+}
+
+func (l *statsLog) Enabled(context.Context, slog.Level) bool { return true }
+func (l *statsLog) WithAttrs([]slog.Attr) slog.Handler       { return l }
+func (l *statsLog) WithGroup(string) slog.Handler            { return l }
+func (l *statsLog) Handle(_ context.Context, r slog.Record) error {
+	if r.Message != "prediction" {
+		return nil
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "stats" {
+			l.mu.Lock()
+			l.stats = a.Value.String()
+			l.mu.Unlock()
+		}
+		return true
+	})
+	return nil
 }
 
 func startPredicting(t *testing.T) *predicting {
 	t.Helper()
 	n := newSimNet(t, slowPath())
 	ctx, cancel := context.WithCancel(context.Background())
-	p := &predicting{t: t, user: &userTerminal{keys: make(chan []byte), resized: make(chan struct{})}, prog: newMishearer()}
+	p := &predicting{t: t, user: &userTerminal{keys: make(chan []byte), resized: make(chan struct{})}, prog: newMishearer(), stats: &statsLog{}}
+	n.log = slog.New(p.stats)
 	server := n.serve(t, ctx, p.prog)
-	client := n.connect(ctx, p.user)
+	p.client = n.connect(ctx, p.user)
 	t.Cleanup(func() {
 		cancel()
-		close(p.user.keys)
+		p.leave()
 		p.prog.Close()
-		<-client
 		<-server
 	})
 	p.wait("prompt", func(s string) bool { return strings.HasPrefix(s, "$") })
 	return p
+}
+
+// leave ends the user's input, so the client detaches and logs its
+// stats.
+func (p *predicting) leave() {
+	p.end.Do(func() {
+		close(p.user.keys)
+		<-p.client
+	})
+}
+
+// predicted is how many key events the client predicted anything for,
+// once it has left.
+func (p *predicting) predicted() int {
+	p.t.Helper()
+	p.leave()
+	p.stats.mu.Lock()
+	defer p.stats.mu.Unlock()
+	m := regexp.MustCompile(`Predicted:(\d+)`).FindStringSubmatch(p.stats.stats)
+	if m == nil {
+		p.t.Fatalf("the client logged no prediction stats: %q", p.stats.stats)
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
 }
 
 func (p *predicting) screen() string { return screenOf(p.user.bytes(), 80, 24) }
@@ -228,6 +283,13 @@ func TestNothingIsPredictedAtAPasswordPrompt(t *testing.T) {
 			if strings.ContainsAny(strings.SplitN(strings.SplitN(p.screen(), "Password:", 2)[1], "\n", 2)[0], "secrt") {
 				t.Fatalf("a password key was drawn:\n%s", p.screen())
 			}
+		}
+		// Not drawn is the epoch rules' doing as much as the echo-off
+		// bit's: no secret key echoes, so none could confirm. The bit's
+		// own promise is that none was even guessed (prediction.md
+		// §13.1): only "p" and "w" could have been.
+		if n := p.predicted(); n > 2 {
+			t.Fatalf("the client predicted %d key events, so it guessed at the password", n)
 		}
 	})
 }
