@@ -1225,12 +1225,12 @@ authentic END and closes; the rest find no keys and are dropped.
 END is authenticated like every frame, so only a holder of the session's
 keys can end it, and it is replay-protected like every frame, so a
 recorded END cannot end a later epoch. If every copy is lost (an outage
-longer than T6 + 200 ms as the shell exits), the client is left waiting
-on a session that has gone, as it would be without END, until its user
-detaches. The resume slice leaves it so [choice]: a detached client that
-then tries `mosey -r` is told there is no session, which is the truth,
-and no timer on the client could tell a finished session from a long
-outage any better.
+longer than T6 + 200 ms as the shell exits), the client hears nothing,
+as it would without END, until R3's reconnect (`bootstrap.md` §9.2.2)
+logs in again to resume it by name, is told there is no session, which
+is the truth, and exits saying the session has ended. No timer on the
+client alone could tell a finished session from a long outage any
+better [choice].
 
 ## 9. Erasing secrets
 

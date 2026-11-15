@@ -2278,9 +2278,12 @@ durations in the commit message; 10 s each in CI):
 
 ## 14. Open in this document
 
-A. **An upgraded client and an old session.** *Decided by the resume
-   slice* (§9.2 step 5): an upgrade ends resumability, with a message
-   naming both versions. Dan may still prefer keeping old client builds.
+A. **An upgraded client and an old session.** *Interim, until D8 V1
+   and V2 land* (§9.2 step 5): a launcher passes over a session of
+   another version, so a plain `mosey DEST` starts a new session and
+   `-s NAME` a new NAME beside the old one, rather than fail. Nothing
+   refuses another version. The stable protocol and live upgrade (D8 V1,
+   V2) replace this: the newer binary takes the older session over.
 
 B. **The spawner's confirmation backstop** (§4.5): the `Attached`
    message and the CredentialTTL + 10 s rule are a requirement this

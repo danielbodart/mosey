@@ -450,7 +450,7 @@ when the server ends the session, and otherwise tells the server with
 
 | Later | Reserved now |
 |---|---|
-| Resume (D8) | **built** (resume slice): the attach socket (`server.md` §2.6), `ipc.Resume`, `bootstrap.md` §9.2–§9.4 |
+| Resume (D8) | **built** (resume slice; automatic and named resume, R3's reconnect, `-list`, `-kill` and the idle timeout in the sessions slice): the attach socket (`server.md` §2.6), `ipc.Resume`, `bootstrap.Attach`, `client.Session.Reconnect`, `bootstrap.md` §9.2–§9.5 |
 | Exclusive attach (D26) | **built** (resume slice) on `Hello.Attach`, `transport.KindRevoked`, the `Revoked` event |
 | Agent channel (D15, D25) | **built** (agent slice): `agent.md`, `internal/channel`, `internal/agent`, `Conn.SendChannel`/`RecvChannel`, `ipc.AgentConn`, `server.md` §2.7 |
 | Prediction (D12) | **built** (prediction slice): `prediction.md`, `internal/predict`, `Grid.EchoApplied`, the server's echo ack (`prediction.md` §3.1), `mosey -predict` |

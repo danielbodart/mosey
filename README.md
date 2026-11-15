@@ -13,8 +13,10 @@ The first slice works: `mosey HOST` bootstraps over your `ssh` and gives
 you an interactive shell over encrypted UDP, with the emulator sandboxed on
 the server, and copies itself to a host that doesn't have it (see
 [Zero install](#zero-install)). Sessions survive the client: a later
-`mosey HOST` picks a detached one up again, from here or another device
-(see [Using it](#using-it)), and your ssh-agent comes along when your ssh config
+`mosey HOST` picks a detached one up again, from here or another device,
+every session has a name you can attach to with `-s`, and a client that
+loses its server for a while logs in again by itself to get its session
+back (see [Using it](#using-it)), and your ssh-agent comes along when your ssh config
 forwards it (see [Agent forwarding](#agent-forwarding)). While you type,
 both ends send cover traffic on a fixed tick, which hides the timing of
 keys within a run of typing (see [What it is](#what-it-is)). On a slow
