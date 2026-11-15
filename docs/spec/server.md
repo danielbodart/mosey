@@ -504,7 +504,13 @@ margins, tab stops, saved cursor, character sets, the kitty keyboard
 flags) start afresh in emu-N, as after an emulator rebuild (§5.2). A
 full-screen program redraws them the next time it repaints; the shell's
 exit status, which only the shell's parent can read, is reported to
-proto-N as 0 and logged as unknown.
+proto-N as 0 and logged as unknown [choice, 2026-11-15: accepted rather
+than recovered. Recovering it would need spawner-N made a child
+subreaper before the hand-off, which does not make it the shell's parent,
+or spawner-O kept alive as a reaper after it lets go, which keeps the old
+binary running; and the status reaches only the logs: the client is told
+that the shell exited (`EndShellExited`, `transport.md` §8.4), never
+how].
 
 **Sandboxes.** proto and emu keep their policies unchanged (§6.3):
 `Freeze` and `Thaw` are a read deadline and a flag in proto, `Snapshot`
