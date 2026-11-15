@@ -16,7 +16,7 @@ CGO_ENABLED = "0"
 
 [tasks.check]
 description = "Lint, unit tests, the runtimesecret build's checks, shellcheck, actionlint and the scripts' tests: the dev loop and CI's fast job"
-depends = ["lint", "test", "secret", "shellcheck", "actionlint", "scripts-test", "vendor-hash-check"]
+depends = ["lint", "test", "secret", "shellcheck", "actionlint", "actions-pinned", "scripts-test", "vendor-hash-check"]
 
 # Vetted for both operating systems and both architectures every release
 # ships for (D10), so a Linux-only call outside a _linux.go file fails here
@@ -96,6 +96,15 @@ description = "actionlint the workflows"
 sources = [".github/workflows/*.yml"]
 outputs = { auto = true }
 run = "actionlint"
+
+# Every action pinned by commit, in every job (S1): the release job attests
+# what the build job made, so a moved tag anywhere upstream of it could get
+# a binary of its choosing attested. The script says more.
+[tasks.actions-pinned]
+description = "Every workflow's uses: names a commit SHA with its release as a comment"
+sources = [".github/workflows/*.yml", "scripts/actions-pinned.sh"]
+outputs = { auto = true }
+run = "scripts/actions-pinned.sh"
 
 [tasks.build]
 description = "The static mosey binary for linux and darwin on amd64 and arm64, in dist/"

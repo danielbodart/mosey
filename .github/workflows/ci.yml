@@ -13,6 +13,9 @@ on:
         type: boolean
         default: false
 
+# Every action is pinned by commit with its release as a comment, never by
+# tag (the release job says why; scripts/actions-pinned.sh enforces it).
+#
 # Least privilege for the built-in token: read-only by default, and widened
 # only on the job that publishes a release.
 permissions:
@@ -33,8 +36,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
       - run: mise run check
 
   # The tests that wait in real time, kept out of check so the dev loop
@@ -44,8 +47,8 @@ jobs:
   slow:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
       - run: mise run test-slow
 
   # Every fuzz target for a few seconds: enough to catch a parser that
@@ -55,8 +58,8 @@ jobs:
   fuzz-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
       - run: mise run fuzz-smoke
         env:
           FUZZTIME: 10s
@@ -72,8 +75,8 @@ jobs:
   race:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
       - run: mise run race
 
   # The KILL soak of D22 and server.md §9: the real server with its roles
@@ -90,8 +93,8 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
       - run: mise exec -- scripts/soak.sh --scope 150s
 
   # Static binaries for every platform a release ships for (D1, D10), kept
@@ -106,10 +109,10 @@ jobs:
       # The whole history, because the version's minor is the commit count;
       # scripts/version.sh refuses a shallow clone rather than stamp a wrong
       # version.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
       - name: Build ${{ matrix.target }}
         run: scripts/build.sh "${{ matrix.target }}"
       - name: Name the artifact
@@ -117,7 +120,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: echo "value=mosey-${TARGET/\//-}" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.name.outputs.value }}
           path: dist/
@@ -141,11 +144,11 @@ jobs:
       # pushed.
       CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # install-nix-action gives the runner's /dev/kvm to the build user, so
       # the VM test runs under KVM rather than emulated.
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
@@ -154,7 +157,7 @@ jobs:
       # The danielbodart cache, read-only here: the free tier is 5 GB, so
       # only mosey's own package is pushed, by the rest leg's last step,
       # never a VM test's closure.
-      - uses: cachix/cachix-action@v17
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
         with:
           name: danielbodart
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -236,8 +239,13 @@ jobs:
     # holds id-token: write, so any step's code could mint a Fulcio
     # certificate for exactly the identity the client trusts
     # (internal/provenance.Identity) and attest a binary of its choosing.
-    # A moved tag must not be able to do that. Bumping one is a reviewed
-    # change of its SHA; the comment says which release it is. The tools
+    # A moved tag must not be able to do that. Nor, since this job attests
+    # what the build job uploaded, may a moved tag there (the toolchain
+    # mise-action installs, the bytes upload-artifact carries): so every
+    # action in every workflow is pinned the same way, and
+    # scripts/actions-pinned.sh (mise run check) refuses one that is not.
+    # Bumping one is a reviewed change of its SHA; the comment says which
+    # release it is. The tools
     # mise-action installs (mise.toml: Go, shellcheck, actionlint, pinned
     # by exact version) run here too and are trusted the same way.
     steps:
