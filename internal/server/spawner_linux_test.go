@@ -88,6 +88,7 @@ func fakeProto(f *os.File) error {
 		SoftwareVersion: fakeVersion,
 		Addr:            start.Addr,
 		Port:            start.Port,
+		Name:            start.Name,
 		Public:          start.ClientPublic,
 	})
 	if err := ctl.Send(ipc.Credential{Line: line}); err != nil {

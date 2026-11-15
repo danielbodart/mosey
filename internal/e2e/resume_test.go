@@ -7,12 +7,14 @@ import (
 	"errors"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/danielbodart/mosey/internal/client"
 	"github.com/danielbodart/mosey/internal/netsim"
+	"github.com/danielbodart/mosey/internal/server"
 )
 
 // Resume (D8) and exclusive attach (D26), end to end in one process: a
@@ -80,10 +82,34 @@ type resumeWorld struct {
 	served   <-chan error
 	up, down *netsim.Link
 	stop     context.CancelFunc
+	// events is what the server's Attached and Detached said, for a
+	// test that records them.
+	mu     sync.Mutex
+	events []string
+}
+
+func (w *resumeWorld) record(what string, cred [8]byte) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if cred != ([8]byte{}) {
+		what += " " + string(cred[:])
+	}
+	w.events = append(w.events, what)
+}
+
+func (w *resumeWorld) recorded() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.events...)
 }
 
 func newResumeWorld(t *testing.T) *resumeWorld {
-	w := &resumeWorld{t: t}
+	return newResumeWorldWith(t, &resumeWorld{t: t}, nil)
+}
+
+// newResumeWorldWith is newResumeWorld into w, with a hook on the
+// server's Session.
+func newResumeWorldWith(t *testing.T, w *resumeWorld, hook func(*server.Session)) *resumeWorld {
 	cuttable := netsim.Profile{Name: "lan", Setup: func(n *netsim.Network, c, s *netsim.Host, _ *netsim.Conn) {
 		l := netsim.LinkParams{Delay: 250 * time.Microsecond, MTU: netsim.ProfileMTU}
 		w.up, w.down = n.Connect(c, s, l), n.Connect(s, c, l)
@@ -92,7 +118,7 @@ func newResumeWorld(t *testing.T) *resumeWorld {
 	w.prog = newShell()
 	ctx, cancel := context.WithCancel(context.Background())
 	w.stop = cancel
-	w.served = w.n.serve(t, ctx, w.prog)
+	w.served = w.n.serveWith(t, ctx, w.prog, hook)
 	t.Cleanup(func() {
 		cancel()
 		w.prog.Close()
@@ -165,7 +191,7 @@ func TestALeavingClientDetachesAndAnotherResumesTheSession(t *testing.T) {
 		a.sees("BEFORE")
 		a.leave()
 		var d *client.DetachedError
-		if err := a.ends(); !errors.As(err, &d) || d.SessionID != sessionID {
+		if err := a.ends(); !errors.As(err, &d) {
 			t.Fatalf("the first client ended with %v, not a detach from the session", err)
 		}
 		// Long after the credential TTL and the spawner's backstop: a

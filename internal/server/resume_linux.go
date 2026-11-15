@@ -76,6 +76,15 @@ func (s *spawner) serveResume(f *os.File) error {
 	if err != nil {
 		return fmt.Errorf("reading the client's line: %w", err)
 	}
+	if _, ok := m.(ipc.Hangup); ok {
+		// mosey -kill (bootstrap.md §9.5): the supervision loop hangs the
+		// shell up; closing the connection says it was asked.
+		select {
+		case s.hangups <- struct{}{}:
+		default: // one is already on its way
+		}
+		return nil
+	}
 	refuse := func(err error) error {
 		conn.Send(ipc.Failed{Text: printableASCII(err.Error(), ipc.MaxFailed)})
 		return err
@@ -121,16 +130,18 @@ func (s *spawner) serveResume(f *os.File) error {
 
 // checkResumeLine is what the spawner checks of a resuming client's line
 // before proto hears of it (server.md §2.6): the whole canonical parse, a
-// resume of this session (or AnySession, which the launcher resolved to
-// this one), this version, and a key proto can mint for.
+// bare resume of this session (the launcher chose it, and checked any
+// holder, under its lock), this version, and a key proto can mint for.
 func checkResumeLine(line []byte, version string, sid [16]byte) (bootstrap.ClientLine, error) {
 	cl, err := bootstrap.ParseClientLine(line)
 	switch {
 	case err != nil:
 		return cl, fmt.Errorf("the client's line: %w", err)
-	case !cl.Resume:
+	case cl.Attach != bootstrap.AttachResume:
 		return cl, errors.New("a new session asked of a running one")
-	case cl.SessionID != sid && cl.SessionID != bootstrap.AnySession:
+	case cl.HasHolder:
+		return cl, errors.New("a resume the launcher has not resolved")
+	case cl.SessionID != sid:
 		return cl, errors.New("a resume of another session")
 	case cl.SoftwareVersion != version:
 		return cl, fmt.Errorf("the client is version %s, the session %s", printableASCII(cl.SoftwareVersion, 64), version)
@@ -144,7 +155,7 @@ func checkResumeLine(line []byte, version string, sid [16]byte) (bootstrap.Clien
 // checkResumed is §3.4's check of a credential minted for a resume: as at
 // the bootstrap, and for this session.
 func (s *spawner) checkResumed(line []byte) error {
-	if err := checkCredential(line, s.advertised, s.port, s.cfg.Version); err != nil {
+	if err := checkCredential(line, s.advertised, s.port, s.cfg.Version, s.name); err != nil {
 		return err
 	}
 	cl, _ := bootstrap.ParseCredentialLine(line)
@@ -155,25 +166,55 @@ func (s *spawner) checkResumed(line []byte) error {
 	return nil
 }
 
-// greeting is what the attach socket says first (bootstrap.md §9.2.1).
+// greeting is what the attach socket says first (bootstrap.md §9.2.1): what
+// proto last said, unless a resume's credential is out, which holds the
+// session as attached until it can no longer be confirmed.
 func (s *spawner) greeting() bootstrap.SessionLine {
 	s.greetMu.Lock()
 	defer s.greetMu.Unlock()
-	return bootstrap.SessionLine{
-		SoftwareVersion: s.cfg.Version, SessionID: s.sid,
+	g := bootstrap.SessionLine{
+		SoftwareVersion: s.cfg.Version, SessionID: s.sid, Name: s.name,
 		Started: s.started, State: s.state, Since: s.since, Peer: s.peer,
+		Holder: s.holder, HasHolder: s.hasHolder,
 	}
+	if time.Now().Before(s.holdUntil) {
+		g.State, g.Since, g.Holder, g.HasHolder = bootstrap.SessionAttached, s.holdFrom, s.hold, true
+	}
+	return g
 }
 
-// setState records what proto says of the client, for the greeting. A
-// detach keeps the last peer, so a list still says where it was.
-func (s *spawner) setState(st bootstrap.SessionState, peer netip.AddrPort) {
+// setAttached records that a client holds the session with credential
+// cred, from peer, for the greeting; any resume's hold is over.
+func (s *spawner) setAttached(cred [8]byte, peer netip.AddrPort) {
 	s.greetMu.Lock()
 	defer s.greetMu.Unlock()
-	s.state, s.since = st, time.Now()
+	s.state, s.since, s.holder, s.hasHolder = bootstrap.SessionAttached, time.Now(), cred, true
+	s.holdUntil = time.Time{}
 	if peer.IsValid() {
 		s.peer = peer
 	}
+}
+
+// setDetached records that no client holds the session. It keeps the
+// last peer, so a list still says where it was.
+func (s *spawner) setDetached() {
+	s.greetMu.Lock()
+	defer s.greetMu.Unlock()
+	s.state, s.since, s.hasHolder = bootstrap.SessionDetached, time.Now(), false
+	s.holdUntil = time.Time{}
+}
+
+// holdFor marks the session held by a resume's credential for that
+// credential's life (bootstrap.md §9.2 "The lock").
+func (s *spawner) holdFor(cred [8]byte) {
+	s.greetMu.Lock()
+	defer s.greetMu.Unlock()
+	ttl := s.holdTTL
+	if ttl == 0 {
+		ttl = handshake.CredentialTTL
+	}
+	now := time.Now()
+	s.hold, s.holdFrom, s.holdUntil = cred, now, now.Add(ttl)
 }
 
 // serveAgent accepts on the agent socket until it closes, and passes each

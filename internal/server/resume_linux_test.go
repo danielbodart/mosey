@@ -69,7 +69,10 @@ type stubSession struct {
 	ended    chan struct{}
 }
 
-const stubVersion = "resumetest"
+const (
+	stubVersion = "resumetest"
+	stubName    = "stub"
+)
 
 var stubAddr = netip.MustParseAddr("127.0.0.1")
 
@@ -98,6 +101,17 @@ func startIdle(t *testing.T, role string, stdin *os.File) *child {
 
 func startStubSession(t *testing.T, sid [16]byte) *stubSession {
 	t.Helper()
+	return startStubSessionWith(t, sid, SpawnerConfig{Version: stubVersion}, 0)
+}
+
+// startStubSessionWith is startStubSession with the spawner's config, for
+// its idle timeout, and how long a resume holds the greeting (0 is the
+// credential's TTL).
+func startStubSessionWith(t *testing.T, sid [16]byte, cfg SpawnerConfig, hold time.Duration) *stubSession {
+	t.Helper()
+	if cfg.IdleTimeout == 0 {
+		cfg.IdleTimeout = IdleTimeout
+	}
 	runtime := runtimeDir(t)
 	local, remote, err := ipc.Pair()
 	if err != nil {
@@ -128,12 +142,12 @@ func startStubSession(t *testing.T, sid [16]byte) *stubSession {
 	log := &syncBuffer{}
 	now := time.Now()
 	s := &spawner{
-		cfg: SpawnerConfig{Version: stubVersion}, start: newStarter(),
+		cfg: cfg, start: newStarter(),
 		log: slog.New(slog.NewTextHandler(log, nil)),
 		ctl: ctl, advertised: stubAddr, port: stubPort, master: master,
 		proto: proto, shell: shell, ready: true,
-		sid: sid, started: now, state: bootstrap.SessionNew, since: now,
-		resumes: make(chan resumeRequest),
+		sid: sid, name: stubName, started: now, state: bootstrap.SessionNew, since: now,
+		resumes: make(chan resumeRequest), hangups: make(chan struct{}, 1), holdTTL: hold,
 	}
 	if s.attach, err = listenAttach(filepath.Join(runtime, "mosey"), sid); err != nil {
 		t.Fatal(err)
@@ -171,7 +185,7 @@ func (ss *stubSession) launch(sid [16]byte) (public []byte, result <-chan launch
 	ss.t.Helper()
 	public = oneShotKey(ss.t)
 	line := bootstrap.MarshalClientLine(bootstrap.ClientLine{
-		SoftwareVersion: stubVersion, Resume: true, SessionID: sid,
+		SoftwareVersion: stubVersion, Attach: bootstrap.AttachResume, SessionID: sid,
 		Cols: 80, Rows: 24, Public: public,
 	})
 	ch := make(chan launchResult, 1)
@@ -218,7 +232,7 @@ func credential(t *testing.T, sid [16]byte, id byte) bootstrap.CredentialLine {
 	return bootstrap.CredentialLine{
 		SoftwareVersion: stubVersion, Addr: stubAddr, Port: stubPort,
 		CredentialID: [bootstrap.CredentialIDSize]byte{id}, SessionID: sid,
-		Public: oneShotKey(t),
+		Name: stubName, Public: oneShotKey(t),
 	}
 }
 
@@ -249,7 +263,7 @@ func (ss *stubSession) protoKilled() bool {
 func TestAResumeReachesProtoAndItsCredentialReachesTheLauncher(t *testing.T) {
 	sid := [16]byte{0x5e, 1}
 	ss := startStubSession(t, sid)
-	public, done := ss.launch(bootstrap.AnySession)
+	public, done := ss.launch(sid)
 	if r := ss.recvResume(); !bytes.Equal(r.ClientPublic, public) {
 		t.Errorf("proto was asked to mint for another key")
 	}
@@ -269,6 +283,7 @@ func TestACredentialForAnotherSessionAddressPortOrVersionKillsProto(t *testing.T
 		"addr":      func(c *bootstrap.CredentialLine) { c.Addr = netip.MustParseAddr("127.0.0.2") },
 		"port":      func(c *bootstrap.CredentialLine) { c.Port++ },
 		"swver":     func(c *bootstrap.CredentialLine) { c.SoftwareVersion = "other" },
+		"name":      func(c *bootstrap.CredentialLine) { c.Name = "other" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			sid := [16]byte{0x5e, 2}
@@ -302,13 +317,46 @@ func TestACredentialNobodyAskedForKillsProto(t *testing.T) {
 	}
 }
 
+// direct is a resume straight to the spawner's attach socket, as a
+// launcher without the lock would make it: the spawner must still answer
+// resumes that wait together in order.
+func (ss *stubSession) direct(sid [16]byte) (public []byte, result <-chan launchResult) {
+	ss.t.Helper()
+	public = oneShotKey(ss.t)
+	line := bootstrap.MarshalClientLine(bootstrap.ClientLine{
+		SoftwareVersion: stubVersion, Attach: bootstrap.AttachResume, SessionID: sid,
+		Cols: 80, Rows: 24, Public: public,
+	})
+	ch := make(chan launchResult, 1)
+	go func() {
+		f, _, err := dialAttach(sessionDir(filepath.Join(ss.runtime, "mosey"), sid))
+		if err != nil {
+			ch <- launchResult{public, "", err}
+			return
+		}
+		defer f.Close()
+		conn, _ := ipc.NewConn(f, ipc.Launcher, ipc.Spawner)
+		if err := conn.Send(ipc.ClientLine{Line: line}); err != nil {
+			ch <- launchResult{public, "", err}
+			return
+		}
+		m, err := conn.Recv()
+		if r, ok := m.(ipc.Ready); ok {
+			ch <- launchResult{public, string(r.Line), nil}
+			return
+		}
+		ch <- launchResult{public, "", fmt.Errorf("%T %v", m, err)}
+	}()
+	return public, ch
+}
+
 // Two resumes waiting on proto at once: proto answers in the order it was
-// asked, and each launcher gets the answer to its own.
+// asked, and each gets the answer to its own.
 func TestResumesWaitingTogetherAreAnsweredInOrder(t *testing.T) {
 	sid := [16]byte{0x5e, 4}
 	ss := startStubSession(t, sid)
-	_, doneA := ss.launch(sid)
-	_, doneB := ss.launch(sid)
+	_, doneA := ss.direct(sid)
+	_, doneB := ss.direct(sid)
 	first, second := ss.recvResume(), ss.recvResume()
 	lineFirst := bootstrap.MarshalCredentialLine(credential(t, sid, 1))
 	lineSecond := bootstrap.MarshalCredentialLine(credential(t, sid, 2))
@@ -364,12 +412,13 @@ func TestTheGreetingFollowsAttachAndDetachAndAListerChangesNothing(t *testing.T)
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	ss.send(ipc.Attached{Peer: peer})
-	if g := until(bootstrap.SessionAttached); g.State != bootstrap.SessionAttached || g.Peer != peer {
+	ss.send(ipc.Attached{Credential: [8]byte{7}, Peer: peer})
+	if g := until(bootstrap.SessionAttached); g.State != bootstrap.SessionAttached || g.Peer != peer ||
+		!g.HasHolder || g.Holder != [8]byte{7} || g.Name != stubName {
 		t.Errorf("after Attached: %+v", g)
 	}
 	ss.send(ipc.Detached{})
-	if g := until(bootstrap.SessionDetached); g.State != bootstrap.SessionDetached || g.Peer != peer {
+	if g := until(bootstrap.SessionDetached); g.State != bootstrap.SessionDetached || g.Peer != peer || g.HasHolder {
 		t.Errorf("after Detached: %+v", g)
 	}
 	// The listers above reached nothing: the first thing proto hears is
@@ -382,6 +431,89 @@ func TestTheGreetingFollowsAttachAndDetachAndAListerChangesNothing(t *testing.T)
 	ss.send(ipc.Credential{Line: bytes.Clone(line)})
 	if r := wait(t, done); r.err != nil || r.out != string(line) {
 		t.Errorf("a resume after listers: %v %q", r.err, r.out)
+	}
+}
+
+// Once a resume's credential is out, the greeting says the session is
+// attached, held by that credential, before its client has confirmed, so
+// the next plain mosey does not take it too; with nobody confirming, the
+// hold ends and the greeting says what it said before (bootstrap.md §9.2
+// "The lock").
+func TestAResumesCredentialHoldsTheSessionUntilItCouldNoLongerBeConfirmed(t *testing.T) {
+	sid := [16]byte{0x5e, 7}
+	ss := startStubSessionWith(t, sid, SpawnerConfig{Version: stubVersion}, 500*time.Millisecond)
+	ss.send(ipc.Detached{})
+	for ss.greetingOf().State != bootstrap.SessionDetached {
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, done := ss.launch(sid)
+	ss.recvResume()
+	ss.send(ipc.Credential{Line: bootstrap.MarshalCredentialLine(credential(t, sid, 9))})
+	if r := wait(t, done); r.err != nil {
+		t.Fatal(r.err)
+	}
+	if g := ss.greetingOf(); g.State != bootstrap.SessionAttached || !g.HasHolder || g.Holder != [8]byte{9} {
+		t.Errorf("while the credential is out: %+v", g)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for ss.greetingOf().State != bootstrap.SessionDetached {
+		if time.Now().After(deadline) {
+			t.Fatalf("the hold never ended: %+v", ss.greetingOf())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// shellHungUp waits for the spawner to tell the stub proto the shell has
+// exited, which the idle shell does on SIGHUP.
+func (ss *stubSession) shellHungUp(within time.Duration) bool {
+	ss.t.Helper()
+	ss.proto.File().SetReadDeadline(time.Now().Add(within))
+	for {
+		m, err := ss.proto.Recv()
+		if err != nil {
+			return false
+		}
+		if _, ok := m.(ipc.ShellExit); ok {
+			return true
+		}
+	}
+}
+
+// A session detached for the idle timeout has its shell hung up, and an
+// attach in time stops the clock (D8 R4, bootstrap.md §9.3). The timeout
+// is injected short; nothing measures how long anything took.
+func TestADetachedSessionIsHungUpAfterTheIdleTimeoutAndAnAttachStopsTheClock(t *testing.T) {
+	sid := [16]byte{0x5e, 8}
+	ss := startStubSessionWith(t, sid, SpawnerConfig{Version: stubVersion, IdleTimeout: time.Second}, 0)
+	ss.send(ipc.Detached{})
+	ss.send(ipc.Attached{Credential: [8]byte{1}})
+	if ss.shellHungUp(3 * time.Second) {
+		t.Fatalf("hung up a session whose client came back\nlog:\n%s", ss.log.String())
+	}
+	ss.send(ipc.Detached{})
+	if !ss.shellHungUp(30 * time.Second) {
+		t.Fatalf("the idle session's shell was not hung up\nlog:\n%s", ss.log.String())
+	}
+}
+
+// mosey -kill reaches the spawner over its attach socket and hangs the
+// shell up (bootstrap.md §9.5), whether or not a client is attached.
+func TestKillHangsTheShellUp(t *testing.T) {
+	sid := [16]byte{0x5e, 9}
+	ss := startStubSession(t, sid)
+	ss.send(ipc.Attached{Credential: [8]byte{1}})
+	getenv := func(k string) string {
+		if k == "XDG_RUNTIME_DIR" {
+			return ss.runtime
+		}
+		return ""
+	}
+	if err := Kill(io.Discard, getenv, stubName); err != nil {
+		t.Fatal(err)
+	}
+	if !ss.shellHungUp(30 * time.Second) {
+		t.Fatalf("the shell was not hung up\nlog:\n%s", ss.log.String())
 	}
 }
 

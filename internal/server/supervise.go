@@ -13,6 +13,17 @@ const (
 	LastPort  = 61000
 )
 
+// A session's lifetime once its client has gone (D8 R4, bootstrap.md
+// §9.3).
+const (
+	// IdleTimeout is how long a session may stay detached before its
+	// shell is hung up [D: Dan, 2026-11-15]. A constant (PLAN O14).
+	IdleTimeout = 7 * 24 * time.Hour
+	// HangupGrace is how long a hung-up shell has to exit before the
+	// teardown closes the last pty master and then kills it [choice].
+	HangupGrace = 10 * time.Second
+)
+
 // emu restarts (server.md §5.2, from S4 §3.8's supervisor): wait 50 ms
 // before the first restart, doubling to at most 5 s, back to 50 ms once an
 // emu has lived 60 s; at most 10 starts in any 60 s. When the budget is

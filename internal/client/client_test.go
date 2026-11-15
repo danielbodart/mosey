@@ -111,6 +111,7 @@ func TestTheLineCarriesTheCredentialExactly(t *testing.T) {
 		Port:            60123,
 		CredentialID:    [8]byte{1, 2, 3, 4, 5, 6, 7, 8},
 		SessionID:       [16]byte{0: 0xaa, 15: 0xbb},
+		Name:            "work",
 		PSK:             [32]byte{0: 1, 31: 2},
 		Public:          bytes.Repeat([]byte{0x5a}, bootstrap.PublicKeySize),
 	}

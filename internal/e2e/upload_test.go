@@ -154,25 +154,25 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 		cmd := exec.Command(b, "-list", "--", "-F", s.config, s.host)
 		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state)
 		out, err := cmd.CombinedOutput()
-		if err != nil || !strings.Contains(string(out), "no sessions") && !strings.HasPrefix(string(out), "SESSION ") {
+		if err != nil || !strings.Contains(string(out), "no sessions") && !strings.HasPrefix(string(out), "NAME ") {
 			t.Errorf("mosey -list: %v\n%q", err, out)
 		}
 	})
 
 	cBuild := buildMosey(t, "0-e2e-upload-c")
-	t.Run("-list and -r copy nothing to a host without this version", func(t *testing.T) {
+	t.Run("-list and -kill copy nothing to a host without this version", func(t *testing.T) {
 		cmd := exec.Command(cBuild, "-list", "--", "-F", s.config, s.host)
 		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state)
 		out, err := cmd.CombinedOutput()
 		if bootstrap.ExitStatus(err) == 0 || !strings.Contains(string(out), "no mosey 0-e2e-upload-c on mosey-e2e") {
 			t.Errorf("mosey -list: %v\n%q", err, out)
 		}
-		c := startUploadClient(t, s, cBuild, state, "-r", "-upload=yes")
+		c := startUploadClient(t, s, cBuild, state, "-kill", "work", "-upload=yes")
 		if status := c.wait(t); status != 1 {
-			t.Errorf("mosey -r exited %d", status)
+			t.Errorf("mosey -kill exited %d", status)
 		}
-		if !strings.Contains(c.screen.String(), "no session of it to resume") {
-			t.Errorf("mosey -r said %q", c.screen.String())
+		if !strings.Contains(c.screen.String(), "no mosey 0-e2e-upload-c on mosey-e2e") {
+			t.Errorf("mosey -kill said %q", c.screen.String())
 		}
 		if _, err := os.Lstat(filepath.Dir(s.cached("0-e2e-upload-c"))); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("something was copied: %v", err)

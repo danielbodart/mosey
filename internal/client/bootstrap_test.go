@@ -76,6 +76,7 @@ func credLine() []byte {
 	return bootstrap.MarshalCredentialLine(bootstrap.CredentialLine{
 		SoftwareVersion: "1.2.3",
 		Port:            60001,
+		Name:            "work",
 		Public:          bytes.Repeat([]byte{6}, bootstrap.PublicKeySize),
 	})
 }

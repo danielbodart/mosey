@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -65,6 +66,10 @@ const (
 	PublicKeySize = 1216
 	// MaxEmuPause is the longest EmuPaused, an hour.
 	MaxEmuPause = 3600
+	// MaxSessionName is bootstrap.MaxSessionName (bootstrap.md §6.2).
+	MaxSessionName = 32
+	// CredentialIDSize is a credential id (D20, transport.md §3.4).
+	CredentialIDSize = 8
 )
 
 // The types of server.md §3.2. The high nibble names the direction.
@@ -89,6 +94,7 @@ const (
 	typeClientLine = 0x40
 	typeReady      = 0x41
 	typeFailed     = 0x42
+	typeHangup     = 0x43
 )
 
 // Message is one IPC message.
@@ -109,8 +115,12 @@ type Start struct {
 	Addr netip.Addr
 	// ClientPublic is the client's one-shot X-Wing key (D20).
 	ClientPublic []byte
-	UDP          *os.File // the bound socket, never connected
-	PTY          *os.File // the master
+	// Name is the session's (D8 R2), which proto puts in every credential
+	// line it mints: 1..MaxSessionName bytes, checked by the spawner as an
+	// sname before it sends it, and here only for its length and bytes.
+	Name string
+	UDP  *os.File // the bound socket, never connected
+	PTY  *os.File // the master
 }
 
 // EmuEnd is how the previous emu ended, as an EmuLink tells proto.
@@ -226,11 +236,16 @@ type KillEmu struct {
 	Why        KillReason
 }
 
-// Attached tells the spawner a client has confirmed a credential: the
-// first stops its backstop timer (bootstrap.md §4.5), and each is what the
-// attach socket's greeting says (server.md §2.6). Peer is the client's
-// validated address, or the zero AddrPort while it has none.
-type Attached struct{ Peer netip.AddrPort }
+// Attached tells the spawner a client has confirmed a credential, or that
+// a client proto had reported silent is heard again: the first stops its
+// backstop timer (bootstrap.md §4.5), and each is what the attach socket's
+// greeting says (server.md §2.6). Credential is the id the connection was
+// made with, the greeting's holder; Peer is the client's validated
+// address, or the zero AddrPort while it has none.
+type Attached struct {
+	Credential [CredentialIDSize]byte
+	Peer       netip.AddrPort
+}
 
 // Detached tells the spawner the attached client has gone, with no other
 // in its place: the session waits for a resume (server.md §2.4).
@@ -246,6 +261,10 @@ type Ready struct{ Line []byte }
 
 // Failed is the spawner's word that the session did not start, and why.
 type Failed struct{ Text string }
+
+// Hangup asks a session's spawner, over its attach socket, to hang the
+// shell up: `mosey -kill` (bootstrap.md §9.5).
+type Hangup struct{}
 
 func (Start) typ() byte      { return typeStart }
 func (EmuLink) typ() byte    { return typeEmuLink }
@@ -267,6 +286,7 @@ func (Detached) typ() byte   { return typeDetached }
 func (ClientLine) typ() byte { return typeClientLine }
 func (Ready) typ() byte      { return typeReady }
 func (Failed) typ() byte     { return typeFailed }
+func (Hangup) typ() byte     { return typeHangup }
 
 // route is who may send a type to whom, and how many fds it carries.
 type route struct {
@@ -295,6 +315,7 @@ var routes = map[byte]route{
 	typeClientLine: {Launcher, Spawner, 0},
 	typeReady:      {Spawner, Launcher, 0},
 	typeFailed:     {Spawner, Launcher, 0},
+	typeHangup:     {Launcher, Spawner, 0},
 }
 
 // ErrMalformed is wrapped by every refusal of a message: a violation by the
@@ -347,6 +368,7 @@ func Marshal(m Message) ([]byte, error) {
 		b = binary.BigEndian.AppendUint16(b, m.Port)
 		b = appendAddr(b, m.Addr)
 		b = append(b, m.ClientPublic...)
+		b = append(append(b, byte(len(m.Name))), m.Name...)
 	case EmuLink:
 		b = binary.BigEndian.AppendUint32(b, m.Generation)
 		b = append(b, byte(m.Reason))
@@ -372,11 +394,12 @@ func Marshal(m Message) ([]byte, error) {
 		b = binary.BigEndian.AppendUint16(b, m.Cols)
 		b = binary.BigEndian.AppendUint16(b, m.Rows)
 	case Attached:
+		b = append(b, m.Credential[:]...)
 		b = appendAddr(b, m.Peer.Addr())
 		if m.Peer.Addr().IsValid() {
 			b = binary.BigEndian.AppendUint16(b, m.Peer.Port())
 		}
-	case Flush, Detached, AgentConn:
+	case Flush, Detached, AgentConn, Hangup:
 	case Update:
 		var flags byte
 		if m.More {
@@ -474,10 +497,18 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		if m.Addr.IsValid() && (m.Addr.IsMulticast() || m.Addr == netip.AddrFrom4([4]byte{255, 255, 255, 255})) {
 			return nil, malformed("Start advertises %s", m.Addr)
 		}
-		if len(rest) != PublicKeySize {
-			return nil, malformed("Start's public key is %d bytes, not %d", len(rest), PublicKeySize)
+		if len(rest) < PublicKeySize+2 {
+			return nil, malformed("Start's public key and name are %d bytes", len(rest))
 		}
-		m.ClientPublic = append([]byte(nil), rest...)
+		m.ClientPublic = append([]byte(nil), rest[:PublicKeySize]...)
+		name := rest[PublicKeySize+1:]
+		if n := int(rest[PublicKeySize]); n < 1 || n > MaxSessionName || n != len(name) {
+			return nil, malformed("Start's name is %d bytes, said to be %d", len(name), n)
+		}
+		if !printable(name) || bytes.IndexByte(name, ' ') >= 0 {
+			return nil, malformed("Start's name is not printable ASCII")
+		}
+		m.Name = string(name)
 		return m, nil
 	case typeEmuLink:
 		if err := fixed(9); err != nil {
@@ -600,12 +631,16 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		}
 		return m, nil
 	case typeAttached:
-		addr, rest, err := parseAddr(body, "Attached")
+		if len(body) < CredentialIDSize+1 {
+			return nil, malformed("Attached is short")
+		}
+		m := Attached{Credential: [CredentialIDSize]byte(body[:CredentialIDSize])}
+		addr, rest, err := parseAddr(body[CredentialIDSize:], "Attached")
 		if err != nil {
 			return nil, err
 		}
 		if !addr.IsValid() {
-			return Attached{}, fixed(1)
+			return m, fixed(CredentialIDSize + 1)
 		}
 		if len(rest) != 2 {
 			return nil, malformed("Attached is %d bytes", len(b))
@@ -614,9 +649,12 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		if port == 0 {
 			return nil, malformed("Attached has port 0")
 		}
-		return Attached{Peer: netip.AddrPortFrom(addr, port)}, nil
+		m.Peer = netip.AddrPortFrom(addr, port)
+		return m, nil
 	case typeDetached:
 		return Detached{}, fixed(0)
+	case typeHangup:
+		return Hangup{}, fixed(0)
 	case typeClientLine:
 		if err := line(body, MaxClientLine); err != nil {
 			return nil, err

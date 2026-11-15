@@ -14,7 +14,13 @@ import (
 func FuzzParseClientLine(f *testing.F) {
 	f.Add(MarshalClientLine(sampleClientLine()))
 	r := sampleClientLine()
-	r.Resume, r.Agent, r.Env = true, true, nil
+	r.Attach, r.SessionID, r.Agent, r.Env = AttachResume, [16]byte{1}, true, nil
+	f.Add(MarshalClientLine(r))
+	r.Holder, r.HasHolder = [8]byte{2}, true
+	f.Add(MarshalClientLine(r))
+	r.Attach, r.Name, r.HasHolder = AttachName, "quiet-heron", false
+	f.Add(MarshalClientLine(r))
+	r.Attach = AttachAuto
 	f.Add(MarshalClientLine(r))
 	f.Add([]byte("MOSEY-CLIENT 1 dev new no 80 24 - AAAA\n"))
 	f.Add([]byte("MOSEY-CLIENT 2\n"))
@@ -31,6 +37,9 @@ func FuzzParseClientLine(f *testing.F) {
 		}
 		if c.Cols == 0 || c.Rows == 0 || len(c.Public) != PublicKeySize {
 			t.Fatalf("accepted %+v", c)
+		}
+		if c.Name != "" && !ValidSessionName(c.Name) || c.Attach == AttachResume && c.SessionID == ([16]byte{}) {
+			t.Fatalf("accepted attach %+v", c)
 		}
 		for n, v := range c.Env {
 			if _, ok := slices.BinarySearch(EnvNames, n); !ok || !ValidEnvValue(v) {
@@ -61,7 +70,7 @@ func FuzzParseCredentialLine(f *testing.F) {
 		if a := c.Addr; a.IsValid() && (addressRule(a) != "" || a.Zone() != "" || a.Is4In6()) {
 			t.Fatalf("accepted address %s", a)
 		}
-		if c.Port == 0 || len(c.Public) != PublicKeySize {
+		if c.Port == 0 || len(c.Public) != PublicKeySize || !ValidSessionName(c.Name) {
 			t.Fatalf("accepted %+v", c)
 		}
 	})

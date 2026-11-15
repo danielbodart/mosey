@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -90,14 +89,55 @@ func (l *Launcher) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	cl, err := bootstrap.ParseClientLine(line)
-	if err == nil && cl.Resume {
-		return l.resume(ctx, line, cl)
-	}
-	if err := checkClientLine(line, l.Version); err != nil {
+	cl, err := parseClientLine(line, l.Version)
+	if err != nil {
 		return err
 	}
 
+	// Choosing and starting are one step (bootstrap.md §9.2 "The lock"):
+	// the lock is held until the spawner has answered.
+	base := sessionsDir(l.getenv)
+	lock, err := lockSessions(base, T2)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	var sessions []bootstrap.SessionLine
+	var conns []liveSession
+	for _, s := range liveSessions(base) {
+		g, err := bootstrap.ParseSessionLine(s.greeting)
+		if err != nil {
+			// Another version's session: only its own version reads its
+			// name and state, so it is not chosen (§9.2 step 5).
+			s.f.Close()
+			continue
+		}
+		sessions, conns = append(sessions, g), append(conns, s)
+	}
+	c := choose(cl, sessions, GenerateName)
+	for i, s := range conns {
+		if c.start || c.err != nil || i != c.take {
+			s.f.Close()
+		}
+	}
+	switch {
+	case c.err != nil:
+		return c.err
+	case c.start:
+		cl.Attach, cl.Name, cl.HasHolder = bootstrap.AttachNew, c.name, false
+		return l.start(ctx, bootstrap.MarshalClientLine(cl), cl)
+	}
+	taken := conns[c.take]
+	defer taken.f.Close()
+	to := cl
+	to.Attach, to.SessionID, to.Name, to.HasHolder = bootstrap.AttachResume, sessions[c.take].SessionID, "", false
+	return l.resume(ctx, taken.f, taken.greeting, bootstrap.MarshalClientLine(to), cl)
+}
+
+// start is a new session: the spawner, started in a session of its own,
+// gets the line, which names the session (new:NAME), and answers with the
+// credential line (server.md §2.1).
+func (l *Launcher) start(ctx context.Context, line []byte, cl bootstrap.ClientLine) error {
 	ours, theirs, err := ipc.Pair()
 	if err != nil {
 		return err
@@ -156,16 +196,11 @@ func (l *Launcher) run(ctx context.Context) error {
 	return fmt.Errorf("the server did not start")
 }
 
-// resume is the launcher's part of a resume (bootstrap.md §9.2 steps 2
-// and 5): find the session's attach socket, compare versions with the
-// session's own, not this launcher's, hand the spawner the client's line,
-// and print the credential line it answers with.
-func (l *Launcher) resume(ctx context.Context, line []byte, cl bootstrap.ClientLine) error {
-	f, greeting, err := findSession(sessionsDir(l.getenv), cl.SessionID)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+// resume is the launcher's part of taking a session (bootstrap.md §9.2
+// steps 2 and 5): compare versions with the session's own, not this
+// launcher's, hand the session's spawner the line (resume:SID), and print
+// the credential line it answers with.
+func (l *Launcher) resume(ctx context.Context, f *os.File, greeting, line []byte, cl bootstrap.ClientLine) error {
 	theirs, err := bootstrap.SessionLineVersion(greeting)
 	if err != nil {
 		return fmt.Errorf("the session's greeting: %w", err)
@@ -232,46 +267,6 @@ func (l *Launcher) getenv(name string) string {
 	return ""
 }
 
-// findSession connects to session sid's attach socket under base, or for
-// AnySession to the user's one session, and returns the connection and
-// its greeting. No session is CodeSession; several, for AnySession, are
-// CodeAmbiguous with their count (bootstrap.md §9.2 step 2).
-func findSession(base string, sid [16]byte) (*os.File, []byte, error) {
-	none := &LaunchError{Code: bootstrap.CodeSession, Text: "no such session"}
-	// R/mosey is checked before either branch, as server.md §2.6 asks, so
-	// a named session is never reached through a sessions directory
-	// someone else could have put it in.
-	if err := checkPrivateDir(base); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			none.Text = "no session to resume"
-		} else {
-			none.Text = fmt.Sprintf("the sessions directory: %v", err)
-		}
-		return nil, nil, none
-	}
-	if sid != bootstrap.AnySession {
-		f, greeting, err := dialAttach(sessionDir(base, sid))
-		if err != nil {
-			none.Text = fmt.Sprintf("no session %x: %v", sid, err)
-			return nil, nil, none
-		}
-		return f, greeting, nil
-	}
-	live := liveSessions(base)
-	switch len(live) {
-	case 0:
-		none.Text = "no session to resume"
-		return nil, nil, none
-	case 1:
-		return live[0].f, live[0].greeting, nil
-	}
-	for _, s := range live {
-		s.f.Close()
-	}
-	n := strconv.Itoa(len(live))
-	return nil, nil, &LaunchError{Code: bootstrap.CodeAmbiguous, Detail: n, Text: n + " sessions: name one"}
-}
-
 // liveSession is a session whose spawner answered with a greeting.
 type liveSession struct {
 	f        *os.File
@@ -336,27 +331,40 @@ func readClientLine(ctx context.Context, r io.Reader) ([]byte, error) {
 	}
 }
 
-// checkClientLine is what both the launcher and the spawner check of the
-// client's line: that it parses, then its protocol version, its software
-// version, and that it is not a resume (bootstrap.md §6.2, §6.4).
-func checkClientLine(line []byte, version string) error {
+// parseClientLine is what the launcher checks of the client's line before
+// it chooses: that it parses, then its protocol version and its software
+// version (bootstrap.md §6.2, §6.4). The version is this launcher's: the
+// greetings it can read, and so the sessions it can choose, are its own
+// version's (§9.2 step 5).
+func parseClientLine(line []byte, version string) (bootstrap.ClientLine, error) {
 	cl, err := bootstrap.ParseClientLine(line)
 	if err != nil {
 		var ve *bootstrap.VersionError
 		if errors.As(err, &ve) {
-			return &LaunchError{Code: bootstrap.CodeVersion, Detail: version,
+			return cl, &LaunchError{Code: bootstrap.CodeVersion, Detail: version,
 				Text: fmt.Sprintf("the client speaks bootstrap protocol %d, this server %d", ve.Got, bootstrap.Version)}
 		}
-		return &LaunchError{Code: bootstrap.CodeLine, Text: "the client's line is malformed"}
+		return cl, &LaunchError{Code: bootstrap.CodeLine, Text: "the client's line is malformed"}
 	}
 	if cl.SoftwareVersion != version {
-		return &LaunchError{Code: bootstrap.CodeVersion, Detail: version,
+		return cl, &LaunchError{Code: bootstrap.CodeVersion, Detail: version,
 			Text: fmt.Sprintf("the client is version %s, this server %s", printableASCII(cl.SoftwareVersion, 64), version)}
 	}
-	if cl.Resume {
-		// The launcher sends a resume to resume, never here; a spawner
-		// started for a session never takes one.
-		return &LaunchError{Code: bootstrap.CodeLine, Text: "a resume where a new session was asked for"}
+	return cl, nil
+}
+
+// checkClientLine is what a new session's spawner checks of the line its
+// launcher sends: as the launcher did, and that it starts a session with
+// a name the launcher chose (new:NAME, bootstrap.md §9.2 step 2).
+func checkClientLine(line []byte, version string) error {
+	cl, err := parseClientLine(line, version)
+	if err != nil {
+		return err
+	}
+	if cl.Attach != bootstrap.AttachNew || cl.Name == "" {
+		// A spawner started for a session never takes another, and every
+		// session it starts has a name.
+		return &LaunchError{Code: bootstrap.CodeLine, Text: "not a new session with a name"}
 	}
 	return nil
 }

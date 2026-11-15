@@ -71,7 +71,7 @@ func TestStartCarriesTheSocketAndThePTYMaster(t *testing.T) {
 	pty, ptyPeer, _ := Pair()
 	defer ptyPeer.Close()
 	before := openFDs(t)
-	err := spawner.Send(Start{Cols: 80, Rows: 24, Port: 60000, ClientPublic: key(), UDP: udp, PTY: pty})
+	err := spawner.Send(Start{Cols: 80, Rows: 24, Port: 60000, ClientPublic: key(), Name: "s", UDP: udp, PTY: pty})
 	if err != nil {
 		t.Fatal(err)
 	}

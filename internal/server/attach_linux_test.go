@@ -3,11 +3,13 @@ package server
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,7 +36,7 @@ func oneShotKey(t *testing.T) []byte {
 func resumeLine(t *testing.T, version string, sid [16]byte) []byte {
 	t.Helper()
 	return bootstrap.MarshalClientLine(bootstrap.ClientLine{
-		SoftwareVersion: version, Resume: true, SessionID: sid,
+		SoftwareVersion: version, Attach: bootstrap.AttachResume, SessionID: sid,
 		Cols: 80, Rows: 24, Public: oneShotKey(t),
 	})
 }
@@ -111,7 +113,7 @@ func fakeSession(t *testing.T, base string, sid [16]byte, serve func(f *os.File)
 func greet(version string, sid [16]byte) func(f *os.File) {
 	return func(f *os.File) {
 		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{
-			SoftwareVersion: version, SessionID: sid, Started: time.Unix(1794650000, 0),
+			SoftwareVersion: version, SessionID: sid, Name: fmt.Sprintf("s-%x", sid[0]), Started: time.Unix(1794650000, 0),
 			State: bootstrap.SessionDetached, Since: time.Unix(1794650100, 0),
 			Peer: netip.MustParseAddrPort("192.0.2.7:50000"),
 		}))
@@ -157,63 +159,24 @@ func TestTheAttachSocketGreetsAndLeavesNothingBehind(t *testing.T) {
 	}
 }
 
-// A resume of AnySession finds the user's one session; with none it is
-// CodeSession, with several CodeAmbiguous and their count (bootstrap.md
-// §9.2 step 2). A named session that does not answer is CodeSession.
-func TestAResumeOfAnySessionNeedsExactlyOne(t *testing.T) {
-	base := filepath.Join(runtimeDir(t), "mosey")
-	code := func(err error) string {
-		var le *LaunchError
-		if errors.As(err, &le) {
-			return le.Code + " " + le.Detail
-		}
-		return "?"
-	}
-	if _, _, err := findSession(base, bootstrap.AnySession); code(err) != "session " {
-		t.Errorf("no sessions: %v", err)
-	}
-	one := [16]byte{1}
-	fakeSession(t, base, one, greet("v1", one))
-	f, greeting, err := findSession(base, bootstrap.AnySession)
-	if err != nil {
-		t.Fatalf("one session: %v", err)
-	}
-	f.Close()
-	if g, _ := bootstrap.ParseSessionLine(greeting); g.SessionID != one {
-		t.Errorf("found %+v", g)
-	}
-	// Not a session's directory: skipped, not counted.
-	os.Mkdir(filepath.Join(base, "not-a-session"), 0o700)
-	two := [16]byte{2}
-	fakeSession(t, base, two, greet("v1", two))
-	if _, _, err := findSession(base, bootstrap.AnySession); code(err) != "ambiguous 2" {
-		t.Errorf("two sessions: %v", err)
-	}
-	if _, _, err := findSession(base, [16]byte{3}); code(err) != "session " {
-		t.Errorf("a named session that is not there: %v", err)
-	}
-	f, _, err = findSession(base, two)
-	if err != nil {
-		t.Errorf("a named session: %v", err)
-	} else {
-		f.Close()
-	}
-}
-
-// The launcher's resume against a fake spawner: the line goes to the
-// session's socket, and the credential line it answers with comes out on
-// stdout; a session of another version is refused before anything is sent
-// (bootstrap.md §9.2 step 5).
+// The launcher's resume against a fake spawner: a plain client's line
+// (auto) finds the detached session, which gets the line as resume:SID,
+// and the credential line it answers with comes out on stdout; a session
+// whose version is not the client's is refused before anything is sent
+// (bootstrap.md §9.2 steps 2 and 5).
 func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	runtime := runtimeDir(t)
 	base := filepath.Join(runtime, "mosey")
 	sid := [16]byte{9}
 	answer := bootstrap.MarshalCredentialLine(bootstrap.CredentialLine{
-		SoftwareVersion: "v1", Port: 60001, SessionID: sid, Public: oneShotKey(t),
+		SoftwareVersion: "v1", Port: 60001, SessionID: sid, Name: "work", Public: oneShotKey(t),
 	})
 	got := make(chan []byte, 1)
+	var sessionVersion atomic.Value
+	sessionVersion.Store("v1")
 	fakeSession(t, base, sid, func(f *os.File) {
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: "v1", SessionID: sid, State: bootstrap.SessionNew}))
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: sessionVersion.Load().(string), SessionID: sid, Name: "work",
+			Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650000, 0)}))
 		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
 		m, err := conn.Recv()
 		if err != nil {
@@ -224,23 +187,34 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	})
 	run := func(line []byte) (string, string, error) {
 		var stdout, stderr bytes.Buffer
-		l := &Launcher{Stdin: bytes.NewReader(line), Stdout: &stdout, Stderr: &stderr, Version: "v2",
+		l := &Launcher{Stdin: bytes.NewReader(line), Stdout: &stdout, Stderr: &stderr, Version: "v1",
 			Env: []string{"XDG_RUNTIME_DIR=" + runtime}}
 		err := l.Run(t.Context())
 		return stdout.String(), stderr.String(), err
 	}
-	line := resumeLine(t, "v1", bootstrap.AnySession)
-	out, errs, err := run(line)
+	key := oneShotKey(t)
+	auto := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachAuto, Cols: 80, Rows: 24, Public: key})
+	out, errs, err := run(auto)
 	if err != nil || out != string(answer) {
 		t.Fatalf("resume: %v, stdout %q, stderr %q", err, out, errs)
 	}
-	if sent := <-got; !bytes.Equal(sent, line) {
-		t.Errorf("the spawner got %q", sent)
+	want := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid, Cols: 80, Rows: 24, Public: key})
+	if sent := <-got; !bytes.Equal(sent, want) {
+		t.Errorf("the spawner got %q, not the line as resume:SID", sent)
 	}
-	// The launcher is v2, the session v1: the session's version decides.
-	out, _, err = run(resumeLine(t, "v2", sid))
-	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeVersion || e.Detail != "v1" {
+	// The session is v0, the client and the launcher v1: the session's
+	// version decides.
+	sessionVersion.Store("v0")
+	out, _, err = run(resumeLine(t, "v1", sid))
+	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeVersion || e.Detail != "v0" {
 		t.Errorf("a client of another version than the session's: %v, %q", err, out)
+	}
+	// R3's reconnect of a session that is not there.
+	gone := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume,
+		SessionID: [16]byte{0x77}, Holder: [8]byte{1}, HasHolder: true, Cols: 80, Rows: 24, Public: key})
+	out, _, err = run(gone)
+	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeSession {
+		t.Errorf("a reconnect of a session that has gone: %v, %q", err, out)
 	}
 	select {
 	case l := <-got:
@@ -257,25 +231,27 @@ func TestTheSpawnerRefusesAResumeLineThatIsNotForIt(t *testing.T) {
 	if _, err := checkResumeLine(good, "v1", sid); err != nil {
 		t.Fatalf("a good line: %v", err)
 	}
-	if _, err := checkResumeLine(resumeLine(t, "v1", bootstrap.AnySession), "v1", sid); err != nil {
-		t.Errorf("AnySession: %v", err)
-	}
 	// A resuming client may forward its agent: its own login triggered
 	// its own bind (bootstrap.md §9.2 step 2).
-	agent := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Resume: true, SessionID: sid, Agent: true,
+	agent := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid, Agent: true,
 		Cols: 80, Rows: 24, Public: oneShotKey(t)})
 	if _, err := checkResumeLine(agent, "v1", sid); err != nil {
 		t.Errorf("agent=yes: %v", err)
 	}
-	badKey := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Resume: true, SessionID: sid,
+	badKey := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid,
 		Cols: 80, Rows: 24, Public: bytes.Repeat([]byte{0xff}, bootstrap.PublicKeySize)})
 	newLine := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Cols: 80, Rows: 24, Public: oneShotKey(t)})
+	holder := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachResume, SessionID: sid,
+		Holder: [8]byte{1}, HasHolder: true, Cols: 80, Rows: 24, Public: oneShotKey(t)})
+	auto := bootstrap.MarshalClientLine(bootstrap.ClientLine{SoftwareVersion: "v1", Attach: bootstrap.AttachAuto, Cols: 80, Rows: 24, Public: oneShotKey(t)})
 	for name, line := range map[string][]byte{
-		"another session": resumeLine(t, "v1", [16]byte{6}),
-		"another version": resumeLine(t, "v2", sid),
-		"a new session":   newLine,
-		"a bad key":       badKey,
-		"malformed":       append(bytes.Clone(good[:len(good)-1]), ' ', '\n'),
+		"another session":      resumeLine(t, "v1", [16]byte{6}),
+		"another version":      resumeLine(t, "v2", sid),
+		"a new session":        newLine,
+		"an unresolved holder": holder,
+		"an unresolved choice": auto,
+		"a bad key":            badKey,
+		"malformed":            append(bytes.Clone(good[:len(good)-1]), ' ', '\n'),
 	} {
 		if _, err := checkResumeLine(line, "v1", sid); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -293,7 +269,7 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 		return ""
 	}
 	var out bytes.Buffer
-	if err := List(&out, getenv); err != nil || out.String() != "no sessions\n" {
+	if err := List(&out, getenv); err != nil || out.String() != "" {
 		t.Fatalf("%v %q", err, out.String())
 	}
 	sid := [16]byte{0xab, 0xcd}
@@ -304,10 +280,70 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 	if err := List(&out, getenv); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"abcd0000000000000000000000000000", "detached", "2026-11-14T", "192.0.2.7:50000", "v1", "v9"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("the list lacks %q:\n%s", want, out.String())
+	// Oldest first: the v9 session's start is unknown, so it sorts first.
+	want := "MOSEY-LIST 1 - - - v9\nMOSEY-LIST 1 s-ab detached 1794650100 v1\n"
+	if out.String() != want {
+		t.Errorf("the list is\n%s\nnot\n%s", out.String(), want)
+	}
+	for _, line := range strings.SplitAfter(out.String(), "\n") {
+		if line == "" {
+			continue
 		}
+		if _, err := bootstrap.ParseListLine([]byte(line)); err != nil {
+			t.Errorf("%q does not parse: %v", line, err)
+		}
+	}
+}
+
+// -kill asks the named session's spawner to hang up, over its attach
+// socket, and with no session of the name says so in an ErrorLine
+// (bootstrap.md §9.5).
+func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
+	runtime := runtimeDir(t)
+	base := filepath.Join(runtime, "mosey")
+	getenv := func(k string) string {
+		if k == "XDG_RUNTIME_DIR" {
+			return runtime
+		}
+		return ""
+	}
+	asked := make(chan [16]byte, 2)
+	for _, sid := range [][16]byte{{0x11}, {0x22}} {
+		fakeSession(t, base, sid, func(f *os.File) {
+			greet("v1", sid)(f)
+		})
+	}
+	// The greeting above reads whatever comes next and returns; a real
+	// spawner hands Hangup on. This one records which session got it.
+	killed := [16]byte{0x33}
+	fakeSession(t, base, killed, func(f *os.File) {
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{SoftwareVersion: "v1", SessionID: killed, Name: "doomed",
+			Started: time.Unix(1794650000, 0), State: bootstrap.SessionAttached, Since: time.Unix(1794650000, 0)}))
+		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
+		if m, err := conn.Recv(); err == nil {
+			if _, ok := m.(ipc.Hangup); ok {
+				asked <- killed
+			}
+		}
+	})
+	var out bytes.Buffer
+	if err := Kill(&out, getenv, "doomed"); err != nil || out.Len() != 0 {
+		t.Fatalf("kill: %v, %q", err, out.String())
+	}
+	select {
+	case sid := <-asked:
+		if sid != killed {
+			t.Errorf("hung up %x", sid)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session was never asked to hang up")
+	}
+	out.Reset()
+	if err := Kill(&out, getenv, "nothing"); !errors.Is(err, ErrNoSuchSession) {
+		t.Fatalf("kill of nothing: %v", err)
+	}
+	if e, err := bootstrap.ParseErrorLine(out.Bytes()); err != nil || e.Code != bootstrap.CodeSession {
+		t.Errorf("kill of nothing printed %q", out.String())
 	}
 }
 
@@ -358,9 +394,9 @@ func TestASessionWhoseBacklogIsFullIsSkippedNotWaitedOn(t *testing.T) {
 	}
 }
 
-// A launcher checks R/mosey is private before it connects to a session
-// named by its id, not only SID-HEX (server.md §2.6).
-func TestANamedSessionInASessionsDirectoryOthersCanUseIsNotReached(t *testing.T) {
+// A launcher checks R/mosey is private before it reads any session or
+// takes its lock, not only SID-HEX (server.md §2.6).
+func TestNoSessionInASessionsDirectoryOthersCanUseIsReached(t *testing.T) {
 	base := filepath.Join(runtimeDir(t), "mosey")
 	sid := [16]byte{0xf1}
 	fakeSession(t, base, sid, greet("v1", sid))
@@ -368,11 +404,41 @@ func TestANamedSessionInASessionsDirectoryOthersCanUseIsNotReached(t *testing.T)
 		t.Fatal(err)
 	}
 	defer os.Chmod(base, 0o700)
-	var le *LaunchError
-	if f, _, err := findSession(base, sid); !errors.As(err, &le) || le.Code != bootstrap.CodeSession {
-		if f != nil {
-			f.Close()
+	if live := liveSessions(base); len(live) != 0 {
+		for _, s := range live {
+			s.f.Close()
 		}
-		t.Errorf("a named session under an open sessions directory: %v", err)
+		t.Errorf("reached %d sessions under an open sessions directory", len(live))
+	}
+	if f, err := lockSessions(base, time.Second); err == nil {
+		f.Close()
+		t.Error("took the lock in an open sessions directory")
+	}
+}
+
+// The launchers' lock is exclusive and is let go when its holder closes
+// it (or exits): a second launcher waits, then gives up at its bound
+// (bootstrap.md §9.2 "The lock").
+func TestTheSessionsLockIsExclusiveAndLetGo(t *testing.T) {
+	base := filepath.Join(runtimeDir(t), "mosey")
+	first, err := lockSessions(base, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := lockSessions(base, 100*time.Millisecond); err == nil {
+		second.Close()
+		t.Fatal("two launchers held the lock at once")
+	}
+	first.Close()
+	again, err := lockSessions(base, time.Second)
+	if err != nil {
+		t.Fatalf("the lock was not let go: %v", err)
+	}
+	again.Close()
+	if fi, err := os.Lstat(filepath.Join(base, lockName)); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("the lock file: %v %v", fi.Mode(), err)
+	}
+	if live := liveSessions(base); len(live) != 0 {
+		t.Errorf("the lock file was taken for a session")
 	}
 }

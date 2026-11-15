@@ -223,12 +223,21 @@ func newSimNet(t *testing.T, p netsim.Profile) *simNet {
 // shell's pty and the in-process emulator; its end arrives on the channel.
 func (n *simNet) serve(t *testing.T, ctx context.Context, prog server.Terminal) <-chan error {
 	t.Helper()
+	return n.serveWith(t, ctx, prog, nil)
+}
+
+// serveWith is serve with a hook to set the Session's callbacks.
+func (n *simNet) serveWith(t *testing.T, ctx context.Context, prog server.Terminal, hook func(*server.Session)) <-chan error {
+	t.Helper()
 	em, err := emu.New(80, 24, emu.Options{ScrollbackCells: emu.DefaultScrollbackCells})
 	if err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	srv := &server.Session{Listener: transport.Listen(n.sc, n.creds, n.log), Terminal: prog, Emulator: em, Log: n.log}
+	if hook != nil {
+		hook(srv)
+	}
 	go func() { done <- srv.Run(ctx) }()
 	return done
 }
@@ -276,9 +285,18 @@ func (n *simNet) resume(ctx context.Context, d *device, user terminal.Terminal) 
 // connect runs the client's Session over the client's socket, on user's
 // terminal; its end arrives on the channel.
 func (n *simNet) connect(ctx context.Context, user terminal.Terminal) <-chan error {
+	return n.connectWith(ctx, user, nil)
+}
+
+// connectWith is connect with a hook to set the client Session's fields:
+// its name and R3's Reconnect.
+func (n *simNet) connectWith(ctx context.Context, user terminal.Terminal, hook func(*client.Session)) <-chan error {
 	done := make(chan error, 1)
 	cli := &client.Session{Conn: n.cc, Server: serverAddr, Credential: n.cred, Key: n.key, Terminal: user, Log: n.log,
 		Capabilities: render.Capabilities{UTF8: true, Colors256: true}}
+	if hook != nil {
+		hook(cli)
+	}
 	go func() { done <- cli.Run(ctx) }()
 	return done
 }

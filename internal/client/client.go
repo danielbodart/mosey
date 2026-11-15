@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/handshake"
@@ -35,11 +37,11 @@ type Options struct {
 	// Getenv reads the environment: TERM, the locale, SSH_AUTH_SOCK,
 	// and where the state directory is.
 	Getenv func(string) string
-	// Resume asks to take over a running session rather than start one
-	// (D8, bootstrap.md §9.2): SessionID, or with bootstrap.AnySession
-	// the user's one session on the host.
-	Resume    bool
-	SessionID [16]byte
+	// Attach and Name say which session (D8 R1, R2; bootstrap.md §9.2):
+	// AttachAuto for a plain `mosey host`, AttachName with Name for -s,
+	// AttachNew for -new.
+	Attach bootstrap.Attach
+	Name   string
 
 	// D7's auto-upload (bootstrap.md §4.7), when SSH.Server is "".
 	//
@@ -64,11 +66,11 @@ type Options struct {
 	Predict predict.Mode
 }
 
-// Run is `mosey host` (or `mosey -r host`): the SSH bootstrap, then a
-// Session over a real UDP socket, until the session ends, this client
-// detaches (*DetachedError), or another client takes the session over
-// (*TakenOverError). Its errors are for the user: *Failure,
-// *bootstrap.UsageError, or ctx's.
+// Run is `mosey host` (and -s and -new): the SSH bootstrap, then a Session
+// over a real UDP socket, until the session ends, this client detaches
+// (*DetachedError), another client takes the session over
+// (*TakenOverError), or R3's reconnect finds it gone (*GoneError). Its
+// errors are for the user: *Failure, *bootstrap.UsageError, or ctx's.
 func Run(ctx context.Context, o Options) error {
 	if o.Log == nil {
 		o.Log = slog.New(slog.DiscardHandler)
@@ -102,8 +104,8 @@ func Run(ctx context.Context, o Options) error {
 		ssh: o.SSH,
 		line: bootstrap.ClientLine{
 			SoftwareVersion: o.Version,
-			Resume:          o.Resume,
-			SessionID:       o.SessionID,
+			Attach:          o.Attach,
+			Name:            o.Name,
 			Cols:            uint16(size.Cols),
 			Rows:            uint16(size.Rows),
 			Env:             env,
@@ -115,12 +117,6 @@ func Run(ctx context.Context, o Options) error {
 	}
 	line, cfg, err := b.run(ctx)
 	var ns *bootstrap.NoServerError
-	if errors.As(err, &ns) && o.Resume {
-		// A resume never copies (bootstrap.md §9.2 step 5): a session
-		// runs the version that started it, and a copy of this one could
-		// not serve a session of another.
-		return fail(err, "no mosey %s on %s, so no session of it to resume: a session started by another version is resumed with that version's mosey", o.Version, o.SSH.Destination)
-	}
 	if errors.As(err, &ns) && o.SSH.Probes() {
 		// D7: no mosey of this version there. Copy it over, with the
 		// user's consent, and start once more with the same line, whose
@@ -140,24 +136,16 @@ func Run(ctx context.Context, o Options) error {
 		b.forward.Log = o.Log
 	}
 
-	addr, err := bootstrap.ChooseAddr(ctx, line, cfg, lookupIP, localPrefixes(o.Log))
+	server, pc, err := udpTo(ctx, line, cfg, o.Log)
 	if err != nil {
-		return fail(err, "don't know where to send UDP for %s: %v", o.SSH.Destination, err)
+		return fail(err, "%s: %v", o.SSH.Destination, err)
 	}
-	if line.Addr.IsValid() && addr.WithZone("") != line.Addr {
-		o.Log.Warn("not sending UDP where the server said", "said", line.Addr, "using", addr)
-	}
-	server := netip.AddrPortFrom(addr, line.Port)
 	if cfg.Get("proxyjump") != "" && cfg.Get("proxyjump") != "none" || cfg.Get("proxycommand") != "" && cfg.Get("proxycommand") != "none" {
 		// UDP cannot follow an ssh proxy, so say where it goes instead.
 		fmt.Fprintf(o.Stderr, "mosey: UDP goes straight to %s, not through the ssh proxy\n", server)
 		o.Log.Info("ssh went through a proxy; UDP does not", "server", server)
 	}
-
-	pc, err := listenFor(addr)
-	if err != nil {
-		return fail(err, "opening a UDP socket: %v", err)
-	}
+	o.Log.Info("session", "name", line.Name)
 	s := &Session{
 		Conn:         pc,
 		Server:       server,
@@ -168,16 +156,104 @@ func Run(ctx context.Context, o Options) error {
 		Capabilities: render.FromEnv(o.Getenv),
 		Agent:        b.forward,
 		Predict:      o.Predict,
+		Name:         line.Name,
+		Reconnect:    reconnector(o, line.SessionID),
 	}
 	// The Session has its own copy, which dial wipes once msg1 is built
 	// (threat-model.md §4.10).
 	clear(line.PSK[:])
 	err = s.Run(ctx)
 	var d *DetachedError
-	if errors.As(err, &d) {
+	var g *GoneError
+	switch {
+	case errors.As(err, &d):
 		d.Destination = o.SSH.Destination
+	case errors.As(err, &g):
+		g.Destination = o.SSH.Destination
 	}
 	return err
+}
+
+// udpTo is where the session's UDP goes, checked as bootstrap.md §7.2
+// says, and a socket to send it from.
+func udpTo(ctx context.Context, line bootstrap.CredentialLine, cfg bootstrap.Config, log *slog.Logger) (netip.AddrPort, *net.UDPConn, error) {
+	addr, err := bootstrap.ChooseAddr(ctx, line, cfg, lookupIP, localPrefixes(log))
+	if err != nil {
+		return netip.AddrPort{}, nil, fmt.Errorf("don't know where to send UDP: %w", err)
+	}
+	if line.Addr.IsValid() && addr.WithZone("") != line.Addr {
+		log.Warn("not sending UDP where the server said", "said", line.Addr, "using", addr)
+	}
+	pc, err := listenFor(addr)
+	if err != nil {
+		return netip.AddrPort{}, nil, fmt.Errorf("opening a UDP socket: %w", err)
+	}
+	return netip.AddrPortFrom(addr, line.Port), pc, nil
+}
+
+// reconnector is R3's try for the binary (bootstrap.md §9.2.2): a fresh
+// bootstrap through the user's ssh, in batch mode so nothing is asked,
+// its stderr to the log alone (the screen is up), copying nothing over,
+// resuming session sid only if it is detached or still held by holder.
+func reconnector(o Options, sid [16]byte) func(context.Context, [8]byte) (*Reattach, error) {
+	return func(ctx context.Context, holder [8]byte) (*Reattach, error) {
+		key, err := handshake.NewOneShotKey()
+		if err != nil {
+			return nil, err
+		}
+		ok := false
+		defer func() {
+			if !ok {
+				key.Wipe()
+			}
+		}()
+		cols, rows, _ := o.Terminal.Size()
+		size := clampSize(cols, rows)
+		env, _ := bootstrap.ClientEnv(o.Getenv)
+		ssh := o.SSH
+		ssh.Batch = true
+		b := &spawn{
+			ssh: ssh,
+			line: bootstrap.ClientLine{
+				SoftwareVersion: o.Version,
+				Attach:          bootstrap.AttachResume,
+				SessionID:       sid,
+				Holder:          holder,
+				HasHolder:       true,
+				Cols:            uint16(size.Cols),
+				Rows:            uint16(size.Rows),
+				Env:             env,
+				Public:          key.PublicKey(),
+			},
+			stderr: &logLines{log: o.Log},
+			log:    o.Log,
+			getenv: o.Getenv,
+		}
+		line, cfg, err := b.run(ctx)
+		var remote *bootstrap.RemoteError
+		switch {
+		case errors.As(err, &remote) && remote.Code == bootstrap.CodeSession:
+			return nil, ErrSessionGone
+		case errors.As(err, &remote) && remote.Code == bootstrap.CodeTaken:
+			at, _ := strconv.ParseInt(remote.Detail, 10, 64)
+			return nil, &TakenOverError{At: time.Unix(at, 0)}
+		case err != nil:
+			return nil, err
+		}
+		defer clear(line.PSK[:])
+		if line.SessionID != sid {
+			return nil, fmt.Errorf("the server resumed another session, %x", line.SessionID)
+		}
+		server, pc, err := udpTo(ctx, line, cfg, o.Log)
+		if err != nil {
+			return nil, err
+		}
+		if b.forward != nil {
+			b.forward.Log = o.Log
+		}
+		ok = true
+		return &Reattach{Conn: pc, Server: server, Credential: credentialFrom(line), Key: key, Agent: b.forward}, nil
+	}
 }
 
 // credentialFrom is the handshake's view of a CredentialLine: bootstrap

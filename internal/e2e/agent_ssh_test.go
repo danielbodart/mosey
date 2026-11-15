@@ -63,7 +63,7 @@ func (a *throwawayAgent) add(args ...string) {
 func startAgentClient(t *testing.T, name, mosey string, s *sshd, a *throwawayAgent, flags ...string) *realClient {
 	t.Helper()
 	master, slave := openPTY(t)
-	c := &realClient{t: t, name: name, master: master, screen: &screenLog{}, exited: make(chan error, 1), state: t.TempDir()}
+	c := &realClient{t: t, label: name, master: master, screen: &screenLog{}, exited: make(chan error, 1), state: t.TempDir()}
 	args := append(append([]string{}, flags...), "-remote", mosey, "--", "-F", s.config, s.host)
 	c.cmd = exec.Command(mosey, args...)
 	c.cmd.Stdin, c.cmd.Stdout, c.cmd.Stderr = slave, slave, slave
@@ -307,7 +307,9 @@ func TestAResumedSessionForwardsTheResumingClientsAgent(t *testing.T) {
 		t.Fatalf("the first device exited %d", st)
 	}
 
-	b := startAgentClient(t, "the second device", mosey, s, second, "-r")
+	// A plain mosey: the session the first device detached from is the
+	// newest detached one (D8 R1).
+	b := startAgentClient(t, "the second device", mosey, s, second)
 	b.shows(agentKeyComment) // the screen as the first device left it
 	b.typeLine("ssh-add -l")
 	b.shows("second-device-key")
@@ -350,7 +352,7 @@ func TestPredictionAndTheAgentBothCarryOverAResume(t *testing.T) {
 		t.Errorf("the first device predicted nothing; log:\n%s", a.log())
 	}
 
-	b := startAgentClient(t, "the second device", mosey, s, second, "-predict", "always", "-r")
+	b := startAgentClient(t, "the second device", mosey, s, second, "-predict", "always")
 	b.shows("before-42") // the screen as the first device left it
 	b.typeLine("echo after-$((50+3))")
 	b.shows("after-53")

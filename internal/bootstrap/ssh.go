@@ -37,13 +37,21 @@ type SSH struct {
 	// is ForwardAgent=no.
 	AgentCapture string
 	// Role is the server role to run: "" for the bootstrap's own
-	// `--serve`, or RoleList for `--serve=list` (§9.4), which reads no
-	// line and prints the user's sessions.
-	Role string
+	// `--serve`, RoleList for `--serve=list` (§9.4), which reads no line
+	// and prints the user's sessions, or RoleKill for `--serve=kill
+	// RoleArg` (§9.5), which ends the session called RoleArg.
+	Role    string
+	RoleArg string
+	// Batch runs ssh with BatchMode=yes: R3's background reconnect, which
+	// must never ask the user anything (§9.2.2).
+	Batch bool
 }
 
-// RoleList is SSH.Role for `mosey -list` (§9.4).
-const RoleList = "list"
+// The server roles the client runs (§9.4, §9.5).
+const (
+	RoleList = "list"
+	RoleKill = "kill"
+)
 
 // Bounds on what the user may name (§2, §4.1).
 const (
@@ -68,8 +76,13 @@ func (s SSH) Check() error {
 			return &UsageError{fmt.Sprintf("mosey: %q is not a destination", d)}
 		}
 	}
-	if s.Role != "" && s.Role != RoleList {
+	switch {
+	case s.Role != "" && s.Role != RoleList && s.Role != RoleKill:
 		return &UsageError{fmt.Sprintf("mosey: no server role %q", s.Role)}
+	case s.Role == RoleKill && !ValidSessionName(s.RoleArg):
+		return &UsageError{fmt.Sprintf("mosey: %q is not a session name: 1 to 32 letters, digits, '-', '_' and '.', starting with a letter or digit", s.RoleArg)}
+	case s.Role != RoleKill && s.RoleArg != "":
+		return &UsageError{"mosey: only --serve=kill takes a session name"}
 	}
 	if s.Server != "" && !ValidServer(s.Server) {
 		return &UsageError{fmt.Sprintf("mosey: -remote %q: a remote path may hold only letters, digits and ._/+- (and start with ~/)", s.Server)}
@@ -177,11 +190,15 @@ func (s SSH) RemoteCommand() string {
 	return wrap("exec " + s.Server + " " + s.flag())
 }
 
-// flag is --serve with the role, if any. Check has made sure the role is
-// RoleList or none, so it needs no quoting.
+// flag is --serve with the role, if any, and kill's session name. Check
+// has made sure the role is one of ours and the name an sname, so neither
+// needs quoting (§9.5).
 func (s SSH) flag() string {
-	if s.Role == "" {
+	switch s.Role {
+	case "":
 		return "--serve"
+	case RoleKill:
+		return "--serve=" + s.Role + " " + s.RoleArg
 	}
 	return "--serve=" + s.Role
 }
@@ -276,6 +293,11 @@ func (s SSH) command(ctx context.Context, c Config, remote string) *exec.Cmd {
 		"-o", "PermitLocalCommand=no", "-o", "EscapeChar=none",
 		// A config RemoteCommand and a command on the line is an error.
 		"-o", "RemoteCommand=none",
+	}
+	if s.Batch {
+		// R3's reconnect runs while the screen is up: no question may be
+		// put, so a login that would need one fails instead (§9.2.2).
+		args = append(args, "-o", "BatchMode=yes")
 	}
 	// A config SessionType none or StdinNull yes would break the
 	// bootstrap, but an ssh older than 8.7 refuses the keywords, so they

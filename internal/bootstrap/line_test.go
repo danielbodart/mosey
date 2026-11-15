@@ -27,6 +27,7 @@ func sampleCredentialLine() CredentialLine {
 		Port:            60001,
 		CredentialID:    [8]byte{1, 2, 3, 4, 5, 6, 7, 8},
 		SessionID:       [16]byte{9: 9},
+		Name:            "quiet-heron",
 		PSK:             [32]byte{31: 0xff},
 		Public:          key(3),
 	}
@@ -35,8 +36,10 @@ func sampleCredentialLine() CredentialLine {
 func TestAClientLineSurvivesARoundTrip(t *testing.T) {
 	max := ClientLine{
 		SoftwareVersion: strings.Repeat("v", 64),
-		Resume:          true,
+		Attach:          AttachResume,
 		SessionID:       [16]byte{1, 2, 3},
+		Holder:          [8]byte{4, 5},
+		HasHolder:       true,
 		Agent:           true,
 		Cols:            65535,
 		Rows:            65535,
@@ -60,8 +63,62 @@ func TestAClientLineSurvivesARoundTrip(t *testing.T) {
 		}
 	}
 	// The longest legal line is the size §6.2 derives.
-	if n := len(MarshalClientLine(max)); n != 3027 {
-		t.Errorf("longest client line is %d bytes, §6.2 says 3027", n)
+	if n := len(MarshalClientLine(max)); n != 3039 {
+		t.Errorf("longest client line is %d bytes, §6.2 says 3039", n)
+	}
+}
+
+// Every attach of §6.2 survives a round trip as the field the spec shows.
+func TestEveryAttachIsWrittenAsTheSpecShows(t *testing.T) {
+	sid := [16]byte{1}
+	for want, c := range map[string]ClientLine{
+		" auto ":                          {Attach: AttachAuto},
+		" new ":                           {Attach: AttachNew},
+		" new:work ":                      {Attach: AttachNew, Name: "work"},
+		" name:a.b_c ":                    {Attach: AttachName, Name: "a.b_c"},
+		" resume:AQAAAAAAAAAAAAAAAAAAAA ": {Attach: AttachResume, SessionID: sid},
+		" resume:AQAAAAAAAAAAAAAAAAAAAA:CQAAAAAAAAA ": {Attach: AttachResume, SessionID: sid, Holder: [8]byte{9}, HasHolder: true},
+	} {
+		c.SoftwareVersion, c.Cols, c.Rows, c.Public = "dev", 80, 24, key(1)
+		line := MarshalClientLine(c)
+		if !bytes.Contains(line, []byte(want)) {
+			t.Errorf("%+v: %q has no %q", c, line[:60], want)
+		}
+		got, err := ParseClientLine(line)
+		if err != nil || got.Attach != c.Attach || got.Name != c.Name || got.SessionID != c.SessionID ||
+			got.Holder != c.Holder || got.HasHolder != c.HasHolder {
+			t.Errorf("%q parsed as %+v, %v", want, got, err)
+		}
+	}
+}
+
+// A name that is not an sname, an empty holder and the all-zero session
+// id are each refused (§6.2).
+func TestABadAttachIsRefused(t *testing.T) {
+	good := string(MarshalClientLine(ClientLine{SoftwareVersion: "dev", Attach: AttachName, Name: "work", Cols: 80, Rows: 24, Public: key(1)}))
+	for name, attach := range map[string]string{
+		"leading dash":   "name:-work",
+		"leading dot":    "name:.work",
+		"empty name":     "name:",
+		"33 bytes":       "name:" + strings.Repeat("a", 33),
+		"a slash":        "name:a/b",
+		"a colon":        "name:a:b",
+		"empty new name": "new:",
+		"zero sid":       "resume:AAAAAAAAAAAAAAAAAAAAAA",
+		"empty holder":   "resume:AQAAAAAAAAAAAAAAAAAAAA:",
+		"short holder":   "resume:AQAAAAAAAAAAAAAAAAAAAA:CQAA",
+		"two holders":    "resume:AQAAAAAAAAAAAAAAAAAAAA:CQAAAAAAAAA:CQAAAAAAAAA",
+		"upper case":     "AUTO",
+	} {
+		line := strings.Replace(good, "name:work", attach, 1)
+		if _, err := ParseClientLine([]byte(line)); !errors.Is(err, ErrBadLine) {
+			t.Errorf("%s: %q gave %v", name, attach, err)
+		}
+	}
+	for _, n := range []string{"a", "A9", "quiet-heron", "x.y_z-1", strings.Repeat("z", 32)} {
+		if !ValidSessionName(n) {
+			t.Errorf("%q refused", n)
+		}
 	}
 }
 
@@ -78,6 +135,7 @@ func TestACredentialLineSurvivesARoundTrip(t *testing.T) {
 	longest.SoftwareVersion = strings.Repeat("9", 64)
 	longest.Addr = netip.MustParseAddr("2001:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
 	longest.Port = 65535
+	longest.Name = strings.Repeat("n", MaxSessionName)
 	noAddr := sampleCredentialLine()
 	noAddr.Addr = netip.Addr{}
 	for _, c := range []CredentialLine{sampleCredentialLine(), longest, noAddr} {
@@ -88,12 +146,12 @@ func TestACredentialLineSurvivesARoundTrip(t *testing.T) {
 		}
 		if got.Addr != c.Addr || got.Port != c.Port || got.CredentialID != c.CredentialID ||
 			got.SessionID != c.SessionID || got.PSK != c.PSK || !bytes.Equal(got.Public, c.Public) ||
-			got.SoftwareVersion != c.SoftwareVersion {
+			got.SoftwareVersion != c.SoftwareVersion || got.Name != c.Name {
 			t.Errorf("round trip changed %+v", got)
 		}
 	}
-	if n := len(MarshalCredentialLine(longest)); n != 1829 {
-		t.Errorf("longest credential line is %d bytes, §6.3 says 1829", n)
+	if n := len(MarshalCredentialLine(longest)); n != 1862 {
+		t.Errorf("longest credential line is %d bytes, §6.3 says 1862", n)
 	}
 }
 
@@ -269,5 +327,17 @@ func TestClientEnvKeepsOnlyWhatTheLineCanCarry(t *testing.T) {
 	c.Env = env
 	if _, err := ParseClientLine(MarshalClientLine(c)); err != nil {
 		t.Errorf("a line with ClientEnv's env: %v", err)
+	}
+}
+
+// The session's name comes from the server, which may be hostile, and the
+// client prints it: anything but an sname is refused (§6.3).
+func TestACredentialLineWithABadNameIsRefused(t *testing.T) {
+	good := string(MarshalCredentialLine(sampleCredentialLine()))
+	for _, name := range []string{"quiet\x1bheron", "-heron", strings.Repeat("n", 33), "a/b"} {
+		line := strings.Replace(good, " quiet-heron ", " "+name+" ", 1)
+		if _, err := ParseCredentialLine([]byte(line)); !errors.Is(err, ErrBadLine) {
+			t.Errorf("%q gave %v", name, err)
+		}
 	}
 }

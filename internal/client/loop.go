@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/danielbodart/mosey/internal/terminal"
@@ -62,8 +63,13 @@ type painter[R any] interface {
 
 // loop is the client's session once the transport is up: keystrokes
 // become input events, size changes become resize events, new screens are
-// drawn, and the transport's events end it or are logged.
+// drawn, and the transport's events end it or are logged. With reconnect
+// set it also carries out R3 (bootstrap.md §9.2.2): after reconnectAfter
+// of silence it resumes its own session over a fresh SSH login, in the
+// background, and swaps the new transport in without leaving raw mode.
 type loop[L inputLog, R any] struct {
+	// The current link: one transport's SSP endpoint, the input stream it
+	// sends, its events, and what is drawn over it (link).
 	sync   syncer[L, R]
 	input  L
 	paint  painter[R]
@@ -79,6 +85,55 @@ type loop[L inputLog, R any] struct {
 	// before each draw (prediction.md §11).
 	predict predictor[R]
 	rtt     func() time.Duration
+	// heard is when the current link last heard anything authentic;
+	// holder is the credential it was made with; retire closes it.
+	heard  func() time.Time
+	holder [8]byte
+	retire func()
+	end    func(transport.EndReason)
+
+	// reconnect, if set, is one R3 try: a fresh bootstrap that resumes
+	// this session naming holder, then, if dial still says go, the
+	// handshake, and the new link. reconnectAfter is how long a silence
+	// must last before the first try, and backoff the wait after the
+	// n-th failed one.
+	reconnect      func(ctx context.Context, holder [8]byte, dial func() bool) (link[L, R], error)
+	reconnectAfter time.Duration
+	backoff        func(n int) time.Duration
+	// dialing is set while a try's handshake is in flight: a REVOKED or a
+	// failure on the old link then is the try's own doing (§9.2.2).
+	dialing atomic.Bool
+}
+
+// link is what loop runs over one transport, all of which a reconnect
+// replaces at once.
+type link[L inputLog, R any] struct {
+	sync    syncer[L, R]
+	input   L
+	events  <-chan transport.Event
+	paused  func() bool
+	predict predictor[R]
+	rtt     func() time.Duration
+	heard   func() time.Time
+	holder  [8]byte
+	retire  func()
+	end     func(transport.EndReason)
+}
+
+// adopt makes lk the current link.
+func (l *loop[L, R]) adopt(lk link[L, R]) {
+	l.sync, l.input, l.events, l.paused = lk.sync, lk.input, lk.events, lk.paused
+	l.predict, l.rtt, l.heard, l.holder, l.retire, l.end = lk.predict, lk.rtt, lk.heard, lk.holder, lk.retire, lk.end
+}
+
+// errAbandoned is a reconnect that found the old link alive again before
+// it dialled: roaming won, and nothing changes.
+var errAbandoned = errors.New("the old transport is heard again")
+
+// attempt is how one reconnect try ended.
+type attempt[L inputLog, R any] struct {
+	lk  link[L, R]
+	err error
 }
 
 // typed appends keys to the input, and tells prediction the event it
@@ -133,8 +188,19 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 	}
 	defer l.paint.Leave()
 
-	runErr := make(chan error, 1)
-	go func() { runErr <- l.sync.Run(ctx) }()
+	// Each link's SSP runs on a context of its own, so a swap stops the
+	// old one; its result arrives on a channel of its own, which the loop
+	// stops reading at the swap.
+	var runErr chan error
+	var stopLink context.CancelFunc
+	runLink := func() {
+		lctx, stop := context.WithCancel(ctx)
+		ch := make(chan error, 1)
+		go func(s syncer[L, R]) { ch <- s.Run(lctx) }(l.sync)
+		runErr, stopLink = ch, stop
+	}
+	runLink()
+	defer func() { stopLink() }()
 
 	// The reader reads only when asked, so flow control can stop reading
 	// the terminal outright, leaving a paste in the user's terminal rather
@@ -163,10 +229,113 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 		screen  R
 		haveOne bool
 	)
+
+	// R3 (bootstrap.md §9.2.2): wake is when to look at the silence again;
+	// tries counts failed tries since the link was last heard, notBefore
+	// is the backoff's earliest next try, and pending is what the old
+	// link said while a try was dialling (its REVOKED, or its failure),
+	// to act on only if the try fails.
+	var (
+		wake      <-chan time.Time
+		tries     int
+		notBefore time.Time
+		lastFail  time.Time
+		trying    bool
+		results   = make(chan attempt[L, R], 1)
+		pending   error
+	)
+	arm := func() {
+		if l.reconnect == nil || l.heard == nil || trying {
+			wake = nil
+			return
+		}
+		at := l.heard().Add(l.reconnectAfter)
+		if at.Before(notBefore) {
+			at = notBefore
+		}
+		wake = time.After(time.Until(at))
+	}
+	defer func() {
+		if trying {
+			// A try still running when the session ends: whatever it
+			// makes is closed, never used.
+			go func() {
+				if a := <-results; a.err == nil && a.lk.retire != nil {
+					a.lk.retire()
+				}
+			}()
+		}
+	}()
+	arm()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-wake:
+			wake = nil
+			heard := l.heard()
+			if heard.After(lastFail) {
+				tries = 0 // heard since the last failure: start the backoff again
+			}
+			if time.Since(heard) < l.reconnectAfter || time.Now().Before(notBefore) {
+				arm()
+				continue
+			}
+			trying = true
+			l.log.Info("no word from the server; reconnecting in the background", "silent", time.Since(heard).Round(time.Millisecond), "try", tries+1)
+			heardFn, holder := l.heard, l.holder
+			go func() {
+				// dial is asked just before the handshake: a try whose old
+				// link has been heard since it began is dropped.
+				dial := func() bool {
+					if heardFn().After(heard) {
+						return false
+					}
+					l.dialing.Store(true)
+					return true
+				}
+				lk, err := l.reconnect(ctx, holder, dial)
+				results <- attempt[L, R]{lk, err}
+			}()
+		case a := <-results:
+			trying = false
+			l.dialing.Store(false)
+			switch {
+			case a.err == nil:
+				l.log.Info("reconnected: a new transport for the same session")
+				pending = nil
+				stopLink()
+				if l.retire != nil {
+					l.retire()
+				}
+				l.adopt(a.lk)
+				runLink()
+				tries, notBefore = 0, time.Time{}
+				// SSP starts afresh on the new transport (ssp.md §1.3): the
+				// size goes first again, and the whole screen comes back.
+				heldSize = nil
+				l.resized(size)
+				l.sync.Set(l.input)
+				l.paint.Invalidate()
+				haveOne = false // prediction starts afresh, with no frame yet
+				// A read may be outstanding; if not, the new link's flow
+				// control may let one go.
+				askRead()
+			case errors.Is(a.err, errAbandoned):
+				l.log.Info("the server is heard again; dropping the reconnect")
+				tries, notBefore = 0, time.Time{}
+			case isFinal(a.err):
+				return a.err
+			default:
+				lastFail = time.Now()
+				notBefore = lastFail.Add(l.backoff(tries))
+				tries++
+				l.log.Warn("reconnecting failed; trying again", "err", a.err, "after", time.Until(notBefore).Round(time.Millisecond))
+			}
+			if a.err != nil && pending != nil {
+				return pending
+			}
+			arm()
 		case err := <-runErr:
 			if ctx.Err() != nil {
 				return nil
@@ -175,6 +344,16 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 				// The END frame closes the transport as it reports the
 				// event, so SSP may see it first.
 				return errSessionEnded
+			}
+			if l.dialing.Load() {
+				// The try's own takeover closed the old link; if the try
+				// fails after all, this is how the session ended (unless
+				// a REVOKED already said so).
+				if pending == nil {
+					pending = fail(err, "the session failed: %v", err)
+				}
+				runErr = nil
+				continue
 			}
 			return fail(err, "the session failed: %v", err)
 		case err := <-readErr:
@@ -238,6 +417,13 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 		case ev := <-l.events:
 			switch ev := ev.(type) {
 			case transport.Revoked:
+				if l.dialing.Load() {
+					// Very likely this client's own new transport (D26);
+					// a takeover only if that dial fails.
+					pending = &TakenOverError{By: ev.By, At: ev.At}
+					l.events = nil // the old link has nothing more to say
+					continue
+				}
 				return &TakenOverError{By: ev.By, At: ev.At}
 			case transport.Ended:
 				l.log.Info("the server ended the session", "reason", ev.Reason)
@@ -249,6 +435,13 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// isFinal is a reconnect that must not be tried again: the session has
+// gone, or another client holds it (bootstrap.md §9.2.2).
+func isFinal(err error) bool {
+	var taken *TakenOverError
+	return errors.Is(err, ErrSessionGone) || errors.As(err, &taken)
 }
 
 // size is the terminal's size now, and whether it differs from was. A

@@ -82,37 +82,43 @@ func TestVersionNeedsNoDestination(t *testing.T) {
 	}
 }
 
-// -r resumes the user's one session, -r=SESSION a named one, -list lists
-// them (bootstrap.md §9.2, §9.4); a plain mosey DEST never resumes.
-func TestResumeAndListOnTheCommandLine(t *testing.T) {
-	sid := [16]byte{0x0f, 0x3a, 15: 0x01}
+// A plain mosey DEST resumes automatically, -s NAME names a session,
+// -new starts one, -list and -kill NAME act on them; -r is gone and the
+// four exclude each other (bootstrap.md §2, D8 R1, R2).
+func TestSessionsOnTheCommandLine(t *testing.T) {
 	for _, c := range []struct {
 		args   []string
-		resume bool
-		sid    [16]byte
+		attach bootstrap.Attach
+		name   string
 		list   bool
+		kill   string
 	}{
-		{[]string{"far"}, false, [16]byte{}, false},
-		{[]string{"-r", "far"}, true, bootstrap.AnySession, false},
-		{[]string{"-r=0f3a0000000000000000000000000001", "far"}, true, sid, false},
-		{[]string{"-r", "--", "-p", "2222", "far"}, true, bootstrap.AnySession, false},
-		{[]string{"-list", "far"}, false, [16]byte{}, true},
+		{[]string{"far"}, bootstrap.AttachAuto, "", false, ""},
+		{[]string{"-s", "work", "far"}, bootstrap.AttachName, "work", false, ""},
+		{[]string{"-s=quiet-heron", "--", "-p", "2222", "far"}, bootstrap.AttachName, "quiet-heron", false, ""},
+		{[]string{"-new", "far"}, bootstrap.AttachNew, "", false, ""},
+		{[]string{"-list", "far"}, bootstrap.AttachAuto, "", true, ""},
+		{[]string{"-kill", "work", "far"}, bootstrap.AttachAuto, "", false, "work"},
 	} {
 		got, err := parseArgs(c.args)
 		if err != nil {
 			t.Errorf("%q: %v", c.args, err)
 			continue
 		}
-		if got.resume.set != c.resume || got.resume.sid != c.sid || got.list != c.list || got.ssh.Destination != "far" {
+		if got.attach != c.attach || got.name != c.name || got.list != c.list || got.kill != c.kill || got.ssh.Destination != "far" {
 			t.Errorf("%q: %+v", c.args, got)
 		}
 	}
 	for _, args := range [][]string{
-		{"-r", "-list", "far"},
-		{"-r=0f3a", "far"},
-		{"-r=0F3A0000000000000000000000000001x", "far"},
-		{"-r=00000000000000000000000000000000", "far"},    // AnySession is never a session's name
-		{"-r", "0f3a0000000000000000000000000001", "far"}, // the value needs its =
+		{"-s", "work", "-list", "far"},
+		{"-new", "-kill", "work", "far"},
+		{"-s", "work", "-new", "far"},
+		{"-s", "", "far"},
+		{"-s", "-work", "far"},
+		{"-s", "a b", "far"},
+		{"-kill", "x;y", "far"},
+		{"-s", "far"}, // no destination: far is the name
+		{"-r", "far"},
 	} {
 		_, err := parseArgs(args)
 		var u *bootstrap.UsageError

@@ -45,6 +45,56 @@ type Session struct {
 	// Predict is when predictive local echo is drawn (D12,
 	// prediction.md §11.1); the zero value is predict.Adaptive.
 	Predict predict.Mode
+	// Name is the session's (D8 R2), for the messages it ends with.
+	Name string
+	// Reconnect, if set, is R3 (bootstrap.md §9.2.2): after
+	// ReconnectAfter of silence the session calls it, in the background,
+	// for a fresh bootstrap that resumes this same session naming holder,
+	// the credential its transport was made with, and dials what it
+	// returns. It must never ask the user anything. Its errors
+	// ErrSessionGone and *TakenOverError end the session; any other is
+	// tried again after the backoff. Nil is no reconnect.
+	Reconnect func(ctx context.Context, holder [8]byte) (*Reattach, error)
+}
+
+// Reattach is what one R3 try's bootstrap gives: a new socket and
+// credential for the same session, a fresh one-shot key, and the agent
+// forwarding that login set up, or nil.
+type Reattach struct {
+	Conn       net.PacketConn
+	Server     netip.AddrPort
+	Credential handshake.Credential
+	Key        *handshake.OneShotKey
+	Agent      *agent.Forwarder
+}
+
+// R3's timing (bootstrap.md §9.2.2, PLAN O13).
+const (
+	// ReconnectAfter is how long the client hears nothing authentic before
+	// it starts resuming its own session over SSH [D: five of D11's 3 s
+	// heartbeats; the server's SilentAfter is the same].
+	ReconnectAfter = 15 * time.Second
+	// ReconnectTry bounds one try, its bootstrap and its handshake [D:
+	// twice the credential TTL, the longest a healthy try can need].
+	ReconnectTry = 60 * time.Second
+	// reconnectFirst and reconnectMax are the backoff between failed
+	// tries: 2 s, doubling, at most 60 s [D: a try is one SSH login; 60 s
+	// keeps a day-long outage to about 1440 of them, and a working
+	// session at most a minute after the network returns].
+	reconnectFirst = 2 * time.Second
+	reconnectMax   = 60 * time.Second
+)
+
+// reconnectBackoff is the wait after the n-th failed try (from 0).
+func reconnectBackoff(n int) time.Duration {
+	d := reconnectFirst
+	for range n {
+		if d >= reconnectMax/2 {
+			return reconnectMax
+		}
+		d *= 2
+	}
+	return d
 }
 
 // transport.Conn must be an ssp.Chaffer: NewEndpoint only chaffs over
@@ -66,23 +116,16 @@ func (s *Session) Run(ctx context.Context) error {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	conn, err := s.dial(ctx, log)
+	conn, err := dial(ctx, log, s.Conn, s.Server, &s.Credential, s.Key, s.Agent != nil)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if s.Agent != nil {
-		if conn.Carries(handshake.ChannelAgent) {
-			mux := channel.NewMux(conn, channel.Config{Role: channel.Client, Accept: s.Agent.Accept, Log: log})
-			go mux.Run(ctx)
-		} else {
-			log.Warn("the server does not forward an agent")
-		}
-	}
+	first := s.newLink(ctx, conn, s.Agent, log)
 
 	if err := s.Terminal.Raw(); err != nil {
+		first.retire()
 		return fail(err, "putting the terminal in raw mode: %v", err)
 	}
 	defer s.Terminal.Restore()
@@ -92,6 +135,53 @@ func (s *Session) Run(ctx context.Context) error {
 		// The renderer clips to the local size (screen.md §8.3); after
 		// this, the loop tells it of every change.
 		paint.Resize(cols, rows)
+	}
+	l := &loop[*userinput.Stream, *screen.Grid]{
+		paint:          paint,
+		term:           s.Terminal,
+		log:            log,
+		reconnectAfter: ReconnectAfter,
+		backoff:        reconnectBackoff,
+	}
+	l.adopt(first)
+	if s.Reconnect != nil {
+		l.reconnect = s.reconnect(log)
+	}
+	err = l.run(ctx)
+	if errors.Is(err, errSessionEnded) {
+		l.retire()
+		return nil
+	}
+	// This client is going away, or failed: tell the server, which keeps
+	// the session for a resume (bootstrap.md §9.3). A revoked connection
+	// is already closed, and End does nothing.
+	l.end(transport.EndDetached)
+	l.retire()
+	var taken *TakenOverError
+	if errors.As(err, &taken) {
+		taken.Name = s.Name
+	}
+	if errors.Is(err, ErrSessionGone) {
+		return &GoneError{Name: s.Name}
+	}
+	if err == nil {
+		return &DetachedError{Name: s.Name}
+	}
+	return err
+}
+
+// newLink is everything the loop runs over conn: the agent's channels if
+// it carries them, the SSP endpoint, the input stream it sends, and
+// prediction, each from scratch (ssp.md §1.3).
+func (s *Session) newLink(ctx context.Context, conn *transport.Conn, fwd *agent.Forwarder, log *slog.Logger) link[*userinput.Stream, *screen.Grid] {
+	lctx, stop := context.WithCancel(ctx)
+	if fwd != nil {
+		if conn.Carries(handshake.ChannelAgent) {
+			mux := channel.NewMux(conn, channel.Config{Role: channel.Client, Accept: fwd.Accept, Log: log})
+			go mux.Run(lctx)
+		} else {
+			log.Warn("the server does not forward an agent")
+		}
 	}
 	// One stream: the loop appends to it and hands it to Set, and the
 	// endpoint starts from the same empty version 0 (ssp.md §10.1).
@@ -106,61 +196,85 @@ func (s *Session) Run(ctx context.Context) error {
 		MaxRemoteBytes: screen.MaxDiff,
 	}, input.Clone(), screen.NewGrid(0, 0))
 	engine := predict.New(predict.Config{Mode: s.Predict})
-	l := &loop[*userinput.Stream, *screen.Grid]{
+	began := time.Now()
+	return link[*userinput.Stream, *screen.Grid]{
 		sync:    ep,
 		input:   input,
-		paint:   paint,
-		term:    s.Terminal,
 		events:  conn.Events(),
-		log:     log,
 		paused:  func() bool { return pendingInput(ep, input) >= userinput.MaxPendingInput },
 		predict: engine,
 		rtt:     func() time.Duration { return ep.Stats().SRTT },
+		heard: func() time.Time {
+			if h := ep.Stats().LastHeard; h.After(began) {
+				return h
+			}
+			return began
+		},
+		holder: conn.CredentialID(),
+		retire: func() {
+			stop()
+			conn.Close()
+			log.Info("prediction", "mode", s.Predict, "stats", fmt.Sprintf("%+v", engine.Stats()))
+		},
+		end: func(r transport.EndReason) { conn.End(r) },
 	}
-	err = l.run(ctx)
-	log.Info("prediction", "mode", s.Predict, "stats", fmt.Sprintf("%+v", engine.Stats()))
-	if errors.Is(err, errSessionEnded) {
-		return nil
+}
+
+// reconnect is the loop's R3 try (bootstrap.md §9.2.2): Session.Reconnect's
+// bootstrap, then, unless the old link has been heard meanwhile, the
+// handshake, all within ReconnectTry.
+func (s *Session) reconnect(log *slog.Logger) func(context.Context, [8]byte, func() bool) (link[*userinput.Stream, *screen.Grid], error) {
+	return func(ctx context.Context, holder [8]byte, ok func() bool) (link[*userinput.Stream, *screen.Grid], error) {
+		tctx, cancel := context.WithTimeout(ctx, ReconnectTry)
+		defer cancel()
+		r, err := s.Reconnect(tctx, holder)
+		if err != nil {
+			return link[*userinput.Stream, *screen.Grid]{}, err
+		}
+		if !ok() {
+			r.Key.Wipe()
+			clear(r.Credential.PSK[:])
+			r.Conn.Close()
+			return link[*userinput.Stream, *screen.Grid]{}, errAbandoned
+		}
+		conn, err := dial(tctx, log, r.Conn, r.Server, &r.Credential, r.Key, r.Agent != nil)
+		if err != nil {
+			return link[*userinput.Stream, *screen.Grid]{}, err
+		}
+		return s.newLink(ctx, conn, r.Agent, log), nil
 	}
-	// This client is going away, or failed: tell the server, which keeps
-	// the session for a resume (bootstrap.md §9.3). A revoked connection
-	// is already closed, and End does nothing.
-	conn.End(transport.EndDetached)
-	if err == nil {
-		return &DetachedError{SessionID: s.Credential.SessionID}
-	}
-	return err
 }
 
 // dial runs the handshake (bootstrap.md §7.3) within the credential's
-// life: after CredentialTTL the server has forgotten it anyway.
-func (s *Session) dial(ctx context.Context, log *slog.Logger) (*transport.Conn, error) {
+// life: after CredentialTTL the server has forgotten it anyway. It offers
+// the agent channel when the client forwards one.
+func dial(ctx context.Context, log *slog.Logger, pc net.PacketConn, server netip.AddrPort, cred *handshake.Credential, key *handshake.OneShotKey, agent bool) (*transport.Conn, error) {
 	// Nothing needs the key or the PSK once the handshake is over, however
-	// it went: resume, when it comes, rekeys instead (D8).
-	defer s.Key.Wipe()
-	defer clear(s.Credential.PSK[:])
+	// it went: a resume makes new ones (D8).
+	defer key.Wipe()
+	defer clear(cred.PSK[:])
 	dctx, cancel := context.WithTimeout(ctx, handshake.CredentialTTL)
 	defer cancel()
-	log.Info("dialling", "server", s.Server)
+	log.Info("dialling", "server", server)
 	var offer []handshake.ChannelType
-	if s.Agent != nil {
+	if agent {
 		offer = append(offer, handshake.ChannelAgent)
 	}
-	conn, err := transport.DialOffering(dctx, s.Conn, s.Server, s.Credential, s.Key, offer, log)
+	conn, err := transport.DialOffering(dctx, pc, server, *cred, key, offer, log)
 	if err == nil {
-		log.Info("connected", "server", s.Server)
+		log.Info("connected", "server", server)
 		return conn, nil
 	}
 	// With no connection to own it, the socket is still ours to close;
 	// closing it twice, if Dial already did, is harmless.
-	s.Conn.Close()
+	pc.Close()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return nil, fail(err, "no reply from %s over UDP: is UDP port %d open?", s.Server, s.Server.Port())
+		return nil, fail(err, "no reply from %s over UDP: is UDP port %d open?", server, server.Port())
 	}
-	return nil, fail(err, "connecting to %s over UDP: %v", s.Server, err)
+	return nil, fail(err, "connecting to %s over UDP: %v", server, err)
 }
 
 // pendingInput is the encoded size of the input the server has not yet

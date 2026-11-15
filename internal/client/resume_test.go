@@ -9,25 +9,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 )
 
-// A resume's refusals say what the user can do about them (bootstrap.md
-// §6.4): another version is not answered with an upload, and an
-// ambiguous resume says how to choose.
-func TestAResumesRefusalIsExplained(t *testing.T) {
+// A refusal the user can meet says what it means (bootstrap.md §6.4).
+func TestARefusalIsExplained(t *testing.T) {
 	for line, want := range map[string]string{
-		"MOSEY-ERROR 1 version 0.9.9\n": "the session runs version 0.9.9; this is 1.2.3: resume it with mosey 0.9.9, or end it from a new session",
-		"MOSEY-ERROR 1 session -\n":     "no session to resume on far",
-		"MOSEY-ERROR 1 ambiguous 3\n":   "3 sessions on far: name one with -r=SESSION (mosey -list far shows them)",
+		"MOSEY-ERROR 1 version 0.9.9\n": "the session runs version 0.9.9; this is 1.2.3",
+		"MOSEY-ERROR 1 session -\n":     "no such session on far",
 		"MOSEY-ERROR 1 internal -\n":    "the server failed to start (see above)",
 	} {
 		r := &run{dir: t.TempDir()}
 		ssh := fakeSSH(t, r.dir, "hostname far\n", 0)
 		server := fakeServer(t, r.dir, []byte(line), nil, "1")
 		l := testLine()
-		l.Resume = true
+		l.Attach, l.SessionID = bootstrap.AttachResume, [16]byte{1}
 		b := &spawn{
 			ssh:    bootstrap.SSH{Program: ssh, Destination: "far", Server: server},
 			line:   l,
@@ -43,24 +41,40 @@ func TestAResumesRefusalIsExplained(t *testing.T) {
 	}
 }
 
-func TestADetachSaysHowToComeBackAndExitsZero(t *testing.T) {
-	d := &DetachedError{SessionID: [16]byte{0xab, 15: 1}, Destination: "far"}
-	want := "detached from session ab000000000000000000000000000001; resume with: mosey -r=ab000000000000000000000000000001 far"
-	if d.Error() != want {
+// A detach names the session and how to come back to it, and exits 0
+// (bootstrap.md §9.3); a session R3 found gone says so and exits 1; a
+// takeover R3 heard of names the session and when (§9.2.2).
+func TestTheWaysASessionEndsSayWhatHappened(t *testing.T) {
+	d := &DetachedError{Name: "quiet-heron", Destination: "far"}
+	if want := "detached from session quiet-heron; resume it with: mosey -s quiet-heron far"; d.Error() != want {
 		t.Errorf("%q", d.Error())
 	}
 	if ExitStatus(d) != StatusOK {
 		t.Errorf("exit status %d", ExitStatus(d))
 	}
+	g := &GoneError{Name: "quiet-heron", Destination: "far"}
+	if want := "session quiet-heron on far has ended: its shell exited, or the host restarted"; g.Error() != want || !errors.Is(g, ErrSessionGone) || ExitStatus(g) != StatusFailed {
+		t.Errorf("%q, status %d", g.Error(), ExitStatus(g))
+	}
+	at := time.Date(2026, 11, 14, 9, 30, 12, 0, time.UTC)
+	taken := &TakenOverError{At: at, Name: "quiet-heron"}
+	if want := "session quiet-heron taken over by another client at " + at.Local().Format(takenOverTime); taken.Error() != want || ExitStatus(taken) != StatusTakenOver {
+		t.Errorf("%q", taken.Error())
+	}
 }
 
-// -list runs --serve=list and copies what it prints, through the filter:
-// the client parses none of it, and no escape sequence gets through (D9).
-func TestTheListIsCopiedThroughTheFilter(t *testing.T) {
+// -list parses the server's MOSEY-LIST lines and lays out the table
+// itself: a line with an escape sequence, or anything else of the far
+// side's, is never shown (bootstrap.md §9.4, D9).
+func TestTheListIsLaidOutFromLinesThatParse(t *testing.T) {
 	dir := t.TempDir()
 	ssh := fakeSSH(t, dir, "hostname far\n", 0)
 	server := filepath.Join(dir, "mosey")
-	script := "#!/bin/sh\n[ \"$1\" = --serve=list ] || exit 9\nprintf 'SESSION  STATE\\nabcd  detached \\033[2J\\n'\n"
+	script := "#!/bin/sh\n[ \"$1\" = --serve=list ] || exit 9\n" +
+		"printf 'welcome \\033[2J\\n'\n" +
+		"printf 'MOSEY-LIST 1 quiet-heron detached 1794651234 0.4.2\\n'\n" +
+		"printf 'MOSEY-LIST 1 evil\\033[2J attached 1 0.4.2\\n'\n" +
+		"printf 'MOSEY-LIST 1 - - - 0.3.9\\n'\n"
 	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -72,15 +86,44 @@ func TestTheListIsCopiedThroughTheFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v; stderr %q", err, errs.String())
 	}
-	if !strings.Contains(out.String(), "abcd  detached") || strings.Contains(out.String(), "\x1b") {
-		t.Errorf("the list came out as %q", out.String())
+	got := out.String()
+	since := time.Unix(1794651234, 0).Local().Format(takenOverTime)
+	for _, want := range []string{"NAME", "STATE", "SINCE", "VERSION", "quiet-heron", "detached", since, "0.4.2", "0.3.9"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the table lacks %q:\n%s", want, got)
+		}
 	}
-	if !strings.Contains(errs.String(), "mosey -r=SESSION far") {
-		t.Errorf("no hint: %q", errs.String())
+	if strings.Contains(got, "\x1b") || strings.Contains(got, "evil") || strings.Contains(got, "welcome") {
+		t.Errorf("the table shows what it should not:\n%q", got)
+	}
+	if !strings.Contains(errs.String(), "mosey -s NAME far") || !strings.Contains(errs.String(), "1 list lines") {
+		t.Errorf("stderr %q", errs.String())
 	}
 	argv, _ := os.ReadFile(filepath.Join(dir, "argv"))
 	if !strings.Contains(string(argv), "--serve=list") {
 		t.Errorf("ssh ran %q", argv)
+	}
+}
+
+// -kill runs --serve=kill NAME, and says whether there was such a
+// session (bootstrap.md §9.5).
+func TestKillRunsServeKillWithTheName(t *testing.T) {
+	dir := t.TempDir()
+	ssh := fakeSSH(t, dir, "hostname far\n", 0)
+	server := filepath.Join(dir, "mosey")
+	script := "#!/bin/sh\n[ \"$1\" = --serve=kill ] || exit 9\n[ \"$2\" = work ] && exit 0\necho 'MOSEY-ERROR 1 session -'\nexit 1\n"
+	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	o := KillOptions{SSH: bootstrap.SSH{Program: ssh, Destination: "far", Server: server}, Name: "work", Stdout: &out, Stderr: &errs}
+	if err := Kill(context.Background(), o); err != nil || out.String() != "mosey: ended session work on far\n" {
+		t.Fatalf("%v: %q; stderr %q", err, out.String(), errs.String())
+	}
+	o.Name = "play"
+	var f *Failure
+	if err := Kill(context.Background(), o); !errors.As(err, &f) || f.Msg != "no session called play on far" {
+		t.Errorf("a kill of nothing: %v", err)
 	}
 }
 
@@ -114,7 +157,7 @@ func TestTheListFindsTheCachedCopy(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cached), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\ncase \"$1\" in\n--serve=version) echo 0.4.2;;\n--serve=list) echo 'SESSION  STATE'; echo 'abcd  detached';;\n*) exit 9;;\nesac\n"
+	script := "#!/bin/sh\ncase \"$1\" in\n--serve=version) echo 0.4.2;;\n--serve=list) echo 'MOSEY-LIST 1 abcd detached 1 0.4.2';;\n*) exit 9;;\nesac\n"
 	if err := os.WriteFile(cached, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +167,7 @@ func TestTheListFindsTheCachedCopy(t *testing.T) {
 		Version: "0.4.2",
 		Stdout:  &out, Stderr: &errs,
 	})
-	if err != nil || !strings.Contains(out.String(), "abcd  detached") {
+	if err != nil || !strings.Contains(out.String(), "abcd") || !strings.Contains(out.String(), "detached") {
 		t.Errorf("%v: listed %q; stderr %q", err, out.String(), errs.String())
 	}
 }
@@ -148,32 +191,6 @@ func TestTheListCopiesNothingToAHostWithoutMosey(t *testing.T) {
 	}
 	if n, _ := os.ReadFile(ran); strings.Count(string(n), "ran") != 1 {
 		t.Errorf("ssh ran %d times, want 1", strings.Count(string(n), "ran"))
-	}
-	if _, err := os.Stat(filepath.Join(home, ".cache")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("something was written to the cache: %v", err)
-	}
-}
-
-// A resume never copies mosey over, even with -upload=yes (§9.2 step 5):
-// a copy of this version could not serve a session of another.
-func TestAResumeCopiesNothing(t *testing.T) {
-	ssh, home, ran := listHost(t)
-	err := Run(context.Background(), Options{
-		SSH:      bootstrap.SSH{Program: ssh, Destination: "far"},
-		Version:  "0.4.2",
-		Resume:   true,
-		Terminal: newFakeTerm(80, 24),
-		Stderr:   &bytes.Buffer{},
-		Upload:   UploadYes,
-		Getenv:   func(string) string { return "" },
-		Self:     func() ([]byte, error) { return []byte("#!/bin/sh\nexit 9\n"), nil },
-	})
-	var f *Failure
-	if !errors.As(err, &f) || !errors.Is(err, bootstrap.ErrNoServer) || !strings.HasPrefix(f.Msg, "no mosey 0.4.2 on far, so no session of it to resume") {
-		t.Errorf("%v", err)
-	}
-	if n, _ := os.ReadFile(ran); strings.Count(string(n), "ran") != 1 {
-		t.Errorf("ssh ran %d times, want 1 (the probe only)", strings.Count(string(n), "ran"))
 	}
 	if _, err := os.Stat(filepath.Join(home, ".cache")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("something was written to the cache: %v", err)

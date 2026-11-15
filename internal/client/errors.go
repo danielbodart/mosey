@@ -25,11 +25,14 @@ func fail(err error, format string, args ...any) error {
 }
 
 // TakenOverError is the session being taken over by another client (D26):
-// the server revoked this one, and it exits rather than reconnect, which
-// is what cuts off a stolen client.
+// the server revoked this one, or R3's reconnect found another credential
+// holding it (bootstrap.md §9.2.2), and it exits rather than take it back,
+// which is what cuts off a stolen client. By is the zero AddrPort when the
+// reconnect told it, which does not say where from; Name is the session's.
 type TakenOverError struct {
-	By netip.AddrPort
-	At time.Time
+	By   netip.AddrPort
+	At   time.Time
+	Name string
 }
 
 // takenOverTime is RFC 3339 to the second with a numeric zone, in the
@@ -37,25 +40,46 @@ type TakenOverError struct {
 const takenOverTime = "2006-01-02T15:04:05-07:00"
 
 func (e *TakenOverError) Error() string {
-	return fmt.Sprintf("session taken over from %s at %s", e.By, e.At.Local().Format(takenOverTime))
+	at := e.At.Local().Format(takenOverTime)
+	if !e.By.IsValid() {
+		return fmt.Sprintf("session %s taken over by another client at %s", e.Name, at)
+	}
+	return fmt.Sprintf("session taken over from %s at %s", e.By, at)
 }
 
 // DetachedError is this client going away while the session runs on (D8,
 // bootstrap.md §9.3): by a signal or the end of its terminal's input. The
 // server keeps the session for a resume. It exits 0.
 type DetachedError struct {
-	SessionID [16]byte
+	// Name is the session's (an sname, safe to print).
+	Name string
 	// Destination is the host as the user named it, for the hint.
 	Destination string
 }
 
 func (e *DetachedError) Error() string {
-	msg := fmt.Sprintf("detached from session %x", e.SessionID)
+	msg := "detached from session " + e.Name
 	if e.Destination != "" {
-		msg += fmt.Sprintf("; resume with: mosey -r=%x %s", e.SessionID, e.Destination)
+		msg += fmt.Sprintf("; resume it with: mosey -s %s %s", e.Name, e.Destination)
 	}
 	return msg
 }
+
+// ErrSessionGone is R3's reconnect finding no session to resume
+// (bootstrap.md §9.2.2): GoneError says so to the user.
+var ErrSessionGone = errors.New("the session has ended")
+
+// GoneError is the session found gone by R3's reconnect: its shell exited,
+// or the host restarted; the client cannot tell which. It exits 1.
+type GoneError struct {
+	Name, Destination string
+}
+
+func (e *GoneError) Error() string {
+	return fmt.Sprintf("session %s on %s has ended: its shell exited, or the host restarted", e.Name, e.Destination)
+}
+
+func (e *GoneError) Unwrap() error { return ErrSessionGone }
 
 // Exit statuses (bootstrap.md §10).
 const (

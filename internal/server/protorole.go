@@ -95,10 +95,10 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 
 	creds := handshake.NewCredentials(log)
 	// crypto/rand never fails: the runtime crashes instead (Go 1.24). The
-	// all-zero id means "the user's one session" to a resume, so no
-	// session may have it (bootstrap.md §9.2).
+	// all-zero id is refused in a resume line, so no session may have it
+	// (bootstrap.md §6.2).
 	var session [16]byte
-	for session == bootstrap.AnySession {
+	for session == ([16]byte{}) {
 		rand.Read(session[:])
 	}
 	// mint makes a credential for the session, bound to a client's
@@ -115,6 +115,7 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 			Port:            start.Port,
 			CredentialID:    cred.ID,
 			SessionID:       cred.SessionID,
+			Name:            start.Name,
 			PSK:             cred.PSK,
 			Public:          cred.ServerPublic,
 		})
@@ -139,14 +140,14 @@ func RunProto(ctx context.Context, ipcFD *os.File, version string, log *slog.Log
 		Terminal: ptyTerminal{master},
 		Emulator: em,
 		Log:      log,
-		Attached: func(peer netip.AddrPort) {
+		Attached: func(peer netip.AddrPort, credential [8]byte) {
 			// The dual-stack socket reports an IPv4 client as mapped, and a
 			// zone means nothing to the spawner: the address as a person
 			// would write it.
 			if peer.IsValid() {
 				peer = netip.AddrPortFrom(peer.Addr().Unmap().WithZone(""), peer.Port())
 			}
-			if err := ctl.Send(ipc.Attached{Peer: peer}); err != nil {
+			if err := ctl.Send(ipc.Attached{Credential: credential, Peer: peer}); err != nil {
 				log.Warn("telling the spawner a client attached", "err", err)
 			}
 		},

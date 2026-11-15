@@ -17,10 +17,10 @@ const (
 	// every line, frozen in position forever (§6.1).
 	Version = 1
 	// MaxClientLine bounds the stdin line, LF included. The longest legal
-	// line is 3027 bytes (§6.2); this is the next power of two, so the
+	// line is 3039 bytes (§6.2); this is the next power of two, so the
 	// launcher's read bound is fixed and generous.
 	MaxClientLine = 4096
-	// MaxCredentialLine bounds the stdout line, LF included: at most 1829
+	// MaxCredentialLine bounds the stdout line, LF included: at most 1862
 	// bytes are used (§6.3).
 	MaxCredentialLine = 2048
 	// MaxErrorLine bounds an ErrorLine, LF included. It is frozen with the
@@ -53,9 +53,50 @@ const (
 	// than step over it (§6.5).
 	protocolPrefix = "MOSEY-"
 
-	attachNew    = "new"
-	attachResume = "resume:"
+	attachAuto     = "auto"
+	attachNew      = "new"
+	attachNewNamed = "new:"
+	attachName     = "name:"
+	attachResume   = "resume:"
 )
+
+// Attach is which session a ClientLine asks for (§6.2, §9.2).
+type Attach uint8
+
+const (
+	// AttachNew starts a session: with no Name, `mosey -new`, which the
+	// launcher names; with a Name, the launcher's word to its spawner
+	// ("new:NAME"). It is the zero value.
+	AttachNew Attach = iota
+	// AttachAuto is a plain `mosey DEST` (D8 R1): the most recently
+	// detached session, or a new one.
+	AttachAuto
+	// AttachName is `mosey -s NAME DEST` (D8 R2): session Name, taken
+	// over if attached, started if absent.
+	AttachName
+	// AttachResume is session SessionID: from a launcher to the session's
+	// spawner, or, with HasHolder, R3's reconnect (§9.2.2).
+	AttachResume
+)
+
+// MaxSessionName bounds a session's name (§6.2's sname).
+const MaxSessionName = 32
+
+// ValidSessionName says whether n is an sname (§6.2): 1 to 32 letters,
+// digits, '-', '_' and '.', starting with a letter or digit. Nothing in it
+// needs quoting in a shell or does anything on a terminal, so a name can
+// go on an ssh command line and be printed as it is.
+func ValidSessionName(n string) bool {
+	if len(n) < 1 || len(n) > MaxSessionName || !isAlnum(n[0]) {
+		return false
+	}
+	for i := 0; i < len(n); i++ {
+		if c := n[i]; !isAlnum(c) && c != '-' && c != '_' && c != '.' {
+			return false
+		}
+	}
+	return true
+}
 
 // EnvNames are the only variables a ClientLine may carry (§6.2), in byte
 // order, which is the order they must appear in on the line. The server
@@ -73,12 +114,16 @@ var EnvNames = []string{
 type ClientLine struct {
 	// SoftwareVersion is the client's build, for D7's equality check.
 	SoftwareVersion string
-	// Resume asks to attach to session SessionID rather than start one
-	// (D8, §9.2); AnySession asks for the user's one session.
-	Resume    bool
+	// Attach says which session (§6.2, §9.2); Name is AttachName's, or
+	// AttachNew's when the launcher has chosen it; SessionID is
+	// AttachResume's, and Holder, when HasHolder, the credential R3's
+	// reconnect last held the session with (§9.2.2).
+	Attach    Attach
+	Name      string
 	SessionID [SessionIDSize]byte
-	// Agent says whether the client will forward an agent (D25). Reserved
-	// like Resume: slice 1 always sends false.
+	Holder    [CredentialIDSize]byte
+	HasHolder bool
+	// Agent says whether the client will forward an agent (D25).
 	Agent bool
 	// Cols and Rows are the client terminal's size, before the server's
 	// clamp (D23).
@@ -99,7 +144,9 @@ type CredentialLine struct {
 	Port         uint16
 	CredentialID [CredentialIDSize]byte
 	SessionID    [SessionIDSize]byte
-	PSK          [PSKSize]byte
+	// Name is the session's (D8 R2), an sname.
+	Name string
+	PSK  [PSKSize]byte
 	// Public is the server's one-shot X-Wing public key.
 	Public []byte
 }
@@ -120,9 +167,10 @@ const (
 	CodeUnsupported = "unsupported"
 	CodeSession     = "session"
 	CodeInternal    = "internal"
-	// CodeAmbiguous answers a resume of AnySession that finds more than
-	// one session; its detail is their count (§9.2).
-	CodeAmbiguous = "ambiguous"
+	// CodeTaken answers R3's reconnect when another credential holds its
+	// session; its detail is when that client attached, in unix seconds
+	// (§9.2.2).
+	CodeTaken = "taken"
 )
 
 var (
@@ -166,11 +214,7 @@ func MarshalClientLine(c ClientLine) []byte {
 	b = append(b, clientMagic...)
 	b = appendField(b, strconv.Itoa(Version))
 	b = appendField(b, c.SoftwareVersion)
-	if c.Resume {
-		b = appendField(b, attachResume+b64.EncodeToString(c.SessionID[:]))
-	} else {
-		b = appendField(b, attachNew)
-	}
+	b = appendField(b, c.attach())
 	b = appendField(b, yesNo(c.Agent))
 	b = appendField(b, strconv.Itoa(int(c.Cols)))
 	b = appendField(b, strconv.Itoa(int(c.Rows)))
@@ -192,15 +236,8 @@ func ParseClientLine(line []byte) (ClientLine, error) {
 	if c.SoftwareVersion, err = parseSoftwareVersion(fields[2]); err != nil {
 		return ClientLine{}, err
 	}
-	switch attach := fields[3]; {
-	case string(attach) == attachNew:
-	case bytes.HasPrefix(attach, []byte(attachResume)):
-		c.Resume = true
-		if err := decodeFixed(c.SessionID[:], attach[len(attachResume):], "session id"); err != nil {
-			return ClientLine{}, err
-		}
-	default:
-		return ClientLine{}, badLine("attach %q", attach)
+	if err := c.parseAttach(fields[3]); err != nil {
+		return ClientLine{}, err
 	}
 	if c.Agent, err = parseYesNo(fields[4], "agent"); err != nil {
 		return ClientLine{}, err
@@ -224,6 +261,66 @@ func ParseClientLine(line []byte) (ClientLine, error) {
 	return c, nil
 }
 
+// attach is the line's attach field (§6.2).
+func (c ClientLine) attach() string {
+	switch c.Attach {
+	case AttachAuto:
+		return attachAuto
+	case AttachName:
+		return attachName + c.Name
+	case AttachResume:
+		a := attachResume + b64.EncodeToString(c.SessionID[:])
+		if c.HasHolder {
+			a += ":" + b64.EncodeToString(c.Holder[:])
+		}
+		return a
+	}
+	if c.Name != "" {
+		return attachNewNamed + c.Name
+	}
+	return attachNew
+}
+
+// parseAttach reads §6.2's attach field into c.
+func (c *ClientLine) parseAttach(f []byte) error {
+	name := func(rest []byte) (string, error) {
+		if !ValidSessionName(string(rest)) {
+			return "", badLine("session name %q", rest)
+		}
+		return string(rest), nil
+	}
+	var err error
+	switch {
+	case string(f) == attachNew:
+		c.Attach = AttachNew
+	case string(f) == attachAuto:
+		c.Attach = AttachAuto
+	case bytes.HasPrefix(f, []byte(attachNewNamed)):
+		c.Attach = AttachNew
+		c.Name, err = name(f[len(attachNewNamed):])
+	case bytes.HasPrefix(f, []byte(attachName)):
+		c.Attach = AttachName
+		c.Name, err = name(f[len(attachName):])
+	case bytes.HasPrefix(f, []byte(attachResume)):
+		c.Attach = AttachResume
+		sid, holder, has := bytes.Cut(f[len(attachResume):], []byte(":"))
+		if err = decodeFixed(c.SessionID[:], sid, "session id"); err != nil {
+			return err
+		}
+		if c.SessionID == ([SessionIDSize]byte{}) {
+			// No session is given the all-zero id (proto draws again).
+			return badLine("the all-zero session id")
+		}
+		if has {
+			c.HasHolder = true
+			err = decodeFixed(c.Holder[:], holder, "holder")
+		}
+	default:
+		err = badLine("attach %q", f)
+	}
+	return err
+}
+
 // MarshalCredentialLine is c as one line, LF included.
 func MarshalCredentialLine(c CredentialLine) []byte {
 	b := make([]byte, 0, MaxCredentialLine)
@@ -240,6 +337,7 @@ func MarshalCredentialLine(c CredentialLine) []byte {
 	// in nothing its holder cannot wipe (threat-model.md §4.10).
 	b = b64.AppendEncode(append(b, ' '), c.CredentialID[:])
 	b = b64.AppendEncode(append(b, ' '), c.SessionID[:])
+	b = appendField(b, c.Name)
 	b = b64.AppendEncode(append(b, ' '), c.PSK[:])
 	b = b64.AppendEncode(append(b, ' '), c.Public)
 	return append(b, '\n')
@@ -249,7 +347,7 @@ func MarshalCredentialLine(c CredentialLine) []byte {
 // anything not canonical (§6.1, §6.3), and any address no server could
 // legitimately have been reached on (threat-model §4.9).
 func ParseCredentialLine(line []byte) (CredentialLine, error) {
-	fields, err := splitLine(line, MaxCredentialLine, credentialMagic, 10)
+	fields, err := splitLine(line, MaxCredentialLine, credentialMagic, 11)
 	if err != nil {
 		return CredentialLine{}, err
 	}
@@ -269,10 +367,14 @@ func ParseCredentialLine(line []byte) (CredentialLine, error) {
 	if err := decodeFixed(c.SessionID[:], fields[6], "session id"); err != nil {
 		return CredentialLine{}, err
 	}
-	if err := decodeFixed(c.PSK[:], fields[7], "psk"); err != nil {
+	if !ValidSessionName(string(fields[7])) {
+		return CredentialLine{}, badLine("session name %q", fields[7])
+	}
+	c.Name = string(fields[7])
+	if err := decodeFixed(c.PSK[:], fields[8], "psk"); err != nil {
 		return CredentialLine{}, err
 	}
-	if c.Public, err = decodeLen(fields[8], PublicKeySize, "public key"); err != nil {
+	if c.Public, err = decodeLen(fields[9], PublicKeySize, "public key"); err != nil {
 		clear(c.PSK[:])
 		return CredentialLine{}, err
 	}

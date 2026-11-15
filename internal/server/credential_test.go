@@ -22,11 +22,12 @@ func TestTheSpawnerTakesOnlyACredentialLineWithItsOwnFields(t *testing.T) {
 		Port:            60001,
 		CredentialID:    [8]byte{1, 2, 3, 4, 5, 6, 7, 8},
 		SessionID:       [16]byte{9},
+		Name:            "work",
 		PSK:             [32]byte{10},
 		Public:          bytes.Repeat([]byte{0x5a}, ipc.PublicKeySize),
 	}
 	line := bootstrap.MarshalCredentialLine(good)
-	if err := checkCredential(line, addr, 60001, "v1"); err != nil {
+	if err := checkCredential(line, addr, 60001, "v1", "work"); err != nil {
 		t.Fatalf("the spawner refused its own session's line: %v", err)
 	}
 	for _, c := range []struct {
@@ -37,12 +38,13 @@ func TestTheSpawnerTakesOnlyACredentialLineWithItsOwnFields(t *testing.T) {
 		{"another address", bootstrap.MarshalCredentialLine(with(good, func(l *bootstrap.CredentialLine) { l.Addr = netip.MustParseAddr("192.0.2.8") }))},
 		{"no address", bootstrap.MarshalCredentialLine(with(good, func(l *bootstrap.CredentialLine) { l.Addr = netip.Addr{} }))},
 		{"another version", bootstrap.MarshalCredentialLine(with(good, func(l *bootstrap.CredentialLine) { l.SoftwareVersion = "v2" }))},
+		{"another name", bootstrap.MarshalCredentialLine(with(good, func(l *bootstrap.CredentialLine) { l.Name = "play" }))},
 		{"a control byte", append(bytes.TrimSuffix(line, []byte("\n")), '\x1b', '\n')},
 		{"two lines", append(append([]byte(nil), line...), line...)},
 		{"no newline", bytes.TrimSuffix(line, []byte("\n"))},
 		{"empty", nil},
 	} {
-		if err := checkCredential(c.line, addr, 60001, "v1"); err == nil {
+		if err := checkCredential(c.line, addr, 60001, "v1", "work"); err == nil {
 			t.Errorf("%s: accepted %q", c.name, c.line)
 		}
 	}

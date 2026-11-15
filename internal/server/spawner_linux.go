@@ -64,6 +64,10 @@ type SpawnerConfig struct {
 	// Passwd is read for the user's shell when $SHELL is unusable; empty
 	// is /etc/passwd.
 	Passwd string
+	// IdleTimeout is how long a detached session lives before its shell is
+	// hung up; zero is the package's IdleTimeout (D8 R4). Not a user
+	// option (PLAN O14): tests set it.
+	IdleTimeout time.Duration
 
 	// prlimit sets emu's RLIMIT_DATA; a test hook.
 	prlimit func(pid int) error
@@ -92,6 +96,9 @@ func RunSpawner(ctx context.Context, ipcFD *os.File, cfg SpawnerConfig) error {
 	}
 	if cfg.FirstPort == 0 && cfg.LastPort == 0 {
 		cfg.FirstPort, cfg.LastPort = FirstPort, LastPort
+	}
+	if cfg.IdleTimeout == 0 {
+		cfg.IdleTimeout = IdleTimeout
 	}
 	s := &spawner{cfg: cfg, start: newStarter(), log: slog.New(slog.DiscardHandler)}
 	return s.run(ctx, ipcFD)
@@ -130,11 +137,16 @@ type spawner struct {
 	restarts   restarts
 	ready      bool
 
-	// The session's id, from proto's first credential, and its attach
-	// socket (server.md §2.6), or nil if it could not be made.
+	// The session's id, from proto's first credential, its name, from the
+	// launcher's line, and its attach socket (server.md §2.6), or nil if
+	// it could not be made.
 	sid     [16]byte
+	name    string
 	started time.Time
 	attach  *attachListener
+	// hangups carries mosey -kill's Hangup from the attach socket to the
+	// supervision loop (bootstrap.md §9.5).
+	hangups chan struct{}
 	// agent is the session's agent socket (server.md §2.7), or nil, and
 	// agentConns carries its connections to the supervision loop, which
 	// hands them to proto.
@@ -148,11 +160,22 @@ type spawner struct {
 	pending []resumeRequest
 	serving atomic.Int32
 
-	// What the greeting says of the session's client.
-	greetMu sync.Mutex
-	state   bootstrap.SessionState
-	since   time.Time
-	peer    netip.AddrPort
+	// What the greeting says of the session's client: what proto last
+	// said (state, since, peer, holder), and a resume's hold, which says
+	// attached until its credential could no longer be confirmed
+	// (bootstrap.md §9.2 "The lock").
+	greetMu   sync.Mutex
+	state     bootstrap.SessionState
+	since     time.Time
+	peer      netip.AddrPort
+	holder    [8]byte
+	hasHolder bool
+	hold      [8]byte
+	holdFrom  time.Time
+	holdUntil time.Time
+	// holdTTL is how long a resume holds the greeting; zero is
+	// handshake.CredentialTTL. Tests shorten it.
+	holdTTL time.Duration
 }
 
 // resumeRequest is a checked resume on its way to proto: the client's key,
@@ -211,6 +234,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 		return err
 	}
 	cl, _ := bootstrap.ParseClientLine(lineMsg.Line)
+	s.name = cl.Name
 	cols, rows := screen.ClampSize(int(cl.Cols), int(cl.Rows))
 
 	// Pin no mount; outlive the ssh login's hangup; never die of a write
@@ -265,7 +289,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	s.readCtl()
 	err = s.ctl.Send(ipc.Start{
 		Cols: uint16(cols), Rows: uint16(rows), Port: port, Addr: s.advertised,
-		ClientPublic: cl.Public, UDP: udp, PTY: master,
+		ClientPublic: cl.Public, Name: s.name, UDP: udp, PTY: master,
 	})
 	if err == nil {
 		err = s.ctl.Send(ipc.EmuLink{Generation: 1, Reason: ipc.EmuFirst, Conn: emuEnd})
@@ -287,7 +311,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 			}
 			switch m := ev.m.(type) {
 			case ipc.Credential:
-				if err := checkCredential(m.Line, s.advertised, port, s.cfg.Version); err != nil {
+				if err := checkCredential(m.Line, s.advertised, port, s.cfg.Version, s.name); err != nil {
 					s.violation(err)
 					return errors.New("proto sent a bad credential")
 				}
@@ -319,6 +343,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	s.started = time.Now()
 	s.state, s.since = bootstrap.SessionNew, s.started
 	s.resumes = make(chan resumeRequest)
+	s.hangups = make(chan struct{}, 1)
 	if s.attach, err = listenAttach(sessionsDir(s.getenv), s.sid); err != nil {
 		s.log.Warn("no attach socket: this session cannot be resumed", "err", err)
 		s.attach = nil
@@ -386,7 +411,7 @@ func (s *spawner) openLog() error {
 	}
 	s.logFile = w
 	s.log = slog.New(slog.NewTextHandler(w, nil)).With("role", "spawner", "pid", os.Getpid())
-	s.log.Info("session starting", "log", name, "version", s.cfg.Version)
+	s.log.Info("session starting", "log", name, "version", s.cfg.Version, "name", s.name)
 	return nil
 }
 
@@ -597,6 +622,12 @@ func (s *spawner) supervise(ctx context.Context) error {
 	attached := false
 	backstopTimer := time.NewTimer(backstop)
 	defer backstopTimer.Stop()
+	// idle runs while the session is detached (D8 R4); hungUp is the
+	// grace a hung-up shell has to exit before the teardown.
+	idle := time.NewTimer(s.cfg.IdleTimeout)
+	idle.Stop()
+	defer idle.Stop()
+	var hungUp <-chan time.Time
 	var restart <-chan time.Time
 	var nextReason ipc.EmuEnd
 	var nextStatus int32
@@ -621,6 +652,19 @@ func (s *spawner) supervise(ctx context.Context) error {
 		case <-backstopTimer.C:
 			if !attached {
 				reason = "no client attached"
+				s.teardown(reason)
+				return nil
+			}
+		case <-idle.C:
+			s.log.Info("detached for the idle timeout; hanging the shell up", "after", s.cfg.IdleTimeout)
+			hungUp = s.hangup()
+		case <-s.hangups:
+			s.log.Info("mosey -kill: hanging the shell up")
+			hungUp = s.hangup()
+		case <-hungUp:
+			hungUp = nil
+			if s.shell != nil {
+				reason = "hung up; the shell ignored SIGHUP"
 				s.teardown(reason)
 				return nil
 			}
@@ -721,10 +765,12 @@ func (s *spawner) supervise(ctx context.Context) error {
 					attached = true
 					backstopTimer.Stop()
 				}
-				s.setState(bootstrap.SessionAttached, m.Peer)
-				s.log.Info("a client attached", "peer", m.Peer)
+				idle.Stop()
+				s.setAttached(m.Credential, m.Peer)
+				s.log.Info("a client attached", "peer", m.Peer, "credential", fmt.Sprintf("%x", m.Credential))
 			case ipc.Detached:
-				s.setState(bootstrap.SessionDetached, netip.AddrPort{})
+				s.setDetached()
+				idle.Reset(s.cfg.IdleTimeout)
 				s.log.Info("the client detached")
 			case ipc.Credential:
 				if len(s.pending) == 0 {
@@ -739,6 +785,12 @@ func (s *spawner) supervise(ctx context.Context) error {
 					s.violation(err)
 					continue
 				}
+				// Held for the credential's life, so the next launcher does
+				// not choose this session too (bootstrap.md §9.2).
+				if cl, err := bootstrap.ParseCredentialLine(m.Line); err == nil {
+					s.holdFor(cl.CredentialID)
+					clear(cl.PSK[:])
+				}
 				// reply has room for one, so the loop never waits on a
 				// resume that gave up.
 				r.reply <- m.Line
@@ -747,6 +799,30 @@ func (s *spawner) supervise(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// hangup is D8 R4's end of a session by -kill or the idle timeout
+// (server.md §2.4): SIGHUP to the shell and to the pty's foreground
+// process group, as a hangup does, so the shell exits and the session
+// ends the usual way. It returns when to give up on the shell.
+func (s *spawner) hangup() <-chan time.Time {
+	if s.shell == nil {
+		return nil
+	}
+	pid := s.shell.cmd.Process.Pid
+	if err := syscall.Kill(pid, syscall.SIGHUP); err != nil {
+		s.log.Warn("SIGHUP to the shell", "err", err)
+	}
+	if s.master != nil {
+		// The foreground job (an editor, say) is told as well, as the
+		// kernel tells it when a terminal hangs up.
+		if pg, err := unix.IoctlGetInt(int(s.master.Fd()), unix.TIOCGPGRP); err == nil && pg > 1 && pg != pid {
+			if err := syscall.Kill(-pg, syscall.SIGHUP); err != nil {
+				s.log.Warn("SIGHUP to the foreground job", "pgrp", pg, "err", err)
+			}
+		}
+	}
+	return time.After(HangupGrace)
 }
 
 // classify is how an emu ended, for the EmuLink that tells proto.

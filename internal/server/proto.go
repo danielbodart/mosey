@@ -87,13 +87,19 @@ type Session struct {
 	Emulator emu.Emulator
 	Log      *slog.Logger
 	// Attached, if set, is called each time a client confirms a
-	// credential, with its validated address or the zero AddrPort while it
-	// has none: the first stops the spawner's backstop (bootstrap.md
-	// §4.5), and each is what the attach socket's greeting says.
-	Attached func(peer netip.AddrPort)
+	// credential, and again when a client reported silent is heard, with
+	// the id of the credential its connection was made with and its
+	// validated address or the zero AddrPort while it has none: the first
+	// stops the spawner's backstop (bootstrap.md §4.5), and each is what
+	// the attach socket's greeting says.
+	Attached func(peer netip.AddrPort, credential [8]byte)
 	// Detached, if set, is called when the attached client goes and no
-	// other takes its place: the session waits for a resume.
+	// other takes its place, or has been silent for SilentAfter: the
+	// session waits for a resume (bootstrap.md §9.2).
 	Detached func()
+	// SilentAfter is how long the attached client may go unheard before
+	// it counts as detached; zero is the package's SilentAfter.
+	SilentAfter time.Duration
 
 	once      sync.Once
 	em        emu.Emulator
@@ -142,6 +148,18 @@ type Session struct {
 	// can stop holding connections made before it (agent.md §4.2).
 	firstAttach chan struct{}
 }
+
+// SilentAfter is how long proto hears nothing authentic from the attached
+// client before it tells the spawner the session is detached, so that a
+// plain `mosey DEST` takes it after the client's machine crashed or
+// rebooted (D8 R1, R3; bootstrap.md §9.2) [D: five of D11's 3 s
+// heartbeats, the same as the client's ReconnectAfter]. The connection
+// is kept: the client may only be in a dead spot.
+const SilentAfter = 15 * time.Second
+
+// silencePoll is how often proto looks for a silent client's return once
+// it has said it is detached [choice: well inside a heartbeat].
+const silencePoll = time.Second
 
 // AgentStartupHold is how long an agent connection made before any client
 // has attached waits for one, rather than being refused at once
@@ -285,6 +303,18 @@ type attachment struct {
 	gone    chan error
 	quit    chan struct{}
 	mux     *channel.Mux
+	// at is when it attached: the start of its silence until SSP has
+	// heard from it.
+	at time.Time
+}
+
+// lastHeard is when the client last sent anything authentic, or when it
+// attached if it has sent nothing yet.
+func (a *attachment) lastHeard() time.Time {
+	if h := a.ep.Stats().LastHeard; h.After(a.at) {
+		return h
+	}
+	return a.at
 }
 
 // Run serves the session: it moves output from the terminal through the
@@ -325,8 +355,44 @@ func (s *Session) Run(ctx context.Context) error {
 	attachedOnce := false
 	var cur *attachment
 	var gone <-chan error
+	// The attached client's silence (bootstrap.md §9.2): check fires when
+	// it may have gone silent, or, once it has, to look for its return.
+	silentAfter := s.SilentAfter
+	if silentAfter == 0 {
+		silentAfter = SilentAfter
+	}
+	var check <-chan time.Time
+	silent := false
+	var silentSince time.Time
+	arm := func() {
+		switch {
+		case cur == nil:
+			check = nil
+		case silent:
+			check = time.After(silencePoll)
+		default:
+			check = time.After(time.Until(cur.lastHeard().Add(silentAfter)))
+		}
+	}
 	for ctx.Err() == nil {
 		select {
+		case <-check:
+			last := cur.lastHeard()
+			switch {
+			case !silent && time.Since(last) >= silentAfter:
+				silent, silentSince = true, last
+				s.Log.Info("the client is silent; the session counts as detached", "for", time.Since(last).Round(time.Millisecond))
+				if s.Detached != nil {
+					s.Detached()
+				}
+			case silent && last.After(silentSince):
+				silent = false
+				s.Log.Info("the silent client is heard again")
+				if s.Attached != nil {
+					s.Attached(cur.conn.Peer(), cur.conn.CredentialID())
+				}
+			}
+			arm()
 		case <-ctx.Done():
 		case <-noClient.C:
 			if !attachedOnce {
@@ -350,8 +416,10 @@ func (s *Session) Run(ctx context.Context) error {
 			}
 			attachedOnce = true
 			noClient.Stop()
+			silent = false
+			arm()
 			if s.Attached != nil {
-				s.Attached(c.Peer())
+				s.Attached(c.Peer(), c.CredentialID())
 			}
 		case ep := <-s.broken:
 			if cur == nil || cur.ep != ep {
@@ -360,19 +428,24 @@ func (s *Session) Run(ctx context.Context) error {
 			s.Log.Warn("the client broke the input protocol; dropping it")
 			s.drop(cur)
 			cur, gone = nil, nil
-			if s.Detached != nil {
+			arm()
+			if !silent && s.Detached != nil {
 				s.Detached()
 			}
+			silent = false
 		case err := <-gone:
 			revoked := errors.Is(err, transport.ErrRevoked)
 			s.Log.Info("the client went", "why", err)
 			s.drop(cur)
 			cur, gone = nil, nil
+			arm()
 			// A revoked connection has a confirmed one in its place, which
-			// Accept is about to hand over.
-			if !revoked && s.Detached != nil {
+			// Accept is about to hand over; a silent one was reported
+			// detached already.
+			if !revoked && !silent && s.Detached != nil {
 				s.Detached()
 			}
+			silent = false
 		}
 	}
 	cause := context.Cause(ctx)
@@ -444,7 +517,7 @@ func (s *Session) attach(parent context.Context, c *transport.Conn) *attachment 
 		MaxRemoteBytes: userinput.MaxDiffBytes,
 	}, screen.NewGrid(0, 0), userinput.NewStream())
 	sctx, stop := context.WithCancel(parent)
-	a := &attachment{conn: c, ep: ep, stop: stop, sspDone: make(chan struct{}), gone: make(chan error, 1), quit: make(chan struct{})}
+	a := &attachment{conn: c, ep: ep, stop: stop, sspDone: make(chan struct{}), gone: make(chan error, 1), quit: make(chan struct{}), at: time.Now()}
 	// The agent's channels, if this client forwards an agent (agent.md
 	// §4.2). They end with the connection: detach or takeover resets
 	// every one, and the far programs see their connections close.

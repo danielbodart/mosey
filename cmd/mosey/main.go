@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,11 +24,29 @@ var version = "dev"
 
 const usage = `mosey -- a remote terminal for bad networks
 
-  mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a]
-        [-predict adaptive|always|never] [-- SSH-OPTION...] DESTINATION
-        Log in to DESTINATION with ssh, as your ssh config says, start
-        the mosey server there, and stay connected over UDP as the
-        network comes and goes.
+  mosey [OPTIONS] DESTINATION
+        Log in to DESTINATION with ssh, as your ssh config says, and stay
+        connected over UDP as the network comes and goes. Resumes your
+        most recently detached session there, or starts a new one; it
+        never takes a session another terminal is using.
+
+  mosey -s NAME [OPTIONS] DESTINATION
+        Attach to the session called NAME, taking it over from wherever
+        it is attached (that client is told), or start it if there is
+        none. NAME is up to 32 letters, digits, '-', '_' and '.'.
+
+  mosey -new [OPTIONS] DESTINATION
+        Start a new session, with a generated name.
+
+  mosey -list [OPTIONS] DESTINATION
+        List your sessions there: name, attached or detached, since
+        when, and version.
+
+  mosey -kill NAME [OPTIONS] DESTINATION
+        End the session called NAME: its shell gets SIGHUP.
+
+  OPTIONS: [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a]
+           [-predict adaptive|always|never] [-- SSH-OPTION...]
 
         The server is this same version of mosey, from ~/.cache/mosey/
         or the remote PATH. If DESTINATION has none, mosey copies itself
@@ -38,27 +55,18 @@ const usage = `mosey -- a remote terminal for bad networks
         without asking, -upload=no never copies. -remote PATH runs that
         remote binary instead and copies nothing.
 
-        -A and -a are ssh's own: forward the agent or don't (agent
-        forwarding arrives in a later version).
+        -A and -a are ssh's own: forward the agent or don't.
 
         -predict says when to show your typing before the server echoes
         it: adaptive (the default) on a slow link, always, or never.
         Guesses not yet confirmed are underlined on a slower one.
 
-  mosey -r [OPTIONS] DESTINATION
-  mosey -r=SESSION [OPTIONS] DESTINATION
-        Resume your session on DESTINATION, from this device or another:
-        the only one there, or SESSION (as -list shows it). Whatever
-        client had it is cut off and told so.
-
-  mosey -list [OPTIONS] DESTINATION
-        List your sessions on DESTINATION.
-
-  Neither -r nor -list copies mosey over: a session is resumed and
-  listed by the version that started it.
-
-  A session lives until its shell exits. Closing the terminal, or
-  killing the client, detaches from it; mosey -r picks it up again.
+  A session lives on the server until its shell exits: exit or Ctrl-D
+  there ends it. Closing this terminal, or your own machine sleeping,
+  crashing or rebooting, only detaches; plain mosey DESTINATION picks it
+  up again. While mosey runs it rides out a dead spot, and reconnects by
+  itself, over ssh, if it hears nothing for 15 s. There is no detach key.
+  A session left detached for 7 days is ended.
 
   mosey -version
 `
@@ -79,34 +87,13 @@ type cli struct {
 	upload      client.UploadMode
 	predict     predict.Mode
 	showVersion bool
-	// resume is -r or -r=SESSION (bootstrap.md §9.2), list is -list.
-	resume resumeFlag
+	// attach and name are which session (bootstrap.md §9.2): AttachAuto
+	// for a plain mosey DEST, AttachName and the name for -s, AttachNew
+	// for -new. list is -list and kill -kill's name (§9.4, §9.5).
+	attach bootstrap.Attach
+	name   string
 	list   bool
-}
-
-// resumeFlag is -r, which takes an optional value: alone it resumes the
-// user's one session (bootstrap.AnySession), and -r=SESSION names one by
-// its 32 hex digits. Go's flag package has no optional values, so it is a
-// boolean flag whose value may be given after =.
-type resumeFlag struct {
-	set bool
-	sid [16]byte
-}
-
-func (r *resumeFlag) String() string   { return "" }
-func (r *resumeFlag) IsBoolFlag() bool { return true }
-func (r *resumeFlag) Set(v string) error {
-	r.set = true
-	if v == "true" {
-		r.sid = bootstrap.AnySession
-		return nil
-	}
-	b, err := hex.DecodeString(v)
-	if err != nil || len(b) != len(r.sid) || [16]byte(b) == bootstrap.AnySession {
-		return errors.New("a session is 32 hex digits, as mosey -list shows it")
-	}
-	r.sid = [16]byte(b)
-	return nil
+	kill   string
 }
 
 // parseArgs reads `mosey [-remote PATH] [-upload MODE] [-ssh PROGRAM]
@@ -127,8 +114,10 @@ func parseArgs(args []string) (cli, error) {
 	flags.Var(agent.letter('A'), "A", "forward the agent, as ssh -A")
 	flags.Var(agent.letter('a'), "a", "do not forward the agent, as ssh -a")
 	flags.BoolVar(&c.showVersion, "version", false, "print the version")
-	flags.Var(&c.resume, "r", "resume the session, or `SESSION`")
+	flags.StringVar(&c.name, "s", "", "attach to, take over or start the session called `NAME`")
+	fresh := flags.Bool("new", false, "start a new session, with a generated name")
 	flags.BoolVar(&c.list, "list", false, "list the sessions on DESTINATION")
+	flags.StringVar(&c.kill, "kill", "", "end the session called `NAME`")
 	if err := flags.Parse(args); err != nil {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: " + err.Error()}
 	}
@@ -143,8 +132,25 @@ func parseArgs(args []string) (cli, error) {
 	if c.showVersion {
 		return c, nil
 	}
-	if c.resume.set && c.list {
-		return cli{}, &bootstrap.UsageError{Msg: "mosey: -r and -list exclude each other"}
+	named, kill := c.name != "" || flagGiven(flags, "s"), c.kill != "" || flagGiven(flags, "kill")
+	if n := btoi(named) + btoi(*fresh) + btoi(c.list) + btoi(kill); n > 1 {
+		return cli{}, &bootstrap.UsageError{Msg: "mosey: -s, -new, -list and -kill exclude each other"}
+	}
+	for _, n := range []struct {
+		flag, name string
+		given      bool
+	}{{"-s", c.name, named}, {"-kill", c.kill, kill}} {
+		if n.given && !bootstrap.ValidSessionName(n.name) {
+			return cli{}, &bootstrap.UsageError{Msg: fmt.Sprintf("mosey: %s %q: a session name is 1 to 32 letters, digits, '-', '_' and '.', starting with a letter or digit", n.flag, n.name)}
+		}
+	}
+	switch {
+	case named:
+		c.attach = bootstrap.AttachName
+	case *fresh:
+		c.attach = bootstrap.AttachNew
+	default:
+		c.attach = bootstrap.AttachAuto
 	}
 	rest := flags.Args()
 	if len(rest) == 0 {
@@ -164,6 +170,21 @@ func parseArgs(args []string) (cli, error) {
 		return cli{}, err
 	}
 	return c, nil
+}
+
+// flagGiven says whether name was on the command line, even with an empty
+// value.
+func flagGiven(f *flag.FlagSet, name string) bool {
+	given := false
+	f.Visit(func(fl *flag.Flag) { given = given || fl.Name == name })
+	return given
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // agentFlag is -A and -a together, so the last one given wins, as in ssh.
@@ -217,10 +238,15 @@ func runClient(args []string) int {
 
 	log, closeLog := clientLog()
 	defer closeLog()
-	log.Info("starting", "version", version, "destination", c.ssh.Destination, "resume", c.resume.set, "list", c.list)
+	log.Info("starting", "version", version, "destination", c.ssh.Destination, "attach", c.attach, "name", c.name, "list", c.list, "kill", c.kill)
 
-	if c.list {
-		err := client.List(ctx, client.ListOptions{SSH: c.ssh, Version: version, Stdout: os.Stdout, Stderr: os.Stderr, Log: log})
+	if c.list || c.kill != "" {
+		var err error
+		if c.list {
+			err = client.List(ctx, client.ListOptions{SSH: c.ssh, Version: version, Stdout: os.Stdout, Stderr: os.Stderr, Log: log})
+		} else {
+			err = client.Kill(ctx, client.KillOptions{SSH: c.ssh, Version: version, Name: c.kill, Stdout: os.Stdout, Stderr: os.Stderr, Log: log})
+		}
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "mosey:", err)
 			return client.ExitStatus(err)
@@ -235,23 +261,24 @@ func runClient(args []string) int {
 	}
 	defer tty.Close()
 	err = client.Run(ctx, client.Options{
-		SSH:       c.ssh,
-		Version:   version,
-		Terminal:  tty,
-		Stderr:    os.Stderr,
-		Log:       log,
-		Getenv:    os.Getenv,
-		Resume:    c.resume.set,
-		SessionID: c.resume.sid,
-		Upload:    c.upload,
-		Predict:   c.predict,
+		SSH:      c.ssh,
+		Version:  version,
+		Terminal: tty,
+		Stderr:   os.Stderr,
+		Log:      log,
+		Getenv:   os.Getenv,
+		Attach:   c.attach,
+		Name:     c.name,
+		Upload:   c.upload,
+		Predict:  c.predict,
 		// The terminal is still cooked when D7 asks (bootstrap.md
 		// §4.7.5), and Open has made sure stdin is one.
 		Ask: client.AskLine(os.Stdin, os.Stderr),
 	})
 	tty.Close()
 	if err != nil && !errors.Is(err, context.Canceled) {
-		// A detach says how to come back, and exits 0 (bootstrap.md §9.3).
+		// A detach says how to come back, and exits 0 (bootstrap.md §9.3);
+		// a session found gone by R3 says so, and exits 1 (§9.2.2).
 		log.Info("ended", "err", err)
 		fmt.Fprintln(os.Stderr, "mosey:", err)
 		return client.ExitStatus(err)

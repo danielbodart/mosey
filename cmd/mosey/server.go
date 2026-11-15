@@ -7,8 +7,9 @@ package main
 // session, re-executing this same binary as its sandboxed roles,
 // `mosey --serve=proto` and `mosey --serve=emu` (D22, server.md §1). A
 // launcher given a resume hands it to the session's spawner over its
-// attach socket instead (D8), and `mosey --serve=list` prints the user's
-// sessions for `mosey -list`. None of it is for people to run.
+// attach socket instead (D8), `mosey --serve=list` prints the user's
+// sessions for `mosey -list`, and `mosey --serve=kill NAME` ends one for
+// `mosey -kill`. None of it is for people to run.
 //
 // Server mode is a flag, not a word, so it can never collide with a host:
 // `mosey server` connects to a host called server. Every plain word on the
@@ -96,6 +97,21 @@ func runServer(role string) {
 		// The user's sessions on this host, for mosey -list
 		// (bootstrap.md §9.4).
 		if err := server.List(os.Stdout, os.Getenv); err != nil {
+			failServer(err)
+		}
+		return
+	case "kill":
+		// mosey -kill NAME (bootstrap.md §9.5): the name is the next
+		// argument. No such session has been said on stdout already.
+		if len(os.Args) != 3 {
+			fmt.Fprintln(os.Stderr, "mosey --serve=kill: one session name, please")
+			os.Exit(2)
+		}
+		err := server.Kill(os.Stdout, os.Getenv, os.Args[2])
+		if errors.Is(err, server.ErrNoSuchSession) {
+			os.Exit(1)
+		}
+		if err != nil {
 			failServer(err)
 		}
 		return

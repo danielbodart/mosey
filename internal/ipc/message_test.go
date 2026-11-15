@@ -19,9 +19,9 @@ func examples() []Message {
 		pal[i] = 1<<24 | uint32(i)
 	}
 	return []Message{
-		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key()},
-		Start{Cols: MaxCols, Rows: MaxRows, Port: 65535, Addr: netip.MustParseAddr("192.0.2.1"), ClientPublic: key()},
-		Start{Cols: 80, Rows: 24, Port: 60001, Addr: netip.MustParseAddr("2001:db8::1"), ClientPublic: key()},
+		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "s"},
+		Start{Cols: MaxCols, Rows: MaxRows, Port: 65535, Addr: netip.MustParseAddr("192.0.2.1"), ClientPublic: key(), Name: "s"},
+		Start{Cols: 80, Rows: 24, Port: 60001, Addr: netip.MustParseAddr("2001:db8::1"), ClientPublic: key(), Name: strings.Repeat("n", MaxSessionName)},
 		EmuLink{Generation: 1, Reason: EmuFirst},
 		EmuLink{Generation: 2, Reason: EmuSignalled, Status: -31},
 		EmuLink{Generation: 0xffffffff, Reason: EmuKilled, Status: 0x7fffffff},
@@ -40,7 +40,8 @@ func examples() []Message {
 		Exit{Code: ShellExited}, Exit{Code: ExitError, Reason: strings.Repeat("~", MaxExitReason)},
 		Exit{Code: NoClient, Reason: " "}, Exit{Code: NoClient},
 		KillEmu{Generation: 1, Why: KillDeadline}, KillEmu{Generation: 0xffffffff, Why: KillViolation},
-		Attached{}, Attached{Peer: netip.MustParseAddrPort("192.0.2.7:1")},
+		Attached{}, Attached{Credential: [8]byte{1, 2}, Peer: netip.MustParseAddrPort("192.0.2.7:1")},
+		Hangup{},
 		Attached{Peer: netip.MustParseAddrPort("[2001:db8::7]:65535")},
 		Detached{},
 		ClientLine{Line: line(1)}, ClientLine{Line: line(MaxClientLine)},
@@ -141,16 +142,20 @@ func fixedOrMin(t byte) int {
 
 func TestFieldsOutOfRangeAreRefused(t *testing.T) {
 	bad := []Message{
-		Start{Cols: 0, Rows: 1, Port: 1, ClientPublic: key()},
-		Start{Cols: MaxCols + 1, Rows: 1, Port: 1, ClientPublic: key()},
-		Start{Cols: 1, Rows: MaxRows + 1, Port: 1, ClientPublic: key()},
-		Start{Cols: 1, Rows: 1, Port: 0, ClientPublic: key()},
-		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key()[1:]},
-		Start{Cols: 1, Rows: 1, Port: 1, Addr: netip.MustParseAddr("0.0.0.0"), ClientPublic: key()},
-		Start{Cols: 1, Rows: 1, Port: 1, Addr: netip.MustParseAddr("::"), ClientPublic: key()},
-		Start{Cols: 1, Rows: 1, Port: 1, Addr: netip.MustParseAddr("::ffff:192.0.2.1"), ClientPublic: key()},
-		Start{Cols: 1, Rows: 1, Port: 1, Addr: netip.MustParseAddr("224.0.0.1"), ClientPublic: key()},
-		Start{Cols: 1, Rows: 1, Port: 1, Addr: netip.MustParseAddr("255.255.255.255"), ClientPublic: key()},
+		Start{Cols: 0, Rows: 1, Port: 1, ClientPublic: key(), Name: "s"},
+		Start{Cols: MaxCols + 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "s"},
+		Start{Cols: 1, Rows: MaxRows + 1, Port: 1, ClientPublic: key(), Name: "s"},
+		Start{Cols: 1, Rows: 1, Port: 0, ClientPublic: key(), Name: "s"},
+		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key()[1:], Name: "s"},
+		Start{Cols: 1, Rows: 1, Port: 1, Addr: netip.MustParseAddr("0.0.0.0"), ClientPublic: key(), Name: "s"},
+		Start{Cols: 1, Rows: 1, Port: 1, Addr: netip.MustParseAddr("::"), ClientPublic: key(), Name: "s"},
+		Start{Cols: 1, Rows: 1, Port: 1, Addr: netip.MustParseAddr("::ffff:192.0.2.1"), ClientPublic: key(), Name: "s"},
+		Start{Cols: 1, Rows: 1, Port: 1, Addr: netip.MustParseAddr("224.0.0.1"), ClientPublic: key(), Name: "s"},
+		Start{Cols: 1, Rows: 1, Port: 1, Addr: netip.MustParseAddr("255.255.255.255"), ClientPublic: key(), Name: "s"},
+		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key()},
+		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: strings.Repeat("n", MaxSessionName+1)},
+		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "a b"},
+		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "a\x1b"},
 		EmuLink{Generation: 0, Reason: EmuFirst},
 		EmuLink{Generation: 1, Reason: EmuExited},
 		EmuLink{Generation: 2, Reason: EmuFirst},
@@ -182,16 +187,16 @@ func TestFieldsOutOfRangeAreRefused(t *testing.T) {
 	}
 	for _, m := range bad {
 		if b, err := Marshal(m); err == nil {
-			t.Errorf("Marshal(%#v) = %x, want a refusal", m, b)
+			t.Errorf("Marshal(%T) = %x, want a refusal", m, b[:min(len(b), 16)])
 		}
 	}
 }
 
 func TestReservedBitsAreRefused(t *testing.T) {
-	start, _ := Marshal(Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key()})
+	start, _ := Marshal(Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "s"})
 	start[1] = 1
 	update := []byte{typeUpdate, 1 << 2}
-	family, _ := Marshal(Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key()})
+	family, _ := Marshal(Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "s"})
 	family[8] = 5
 	for _, b := range [][]byte{start, update, family} {
 		r := routes[b[0]]
