@@ -232,20 +232,28 @@ jobs:
       # store the attestations with the repository's.
       id-token: write
       attestations: write
+    # Every action in this job is pinned by commit, not by tag: the job
+    # holds id-token: write, so any step's code could mint a Fulcio
+    # certificate for exactly the identity the client trusts
+    # (internal/provenance.Identity) and attest a binary of its choosing.
+    # A moved tag must not be able to do that. Bumping one is a reviewed
+    # change of its SHA; the comment says which release it is. The tools
+    # mise-action installs (mise.toml: Go, shellcheck, actionlint, pinned
+    # by exact version) run here too and are trusted the same way.
     steps:
       # fetch-depth: 0 because the minor is the commit count, which
       # scripts/version.sh REFUSES to count in a shallow clone; fetch-tags so
       # the previous tag resolves, for release-due and the notes below.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
 
       # For mise run release-due.
-      - uses: jdx/mise-action@v5
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
 
       # The build job's four binaries, one directory per artifact.
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
           pattern: mosey-*
@@ -287,9 +295,9 @@ jobs:
       # one attestation per binary so each bundle names exactly the file it
       # sits next to. Signed by the public-good Sigstore (the repository is
       # public): a Fulcio certificate for this workflow on refs/heads/trunk,
-      # logged in Rekor. Pinned by commit, as a third-party action that
-      # holds an OIDC token should be. A failure here fails the job, so
-      # nothing below runs and no unattested asset is published.
+      # logged in Rekor. Pinned by commit, as is every action in this job.
+      # A failure here fails the job, so nothing below runs and no
+      # unattested asset is published.
       - name: Attest linux/amd64
         id: attest-linux-amd64
         if: steps.due.outputs.version

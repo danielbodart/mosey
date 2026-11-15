@@ -486,7 +486,9 @@ exactly this [choice]:
 
 **How the release job makes them.** After laying the binaries out and
 checking their versions, it attests each binary in a step of its own
-(`actions/attest-build-provenance`, pinned by commit), copies each
+(`actions/attest-build-provenance`; every action in the release job is
+pinned by commit, because the job holds the OIDC token that signs as
+the identity clients trust), copies each
 step's bundle next to its binary under the name above
 (`scripts/release-bundles.sh`), and checks every bundle with `gh
 attestation verify`, offline, against the trusted root this very commit
