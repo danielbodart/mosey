@@ -60,23 +60,6 @@ func TestTheAgentSocketIsPrivateAndHandsOutNonBlockingConnections(t *testing.T) 
 	}
 }
 
-// Only nothing at all at the attester's path is "no attester": anything
-// there, or anything that cannot be checked, fails closed (agent.md §4.3).
-func TestAnythingAtTheAttesterPathCountsAsAnAttester(t *testing.T) {
-	dir := t.TempDir()
-	if attesterPresent(filepath.Join(dir, "absent")) {
-		t.Error("nothing there is an attester")
-	}
-	there := filepath.Join(dir, "handoff.sock")
-	os.WriteFile(there, nil, 0o600)
-	if !attesterPresent(there) {
-		t.Error("a file there is not an attester")
-	}
-	if _, err := handOff(nil); err == nil {
-		t.Error("the unimplemented hand-off succeeded")
-	}
-}
-
 // Teardown leaves nothing of an agent session behind: the session's
 // directory goes with both its sockets (server.md §2.7, agent.md §4.1), so
 // empty directories do not pile up under the sessions directory.

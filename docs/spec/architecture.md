@@ -235,7 +235,7 @@ connection's `channel.Mux` (`KindChannel` frames, `agent.md` §5) and
 relays the fd's bytes into it, opaque. The client, for each channel,
 dials its own local agent, replays the captured bind, then relays
 (`agent.md` §3), so the agent judges destination constraints as under
-`ssh -A`. Any agent works, OpenSSH's or quoin's; the client never parses
+`ssh -A`. Any agent works, and mosey has no code for any particular one (D28); the client never parses
 what passes. A resume brings the resuming client's own agent: the socket
 path is fixed for the shell's life, and each connection goes to whichever
 client is attached then.

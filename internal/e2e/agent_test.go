@@ -117,7 +117,7 @@ func agentSessionAfter(t *testing.T, p netsim.Profile, fwd *agent.Forwarder, ear
 // A program on the far host talks to the user's agent over the session,
 // as under ssh -A: the agent first sees ssh's bind, replayed, and its
 // answer to it never reaches the program; then a request and an
-// extension message (provenance-v00@bodar.com, D28) arrive byte for byte,
+// extension message (unheard-of@example.com, D28) arrive byte for byte,
 // and the agent's answers go back byte for byte, over a LAN and over a
 // lossy hotel wifi (agent.md §1, §3).
 func TestAFarProgramReachesTheUsersAgentThroughTheSession(t *testing.T) {
@@ -131,7 +131,7 @@ func TestAFarProgramReachesTheUsersAgentThroughTheSession(t *testing.T) {
 
 				requests := [][]byte{
 					agentFrame([]byte{11}), // REQUEST_IDENTITIES
-					agentFrame(append(sshString([]byte{27}, []byte("provenance-v00@bodar.com")), bytes.Repeat([]byte{0, 0x1b, 0x9b, 0xff}, 2300)...)),
+					agentFrame(append(sshString([]byte{27}, []byte("unheard-of@example.com")), bytes.Repeat([]byte{0, 0x1b, 0x9b, 0xff}, 2300)...)),
 				}
 				answers := [][]byte{
 					agentFrame([]byte{12, 0, 0, 0, 0}),

@@ -9,12 +9,12 @@
 // a throwaway capture socket, keeps the one bind ssh sends there, and
 // replays it to the user's real agent on every forwarded connection. So the
 // agent sees what ssh -A would show it, destination constraints and
-// quoin-signer's checks included, and the user's whole ssh config keeps
-// working.
+// any checks of the agent's own included, and the user's whole ssh config
+// keeps working.
 //
 // After the replayed bind the stream is opaque: mosey parses no agent
-// message the far host sends, so extension messages such as
-// provenance-v00@bodar.com pass through untouched (D28), and any agent that
-// speaks the protocol works (D17). The only agent frames this package reads
+// message the far host sends, so an agent's extension messages pass through
+// untouched and mosey has no code for any particular agent (D28), and any
+// agent that speaks the protocol works (D17). The only agent frames this package reads
 // are the capture's (fuzzed) and the length of the one reply to the bind.
 package agent

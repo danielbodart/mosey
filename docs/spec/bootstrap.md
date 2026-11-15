@@ -1273,28 +1273,18 @@ connection, so NoBind, and carries on without the agent ([S3] E7).
 Measured cost of capture over a plain bootstrap: about 5 ms on loopback
 [S3].
 
-**How quoin knows it is inside a mosey session.** [S3] recommendation 6
-has quoin-sudo treat a detached mosey session as remote, and quoin 0331bf1
-does so by finding an ancestor whose comm is `mosey-server`. D7 removed
-that name: the client and every server role are now the one file `mosey`,
-so every one of them has comm `mosey`, and no process may be called
-`mosey-server`. The comm alone cannot tell the local client from the far
-spawner, so 0331bf1 no longer matches anything.
-
-The marker is the spawner's **argv**: `/proc/PID/cmdline` of the
-session's spawner is exactly `mosey` (any path), then `--serve=spawner`.
-The spawner is the parent of the login shell (`server.md` §2.5), so a
-`sudo` inside the session finds it as an ancestor; the local client's
-argv[1] is never a `--serve` flag (§2). mosey's side of the contract:
-the spawner's argv[1] stays exactly `--serve=spawner`, and the spawner
-never rewrites its argv or comm. **Requirement on the quoin branch**
-(D28 hand-off, `docs/mosey-integration.md`): replace 0331bf1's comm match
-with "an ancestor running as the user whose comm is `mosey` and whose
-argv[1] is `--serve=spawner`". A forged argv grants nothing a forged comm
-did not, for the reason [S3] gives: remote mode's approval is a signature
-any process that reaches the forwarded agent could already ask for. If
-open question 8 puts the session under `systemd-run --user`, the spawner
-is still the shell's parent, so the rule holds.
+**How a program can tell it is inside a mosey session.** mosey is one
+file (D7), so the client and every server role have comm `mosey`, and the
+comm alone cannot tell the local client from the far spawner. The
+spawner's **argv** can: `/proc/PID/cmdline` of the session's spawner is
+exactly `mosey` (any path), then `--serve=spawner`. The spawner is the
+parent of the login shell (`server.md` §2.5), so a program inside the
+session finds it as an ancestor; the local client's argv[1] is never a
+`--serve` flag (§2). This is a documented fact of the process shape, not
+a contract with any particular tool (D28): the spawner's argv[1] stays
+`--serve=spawner` and the spawner never rewrites its argv or comm, and
+whatever a tool does with that is the tool's own affair. A forged argv
+proves nothing, since any process of the user's can set its own.
 
 ---
 
@@ -2040,10 +2030,12 @@ this file.
     bash, tcsh, fish, nushell and zsh, with `~/` still expanded. §4.1's
     charset already needs no quoting inside the single quotes. §12 tests
     each installed shell.
-11. **quoin and the `mosey-server` comm (major). Fixed as a requirement
-    on quoin.** §8 now says 0331bf1's comm match is dead under D7, and
-    that the marker is the spawner's argv (`--serve=spawner`), which
-    mosey promises not to change or rewrite. Setting the comm to
-    `mosey-server` with `PR_SET_NAME`, as the review suggests, is not
-    taken: D7 as now settled says no process is named `mosey-server`.
-    *Elsewhere:* the quoin branch (D28 hand-off) replaces the comm match.
+11. **Telling a mosey session by its processes, and the `mosey-server`
+    comm (major).** §8 says that under D7 no process is named
+    `mosey-server`, and that the spawner's argv (`--serve=spawner`) is
+    what marks a session, which mosey does not change or rewrite. Setting
+    the comm to `mosey-server` with `PR_SET_NAME`, as the review
+    suggests, is not taken: D7 as settled says no process has that name.
+    Since D28's amendment (2026-11-15) this is a documented fact, not a
+    contract with any particular tool; what a tool does with it is its
+    own affair.

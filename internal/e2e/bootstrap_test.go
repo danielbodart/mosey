@@ -178,10 +178,10 @@ func nonLoopbackAddr() (netip.Addr, bool) {
 }
 
 // findSpawner is the pid of the one process running path as
-// `--serve=spawner`: the spawner's argv is the marker quoin looks for
-// (bootstrap.md §8), so the test finds it the same way. Only by argv: a
-// spawner is not dumpable (threat-model.md §4.10), so its /proc/PID/exe
-// is root's to read, while its cmdline stays readable, as quoin needs.
+// `--serve=spawner`: the spawner's argv is how any program can tell it is
+// inside a mosey session (bootstrap.md §8), so the test finds it the same
+// way. Only by argv: a spawner is not dumpable (threat-model.md §4.10), so
+// its /proc/PID/exe is root's to read, while its cmdline stays readable.
 func findSpawner(t *testing.T, path string) int {
 	t.Helper()
 	var found []int

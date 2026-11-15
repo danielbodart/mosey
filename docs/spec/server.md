@@ -358,9 +358,8 @@ socket. `agent.md` §4 is its full rule; in short:
 - the shell's `SSH_AUTH_SOCK` (§2.5) is its path;
 - each accepted connection's `SO_PEERCRED` uid must be the spawner's own
   or root's, as sshd's forwarded socket admits root (`agent.md` §4.1);
-  then, unless the host has an attester (`agent.md` §4.3, which refuses
-  the connection until the hand-off exists), the spawner sends it to
-  proto as `AgentConn` (§3.3) and closes its own copy;
+  then the spawner sends it to proto as `AgentConn` (§3.3) and closes its
+  own copy;
 - removed at teardown (§2.4), before anything else, and just before
   `attach.sock`, so that closing the attach socket can then remove the
   session directory, which must be empty by then.

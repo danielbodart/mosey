@@ -82,7 +82,7 @@ func TestABindThatIsWrongInAnyWayIsRefused(t *testing.T) {
 		"another message":          frame(msgRequestIdentities),
 		"another extension": func() []byte {
 			b := []byte{msgExtension}
-			b = appendString(b, []byte("provenance-v00@bodar.com"))
+			b = appendString(b, []byte("unheard-of@example.com"))
 			return frame(b...)
 		}(),
 	} {

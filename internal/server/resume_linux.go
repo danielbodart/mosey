@@ -177,12 +177,10 @@ func (s *spawner) setState(st bootstrap.SessionState, peer netip.AddrPort) {
 }
 
 // serveAgent accepts on the agent socket until it closes, and passes each
-// connection from this user to the supervision loop for proto, unless the
-// host has an attester, which this mosey cannot yet hand off to: then the
-// connection is refused (agent.md §4.3, fail closed). Only a closed socket
+// connection from this user to the supervision loop for proto, which relays
+// it as an opaque byte stream, as ssh -A does (D28). Only a closed socket
 // ends it.
 func (s *spawner) serveAgent() {
-	warned := false
 	for {
 		f, err := s.agent.Accept()
 		switch {
@@ -195,19 +193,6 @@ func (s *spawner) serveAgent() {
 			s.log.Warn("accepting on the agent socket; trying again", "err", err)
 			time.Sleep(acceptBackoff)
 			continue
-		}
-		if attesterPresent(AttesterSocket) {
-			up, err := handOff(f)
-			if err != nil {
-				if !warned {
-					s.log.Warn("refusing agent connections", "attester", AttesterSocket, "err", err)
-					warned = true
-				}
-				f.Close()
-				continue
-			}
-			f.Close()
-			f = up
 		}
 		select {
 		case s.agentConns <- f:

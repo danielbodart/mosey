@@ -9,10 +9,11 @@ processes and their sockets are `server.md` §2.7 and §3.3; the wire under
 it is `transport.md` §4.2 and §4.4.
 
 Decisions implemented: D15 (typed channels, negotiated in the hello), D16
-(galley and quoin questions work exactly as over `ssh -A`), D17 (any agent
-that speaks the protocol; no dependency on quoin), D25 (replay the bind
-captured from the system ssh; agent off without a trustworthy one), D28
-(extension messages pass through; a fail-closed seam for quoin-attest).
+(an agent's questions to the user work exactly as over `ssh -A`), D17 (any
+agent that speaks the protocol), D25 (replay the bind captured from the
+system ssh; agent off without a trustworthy one), D28 (orthogonal to any
+particular agent: plain `ssh -A` semantics, extension messages pass
+through, no agent-specific code).
 PLAN §2 is locked; where this text and PLAN disagree, PLAN wins.
 
 Provenance tags: **[D*n*]** a locked decision; **[S3]**, **[S7]** our
@@ -38,11 +39,11 @@ what it would see under `ssh -A`:
    `is_forwarding = 1` (§3), byte for byte as ssh sent it at the bootstrap;
 2. then whatever the program on the far host sends, unchanged: requests,
    further binds from an onward `ssh`, extension messages such as
-   `provenance-v00@bodar.com` [D28], and anything a later agent invents.
+   an agent's own extensions [D28], and anything a later agent invents.
 
 mosey never parses the stream after the replayed bind. Any agent that
 speaks the protocol works: OpenSSH's `ssh-agent`, gpg-agent, 1Password,
-KeePassXC, quoin-signer [D17]. An agent that does not know
+KeePassXC, a TPM-backed agent [D17]. An agent that does not know
 `session-bind@openssh.com` answers it with a failure, which mosey reads and
 ignores, as ssh does ([ssh]: `ssh -A` to an agent without the extension
 still forwards).
@@ -202,7 +203,7 @@ Any failure in 1–3 refuses the channel (`RESET unavailable`), and the far
 program sees its connection close, as when an agent is unreachable under
 `ssh -A`. A new connection to the local agent per channel is what ssh does
 too [ssh], so an agent that keys state to a connection (binds, constraint
-checks, quoin's per-connection chain) sees the same shape.
+checks, an agent's per-connection judgement) sees the same shape.
 
 **Destination constraints** (`ssh-add -h`) then work as under `ssh -A`:
 the agent sees the bootstrap host's bind with `is_forwarding = 1`, then an
@@ -272,35 +273,6 @@ length prefix and never rely on a half-close [ssh].
 When the attached connection goes (detach, takeover), its channels are
 reset and their fds closed; a requester sees its connection end, as under
 `ssh -A` when the connection drops.
-
-### 4.3 The quoin-attest seam (D28)
-
-D28's forwarder hands each agent connection to the host's attester when the
-host has one, and fails closed if that hand-off fails. In mosey's layout the
-spawner is the only role that may connect to a socket or pass fds outward,
-so the seam is in the spawner, between accepting a connection and passing
-it to proto:
-
-- **Where the attester is**: the fixed path `AttesterSocket` =
-  `/run/agent-attest/handoff.sock` [S7], never from the environment or the
-  user's files, so a program of the user's cannot point a session at its
-  own "attester".
-- **No attester** (nothing at that path, `ENOENT` on `lstat`): plain
-  forwarding, as above. This is every host without quoin [D28 §1.6].
-- **An attester is present**: the connection must be handed off and the
-  attester's upstream end passed to proto instead. **This slice does not
-  implement the hand-off**: its wire carries `h` (`Conn.HandshakeHash`),
-  which quoin has not yet fixed. So with an attester present every agent
-  connection is **refused** (closed unanswered, logged once), which is the
-  fail-closed half of D28 already in force. Implementing the hand-off is a
-  later slice. The seam is `handOff` and `attesterPresent` in
-  `internal/server/agentsock.go`; the spawner calls them between accepting
-  a connection and sending it to proto. The hand-off will also need `h`
-  carried from proto, which holds the connection, to the spawner, a new
-  IPC message (`server.md` §3.3).
-
-Checked per connection, so an attester that starts or stops during a
-session takes effect at the next connection.
 
 ## 5. The stream protocol (`internal/channel`)
 
@@ -481,7 +453,6 @@ answered.
 | `OpenTimeout` | 30 s | [choice] |
 | `Linger`, `MaxLinger` | 10 s, 64 | [choice] |
 | Padding | sealed plaintext ≥ 64 B, Padmé above, ≤ D5 | `ssp.md` §9.2 |
-| `AttesterSocket` | `/run/agent-attest/handoff.sock` | [S7] |
 
 ## 7. Tests
 
@@ -503,7 +474,8 @@ answered.
 - `internal/transport`: `CHANNEL` frames reach `RecvChannel` only on a
   connection that negotiated a channel type besides the terminal.
 - `internal/e2e`, in process over netsim: an agent channel carries a
-  request and an extension message (`provenance-v00@bodar.com`) byte for
+  request and an extension message mosey has never heard of
+  (`unheard-of@example.com`) byte for
   byte to a fake agent, which sees the replayed bind first.
 - `internal/e2e`, real binaries through a throwaway sshd, with a throwaway
   `ssh-agent` and key: remote `ssh-add -l`; an ssh to a second throwaway
@@ -513,51 +485,19 @@ answered.
   `ForwardAgent no` or `-a`; and the session goes on with the agent off
   when the server has `AllowAgentForwarding no`.
 
-## 8. quoin (D16, D17, D28)
+## 8. No agent-specific code (D17, D28)
 
-mosey needs nothing from quoin and quoin needs nothing new from mosey for
-plain forwarding. The contract mosey made in quoin's
-`docs/mosey-integration.md` §1, item by item:
+D28, as amended on 2026-11-15, makes agent forwarding orthogonal to any
+particular agent: mosey forwards the agent as `ssh -A` does and has no code
+for quoin or any other agent. Every agent channel is the replayed bind
+(§3) and then an opaque byte stream, so an agent's own extension messages
+pass through untouched (§1, tested byte for byte with a made-up
+extension, §7). Anything an agent or its host-side tools need beyond
+`ssh -A`'s semantics, they do on their own side; mosey waits on nothing
+from them. What such a tool can rely on, as anything can, is mosey's
+documented process shape (`bootstrap.md` §8, `server.md` §2).
 
-1. **The bind is OpenSSH's own**, replayed byte for byte at the head of
-   every agent channel (§2, §3): done. quoin-signer's `agentsrv` reads
-   `session-bind@openssh.com` as `ssh-agent` does, so it sees exactly what
-   `ssh -A` would show it. The e2e test with `ssh-add -h` checks the same
-   bind semantics with OpenSSH's agent, the reference quoin follows.
-2. **One binary, `mosey`**: done, but **the argv differs from the
-   contract's wording**. quoin's `docs/mosey-integration.md` §1.2 says the
-   client is `mosey host`, the shells' parent is `mosey server` and the
-   sandboxed roles are `mosey server proto|emu`. That text predates
-   slice 1, which settled the command line as `mosey HOST` for the client
-   and flags for the server (`bootstrap.md` §8): the shells' parent (the
-   spawner) has comm `mosey` and argv `mosey --serve=spawner`, and its
-   roles are `mosey --serve=proto` and `mosey --serve=emu`; ssh starts
-   `mosey --serve`, the launcher, which exits once the spawner is up.
-   quoin's process-chain matching (its work item 1, the rework of
-   0331bf1) must match on that argv, or on position in the chain, not on
-   `mosey server`; quoin's §1.2 should be corrected to match.
-3. **Extension messages pass through**: done, and tested byte for byte
-   with `provenance-v00@bodar.com` (§7).
-4. **The hand-off forwarder**: the seam is in the spawner (§4.3), at the
-   fixed path, never from the environment, and fails closed while an
-   attester is present; the hand-off itself is not implemented yet.
-5. **The session binding**: `Conn.HandshakeHash` is there; handing it to
-   the attester is part of 4.
-6. **Without quoin, plain forwarding**: done.
-
-**Why there is no local test against quoin-signer itself.** It cannot run
-without Dan's live setup: `quoin-signer serve` loads its keys only as
-TPM-wrapped files used through `/dev/tpmrm0` (`internal/tpmkey`), takes
-its listener only from systemd socket activation (`sdnotify.Listen`, a
-socket named `agent`), and asks galley, a desktop prompt, about every
-forwarded sign (`internal/galleyask`). Its `agentsrv.Server`, which could
-take a software signer, is in quoin's `internal/` and cannot be imported
-from mosey's module. A test would therefore touch the TPM, the user's
-systemd units and galley, which mosey's tests must never do. What stands
-in for it: spike S3 ran quoin's real `agentsrv` on frames recorded from a
-mosey-relayed connection and it asked "sudo on spikeA" unchanged (quoin
-8bb8de0); since then mosey relays the same bytes in the same order, which
-`TestAFarProgramReachesTheUsersAgentThroughTheSession` and the `ssh-add
--h` test pin down. A quoin-side test that runs `agentsrv` with a software
-key behind mosey belongs in quoin's own suite, or in the NixOS VM check
-S3 asked for.
+The reference for "works as under `ssh -A`" is OpenSSH's own `ssh-agent`:
+the e2e tests drive a throwaway one, with destination constraints
+(`ssh-add -h`), through a throwaway sshd (§7). A test against any other
+agent belongs in that agent's own suite.

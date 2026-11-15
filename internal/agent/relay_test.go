@@ -70,7 +70,7 @@ func TestAnAgentChannelReplaysTheBindThenCarriesTheStreamUntouched(t *testing.T)
 			fwd := &Forwarder{Bind: bind, Dial: func(context.Context) (net.Conn, error) { return forwarded, nil }}
 			server := muxes(t, fwd)
 
-			request := extension("provenance-v00@bodar.com", bytes.Repeat([]byte{0, 0xff, 0x1b, 'x'}, 3000))
+			request := extension("unheard-of@example.com", bytes.Repeat([]byte{0, 0xff, 0x1b, 'x'}, 3000))
 			reply := frame(append([]byte{msgSuccess}, bytes.Repeat([]byte("statement"), 500)...)...)
 			agentDone := make(chan error, 1)
 			go func() {

@@ -44,11 +44,11 @@ func TestTheAgentDecisionFollowsSSHsConfig(t *testing.T) {
 		{"yes", "", "/run/agent"},
 		{"yes", "none", ""}, // [ssh]: IdentityAgent none forwards nothing
 		{"yes", "SSH_AUTH_SOCK", "/run/agent"},
-		{"yes", "/run/quoin", "/run/quoin"},
+		{"yes", "/run/agent", "/run/agent"},
 		{"yes", "$FOO", "/run/foo"},
 		{"$FOO", "", "/run/foo"},
 		{"$UNSET", "", ""},
-		{"/tmp/sock", "/run/quoin", "/tmp/sock"},
+		{"/tmp/sock", "/run/agent", "/tmp/sock"},
 	} {
 		cfg := Config{}
 		if c.forward != "" {

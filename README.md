@@ -143,7 +143,8 @@ carries on by itself when packets flow again.
 mosey forwards your ssh-agent exactly when `ssh` would: when your
 `~/.ssh/config` says `ForwardAgent yes` (or a socket path) for the host,
 or when you pass `-A`; `-a` turns it off. Any agent that speaks the
-protocol works: OpenSSH's `ssh-agent`, gpg-agent, 1Password, quoin. On the
+protocol works: OpenSSH's `ssh-agent`, gpg-agent, 1Password, a TPM-backed
+agent. On the
 host, `SSH_AUTH_SOCK` points at mosey's own socket, and every connection to
 it reaches your agent as it would under `ssh -A`, starting with the
 `session-bind` OpenSSH made for the login mosey started over, so keys you
@@ -153,11 +154,9 @@ hops you allowed. If that bind can't be had (the host has
 mosey says so once and carries on without the agent. After a resume the
 agent is the resuming device's.
 
-quoin's TPM-backed agent works as any other agent does, with nothing new
-needed from quoin. The one exception is a host running quoin's attester
-(`/run/agent-attest/handoff.sock`): mosey doesn't hand connections to it
-yet, so on such a host it refuses every agent connection rather than
-forward past the attester. Details: [docs/spec/agent.md](docs/spec/agent.md).
+mosey has no code for any particular agent: it forwards the agent as
+`ssh -A` does, and an agent's own extension messages pass through
+untouched. Details: [docs/spec/agent.md](docs/spec/agent.md).
 
 ### Predictive echo
 
