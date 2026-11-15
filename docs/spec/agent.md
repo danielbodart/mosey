@@ -156,6 +156,16 @@ user's own `known_hosts` lists for the host ssh just checked, using
 
 `golang.org/x/crypto/ssh/knownhosts` does the matching (D19).
 
+**A known limitation:** that matching compares a plain (unhashed) host
+pattern byte for byte, while ssh compares host names ignoring case, and
+`ssh -G` prints `hostname` and `hostkeyalias` lowercased [ssh: checked
+black-box]. ssh writes the entries it adds lowercased, so this only
+touches entries written by hand or by another tool with capitals in the
+name (`MyHost.example ssh-ed25519 …`): ssh connects, and the pin fails, so
+mosey says the host key is not in `known_hosts` and runs without the
+agent. Writing the name in lower case fixes it. Hashed entries are not
+affected: ssh hashes the lowercased name.
+
 ### 2.4 When the agent is off
 
 | Cause | What the client says (once, stderr, before raw mode) |
@@ -283,8 +293,11 @@ it to proto:
   which quoin has not yet fixed. So with an attester present every agent
   connection is **refused** (closed unanswered, logged once), which is the
   fail-closed half of D28 already in force. Implementing the hand-off is a
-  later slice and needs no change outside `internal/server`'s
-  `attest.go`.
+  later slice. The seam is `handOff` and `attesterPresent` in
+  `internal/server/agentsock.go`; the spawner calls them between accepting
+  a connection and sending it to proto. The hand-off will also need `h`
+  carried from proto, which holds the connection, to the spawner, a new
+  IPC message (`server.md` §3.3).
 
 Checked per connection, so an attester that starts or stops during a
 session takes effect at the next connection.
@@ -511,8 +524,18 @@ plain forwarding. The contract mosey made in quoin's
    `session-bind@openssh.com` as `ssh-agent` does, so it sees exactly what
    `ssh -A` would show it. The e2e test with `ssh-add -h` checks the same
    bind semantics with OpenSSH's agent, the reference quoin follows.
-2. **One binary, `mosey`**; the shells' parent is the spawner, argv
-   `mosey --serve=spawner` (`bootstrap.md` §8): unchanged here.
+2. **One binary, `mosey`**: done, but **the argv differs from the
+   contract's wording**. quoin's `docs/mosey-integration.md` §1.2 says the
+   client is `mosey host`, the shells' parent is `mosey server` and the
+   sandboxed roles are `mosey server proto|emu`. That text predates
+   slice 1, which settled the command line as `mosey HOST` for the client
+   and flags for the server (`bootstrap.md` §8): the shells' parent (the
+   spawner) has comm `mosey` and argv `mosey --serve=spawner`, and its
+   roles are `mosey --serve=proto` and `mosey --serve=emu`; ssh starts
+   `mosey --serve`, the launcher, which exits once the spawner is up.
+   quoin's process-chain matching (its work item 1, the rework of
+   0331bf1) must match on that argv, or on position in the chain, not on
+   `mosey server`; quoin's §1.2 should be corrected to match.
 3. **Extension messages pass through**: done, and tested byte for byte
    with `provenance-v00@bodar.com` (§7).
 4. **The hand-off forwarder**: the seam is in the spawner (§4.3), at the

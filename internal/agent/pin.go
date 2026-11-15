@@ -17,7 +17,10 @@ import (
 // that some host key signed some session id; this ties it to the
 // destination. Files that do not exist are skipped; hashed entries match;
 // @revoked refuses; a host known only through @cert-authority does not
-// match, so it gets no agent (bootstrap.md §14).
+// match, so it gets no agent (bootstrap.md §14). Unlike ssh, a plain
+// host pattern with capitals in it does not match the lowercased name
+// ssh -G prints: a known limitation of the knownhosts matcher, named in
+// agent.md §2.3.
 func Pin(key ssh.PublicKey, host string, port int, files []string) error {
 	var present []string
 	for _, f := range files {
