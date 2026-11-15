@@ -259,10 +259,13 @@ While the user types, the client's SSP endpoint sends only on a fixed tick,
 one datagram each 20 ms tick, a CHAFF frame (`Conn.SendChaff`) when it has nothing
 else, and keeps on for a random 1–2 s after the last key; the server
 chaffs on a tick grid of its own for a second after each CHAFF it gets
-(`ChaffArrived`). Every SSP datagram is padded (§4, `ssp.md` §9.2), and
-while chaffing both ends pad every datagram, chaff included, to at least 64 bytes
-of sealed plaintext (Padmé above that) (`ssp.md` §9.1.5), so an on-path observer cannot tell which ticks carried keys. `ssp.md` §9.1 says
-what it hides and what it does not.
+(`ChaffArrived`). Every SSP datagram is padded (§4, `ssp.md` §9.2): the
+server always to at least 64 bytes of sealed plaintext, the client to at
+least 40 when idle or not typing; while chaffing both ends pad every
+datagram, chaff included, to at least 64 (Padmé above that; `ssp.md`
+§9.1.5, O10 and O12 as Dan amended them), so an on-path observer cannot
+tell which ticks carried keys. `ssp.md` §9.1 says what it hides and what
+it does not.
 
 ## 4. Sizes on the wire (D5)
 
@@ -434,7 +437,7 @@ Errors are `*Failure`,
 | Exclusive attach (D26) | **built** (resume slice) on `Hello.Attach`, `transport.KindRevoked`, the `Revoked` event |
 | Agent channel (D15, D25) | **built** (agent slice): `agent.md`, `internal/channel`, `internal/agent`, `Conn.SendChannel`/`RecvChannel`, `ipc.AgentConn`, `server.md` §2.7 |
 | Prediction (D12) | **built** (prediction slice): `prediction.md`, `internal/predict`, `Grid.EchoApplied`, the server's echo ack (`prediction.md` §3.1), `mosey -predict` |
-| Chaff (D11, O10) | **built** (chaff slice): `ssp.Chaffer`, `transport.Conn.SendChaff` and `ChaffArrived`, `ssp.md` §9.1 |
+| Chaff (D11, O10) | **built** (chaff slice; the client's 64 B chaffing floor in the dequoin slice): `ssp.Chaffer`, `transport.Conn.SendChaff` and `ChaffArrived`, `ssp.md` §9.1 |
 | Auto-upload (D7) | Landed: `bootstrap.md` §4.7, `internal/install` |
 | NAT traversal (O6) | packet type `0x05` |
 | macOS server (D22) | `pty_other.go`, `sandbox_other.go` return `ErrUnsupported` |

@@ -46,8 +46,9 @@ config, keys and agent, exactly as Mosh does. It aims to be:
   (X-Wing: ML-KEM-768 plus X25519), forward secrecy, rekeying, and
   replay-proof roaming. A leaked SSH log line doesn't hand anyone your
   session. The designs are checked with ProVerif. While you type, both
-  ends send on a fixed tick (20 ms for now) with cover traffic between
-  your keys, which hides the timing of keys within a run of typing from someone
+  ends send on a fixed 20 ms tick with cover traffic between your keys,
+  every packet padded to at least 64 bytes, which hides the timing of
+  keys within a run of typing, and most of their sizes, from someone
   watching the network, as OpenSSH's `ObscureKeystrokeTiming` does for
   SSH. It can't hide when a run starts or stops, or keys that pile up
   while the network stalls.

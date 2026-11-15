@@ -131,10 +131,11 @@ request). The decisions are in §2. Gaps they left:
    resume, the agent channel, prediction, auto-upload, and chaff.
    (Done: slice 1, resume with exclusive attach, D8 and D26, auto-upload,
    D7, chaff, D11 and O10, agent forwarding, D15 and D25, and predictive
-   echo, D12. Next, from Dan's amendments of 2026-11-15: automatic and
-   named resume with reconnect, the stable protocol and live upgrade (D8),
-   Sigstore-verified cross-platform copies (D7), the 64 B client chaff
-   floor (O10, O12), and removing mosey's quoin-specific code (D28).)
+   echo, D12, and from Dan's amendments of 2026-11-15 the 64 B client
+   chaff floor, O10 and O12, and the removal of mosey's quoin-specific
+   code, D28. Next, from the same amendments: automatic and named resume
+   with reconnect, the stable protocol and live upgrade (D8), and
+   Sigstore-verified cross-platform copies (D7).)
 2. `docs/threat-model.md` grows with the slices.
 3. Release pipeline (D10) from the first commit. Then use it daily, on
    trains. (Done: CI releases every green trunk commit to GitHub Releases,
