@@ -727,11 +727,14 @@ that has none, and the copy then runs as the user there.
 - **Where the verifier runs.** Only in the client, before an upload.
   sigstore-go is compiled into the one binary, so every server role
   carries its code, but no role calls it: proto and emu run under their
-  unchanged Landlock and seccomp policies, and the package's `init`
-  functions (its dependencies register gRPC and OpenTelemetry defaults
-  and read the hostname) run before `sandbox.Enter`, as every init does.
-  The KILL soak (CI's `kill-soak`) is what shows nothing they start
-  makes a syscall the policies leave out.
+  unchanged Landlock and seccomp policies. Its dependencies' `init`
+  functions (gRPC and OpenTelemetry defaults, klog reading the hostname)
+  run before `sandbox.Enter`, as every init does, and start no goroutine
+  that could make a syscall later (checked 2026-11-15 by dumping every
+  goroutine of a test binary that links it). The end-to-end tests run
+  the built binary's roles under seccomp Kill through a real sshd. CI's
+  150 s KILL soak runs `internal/server`'s test binary, which does not
+  link sigstore-go, so it does not cover this.
 - **The installer** (`mosey --serve=install`, `bootstrap.md` §4.7.7) is the
   only writer of `~/.cache/mosey`. It checks length and SHA-256 through
   one descriptor; the rename that follows goes by name, inside a

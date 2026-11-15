@@ -90,7 +90,9 @@ copies it to a host of another platform (D7 as amended 2026-11-15, S1;
   bundle and the trusted root are bytes it already has.
 - **In the server roles:** the code is in the one binary, so every role
   carries it, but no role calls it. Their `init` functions run before the
-  sandbox is entered; the KILL soak covers anything they leave running.
+  sandbox is entered and start no goroutine (checked 2026-11-15); the
+  end-to-end tests run the built binary's roles under seccomp Kill. CI's
+  KILL soak runs `internal/server`'s test binary, which does not link it.
 - **Test only:** `provenancetest` signs bundles with sigstore-go's own test
   CA (`pkg/testing/ca`), so no test needs the network.
 - **The trusted root** is not a Go dependency but data:
