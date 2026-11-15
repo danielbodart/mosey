@@ -791,44 +791,21 @@ that has none, and the copy then runs as the user there.
   platform, the release asset of exactly the client's version, whose
   SHA-256 must match the release's `SHA256SUMS` before a byte goes to the
   far host (`bootstrap.md` §4.7.4). Downloads are HTTPS only, redirects
-  included, size-bounded, with a deadline. `SHA256SUMS` is integrity, not
-  authenticity: whoever can publish to the release can publish a matching
-  pair. **Authenticity is the Sigstore bundle** (S1, D7 as amended,
-  `bootstrap.md` §4.6, §4.7.4): the binary must carry SLSA provenance
-  signed by a Fulcio certificate for exactly mosey's release workflow on
-  `refs/heads/trunk`, issued on GitHub Actions' OIDC token, with a CT log
-  timestamp and a Rekor entry, whose statement names this very asset,
-  `mosey-<V>-<os>-<arch>`, with this digest, verified with sigstore-go
-  against a trusted root embedded in the client, before a byte goes to
-  the far host. So a stolen release-upload token, a compromised CDN or a
-  GitHub account that cannot run that workflow on trunk cannot get a
-  binary copied; a missing or wrong bundle is refused. The name is
-  pinned as well as the digest because the uploader controls
-  `SHA256SUMS` too: without it, an older release's genuine binary and
-  genuine bundle, put under the current name, would pass, and an old,
-  vulnerable mosey would be installed as the current one. **What it still trusts:**
-  trunk itself and the workflow on it (anyone who can push there can have
-  CI attest what it builds, as D10 already makes every green trunk
-  commit a release); GitHub's OIDC issuer and Sigstore's public-good
-  Fulcio and Rekor (a compromise of both Fulcio and the log's keys could
-  forge a bundle; Rekor's public log makes an unexpected signing
-  visible, though the client does not watch it); the TUF chain through
-  which `scripts/trusted-root.sh` refreshes the embedded root; and
-  sigstore-go and its dependencies, about 65 modules, now on the
-  client's path (DEPENDENCIES.md). The same-platform path, which is the
+  included, size-bounded, with a deadline. **This is integrity, not
+  authenticity:** a compromised GitHub account or CI, or a stolen
+  release-upload token, can publish a matching `SHA256SUMS` and binary,
+  including an older release's genuine binary under the current name.
+  The trust placed in the download is the trust placed in the GitHub
+  release, the same as a user who downloads it by hand. CI does attest
+  every release binary (`bootstrap.md` §4.6: SLSA provenance signed
+  through GitHub OIDC and Sigstore's public-good Fulcio and Rekor, for
+  mosey's release workflow on `refs/heads/trunk`), and a person can check
+  one with `gh attestation verify FILE --repo danielbodart/mosey`, but the
+  client does not: sigstore-go, which did, doubled the binary and was
+  removed (D7 as amended 2026-11-15; PLAN O16, `bootstrap.md` §14 C,
+  parked until a small verifier). The same-platform path, which is the
   usual one, uses no network and trusts nothing but the file the user is
   already running.
-- **Where the verifier runs.** Only in the client, before an upload.
-  sigstore-go is compiled into the one binary, so every server role
-  carries its code, but no role calls it: proto and emu run under their
-  unchanged Landlock and seccomp policies. Its dependencies' `init`
-  functions (gRPC and OpenTelemetry defaults, klog reading the hostname)
-  run before `sandbox.Enter`, as every init does, and start no goroutine
-  that could make a syscall later (checked 2026-11-15 by dumping every
-  goroutine of a test binary that links it). The end-to-end tests run
-  the built binary's roles under seccomp Kill through a real sshd. CI's
-  150 s KILL soak runs `internal/server`'s test binary, which does not
-  link sigstore-go, so it does not cover this.
 - **The installer** (`mosey --serve=install`, `bootstrap.md` §4.7.7) is the
   only writer of `~/.cache/mosey`. It checks length and SHA-256 through
   one descriptor; the rename that follows goes by name, inside a
@@ -1150,7 +1127,7 @@ target (architecture §6).
 |---|---|
 | Prediction (D12) | Landed: §4.16 |
 | Chaff (D11, O10) | Landed: §4.14, R2 |
-| Auto-upload (D7) | Landed: §4.13, with signed releases (S1: Sigstore bundles, `bootstrap.md` §4.6, §14 C) |
+| Auto-upload (D7) | Landed: §4.13. Release binaries carry GitHub build attestations for checking by hand; the client checking them is parked (`bootstrap.md` §14 C, PLAN O16) |
 | macOS server (D22) | Seatbelt or nothing; until then the sandbox returns `ErrUnsupported` and the server says it runs unconfined |
 
 ## Review notes

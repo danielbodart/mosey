@@ -471,44 +471,36 @@ exactly this [choice]:
 - **The checksums.** One asset named `SHA256SUMS`, in `sha256sum(1)`'s
   text format: per binary, 64 lower-case hex digits, two spaces, the
   asset's name, a newline, sorted by name. It lists the binaries only.
-- **The provenance bundles** (S1, D7 as amended 2026-11-15). One asset per
-  binary, named `mosey-<V>-<os>-<arch>.sigstore.json`: the binary's name
-  with Sigstore's conventional suffix. Each is the Sigstore bundle
-  (media type `application/vnd.dev.sigstore.bundle.v0.3+json`, one JSON
-  object on one line) that `actions/attest-build-provenance` made for
-  that binary alone in the release job: a DSSE envelope holding an in-toto
-  statement of SLSA provenance v1 (`https://slsa.dev/provenance/v1`)
-  whose one subject is the binary, by its file name
-  (`mosey-<V>-<os>-<arch>`) and its SHA-256; a short-lived Fulcio
-  certificate whose subject alternative name is the workflow
+- **The build attestations** (S1, D7 as amended 2026-11-15, and again
+  the same day: client-side checking removed). Not release assets: the
+  release job attests each binary alone with
+  `actions/attest-build-provenance`, which makes a Sigstore bundle (a DSSE
+  envelope holding an in-toto statement of SLSA provenance v1,
+  `https://slsa.dev/provenance/v1`, whose one subject is the binary, by
+  its file name `mosey-<V>-<os>-<arch>` and its SHA-256; a short-lived
+  Fulcio certificate whose subject alternative name is the workflow
   `https://github.com/danielbodart/mosey/.github/workflows/ci.yml@refs/heads/trunk`
-  and whose OIDC issuer is `https://token.actions.githubusercontent.com`,
-  with its CT log timestamp; and the Rekor entry that logged the
-  signature, with its inclusion proof. The repository is public, so this
-  is the public-good Sigstore instance. Each attestation is also stored
-  with the repository's, which is what `gh attestation verify` looks up
-  when it is not given a bundle.
+  and whose OIDC issuer is `https://token.actions.githubusercontent.com`;
+  and the Rekor entry that logged it) and stores it with the repository's
+  attestations, on the public-good Sigstore instance (the repository is
+  public). They are for a person to check a download by hand, with `gh
+  attestation verify FILE --repo danielbodart/mosey`; the client does not
+  fetch or check them (§4.7.4, §14 question C).
 - **So** the binary for `os/arch` at version `V` is
-  `https://github.com/danielbodart/mosey/releases/download/v<V>/mosey-<V>-<os>-<arch>`,
-  its hash is the line of
+  `https://github.com/danielbodart/mosey/releases/download/v<V>/mosey-<V>-<os>-<arch>`
+  and its hash is the line of
   `https://github.com/danielbodart/mosey/releases/download/v<V>/SHA256SUMS`
-  whose second field is that name, and its provenance is
-  `https://github.com/danielbodart/mosey/releases/download/v<V>/mosey-<V>-<os>-<arch>.sigstore.json`.
+  whose second field is that name.
 
 **How the release job makes them.** After laying the binaries out and
 checking their versions, it attests each binary in a step of its own
 (`actions/attest-build-provenance`; every action in every workflow is
 pinned by commit, because the release job holds the OIDC token that
-signs as the identity clients trust and attests what the build job
-made, and the weekly update rewrites the trusted root clients embed;
-`scripts/actions-pinned.sh` refuses a tag), copies each
-step's bundle next to its binary under the name above
-(`scripts/release-bundles.sh`), and checks every bundle with `gh
-attestation verify`, offline, against the trusted root this very commit
-embeds (§4.7.4) and with the client's pins. Only then is the release
-created. A failure at any of these steps fails the job, so no release is
-ever published with an asset that is unattested, or whose own clients
-would refuse it.
+signs as this repository's release workflow, the identity `gh attestation
+verify --repo danielbodart/mosey` trusts, and attests what the build job
+made; `scripts/actions-pinned.sh` refuses a tag). Only then is the
+release created. A failure at any of these steps fails the job, so no
+release is ever published with an unattested binary.
 
 Why bare files: the hash in `SHA256SUMS` is then the hash of the very
 bytes the client sends and the remote installs at
@@ -522,9 +514,9 @@ Mapping the remote's `uname -s` and `uname -m` to `os` and `arch`
 (`Linux` → `linux`, `Darwin` → `darwin`, `x86_64` → `amd64`, `aarch64`
 and `arm64` → `arm64`; anything else has no asset) is the auto-upload
 slice's, as is the download itself. `SHA256SUMS` comes over HTTPS from
-the same release, so it catches corruption and a wrong file; the bundle
-is what ties the binary to the release workflow (§4.7.4, §14 question
-C). A client of a development build (`dev`, or a local build's timestamp
+the same release, so it catches corruption and a wrong file, not a
+compromised GitHub account or CI; the client checking the build
+attestation too is §14 question C, parked. A client of a development build (`dev`, or a local build's timestamp
 patch) has no release, so it can upload only itself.
 
 ### 4.7 Auto-upload (D7)
@@ -659,7 +651,7 @@ Anything else: `mosey: DEST is SYSNAME MACHINE, which mosey has no build
 for`. A `darwin` remote, though there is a darwin build, is refused with
 `mosey: the mosey server runs on Linux only for now, and DEST is Darwin`:
 the server's roles return `ErrUnsupported` there (D22, `server.md`), so
-copying 21 MB over to be told so would waste the user's time. That check
+copying 10 MB over to be told so would waste the user's time. That check
 goes when a macOS server lands.
 
 #### 4.7.4 Which file is sent
@@ -671,7 +663,7 @@ goes when a macOS server lands.
   through `os.Executable`. A non-dumpable process may open its own
   `/proc/self/exe` (the kernel lets a process inspect itself), so §4.3's
   `PR_SET_DUMPABLE 0` does not get in the way. Read whole, at most
-  `MaxBinary` = 128 MiB [choice; a release is about 21 MB, [M] linux/amd64 with sigstore-go, 2026-11-15], and hashed as
+  `MaxBinary` = 128 MiB [choice; a release is about 10 MB], and hashed as
   read. No network.
 - **Otherwise:** the release asset of §4.6 for **exactly `V`** and the
   remote's os/arch. Only a release version has one: `V` must match
@@ -684,79 +676,28 @@ goes when a macOS server lands.
   DEST is OS/ARCH, which it cannot copy itself to: build mosey for OS/ARCH
   and pass -remote, or put it at ~/.cache/mosey/V/mosey there`.
 
-  The download: `SHA256SUMS` first, then the binary, then the binary's
-  bundle (§4.6), all from
+  The download: `SHA256SUMS` first, then the binary, both from
   `https://github.com/danielbodart/mosey/releases/download/v<V>/`. HTTPS
   only, redirects included (a redirect to anything but `https` is
   refused); GitHub redirects release downloads to its object store. The
-  whole fetch has a deadline of 10 minutes [derived: 21 MB at 300 kbit/s is 9.3 minutes; it was 5 for 10 MB before sigstore-go, S1].
-  `SHA256SUMS` is read up to 64 KiB, the binary up to `MaxBinary`, the
-  bundle up to `MaxBundle` = 256 KiB [choice; one is about 14 KB]; more is
+  whole fetch has a deadline of 5 minutes [choice: 10 MB at 300 kbit/s].
+  `SHA256SUMS` is read up to 64 KiB, the binary up to `MaxBinary`; more is
   an error. `SHA256SUMS` is parsed strictly (`ParseSums`, fuzzed): every
   line exactly 64 lower-case hex digits, two spaces, a name of
   1 to 256 `pathchar`s other than `/`, LF; a name at most once; the asset's name must be there.
   The binary's SHA-256 must equal that line's, and its length must be
-  non-zero. Then the bundle must verify (`internal/provenance`, with
-  sigstore-go; D19, never our own crypto):
-
-  - against the **trusted root embedded in the binary**
-    (`internal/provenance/trusted_root.json`, the public-good instance's,
-    as `scripts/trusted-root.sh` fetched it through Sigstore's TUF
-    repository; the weekly `update.yml` refreshes it), so verifying needs
-    no network beyond the release's own files;
-  - with the certificate chaining to that root's Fulcio, its embedded
-    CT log timestamp verifying, and at least one Rekor entry that
-    verifies, its inclusion proof included;
-  - with the certificate valid at a time the signature was observed (the
-    Rekor entry's integrated time or an RFC 3161 timestamp), never at the
-    client's clock, so a client keeps verifying its own release after
-    the ten-minute certificate expired, as Sigstore intends;
-  - pinning the **certificate identity** to exactly
-    `https://github.com/danielbodart/mosey/.github/workflows/ci.yml@refs/heads/trunk`
-    (only trunk releases, D10, so a run on any other ref, a pull request
-    or a fork cannot sign one), the **OIDC issuer** to exactly
-    `https://token.actions.githubusercontent.com`, the **artifact
-    digest** to the SHA-256 just checked, and the **predicate type** to
-    SLSA provenance v1, so another kind of statement about the same file
-    is not taken for provenance;
-  - and pinning the **asset name**: one subject of the statement must
-    be named exactly `mosey-<V>-<os>-<arch>`, the asset asked for, with
-    that SHA-256. The digest alone says only that the workflow built
-    these bytes in *some* release; whoever can upload release assets
-    controls `SHA256SUMS` too, and could otherwise put an older release's
-    genuine binary and genuine bundle under this release's name. The
-    name carries the version and platform, so a bundle is good only for
-    the asset it was made for, and an old, vulnerable mosey cannot be
-    passed off as the current one.
-
-  All of this **before** anything is sent to the far host. A 404 on
-  `SHA256SUMS` or the binary: `mosey: there is no release vV on GitHub to
-  fetch mosey for OS/ARCH from`. A 404 on the bundle, or a bundle that
-  does not verify: `mosey: mosey V for OS/ARCH from GitHub is not shown
-  to come from mosey's release workflow, so it is not copied: ERR`,
-  followed by the same advice as for a development build. Releases from
-  before S1 have no bundles, but no client that checks bundles has one of
-  those versions: a client fetches only its own version. Any other failure, offline included: `mosey: fetching
+  non-zero, **before** anything is sent to the far host. A 404 on either
+  file: `mosey: there is no release vV on GitHub to fetch mosey for
+  OS/ARCH from`. Any other failure, offline included: `mosey: fetching
   mosey V for OS/ARCH from GITHUB-URL: ERR`, followed by the same advice as
   for a development build. Nothing is cached locally; a second host of the
   same platform downloads again (§14 question D).
 
-  What this proves: the bytes are the ones mosey's release workflow built
-  and attested, on trunk of `danielbodart/mosey`, and the attestation is
-  in Rekor's public log, where a signing nobody expected can be seen.
-  A compromised GitHub release, CDN or account that cannot run that
-  workflow on trunk cannot forge it. It does not prove that the commit
-  the workflow built was benign: someone who can push to trunk, or
-  change the workflow there, can have it attest whatever it builds; that
-  is the trust placed in trunk itself (D10).
-
-  Why the root is embedded and stays: every release's bundles are
-  checked, before it is published, against the root that release embeds
-  (§4.6), so a client can always verify the assets of its own version,
-  which are the only ones it fetches, for as long as Sigstore's log
-  keys verify the entries they signed. A key Sigstore rotates in reaches
-  clients through the weekly refresh and the next release; no client
-  ever needs a newer root than its own to verify its own release.
+  What this proves: the bytes are the ones the release lists, so
+  corruption and a wrong file are caught. It does not prove that CI made
+  them: the release's build attestation (§4.6) would, but the client does
+  not check it (§14 question C, parked: sigstore-go, which did, doubled
+  the binary and was removed).
 
 The SHA-256 of what is sent, and its length, go to the far host on the
 upload's command line (§4.7.6), and the installer refuses anything else.
@@ -928,7 +869,6 @@ a touch per login touches three times, once per upgrade per host.
 | offline, same platform | nothing needs the network: the copy is the client's own file |
 | offline, other platform | §4.7.4's fetch error and the advice to copy it by hand |
 | development build, other platform | §4.7.4's message, before any download |
-| other platform, the release's bundle missing or not verifying | §4.7.4's provenance message and the advice to copy it by hand; nothing is sent |
 | no consent | `mosey: not copying mosey to DEST` |
 | `~/.cache/mosey` is a symlink, or a version directory or the file is someone else's | the installer refuses (stderr says which), exit 1 |
 | `~/.cache` on a `noexec` mount | upload exit 126, §4.7.6 |
@@ -2122,14 +2062,9 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Client log rotation | 1 MiB, one old file | [choice] §7.4 |
 | `MaxPreamble` | 64 KiB | [choice] |
 | `MaxProbeLine` | 160 B | [derived] §4.7.2: at most 148 B used |
-| `MaxBinary` (upload, download, installer) | 128 MiB | [choice]; a release is about 21 MB [M] |
+| `MaxBinary` (upload, download, installer) | 128 MiB | [choice]; a release is about 10 MB |
 | `SHA256SUMS` read bound | 64 KiB | [choice]; four lines today |
-| `MaxBundle` (a release asset's Sigstore bundle) | 256 KiB | [choice]; one is about 14 KB |
-| Bundle asset name | `<asset>.sigstore.json` | [choice]: Sigstore's conventional suffix |
-| Release certificate identity | `https://github.com/danielbodart/mosey/.github/workflows/ci.yml@refs/heads/trunk` | [D] D7 as amended, D10 |
-| Release OIDC issuer | `https://token.actions.githubusercontent.com` | [D] D7 as amended |
-| Release predicate type | `https://slsa.dev/provenance/v1` | what `actions/attest-build-provenance` attests |
-| Release fetch deadline | 10 min | [derived] §4.7.4: 21 MB at 300 kbit/s |
+| Release fetch deadline | 5 min | [choice] §4.7.4 |
 | Consent answer bound | 64 B | [choice] |
 | `upload-hosts` file bound, key bound | 1 MiB, 1100 B | [choice] §4.7.5 |
 | Release version parts | at most 9 digits each, patch ≥ 1 | [derived] §4.7.4, `scripts/version.sh` |
@@ -2220,37 +2155,12 @@ group- or world-writable directory, a size or hash mismatch (the upload is
 removed), a `TEMP` outside `~/.cache/mosey`, a relative `HOME`.
 
 **Unit, `internal/client`:** the consent table of §4.7.5 and the
-remembered-hosts file; the release fetch against a local HTTPS server,
-with a virtual Sigstore (`internal/provenance/provenancetest`, built on
-sigstore-go's own test CA) playing the release workflow: the right asset
-is chosen and its bundle accepted; a hash mismatch, a missing asset, a
-404, an oversized body and an `http` redirect are each refused before any
-upload; and so are a missing bundle, a bundle for another identity,
-another issuer, another digest, another version's or platform's asset
-name, or from another Sigstore, a garbled one
-and an oversized one, each with the binary and `SHA256SUMS` in agreement.
-
-**Unit, `internal/provenance`:** the embedded trusted root parses and
-has a Fulcio, a Rekor log and a CT log; a bundle signed as the release
-workflow verifies, and one with a wrong identity (another branch,
-another workflow, another owner, a pull request), a wrong issuer, a
-wrong digest, another asset's name (an older version, another
-platform), another predicate type, no Rekor entry, or from an
-untrusted Sigstore does not; the release policy demands a CT timestamp;
-a real bundle that `actions/attest-build-provenance` made on GitHub
-(the GitHub CLI's, committed under `testdata/`) verifies under the
-release policy and the embedded root with its own identity, and not as
-mosey's, nor for another of its subjects' names; and
-`scripts/release-bundles.sh` pins what the client pins.
+remembered-hosts file; the release fetch against a local HTTPS server:
+the right asset is chosen, a hash mismatch, a missing asset, a 404, an
+oversized body and an `http` redirect are each refused before any upload.
 
 **Fuzz** (each run locally for at least a few minutes before it lands,
 durations in the commit message; 10 s each in CI):
-
-- `FuzzVerify` (`internal/provenance`): whatever is served as a bundle,
-  `Verify` does not panic, and anything it accepts, read again
-  independently, has a certificate for the release identity and issuer
-  and a SLSA provenance statement with one subject naming the asset
-  and digest asked about.
 
 - `FuzzParseClientLine`, `FuzzParseCredentialLine`, `FuzzParseErrorLine`:
   no panic; anything accepted re-marshals to the identical bytes; no
@@ -2366,8 +2276,7 @@ durations in the commit message; 10 s each in CI):
 | late remote bytes corrupt the session screen | ssh's stderr after the line goes, filtered, only to the log file (§7.4) |
 | a planted symlink or another user's file redirects the auto-upload's install (D7) | the installer works through `O_NOFOLLOW` descriptors below `~/.cache`, checks owner and mode at every level, and never replaces what is not the user's (§4.7.7) |
 | a corrupt, cut-short or substituted binary is installed (D7) | the installer checks the length and SHA-256 the client computed or read from `SHA256SUMS` before the rename (§4.7.4, §4.7.7) |
-| a compromised GitHub release, CDN or account serves another binary with a matching `SHA256SUMS` (D7) | the client also verifies the binary's Sigstore bundle against its embedded trusted root, pinning the trunk release workflow's identity, GitHub's OIDC issuer, the asset's name and the digest (§4.6, §4.7.4) |
-| a release's uploader serves an older, vulnerable release's genuine binary and bundle under the current name (D7) | the bundle's subject must be named for this version and platform, not only carry the digest (§4.7.4) |
+| a compromised GitHub release, CDN or account serves another binary with a matching `SHA256SUMS` (D7) | **not covered by the client** (§14 question C, parked): the release job attests every binary (§4.6), so a person can catch it with `gh attestation verify`, but the client checks only `SHA256SUMS` |
 | a hostile remote lies about its platform | it chooses which public build it is sent, nothing more (§4.7.2) |
 
 ---
@@ -2384,14 +2293,15 @@ B. **The spawner's confirmation backstop** (§4.5): the `Attached`
    message and the CredentialTTL + 10 s rule are a requirement this
    document places on `server.md`, which has yet to take it up.
 
-C. **Signed releases** (§4.6). *Decided (Dan, 2026-11-15; D7 as
-   amended): GitHub OIDC and Sigstore, not an SSH key.* CI attests every
-   binary with `actions/attest-build-provenance` and publishes each
-   bundle next to it; the client verifies it with sigstore-go against an
-   embedded trusted root, pinning the workflow identity, the issuer, the
-   asset's name (so its version and platform) and the digest (§4.6,
-   §4.7.4). There is no long-lived signing key to guard
-   or rotate. `SHA256SUMS` stays.
+C. **Signed releases** (§4.6). *Parked (Dan, 2026-11-15; D7 as amended,
+   PLAN O16).* CI attests every binary with
+   `actions/attest-build-provenance` (GitHub OIDC and Sigstore, no
+   long-lived key), and GitHub stores the attestations, so a person can
+   check a download with `gh attestation verify FILE --repo
+   danielbodart/mosey`. The client checked them for a while with
+   sigstore-go, which doubled the binary (9.9 to 21 MB) and brought about
+   65 modules, so it was removed; the client checks `SHA256SUMS` only
+   (§4.7.4). To revisit with a small verifier; no large dependency.
 
 D. **A local cache of downloaded releases** (§4.7.4). Each host of a
    foreign platform downloads the release again; keeping it under
@@ -2399,7 +2309,7 @@ D. **A local cache of downloaded releases** (§4.7.4). Each host of a
    file the client must re-verify before trusting.
 
 E. **Old versions in `~/.cache/mosey`** (§4.7.7). Under D10 each upgrade
-   leaves about 21 MB per host. Removing a version is safe for running
+   leaves about 10 MB per host. Removing a version is safe for running
    sessions (they run `/proc/self/exe`), but a resume from an old client
    (question A) would then upload that version again, so pruning waits
    for the resume slice's answer to A.
