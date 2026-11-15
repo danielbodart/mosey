@@ -236,7 +236,7 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 	t.Run("a host with no mosey asks, copies, and the session hops on from the copy", func(t *testing.T) {
 		c := startUploadClient(t, s, a, state)
 		waitFor(t, "the question", func() bool { return strings.Contains(c.screen.String(), "[y/N]") })
-		if !strings.Contains(c.screen.String(), "mosey-e2e has no mosey. Copy this one (linux/") {
+		if !strings.Contains(c.screen.String(), "mosey-e2e has no mosey this one can use. Copy this one (linux/") {
 			t.Errorf("asked %q", c.screen.String())
 		}
 		c.master.Write([]byte("y\r"))

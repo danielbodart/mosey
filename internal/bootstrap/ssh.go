@@ -228,22 +228,20 @@ func wrap(script string) string {
 // asked --serve=protocol with stdin on /dev/null (the ClientLine waiting
 // there is the launcher's) and stderr dropped, and exec'd as flag (the
 // launcher's --serve, or a role's) only if it says exactly protocol.
-// Otherwise one MOSEY-PROBE line saying what the host is and whether a
-// cached file was there ("other") or not ("none"), and exit 0, so 126 and
-// 127 keep their slice-1 meaning. (The script may hold no !, so "not a
-// symlink" is the empty then-branch.)
+// Otherwise one MOSEY-PROBE line saying what the host is, and exit 0, so
+// 126 and 127 keep their slice-1 meaning. (The script may hold no !, so
+// "not a symlink" is the empty then-branch.)
 func probeCommand(protocol, flag string) string {
 	if !validProtocolAnswer(protocol) {
 		protocol = "-"
 	}
 	return wrap(`if command -v mosey >/dev/null 2>&1; then exec mosey ` + flag + `; fi; ` +
-		`c="$HOME/.cache/mosey"; f="$c/mosey"; k=` + cachedNone + `; ` +
-		`if test -e "$f" || test -h "$f"; then k=` + cachedOther + `; ` +
+		`c="$HOME/.cache/mosey"; f="$c/mosey"; ` +
 		`if test -h "$c" || test -h "$f"; then :; ` +
 		`elif test -O "$HOME/.cache" && test -O "$c" && test -O "$f" && ` +
-		`[ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "` + protocol + `" ]; then exec "$f" ` + flag + `; fi; fi; ` +
+		`[ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "` + protocol + `" ]; then exec "$f" ` + flag + `; fi; ` +
 		`s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); ` +
-		`echo "` + probeMagic + ` ` + strconv.Itoa(Version) + ` ${s:-unknown} ${a:-unknown} $k"`)
+		`echo "` + probeMagic + ` ` + strconv.Itoa(Version) + ` ${s:-unknown} ${a:-unknown}"`)
 }
 
 // uploadCommand is §4.7.6's: the binary arrives on stdin, goes to a

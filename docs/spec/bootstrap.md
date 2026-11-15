@@ -562,7 +562,7 @@ client                                                     far host
 ssh … "PROBE"   + ClientLine  ──────────────────────────►  mosey on PATH?                         exec it --serve
                                                            else ~/.cache/mosey/mosey, if its
                                                              --serve=protocol is the client's?    exec it --serve
-                              ◄──────── MOSEY-PROBE 1 Linux x86_64 none   (neither: say what this host is)
+                              ◄──────── MOSEY-PROBE 1 Linux x86_64   (neither: say what this host is)
 ask the user (first time per host)
 pick the binary: our own file, or the release asset, SHA-256 checked
 ssh … "UPLOAD"  + the binary  ──────────────────────────►  mktemp in ~/.cache/mosey; cat; run it as
@@ -602,7 +602,7 @@ The remote command (one argument, as §4.1; `B H` is the client's
 now `1 1`):
 
 ```
-exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; c="$HOME/.cache/mosey"; f="$c/mosey"; k=none; if test -e "$f" || test -h "$f"; then k=other; if test -h "$c" || test -h "$f"; then :; elif test -O "$HOME/.cache" && test -O "$c" && test -O "$f" && [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown} $k"'
+exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; c="$HOME/.cache/mosey"; f="$c/mosey"; if test -h "$c" || test -h "$f"; then :; elif test -O "$HOME/.cache" && test -O "$c" && test -O "$f" && [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
 ```
 
 - **`PATH` first** (Dan, 2026-11-15). A `mosey` on the remote `PATH` is
@@ -629,13 +629,12 @@ exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; 
   the same way for ever (D8 V1). The attach protocol (§9.2.1) is not in
   it: that is spoken between server binaries on one host, never by the
   client.
-- **Neither:** one `MOSEY-PROBE` line on stdout, then exit 0. Its last
-  field says whether there is a cached file the probe could not use
-  (`other`: it speaks another protocol, does not answer, or breaks the
-  installer's rules, which the installer will then name) or none
-  (`none`), so the question can say which (§4.7.5). The probe never exits
-  126 or 127 itself, so `ErrNoServer` from an exit status means only what
-  it meant in slice 1.
+- **Neither:** one `MOSEY-PROBE` line on stdout, then exit 0. It does not
+  say whether a cached file was there that the probe could not use: the
+  install is the same either way (the installer replaces the user's own
+  regular file and names what it refuses, §4.7.7), and one question
+  covers both (§4.7.5). The probe never exits 126 or 127 itself, so
+  `ErrNoServer` from an exit status means only what it meant in slice 1.
 - **`command -v` and `test -O`.** `command -v` is POSIX. `test -O` is not,
   but dash, bash, BusyBox ash and the BSD and macOS `/bin/sh` all have it;
   a `/bin/sh` without it makes the test false, so the cache is not run and
@@ -653,14 +652,13 @@ exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; 
 ours and fuzzed with them:
 
 ```
-probe-line = "MOSEY-PROBE" SP proto SP sysname SP machine SP cached LF
+probe-line = "MOSEY-PROBE" SP proto SP sysname SP machine LF
 proto      = decimal                 ; must be Version
 sysname    = 1*64(%x21-7E)           ; uname -s, or "unknown"
 machine    = 1*64(%x21-7E)           ; uname -m, or "unknown"
-cached     = "none" / "other"
 ```
 
-At most 154 bytes [derived: 11 + 1 + 5 + 1 + 64 + 1 + 64 + 1 + 5 + LF];
+At most 148 bytes [derived: 11 + 1 + 5 + 1 + 64 + 1 + 64 + LF];
 **`MaxProbeLine` = 160**. Canonical as §6.1 asks. `ReadCredential` returns
 it as a `*NoServerError` (`errors.Is(err, ErrNoServer)`) carrying the
 fields. A `uname` that prints a space or something longer gives a line
@@ -748,15 +746,14 @@ upload's command line (§4.7.6), and the installer refuses anything else.
 after the probe's ssh has exited, so no ssh is reading `/dev/tty`:
 
 ```
-mosey: DEST has no mosey. Copy this one (OS/ARCH, N.N MB) to ~/.cache/mosey/ there? [y/N] 
-mosey: DEST has no mosey. Download mosey V for OS/ARCH from GitHub and copy it to ~/.cache/mosey/ there? [y/N] 
+mosey: DEST has no mosey this one can use. Copy this one (OS/ARCH, N.N MB) to ~/.cache/mosey/ there? [y/N] 
+mosey: DEST has no mosey this one can use. Download mosey V for OS/ARCH from GitHub and copy it to ~/.cache/mosey/ there? [y/N] 
 ```
 
 (the first for the client's own platform, the second for another, which is
-asked before anything is downloaded). When the probe said `other`, each
-starts instead `mosey: DEST's ~/.cache/mosey/mosey cannot serve this
-mosey.` and asks to replace it: `Replace it with this one (OS/ARCH, N.N
-MB)? [y/N]`, or `Replace it with mosey V for OS/ARCH from GitHub? [y/N]`.
+asked before anything is downloaded). The same question covers a host
+with no mosey at all and one whose cached copy the probe could not use,
+which the install replaces (§4.7.7).
 The answer is one line read from the terminal, at most 64 bytes counted.
 Every field in it is the client's own (the destination as typed, its
 version, the platform mapped through §4.7.3), never a remote string.
@@ -1931,7 +1928,6 @@ func ReadCredential(r io.Reader) (CredentialLine, error)
 type ProbeLine struct {
 	System  string // uname -s
 	Machine string // uname -m
-	Cached  bool   // "other": a cached file is there but cannot be used
 }
 
 func MarshalProbeLine(ProbeLine) []byte
@@ -2055,7 +2051,7 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Spawner backstop (requirement on server.md) | CredentialTTL + 10 s | [choice] §4.5 |
 | Client log rotation | 1 MiB, one old file | [choice] §7.4 |
 | `MaxPreamble` | 64 KiB | [choice] |
-| `MaxProbeLine` | 160 B | [derived] §4.7.2: at most 154 B used |
+| `MaxProbeLine` | 160 B | [derived] §4.7.2: at most 148 B used |
 | `MaxBinary` (upload, download, installer) | 128 MiB | [choice]; a release is about 10 MB |
 | `SHA256SUMS` read bound | 64 KiB | [choice]; four lines today |
 | Release fetch deadline | 5 min | [choice] §4.7.4 |

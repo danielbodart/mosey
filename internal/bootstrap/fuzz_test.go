@@ -112,8 +112,7 @@ func FuzzReadCredential(f *testing.F) {
 	f.Add(append([]byte("motd\r\nMOSE\nMOSEY\n"), line...))
 	f.Add([]byte("MOSEY-ERROR 2 version -\n"))
 	f.Add(append(bytes.Repeat([]byte("x"), 70000), line...))
-	f.Add([]byte("rc noise\nMOSEY-PROBE 1 Linux x86_64 none\n"))
-	f.Add([]byte("MOSEY-PROBE 1 Linux x86_64 other\n"))
+	f.Add([]byte("rc noise\nMOSEY-PROBE 1 Linux x86_64\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		r := &countingReader{r: bytes.NewReader(data)}
 		c, err := ReadCredential(r)
@@ -148,10 +147,10 @@ func FuzzReadCredential(f *testing.F) {
 }
 
 func FuzzParseProbeLine(f *testing.F) {
-	f.Add([]byte("MOSEY-PROBE 1 Linux x86_64 none\n"))
-	f.Add([]byte("MOSEY-PROBE 1 unknown unknown other\n"))
-	f.Add([]byte("MOSEY-PROBE 2 Linux aarch64 none\n"))
-	f.Add([]byte("MOSEY-PROBE 1 Linux aarch64\n"))
+	f.Add([]byte("MOSEY-PROBE 1 Linux x86_64\n"))
+	f.Add([]byte("MOSEY-PROBE 1 unknown unknown\n"))
+	f.Add([]byte("MOSEY-PROBE 2 Linux aarch64\n"))
+	f.Add([]byte("MOSEY-PROBE 1 Linux aarch64 none\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		p, err := ParseProbeLine(line)
 		if err != nil {
@@ -165,11 +164,6 @@ func FuzzParseProbeLine(f *testing.F) {
 		}
 		if len(p.System) < 1 || len(p.System) > 64 || len(p.Machine) < 1 || len(p.Machine) > 64 {
 			t.Fatalf("accepted fields %q %q", p.System, p.Machine)
-		}
-		// The cached field is one of its two words, and only it says so.
-		if !bytes.HasSuffix(line, []byte(" none\n")) && !bytes.HasSuffix(line, []byte(" other\n")) ||
-			p.Cached != bytes.HasSuffix(line, []byte(" other\n")) {
-			t.Fatalf("%q parsed as cached %v", line, p.Cached)
 		}
 	})
 }

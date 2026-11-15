@@ -122,7 +122,7 @@ func TestTheFirstCopyIsAskedForAndRemembered(t *testing.T) {
 	if got, err := h.installed(); err != nil || string(got) != installer {
 		t.Fatalf("installed %q %v", got, err)
 	}
-	if len(h.asked) != 1 || h.asked[0] != "mosey: far has no mosey. Copy this one (linux/amd64, 0.0 MB) to ~/.cache/mosey/ there? [y/N] " {
+	if len(h.asked) != 1 || h.asked[0] != "mosey: far has no mosey this one can use. Copy this one (linux/amd64, 0.0 MB) to ~/.cache/mosey/ there? [y/N] " {
 		t.Errorf("asked %q", h.asked)
 	}
 	hosts, _ := os.ReadFile(filepath.Join(h.state, "mosey", "upload-hosts"))
@@ -136,11 +136,10 @@ func TestTheFirstCopyIsAskedForAndRemembered(t *testing.T) {
 	}
 }
 
-// A cached copy the probe could not use is replaced, and the question
-// says so; for another platform it names the release instead
-// (bootstrap.md §4.7.5).
-func TestReplacingTheCachedCopyIsAskedForAsSuch(t *testing.T) {
-	stale := bootstrap.ProbeLine{System: "Linux", Machine: "x86_64", Cached: true}
+// A cached copy the probe could not use is replaced under the one
+// question, which covers a host with none too; for another platform it
+// names the release instead (bootstrap.md §4.7.5).
+func TestACachedCopyThatCannotServeIsReplacedUnderTheOneQuestion(t *testing.T) {
 	h := newUploadHost(t)
 	if err := os.MkdirAll(filepath.Join(h.home, ".cache", "mosey"), 0o700); err != nil {
 		t.Fatal(err)
@@ -148,19 +147,16 @@ func TestReplacingTheCachedCopyIsAskedForAsSuch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(h.home, ".cache", "mosey", "mosey"), []byte("a build of another protocol"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.copier(UploadAsk, installer).copy(context.Background(), stale); err != nil {
+	if err := h.copier(UploadAsk, installer).copy(context.Background(), linux); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.asked) != 1 || h.asked[0] != "mosey: far's ~/.cache/mosey/mosey cannot serve this mosey. Replace it with this one (linux/amd64, 0.0 MB)? [y/N] " {
+	if len(h.asked) != 1 || h.asked[0] != "mosey: far has no mosey this one can use. Copy this one (linux/amd64, 0.0 MB) to ~/.cache/mosey/ there? [y/N] " {
 		t.Errorf("asked %q", h.asked)
 	}
 	if got, err := h.installed(); err != nil || string(got) != installer {
 		t.Errorf("installed %q %v", got, err)
 	}
-	if q := question("far", "0.4.2", "linux/arm64", nil, false, true); q != "mosey: far's ~/.cache/mosey/mosey cannot serve this mosey. Replace it with mosey 0.4.2 for linux/arm64 from GitHub? [y/N] " {
-		t.Errorf("for another platform: %q", q)
-	}
-	if q := question("far", "0.4.2", "linux/arm64", nil, false, false); q != "mosey: far has no mosey. Download mosey 0.4.2 for linux/arm64 from GitHub and copy it to ~/.cache/mosey/ there? [y/N] " {
+	if q := question("far", "0.4.2", "linux/arm64", nil, false); q != "mosey: far has no mosey this one can use. Download mosey 0.4.2 for linux/arm64 from GitHub and copy it to ~/.cache/mosey/ there? [y/N] " {
 		t.Errorf("for another platform: %q", q)
 	}
 }

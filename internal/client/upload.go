@@ -81,8 +81,7 @@ func (c *copier) copy(ctx context.Context, p bootstrap.ProbeLine) error {
 
 	// Our own file is read first, so the question can say how big it is;
 	// a release is fetched only once the user has said yes. A cached copy
-	// the probe could not use is replaced, and the question says so
-	// (§4.7.5).
+	// the probe could not use is replaced by the install (§4.7.7).
 	var bin []byte
 	if ours {
 		var err error
@@ -90,7 +89,7 @@ func (c *copier) copy(ctx context.Context, p bootstrap.ProbeLine) error {
 			return fail(err, "reading this mosey's own file to copy it to %s: %v", dest, err)
 		}
 	}
-	if err := c.consent(question(dest, v, platform, bin, ours, p.Cached)); err != nil {
+	if err := c.consent(question(dest, v, platform, bin, ours)); err != nil {
 		return err
 	}
 	var sum [32]byte
@@ -119,21 +118,16 @@ func (c *copier) copy(ctx context.Context, p bootstrap.ProbeLine) error {
 }
 
 // question is §4.7.5's: copy this client's own file, or download its
-// version's release for another platform, to a host with no mosey, or in
-// place of a cached copy the probe could not use. Every field is the
-// client's own, never the far side's.
-func question(dest, v, platform string, bin []byte, ours, replace bool) string {
-	what := fmt.Sprintf("mosey %s for %s from GitHub", v, platform)
+// version's release for another platform, to a host with no mosey this
+// client can use, whether it has none or a cached copy the probe could
+// not use. Every field is the client's own, never the far side's.
+func question(dest, v, platform string, bin []byte, ours bool) string {
 	if ours {
-		what = fmt.Sprintf("this one (%s, %s)", platform, megabytes(len(bin)))
+		return fmt.Sprintf("mosey: %s has no mosey this one can use. Copy this one (%s, %s) to ~/.cache/mosey/ there? [y/N] ",
+			dest, platform, megabytes(len(bin)))
 	}
-	if replace {
-		return fmt.Sprintf("mosey: %s's ~/.cache/mosey/mosey cannot serve this mosey. Replace it with %s? [y/N] ", dest, what)
-	}
-	if ours {
-		return fmt.Sprintf("mosey: %s has no mosey. Copy %s to ~/.cache/mosey/ there? [y/N] ", dest, what)
-	}
-	return fmt.Sprintf("mosey: %s has no mosey. Download %s and copy it to ~/.cache/mosey/ there? [y/N] ", dest, what)
+	return fmt.Sprintf("mosey: %s has no mosey this one can use. Download mosey %s for %s from GitHub and copy it to ~/.cache/mosey/ there? [y/N] ",
+		dest, v, platform)
 }
 
 // byHand is the advice when the client cannot supply a build itself.

@@ -15,10 +15,9 @@ import (
 
 func TestAProbeLineSurvivesARoundTrip(t *testing.T) {
 	for _, p := range []ProbeLine{
-		{"Linux", "x86_64", false},
-		{"Linux", "x86_64", true},
-		{"unknown", "unknown", false},
-		{strings.Repeat("S", 64), strings.Repeat("m", 64), true},
+		{"Linux", "x86_64"},
+		{"unknown", "unknown"},
+		{strings.Repeat("S", 64), strings.Repeat("m", 64)},
 	} {
 		line := MarshalProbeLine(p)
 		got, err := ParseProbeLine(line)
@@ -29,47 +28,43 @@ func TestAProbeLineSurvivesARoundTrip(t *testing.T) {
 			t.Errorf("%q is over MaxProbeLine", line)
 		}
 	}
-	if got := string(MarshalProbeLine(ProbeLine{"Linux", "aarch64", false})); got != "MOSEY-PROBE 1 Linux aarch64 none\n" {
+	if got := string(MarshalProbeLine(ProbeLine{"Linux", "aarch64"})); got != "MOSEY-PROBE 1 Linux aarch64\n" {
 		t.Errorf("marshalled %q", got)
 	}
-	if got := string(MarshalProbeLine(ProbeLine{"Linux", "aarch64", true})); got != "MOSEY-PROBE 1 Linux aarch64 other\n" {
-		t.Errorf("marshalled %q", got)
-	}
-	if n := len(MarshalProbeLine(ProbeLine{strings.Repeat("S", 64), strings.Repeat("m", 64), true})); n != 150 {
+	if n := len(MarshalProbeLine(ProbeLine{strings.Repeat("S", 64), strings.Repeat("m", 64)})); n != 144 {
 		t.Errorf("the longest probe line is %d bytes", n)
 	}
 }
 
 func TestAProbeLineOutsideItsGrammarIsRefused(t *testing.T) {
 	for _, line := range []string{
-		"MOSEY-PROBE 1 Linux x86_64\n",
-		"MOSEY-PROBE 1 Linux x86_64 maybe\n",
-		"MOSEY-PROBE 1 Linux x86_64 none extra\n",
-		"MOSEY-PROBE 1 Linux  x86_64 none\n",
-		"MOSEY-PROBE 1 Linux x86_64 none \n",
-		"MOSEY-PROBE 1 Linux x86_64 none",
-		"MOSEY-PROBE 1 Linux x86_64 none\r\n",
-		"MOSEY-PROBE 01 Linux x86_64 none\n",
-		"MOSEY-PROBE 1 Lin\x00ux x86_64 none\n",
-		"MOSEY-PROBE 1 " + strings.Repeat("S", 65) + " x86_64 none\n",
+		"MOSEY-PROBE 1 Linux\n",
+		"MOSEY-PROBE 1 Linux x86_64 none\n",
+		"MOSEY-PROBE 1 Linux  x86_64\n",
+		"MOSEY-PROBE 1 Linux x86_64 \n",
+		"MOSEY-PROBE 1 Linux x86_64",
+		"MOSEY-PROBE 1 Linux x86_64\r\n",
+		"MOSEY-PROBE 01 Linux x86_64\n",
+		"MOSEY-PROBE 1 Lin\x00ux x86_64\n",
+		"MOSEY-PROBE 1 " + strings.Repeat("S", 65) + " x86_64\n",
 	} {
 		if p, err := ParseProbeLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%q: %+v %v", line, p, err)
 		}
 	}
 	var ve *VersionError
-	if _, err := ParseProbeLine([]byte("MOSEY-PROBE 2 Linux x86_64 none\n")); !errors.As(err, &ve) || ve.Got != 2 {
+	if _, err := ParseProbeLine([]byte("MOSEY-PROBE 2 Linux x86_64\n")); !errors.As(err, &ve) || ve.Got != 2 {
 		t.Errorf("another version: %v", err)
 	}
 }
 
 func TestReadCredentialReturnsTheProbeAsNoServer(t *testing.T) {
-	_, err := ReadCredential(strings.NewReader("Welcome\nMOSEY-PROBE 1 Linux aarch64 other\n"))
+	_, err := ReadCredential(strings.NewReader("Welcome\nMOSEY-PROBE 1 Linux aarch64\n"))
 	var ns *NoServerError
-	if !errors.As(err, &ns) || !errors.Is(err, ErrNoServer) || ns.Probe != (ProbeLine{"Linux", "aarch64", true}) {
+	if !errors.As(err, &ns) || !errors.Is(err, ErrNoServer) || ns.Probe != (ProbeLine{"Linux", "aarch64"}) {
 		t.Fatalf("%v", err)
 	}
-	if _, err := ReadCredential(strings.NewReader("MOSEY-PROBE 1 Linux x86 64 none\n")); !errors.Is(err, ErrBadLine) {
+	if _, err := ReadCredential(strings.NewReader("MOSEY-PROBE 1 Linux x86 64\n")); !errors.Is(err, ErrBadLine) {
 		t.Errorf("a probe line with a space in a field: %v", err)
 	}
 }
@@ -89,7 +84,7 @@ func TestEveryPlatformWithABuildIsMappedAndNoOther(t *testing.T) {
 			t.Errorf("%s %s: %s %s %v", c.sys, c.machine, os, arch, ok)
 		}
 	}
-	for _, p := range []ProbeLine{{"linux", "x86_64", false}, {"FreeBSD", "amd64", false}, {"Linux", "armv7l", false}, {"Linux", "riscv64", false}, {"unknown", "unknown", false}, {"Linux", "i686", false}} {
+	for _, p := range []ProbeLine{{"linux", "x86_64"}, {"FreeBSD", "amd64"}, {"Linux", "armv7l"}, {"Linux", "riscv64"}, {"unknown", "unknown"}, {"Linux", "i686"}} {
 		if os, arch, ok := Platform(p); ok {
 			t.Errorf("%+v mapped to %s/%s", p, os, arch)
 		}
@@ -271,8 +266,7 @@ func writeMosey(t *testing.T, path, answer, name string) {
 // The probe, as each login shell would run it (§4.7.2): mosey on PATH
 // first, whatever it answers; else the cached copy if it answers this
 // client's protocol and the installer would have written it; else a
-// ProbeLine that parses, exit 0, saying whether a cached file was there
-// that could not be used.
+// ProbeLine that parses, exit 0.
 func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 	const ours = "1 1"
 	needTools(t, remotePath(), "uname", "cat")
@@ -282,23 +276,22 @@ func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 			cache  string // the cached copy's answer; "-" for none
 			path   string // the PATH mosey's answer; "-" for none
 			served string // which ran, or "" for a probe line
-			cached bool   // the probe line's cached field
 			link   string // "dir": ~/.cache/mosey is a symlink; "file": the file is
 		}{
-			{"PATH", "-", ours, "path", false, ""},
+			{"PATH", "-", ours, "path", ""},
 			// Dan, 2026-11-15: whatever mosey the host has. PATH's is not
 			// asked anything: a mismatch is the bootstrap's to report.
-			{"PATH of another protocol", "-", "2 2", "path", false, ""},
-			{"PATH first", ours, ours, "path", false, ""},
-			{"cache", ours, "-", "cache", false, ""},
-			{"cache of another protocol", "1 2", "-", "", true, ""},
-			{"cache that answers nothing", "", "-", "", true, ""},
+			{"PATH of another protocol", "-", "2 2", "path", ""},
+			{"PATH first", ours, ours, "path", ""},
+			{"cache", ours, "-", "cache", ""},
+			{"cache of another protocol", "1 2", "-", "", ""},
+			{"cache that answers nothing", "", "-", "", ""},
 			// The installer's rules hold for the probe too: a cache it
 			// would refuse to write is not run from.
-			{"symlinked cache directory", ours, "-", "", true, "dir"},
-			{"symlinked cache directory, PATH", ours, ours, "path", false, "dir"},
-			{"symlinked cached file", ours, "-", "", true, "file"},
-			{"nothing", "-", "-", "", false, ""},
+			{"symlinked cache directory", ours, "-", "", "dir"},
+			{"symlinked cache directory, PATH", ours, ours, "path", "dir"},
+			{"symlinked cached file", ours, "-", "", "file"},
+			{"nothing", "-", "-", "", ""},
 		} {
 			home, bin := t.TempDir(), t.TempDir()
 			if c.cache != "-" {
@@ -355,9 +348,6 @@ func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 			}
 			if _, _, ok := Platform(ns.Probe); !ok {
 				t.Errorf("%s, %s: this host is not a platform: %+v", filepath.Base(shell), c.name, ns.Probe)
-			}
-			if ns.Probe.Cached != c.cached {
-				t.Errorf("%s, %s: the probe says cached %v", filepath.Base(shell), c.name, ns.Probe.Cached)
 			}
 		}
 	}
