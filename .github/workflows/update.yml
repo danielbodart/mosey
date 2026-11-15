@@ -10,7 +10,9 @@
 # dependency (go get -u) but the two D23 pins, with flake.nix's vendorHash
 # worked out again; and the Sigstore trusted root the client embeds
 # (scripts/trusted-root.sh, fetched through Sigstore's TUF repository), so
-# a key Sigstore rotates in reaches the next release (D7). mosey requires none of Dan's own modules (D17), so there
+# a key Sigstore rotates in reaches the next release (D7); a failed
+# refresh keeps the old root and holds back nothing else. mosey requires
+# none of Dan's own modules (D17), so there
 # is no scripts/pin.sh step.
 #
 # Held: tuios.dev/vt, the shipped emulator, which D23 pins, and
@@ -125,9 +127,16 @@ jobs:
           moved+=("${mods[@]}")
 
           # 4. The Sigstore trusted root mosey embeds (D7). It is under
-          # internal/, so a week that moves it releases.
-          scripts/trusted-root.sh
-          if ! git diff --quiet internal/provenance/trusted_root.json; then
+          # internal/, so a week that moves it releases. It needs Sigstore's
+          # TUF CDN and refuses a root it does not recognise; if it fails,
+          # the old root stays and the rest of the week's updates, Go's
+          # security fixes among them, still go ahead. The old root keeps
+          # working until Sigstore rotates a key, and a warning says so.
+          if ! scripts/trusted-root.sh; then
+            echo "::warning::refreshing the Sigstore trusted root failed; the old one is kept and the other updates go ahead"
+            rm -f internal/provenance/trusted_root.json.tmp
+            git checkout -- internal/provenance/trusted_root.json
+          elif ! git diff --quiet internal/provenance/trusted_root.json; then
             moved+=("Sigstore trusted root")
           fi
 
