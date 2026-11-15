@@ -97,6 +97,7 @@ func (s *spawner) serveResume(f *os.File) error {
 	}
 	msg, ok := m.(ipc.ClientLine)
 	if !ok {
+		ipc.CloseFiles(m) // an Adopt, which only a new spawner's B carries
 		return refuse(fmt.Errorf("the launcher sent %T", m))
 	}
 	cl, err := checkResumeLine(msg.Line, s.sid)

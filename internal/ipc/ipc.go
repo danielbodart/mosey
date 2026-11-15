@@ -181,6 +181,19 @@ func (c *Conn) Recv() (Message, error) {
 	return withFiles(m, fs), nil
 }
 
+// CloseFiles closes every fd m carries. Recv hands the fds of a message
+// it accepts to the caller, so a caller that refuses a well-formed message
+// because it is not the one the protocol expects next closes them with
+// this, as server.md §3.1 says every receiver does: otherwise a peer could
+// fill the receiver's fd table one unexpected message at a time.
+func CloseFiles(m Message) {
+	for _, f := range files(m) {
+		if f != nil {
+			f.Close()
+		}
+	}
+}
+
 // read reads one message into c.buf, with any fds that came with it.
 func (c *Conn) read() (n int, fds []int, err error) {
 	if !c.recvmsg {

@@ -3,6 +3,8 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,6 +24,44 @@ type forgery struct {
 	st     ipc.HandoffState
 	agent  *os.File
 	screen []byte
+	// msgs, when set, is sent in place of the state, agent listener and
+	// screen in their order, for a session that sends the wrong thing.
+	msgs []ipc.Message
+}
+
+// messages is what g sends down the attach connection.
+func (g forgery) messages() []ipc.Message {
+	if g.msgs != nil {
+		return g.msgs
+	}
+	ms := []ipc.Message{g.st}
+	if g.st.Agent {
+		ms = append(ms, ipc.HandoffAgent{Listener: g.agent})
+	}
+	return append(ms, ipc.HandoffScreen{Fragment: g.screen})
+}
+
+// sent is every file g sends, each once.
+func (g forgery) sent() []*os.File {
+	var fs []*os.File
+	seen := map[*os.File]bool{}
+	add := func(f *os.File) {
+		if f != nil && !seen[f] {
+			seen[f] = true
+			fs = append(fs, f)
+		}
+	}
+	for _, m := range g.messages() {
+		switch m := m.(type) {
+		case ipc.HandoffState:
+			add(m.PTY)
+			add(m.Pidfd)
+			add(m.Listener)
+		case ipc.HandoffAgent:
+			add(m.Listener)
+		}
+	}
+	return fs
 }
 
 // adoptFixture is an adopter for session sid under a runtime directory of
@@ -107,19 +147,53 @@ func (f *adoptFixture) honest() forgery {
 	}
 }
 
-// openFDs is how many fds this process has open.
-func openFDs(t *testing.T) int {
+// copies is how many of this process's fds share f's open file
+// description, f's own included: what SCM_RIGHTS hands the adopter is the
+// same description, so each copy it still holds counts here. kcmp(2)
+// asks the kernel rather than counting /proc/self/fd, whose size other
+// goroutines change at will: os/exec's Wait closes the pidfd of an idle
+// child an earlier test killed whenever it gets round to reaping it.
+func copies(t *testing.T, f *os.File) int {
 	t.Helper()
+	var own int
+	raw, err := f.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.Control(func(fd uintptr) { own = int(fd) })
 	entries, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return len(entries)
+	pid := uintptr(os.Getpid())
+	n := 0
+	for _, e := range entries {
+		fd, err := strconv.Atoi(e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		const kcmpFile = 0 // KCMP_FILE, <linux/kcmp.h>
+		same, _, errno := unix.Syscall6(unix.SYS_KCMP, pid, pid, kcmpFile, uintptr(own), uintptr(fd), 0)
+		switch errno {
+		case 0:
+			if same == 0 {
+				n++
+			}
+		case unix.EBADF:
+			// Closed since the directory was read, the directory's own
+			// fd among them.
+		default:
+			t.Skipf("kcmp: %v", errno)
+		}
+	}
+	runtime.KeepAlive(f)
+	return n
 }
 
 // adopt sends g down an attach connection and runs the adopter's
 // requestHandoff on the other end. It returns the adoption or the
-// refusal, and how many more fds the process has open afterwards.
+// refusal, and how many copies of the files g sent the adopter holds
+// afterwards.
 func (f *adoptFixture) adopt(g forgery) (*adoption, error, int) {
 	f.t.Helper()
 	ours, theirs, err := ipc.Pair()
@@ -130,22 +204,18 @@ func (f *adoptFixture) adopt(g forgery) (*adoption, error, int) {
 	defer attach.Close()
 	session, _ := ipc.NewConn(theirs, ipc.Spawner, ipc.Launcher)
 	defer session.Close()
-	// Everything goes before the adopter asks; fds in flight are in no
-	// process's table, so the count before is this process's own.
-	if err := session.Send(g.st); err != nil {
-		f.t.Fatal(err)
-	}
-	if g.st.Agent {
-		if err := session.Send(ipc.HandoffAgent{Listener: g.agent}); err != nil {
+	// Everything goes before the adopter asks.
+	for _, m := range g.messages() {
+		if err := session.Send(m); err != nil {
 			f.t.Fatal(err)
 		}
 	}
-	if err := session.Send(ipc.HandoffScreen{Fragment: g.screen}); err != nil {
-		f.t.Fatal(err)
-	}
-	before := openFDs(f.t)
 	a, err := f.s.requestHandoff(attach, f.sid)
-	return a, err, openFDs(f.t) - before
+	held := 0
+	for _, file := range g.sent() {
+		held += copies(f.t, file) - 1 // the test's own
+	}
+	return a, err, held
 }
 
 // An honest session's state is adopted, with every fd it sent, and with
@@ -199,6 +269,16 @@ func TestAnAdopterRefusesAForgedStateAndClosesEveryFDItWasSent(t *testing.T) {
 		{"an attach listener for the agent's", func(f *adoptFixture, g *forgery) {
 			g.st.Agent, g.agent = true, f.listener([16]byte{0x5a, 0xf0})
 		}, "agent socket"},
+		{"an agent listener in place of the state", func(f *adoptFixture, g *forgery) {
+			g.msgs = []ipc.Message{ipc.HandoffAgent{Listener: f.agentListener(sessionDir(filepath.Join(f.runtime, "mosey"), f.sid))}}
+		}, "not its state"},
+		{"a second state in place of the agent's listener", func(f *adoptFixture, g *forgery) {
+			g.st.Agent = true
+			g.msgs = []ipc.Message{g.st, g.st}
+		}, "agent socket"},
+		{"an agent listener unasked in place of the screen", func(f *adoptFixture, g *forgery) {
+			g.msgs = []ipc.Message{g.st, ipc.HandoffAgent{Listener: f.agentListener(sessionDir(filepath.Join(f.runtime, "mosey"), f.sid))}}
+		}, "not its screen"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newAdoptFixture(t, [16]byte{0x5a, 2})

@@ -134,6 +134,7 @@ func (s *spawner) serveHandoff(conn *ipc.Conn, f *os.File, req ipc.HandoffReques
 	f.SetReadDeadline(time.Now().Add(s.takenWait))
 	m, err := conn.Recv()
 	if _, ok := m.(ipc.HandoffTaken); err != nil || !ok {
+		ipc.CloseFiles(m)
 		return fmt.Errorf("the newer spawner did not take the session (%v): carrying on", err)
 	}
 	// The commit is two-phase (server.md §2.8 steps 8 and 9): the adopter
@@ -355,6 +356,7 @@ func (s *spawner) requestHandoff(attach *ipc.Conn, sid [16]byte) (*adoption, err
 	}
 	st, ok := m.(ipc.HandoffState)
 	if !ok {
+		ipc.CloseFiles(m)
 		return nil, fmt.Errorf("the session sent %T, not its state", m)
 	}
 	a := &adoption{state: st}
@@ -374,6 +376,7 @@ func (s *spawner) requestHandoff(attach *ipc.Conn, sid [16]byte) (*adoption, err
 		m, err := attach.Recv()
 		ag, ok := m.(ipc.HandoffAgent)
 		if err != nil || !ok {
+			ipc.CloseFiles(m)
 			return fail(fmt.Errorf("waiting for the agent socket: %T %v", m, err))
 		}
 		a.agent = ag.Listener
@@ -385,6 +388,7 @@ func (s *spawner) requestHandoff(attach *ipc.Conn, sid [16]byte) (*adoption, err
 		}
 		frag, ok := m.(ipc.HandoffScreen)
 		if !ok {
+			ipc.CloseFiles(m)
 			return fail(fmt.Errorf("the session sent %T, not its screen", m))
 		}
 		if len(a.snapshot)+len(frag.Fragment) > int(st.ScreenLen) {
@@ -537,6 +541,7 @@ func (s *spawner) commitAdoption(attach *ipc.Conn) error {
 		return fmt.Errorf("waiting for the session to let go: %w", err)
 	}
 	if _, ok := m.(ipc.HandoffReleased); !ok {
+		ipc.CloseFiles(m)
 		return fmt.Errorf("the session sent %T, not HandoffReleased", m)
 	}
 	return nil
@@ -702,7 +707,8 @@ func (s *spawner) adopt(ctx context.Context, m ipc.Adopt) error {
 	go func() {
 		defer attach.Close()
 		attach.File().SetReadDeadline(time.Now().Add(T2))
-		_, err := attach.Recv()
+		m, err := attach.Recv()
+		ipc.CloseFiles(m)
 		s.log.Info("the older spawner has gone", "eof", ipc.IsEOF(err))
 	}()
 	if err := s.launcher.Send(ipc.Ready{Line: line}); err != nil {
