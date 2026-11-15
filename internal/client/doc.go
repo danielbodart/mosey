@@ -10,8 +10,8 @@
 // prompts; after it, nothing but the renderer writes to it.
 //
 // A client that goes away by a signal or the end of its terminal detaches:
-// the session runs on, and `mosey -r` resumes it with a fresh bootstrap
-// and handshake (D8). One that is taken over by another exits saying so
+// the session runs on, and a plain `mosey HOST` (or `-s NAME`) resumes
+// it with a fresh bootstrap and handshake (D8). One that is taken over by another exits saying so
 // (D26). List is `mosey -list`.
 //
 // It is in two parts so the session can be tested without SSH: Run does

@@ -322,7 +322,8 @@ func TestAResumedSessionForwardsTheResumingClientsAgent(t *testing.T) {
 // Resume, agent forwarding and prediction together, with the real binaries
 // through a real sshd: both devices predict on every key (`-predict
 // always`; over loopback the default, adaptive, draws nothing), type
-// before and after the `-r`, and the second device's screen shows what it
+// before and after the second device's plain `mosey HOST` resumes the
+// detached session (D8 R1), and the second device's screen shows what it
 // typed, its own agent's key, and nothing of the first's predictions
 // (prediction.md §3.1: the echo ack restarts with each attach, so the
 // second device's predictions are judged against its own keystrokes).

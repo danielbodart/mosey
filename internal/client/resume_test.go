@@ -127,7 +127,7 @@ func TestKillRunsServeKillWithTheName(t *testing.T) {
 	}
 }
 
-// listHost is a far host for -list and -r with no -remote: ssh runs the
+// listHost is a far host for -list and -kill with no -remote: ssh runs the
 // probe under /bin/sh with HOME the test's, and PATH holds no mosey.
 func listHost(t *testing.T) (ssh, home, ran string) {
 	t.Helper()

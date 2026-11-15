@@ -26,7 +26,8 @@ func (s *spawner) serveAttach() { s.acceptLoop(s.attach.Accept) }
 // acceptLoop is serveAttach's loop over accept. Only a closed socket ends
 // it: anything else is logged and retried, since a session whose loop had
 // ended would run on with nobody able to resume it, and nobody would know
-// until `mosey -r` said there was no session.
+// until a plain `mosey HOST` or `-s NAME`, finding nothing to attach,
+// started another session beside it.
 func (s *spawner) acceptLoop(accept func() (*os.File, error)) {
 	for {
 		f, err := accept()
