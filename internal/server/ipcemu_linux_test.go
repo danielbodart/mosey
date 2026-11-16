@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -324,5 +325,70 @@ func TestAnOutputAnsweredWhileAResizeWaitsIsNoViolation(t *testing.T) {
 	h.wantNoKill()
 	if c, r := h.snapshot().Size(); c != 80 || r != 30 {
 		t.Errorf("the mirror is %dx%d after the resize", c, r)
+	}
+}
+
+// scroll is an answer that puts n new lines, named from at, into the fake
+// emu's history, then answers honestly.
+func scroll(at *int, n int) answerFunc {
+	return func(f *fakeEmu, req ipc.Message) []ipc.Message {
+		f.mu.Lock()
+		var lines [][]screen.Cell
+		for range n {
+			l := screen.NewGrid(10, 1)
+			for i, r := range fmt.Sprintf("L%d", *at) {
+				l.SetCell(i, 0, screen.Cell{Text: string(r), Width: 1})
+			}
+			lines = append(lines, l.Row(0))
+			*at++
+		}
+		f.screen.History = f.screen.History.Add(f.screen.History.Next+uint64(n), lines)
+		f.mu.Unlock()
+		return honest("")(f, req)
+	}
+}
+
+// proto numbers the session's history itself: a rebuilt emu numbers its
+// own from 0 again, and the client's numbers carry on (screen.md §7.2).
+func TestProtoNumbersTheHistoryAcrossARebuild(t *testing.T) {
+	h := newEmuHarness(t, 20, 5)
+	at := 0
+	h.link(ipc.EmuFirst, scroll(&at, 3))
+	h.e.Write([]byte("x"))
+	if g := h.snapshot(); g.History.Next != 3 {
+		t.Fatalf("next %d after the first emu's lines", g.History.Next)
+	}
+	h.link(ipc.EmuSignalled, scroll(&at, 2))
+	h.e.Write([]byte("y"))
+	g := h.snapshot()
+	if g.History.Next != 5 || len(g.History.Lines) != 5 {
+		t.Fatalf("next %d with %d lines after the rebuild", g.History.Next, len(g.History.Lines))
+	}
+	for i, l := range g.History.Lines {
+		if got, want := l[0].Text+l[1].Text, fmt.Sprintf("L%d", i); got != want {
+			t.Errorf("line %d starts %q, want %q", i, got, want)
+		}
+	}
+	h.wantNoKill()
+}
+
+// A rise in emu's history that would wrap proto's numbering is a
+// violation, and changes nothing.
+func TestAHistoryThatWouldWrapTheNumberingIsAViolation(t *testing.T) {
+	h := newEmuHarness(t, 20, 5)
+	at := 0
+	h.link(ipc.EmuFirst, scroll(&at, 1500))
+	h.e.Write([]byte("x"))
+	h.link(ipc.EmuSignalled, func(f *fakeEmu, req ipc.Message) []ipc.Message {
+		f.mu.Lock()
+		f.screen.History = f.screen.History.Add(^uint64(0)-screen.HistoryLines, nil)
+		f.mu.Unlock()
+		return honest("")(f, req)
+	})
+	before := h.snapshot()
+	go h.e.Write([]byte("y"))
+	h.wantKill(ipc.KillViolation)
+	if after := h.snapshot(); !after.History.Equal(before.History) {
+		t.Errorf("a refused update changed the history: next %d, was %d", after.History.Next, before.History.Next)
 	}
 }

@@ -62,7 +62,11 @@ type ipcEmulator struct {
 	bell      uint64
 	clipboard screen.Clipboard
 	rebuilt   screen.Rebuilt
-	changed   chan struct{}
+	// history is the session's history, numbered by proto: emu's lines,
+	// renumbered, so a rebuild does not start the numbers again
+	// (screen.md §7.2).
+	history screen.History
+	changed chan struct{}
 	// dropped counts reply tokens over the allowance or off the list, and
 	// replies over ReplyQueue.
 	dropped int
@@ -148,6 +152,11 @@ func (e *ipcEmulator) attach(m ipc.EmuLink) error {
 	}
 
 	e.mu.Lock()
+	if err := e.followHistory(screen.History{}, fresh.History); err != nil {
+		e.mu.Unlock()
+		e.failed(link, err)
+		return nil
+	}
 	if m.Generation > 1 {
 		e.rebuilt.Seq++
 		e.rebuilt.Reason = e.reason(m)
@@ -351,6 +360,10 @@ func (e *ipcEmulator) take(a answer, allowed int, resize *[2]int) error {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	// The history first: the one take that can still refuse.
+	if err := e.followHistory(mirror.History, scratch.History); err != nil {
+		return err
+	}
 	// Counters rise only within a generation, compared with the mirror
 	// before this answer (screen.md §7.2).
 	e.bell += scratch.Bell - mirror.Bell
@@ -404,7 +417,24 @@ func check(g *screen.Grid, diff []byte, resize bool, cols, rows int) error {
 	return nil
 }
 
-// Snapshot copies the mirror into g, with proto's counters.
+// followHistory takes the lines emu's history gained from before to after
+// into proto's own, renumbered (screen.md §7.2): proto's Next rises by as
+// much as emu's, with a gap where emu's window lost lines. Apply already
+// refused a history that went backwards; a rise that would wrap proto's
+// numbering is a violation, and changes nothing. The caller holds mu.
+func (e *ipcEmulator) followHistory(before, after screen.History) error {
+	if after.Next <= before.Next {
+		return nil
+	}
+	d := after.Next - before.Next
+	if d > ^uint64(0)-e.history.Next {
+		return violated("history numbered past 2^64")
+	}
+	e.history = e.history.Add(e.history.Next+d, after.Since(before.Next))
+	return nil
+}
+
+// Snapshot copies the mirror into g, with proto's counters and history.
 func (e *ipcEmulator) Snapshot(g *screen.Grid) { e.snapshotHeld(g) }
 
 // Held says whether emu held its last answer under synchronised output
@@ -429,6 +459,7 @@ func (e *ipcEmulator) snapshotHeld(g *screen.Grid) bool {
 	g.Bell = e.bell
 	g.Clipboard = screen.Clipboard{Seq: e.clipboard.Seq, Data: bytes.Clone(e.clipboard.Data)}
 	g.Rebuilt = e.rebuilt
+	g.History = e.history
 	return e.held
 }
 
