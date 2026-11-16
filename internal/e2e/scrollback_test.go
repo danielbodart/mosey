@@ -30,6 +30,12 @@ func transcript(b []byte, cols, rows int) []string {
 	t := vt.NewWithScrollback(cols, rows, 100_000)
 	defer t.Close()
 	_, _ = t.Write(b)
+	return contents(t)
+}
+
+// contents is everything t holds: its scrollback, then its screen, one
+// line each, blank lines left out.
+func contents(t vt.Terminal) []string {
 	var out []string
 	add := func(w int, cell func(x int) string) {
 		var line strings.Builder

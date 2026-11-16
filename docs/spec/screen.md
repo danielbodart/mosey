@@ -1639,8 +1639,15 @@ guesses again. A local resize redraws in full as before; the local
 terminal's own reflow of its history on a resize is its own, and can
 pull a few lines back over the screen (when it grows) or push a few of
 the screen's rows into history (when it shrinks), so the lines at the
-seam may be lost or doubled. The client does not try to undo the local
-terminal's reflow.
+seam may be lost or doubled. A shrink of `k` rows doubles at most `k`
+lines (the terminal pushes its top rows into its scrollback, and the
+server's emulator sends the same rows as history), and a grow of `k`
+rows loses at most `k` (the terminal pulls them back onto its screen,
+and the full redraw paints over them); nothing else is lost or doubled,
+and the order holds [measured here, with tuios as the local terminal:
+a shrink of 3 doubled 3 lines and a grow of 6 lost 6,
+`TestAResizeLosesOrDoublesAtMostTheRowsItMoves`]. The client does not
+try to undo the local terminal's reflow.
 
 ## 9. What the client must never do
 
