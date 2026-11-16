@@ -46,11 +46,13 @@ const (
 )
 
 const (
-	// ProtocolVersion is the one protocol version this build speaks (D8 V1): v1
-	// is transport.md as it stands, and the number is the stability
-	// promise. A change a v1 peer could not follow takes a new number;
-	// there is no range and no negotiation (Dan, 2026-11-15).
-	ProtocolVersion = 1
+	// ProtocolVersion is the one protocol version this build speaks (D8 V1):
+	// transport.md and screen.md §5's diff as they stand, and the number is
+	// the stability promise. A change a peer of this number could not
+	// follow takes a new one; there is no range and no negotiation (Dan,
+	// 2026-11-15). 2 since the screen diff gained CONTAINER and CWD
+	// (screen.md §5.2), which a protocol-1 client refuses as unknown ops.
+	ProtocolVersion = 2
 	// MaxChannels bounds the channel list, which keeps msg1 at most 1185
 	// bytes (transport.md §3.5).
 	MaxChannels = 16

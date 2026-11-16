@@ -53,8 +53,8 @@ func TestAProtocolMismatchFailsAtOnceNamingBothNumbers(t *testing.T) {
 		say            string
 		remote         uint8
 	}{
-		{"a client of protocol 2", hello(2), hello(ProtocolVersion), "the server speaks protocol 1; this client speaks 2", 1},
-		{"a server of protocol 2", hello(ProtocolVersion), hello(2), "the server speaks protocol 2; this client speaks 1", 2},
+		{"a client of protocol 1", hello(1), hello(ProtocolVersion), "the server speaks protocol 2; this client speaks 1", 2},
+		{"a server of protocol 1", hello(ProtocolVersion), hello(1), "the server speaks protocol 1; this client speaks 2", 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, p, err := handshakeWith(t, c.client, c.server)
@@ -76,12 +76,12 @@ func TestAProtocolMismatchFailsAtOnceNamingBothNumbers(t *testing.T) {
 }
 
 // A later version may lay the rest of its hello out differently: the
-// server reads the protocol byte first, so a hello that says 2 and whose
+// server reads the protocol byte first, so a hello that says 3 and whose
 // rest is no v1 hello at all is still answered, with the server's own
 // hello, and never confirmed (transport.md §3.6).
 func TestAHelloOfAnotherProtocolIsAnsweredWhateverItsRestLooksLike(t *testing.T) {
 	w := newWorld(t)
-	later := []byte{2, 0xff, 0xff, 0xff} // a count of 255 with one byte after it: no v1 hello
+	later := []byte{3, 0xff, 0xff, 0xff} // a count of 255 with one byte after it: no v1 hello
 	if _, err := ParseHello(later); err == nil {
 		t.Fatal("the test's hello parses as v1")
 	}
@@ -92,9 +92,9 @@ func TestAHelloOfAnotherProtocolIsAnsweredWhateverItsRestLooksLike(t *testing.T)
 	}
 	msg2, p, err := w.resp.ReadMsg1(msg1)
 	if err != nil {
-		t.Fatalf("the server did not answer a genuine client of protocol 2: %v", err)
+		t.Fatalf("the server did not answer a genuine client of protocol 3: %v", err)
 	}
-	if p.Version != 0 || p.Hello.Protocol != 2 {
+	if p.Version != 0 || p.Hello.Protocol != 3 {
 		t.Errorf("the pending says version %d and a client of protocol %d", p.Version, p.Hello.Protocol)
 	}
 	if len(msg2) != Msg2Size(len(terminalOnly.Channels)) {

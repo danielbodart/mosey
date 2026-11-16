@@ -26,6 +26,13 @@ type Grid struct {
 	Cursor Cursor
 	// Title is the window title, already through the allow-list.
 	Title string
+	// Container is the container mark the program set with OSC 666's
+	// vte.container termprops, already through the allow-list
+	// (docs/spec/screen.md §4.6). The zero value is no mark.
+	Container Container
+	// Cwd is the program's current directory as a file: URI from OSC 7,
+	// already through the allow-list (§4.7), or "".
+	Cwd   string
 	Modes Modes
 	// EchoOff is set while the shell's pty has echo off in canonical mode
 	// (!ECHO && ICANON), as at a password prompt. The client neither
@@ -191,6 +198,7 @@ func (g *Grid) Clone() *Grid {
 func (g *Grid) Equal(other *Grid) bool {
 	if g.cols != other.cols || g.rows != other.rows ||
 		g.Cursor != other.Cursor || g.Title != other.Title || g.Modes != other.Modes ||
+		g.Container != other.Container || g.Cwd != other.Cwd ||
 		g.EchoOff != other.EchoOff || g.EchoAck != other.EchoAck || g.EchoApplied != other.EchoApplied ||
 		g.InputConsumed != other.InputConsumed || g.Bell != other.Bell ||
 		g.Rebuilt != other.Rebuilt || g.Clipboard.Seq != other.Clipboard.Seq ||
@@ -243,6 +251,12 @@ func (g *Grid) Valid() error {
 	}
 	if !ValidTitle(g.Title) {
 		return errors.New("G8: title outside the allow-list")
+	}
+	if !ValidContainer(g.Container) {
+		return errors.New("G8: container mark outside the allow-list")
+	}
+	if !ValidCwd(g.Cwd) {
+		return errors.New("G8: directory outside the allow-list")
 	}
 	if len(g.Clipboard.Data) > MaxClipboard {
 		return fmt.Errorf("G8: clipboard of %d bytes", len(g.Clipboard.Data))
@@ -470,6 +484,19 @@ type Clipboard struct {
 	Seq  uint64
 	Data []byte
 }
+
+// Container is a container mark: the vte.container termprops a program set
+// with OSC 666 to say which container the terminal is attached to, as
+// flong and toolbox do (docs/spec/screen.md §4.6). Each value is "" when
+// unset; all three empty is no mark.
+type Container struct {
+	Name, Runtime string
+	// UID is the container user's uid in decimal.
+	UID string
+}
+
+// Set says whether any of the mark's values is set.
+func (c Container) Set() bool { return c != Container{} }
 
 // Rebuilt is the server's notice that its emulator was rebuilt (D23).
 type Rebuilt struct {

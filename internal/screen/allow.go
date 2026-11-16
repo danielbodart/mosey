@@ -36,6 +36,16 @@ const (
 	// size-capped; the cap is ours, set in docs/spec/screen.md). A larger
 	// write is dropped whole: a truncated paste is a different paste.
 	MaxClipboard = 64 << 10
+	// MaxContainerValue is the longest container name or runtime (OSC
+	// 666, docs/spec/screen.md §4.6): MaxTitle's cap, since it is shown
+	// in a header bar as a title is, and under VTE's 1024 characters.
+	MaxContainerValue = MaxTitle
+	// MaxContainerUID is the most digits of a container uid: a uid is a
+	// 32-bit number, and 4294967295 has 10.
+	MaxContainerUID = 10
+	// MaxCwd is the longest OSC 7 directory URI, MaxLink's cap since it is
+	// checked as a link is (§4.7, D27).
+	MaxCwd = MaxLink
 	// MaxDiff is the longest diff: the worst valid diff at the clamp is
 	// about 44 MB of screen and 17 MB of history window, 61 MB in all
 	// (docs/spec/screen.md §5.12). It is SSP's MaxRemoteBytes for the
@@ -122,6 +132,152 @@ func SanitizeLink(uri string) string {
 // ValidLink says whether a cell may carry link: none, or one SanitizeLink
 // would leave unchanged.
 func ValidLink(uri string) bool { return uri == "" || SanitizeLink(uri) == uri }
+
+// ValidContainerValue says whether s may be a container's name or runtime
+// (docs/spec/screen.md §4.6): empty, or at most MaxContainerValue bytes of
+// valid UTF-8 with no forbidden code point and no bidi mark, a title's
+// rules. Unlike a title it is never repaired: a name with a character
+// dropped, or cut short, names another container.
+func ValidContainerValue(s string) bool { return ValidTitle(s) }
+
+// SanitizeContainerValue is s if it is valid, and "" otherwise.
+func SanitizeContainerValue(s string) string {
+	if ValidContainerValue(s) {
+		return s
+	}
+	return ""
+}
+
+// ValidContainerUID says whether s may be a container's uid: empty, or a
+// decimal number with no leading zero, at most 4294967295 (§4.6).
+func ValidContainerUID(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) > MaxContainerUID || (s[0] == '0' && len(s) > 1) {
+		return false
+	}
+	var n uint64
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+		n = n*10 + uint64(s[i]-'0')
+	}
+	return n <= 1<<32-1
+}
+
+// SanitizeContainerUID is s if it is valid, and "" otherwise.
+func SanitizeContainerUID(s string) string {
+	if ValidContainerUID(s) {
+		return s
+	}
+	return ""
+}
+
+// ValidContainer says whether all three of a container mark's values are
+// valid.
+func ValidContainer(c Container) bool {
+	return ValidContainerValue(c.Name) && ValidContainerValue(c.Runtime) && ValidContainerUID(c.UID)
+}
+
+// SanitizeCwd returns the OSC 7 directory URI to carry, or "" if it may not
+// be carried (docs/spec/screen.md §4.7). Bytes outside printable ASCII are
+// percent-encoded first, so a shell that writes spaces or UTF-8 raw still
+// has its directory carried; then the scheme must be file, followed by
+// "://", and the rest must percent-decode to valid UTF-8 with no forbidden
+// code point and no bidi mark. Decoding matters: the local terminal decodes
+// the path to show it, so %1B is as much an escape as a raw ESC.
+func SanitizeCwd(raw string) string {
+	if len(raw) < 1 || len(raw) > MaxCwd {
+		return ""
+	}
+	uri := raw
+	if !printableASCII(raw) {
+		const hex = "0123456789ABCDEF"
+		b := make([]byte, 0, len(raw)+16)
+		for i := 0; i < len(raw); i++ {
+			c := raw[i]
+			if c < 0x21 || c > 0x7e {
+				if len(b) > MaxCwd-3 {
+					return ""
+				}
+				b = append(b, '%', hex[c>>4], hex[c&0x0f])
+				continue
+			}
+			b = append(b, c)
+		}
+		uri = string(b)
+	}
+	if len(uri) > MaxCwd {
+		return ""
+	}
+	scheme, rest, ok := strings.Cut(uri, ":")
+	// Schemes are case-insensitive (RFC 3986 §3.1).
+	if !ok || !strings.EqualFold(scheme, "file") || !strings.HasPrefix(rest, "//") {
+		return ""
+	}
+	path, ok := percentDecode(rest[2:])
+	if !ok || !utf8.Valid(path) {
+		return ""
+	}
+	for i := 0; i < len(path); {
+		r, n := utf8.DecodeRune(path[i:])
+		if forbidden(r) || bidiMark(r) {
+			return ""
+		}
+		i += n
+	}
+	return uri
+}
+
+// ValidCwd says whether a grid may carry uri as its directory: none, or a
+// URI SanitizeCwd leaves unchanged.
+func ValidCwd(uri string) bool { return uri == "" || SanitizeCwd(uri) == uri }
+
+func printableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// percentDecode decodes RFC 3986's %XX escapes (§2.1), and fails on a %
+// that does not start one.
+func percentDecode(s string) ([]byte, bool) {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '%' {
+			out = append(out, s[i])
+			continue
+		}
+		if i+2 >= len(s) {
+			return nil, false
+		}
+		hi, ok1 := unhex(s[i+1])
+		lo, ok2 := unhex(s[i+2])
+		if !ok1 || !ok2 {
+			return nil, false
+		}
+		out = append(out, hi<<4|lo)
+		i += 2
+	}
+	return out, true
+}
+
+func unhex(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
+}
 
 // replacement stands in for cell text that fails the allow-list. The cell
 // keeps its width, so nothing after it moves.

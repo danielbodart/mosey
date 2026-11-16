@@ -43,6 +43,13 @@ func FuzzApply(f *testing.F) {
 		cat([]byte{0x4b}, uv(0), uv(3), uv(^uint64(0)-2)), cat([]byte{0x42}, uv(3), uv(0), uv(^uint64(0)-2)),
 		cat([]byte{0x53}, uv(10), []byte("a\u009d0;evil\u009cb")[:10]),
 		{0x49, 0x49, 0x49, 0x49, 0x49},
+		// The container mark and the directory (§4.6, §4.7): good, cleared,
+		// and with an escape smuggled in.
+		cat([]byte{0x5a, 0x03}, []byte("box"), []byte{0x05}, []byte("flong"), []byte{0x04}, []byte("1000")),
+		{0x5a, 0x00, 0x00, 0x00, 0x5b, 0x00},
+		cat([]byte{0x5a, 0x04}, []byte("a\u009cb"), []byte{0x00, 0x01, '0'}),
+		cat([]byte{0x5b, 0x0d}, []byte("file://h/home")),
+		cat([]byte{0x5b, 0x0c}, []byte("file://h/%1b")),
 		// History (§5.6): a scrolled line, new lines, a gap, and the
 		// bounds' edges.
 		{0x43, 0x01, 0x60, 0x00, 0x62, 0x00},

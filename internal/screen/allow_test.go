@@ -40,6 +40,88 @@ func TestALongTitleIsCutOnARuneBoundary(t *testing.T) {
 	}
 }
 
+func TestAContainerValueWithAControlIsRefusedNotRepaired(t *testing.T) {
+	for s, ok := range map[string]bool{
+		"":                            true,
+		"box":                         true,
+		"frisket · trusted":           true,
+		"a;b\\c":                      true, // the client escapes these itself (§8.4)
+		strings.Repeat("é", 128):      true,
+		strings.Repeat("a", 257):      false,
+		"a\nb":                        false, // what VTE's \n escape would make
+		"a\u009cb":                    false, // C1 ST: VTE decodes UTF-8 first
+		"a\x1b\\b":                    false,
+		"a\x7fb":                      false,
+		"abc‮def":                     false,
+		"r‏l":                         false,
+		"bad\xff":                     false,
+		"line break":                  false,
+		"\x00":                        false,
+		strings.Repeat("a", 256):      true,
+		strings.Repeat("漢", 85) + "a": true,
+	} {
+		if ValidContainerValue(s) != ok {
+			t.Errorf("ValidContainerValue(%q) = %v", s, !ok)
+		}
+		if want := map[bool]string{true: s, false: ""}[ok]; SanitizeContainerValue(s) != want {
+			t.Errorf("SanitizeContainerValue(%q) = %q", s, SanitizeContainerValue(s))
+		}
+	}
+}
+
+func TestAContainerUIDIsACanonical32BitNumber(t *testing.T) {
+	for s, ok := range map[string]bool{
+		"": true, "0": true, "1000": true, "4294967295": true,
+		"4294967296": false, "99999999999": false, "00": false, "01000": false,
+		"-1": false, "+1": false, "1 ": false, "1e3": false, "١": false,
+	} {
+		if ValidContainerUID(s) != ok {
+			t.Errorf("ValidContainerUID(%q) = %v", s, !ok)
+		}
+	}
+	if !ValidContainer(Container{Name: "box", Runtime: "flong", UID: "1000"}) || ValidContainer(Container{UID: "x"}) {
+		t.Error("ValidContainer is all three")
+	}
+}
+
+func TestADirectoryIsAFileURIThatDecodesToNoControl(t *testing.T) {
+	long := "file://h/" + strings.Repeat("x", MaxCwd-9)
+	for in, want := range map[string]string{
+		"file://host/home/dan":     "file://host/home/dan",
+		"file:///tmp":              "file:///tmp",
+		"FILE://h/x":               "FILE://h/x", // schemes are case-insensitive (RFC 3986 §3.1)
+		"file://h/a%20b/%E6%BC%A2": "file://h/a%20b/%E6%BC%A2",
+		"file://h/a b":             "file://h/a%20b", // a shell that does not encode
+		"file://h/漢":               "file://h/%E6%BC%A2",
+		long:                       long,
+		long + "y":                 "",
+		"file://h/" + strings.Repeat("é", MaxCwd/6): "",
+		"file://h/a\x1bb":       "", // encoded, then refused once decoded
+		"file://h/a%1Bb":        "",
+		"file://h/a%c2%9cb":     "", // C1 ST, encoded
+		"file://h/a\u009cb":     "",
+		"file://h/%7F":          "",
+		"file://h/%E2%80%AE":    "", // a bidi override
+		"file://h/%ff":          "", // not UTF-8
+		"file://h/%":            "",
+		"file://h/%4":           "",
+		"file://h/%zz":          "",
+		"file:/x":               "",
+		"file:x":                "",
+		"http://example.com/":   "",
+		"kitty-shell-cwd://h/x": "",
+		"":                      "",
+		"/home/dan":             "",
+	} {
+		if got := SanitizeCwd(in); got != want {
+			t.Errorf("SanitizeCwd(%q) = %q, want %q", in, got, want)
+		}
+		if ValidCwd(in) != (in == "" || in == want) {
+			t.Errorf("ValidCwd(%q) = %v", in, ValidCwd(in))
+		}
+	}
+}
+
 func TestLinksAreHTTPHTTPSOrMailtoInPrintableASCII(t *testing.T) {
 	long := "https://example.com/" + strings.Repeat("x", MaxLink-20)
 	for uri, ok := range map[string]bool{
@@ -119,7 +201,7 @@ func TestClampSizeBoundsBothWays(t *testing.T) {
 // FuzzSanitize checks each rule's two halves agree: what Sanitize returns
 // is Valid, Sanitize is idempotent, and Valid is "Sanitize leaves it".
 func FuzzSanitize(f *testing.F) {
-	for _, s := range []string{"a\u009d0;evil\u009cb", "a\u009b2Jb", "a\x7fb", "https://x", "HTTP:x", "‮", strings.Repeat("é", 200), "\xf0\x9f"} {
+	for _, s := range []string{"a\u009d0;evil\u009cb", "file://h/a%c2%9cb", "file://h/a b", "4294967296", "01", "a;b\\c", "a\u009b2Jb", "a\x7fb", "https://x", "HTTP:x", "‮", strings.Repeat("é", 200), "\xf0\x9f"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
@@ -138,7 +220,27 @@ func FuzzSanitize(f *testing.F) {
 		if !ValidCluster(cluster) || SanitizeCluster(cluster) != cluster || ValidCluster(s) != (cluster == s) {
 			t.Fatalf("cluster %q -> %q", s, cluster)
 		}
-		for _, b := range []byte(title + cluster + link) {
+		value := SanitizeContainerValue(s)
+		if !ValidContainerValue(value) || SanitizeContainerValue(value) != value || ValidContainerValue(s) != (value == s) {
+			t.Fatalf("container value %q -> %q", s, value)
+		}
+		uid := SanitizeContainerUID(s)
+		if !ValidContainerUID(uid) || SanitizeContainerUID(uid) != uid || ValidContainerUID(s) != (uid == s) {
+			t.Fatalf("container uid %q -> %q", s, uid)
+		}
+		cwd := SanitizeCwd(s)
+		if !ValidCwd(cwd) || SanitizeCwd(cwd) != cwd || ValidCwd(s) != (s == "" || cwd == s) {
+			t.Fatalf("cwd %q -> %q", s, cwd)
+		}
+		if len(value) > MaxContainerValue || len(uid) > MaxContainerUID || len(cwd) > MaxCwd {
+			t.Fatalf("over a bound: %d, %d, %d", len(value), len(uid), len(cwd))
+		}
+		for _, b := range []byte(cwd) {
+			if b < 0x21 || b > 0x7e {
+				t.Fatalf("cwd %q has byte %#x", cwd, b)
+			}
+		}
+		for _, b := range []byte(title + cluster + link + value + uid) {
 			if b < 0x20 || b == 0x7f {
 				t.Fatalf("a control byte %#x survived", b)
 			}

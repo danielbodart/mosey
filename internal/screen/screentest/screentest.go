@@ -258,6 +258,14 @@ func (s *Source) State(g *screen.Grid) {
 	if s.N(6) == 0 {
 		g.Rebuilt = screen.Rebuilt{Seq: uint64(s.N(5)), Reason: screen.RebuiltReason(s.N(4))}
 	}
+	if s.N(4) == 0 {
+		g.Container = []screen.Container{
+			{}, {Name: "box", Runtime: "flong", UID: "1000"}, {Name: "a;b\\c · 漢"}, {UID: "0"}, {Runtime: "podman"},
+		}[s.N(5)]
+	}
+	if s.N(4) == 0 {
+		g.Cwd = []string{"", "file://host/home/dan", "file:///tmp/a%20b", "FILE://h/%E6%BC%A2"}[s.N(4)]
+	}
 }
 
 // Next is a later version of g: g scrolled, resized, partly rewritten or

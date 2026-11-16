@@ -127,6 +127,10 @@ func sameScreen(got, want *screen.Grid) error {
 	got.Bell, want.Bell = 0, 0
 	got.Clipboard, want.Clipboard = screen.Clipboard{}, screen.Clipboard{}
 	got.History, want.History = screen.History{}, screen.History{}
+	// The container mark and the directory are not drawn until the
+	// renderer writes them.
+	got.Container, want.Container = screen.Container{}, screen.Container{}
+	got.Cwd, want.Cwd = "", ""
 	if got.Equal(want) {
 		return nil
 	}

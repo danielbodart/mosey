@@ -183,6 +183,7 @@ func examples(t testing.TB) [][]byte {
 		unhex(t, "44 00 00 51 49"), unhex(t, "41 50 18 00 24 50 02 00 52 80"),
 		unhex(t, "06 02 E6 BC A2 E5 AD 97"), unhex(t, "03 05 65 CC 81"),
 		append(link, unhex(t, "4C 10 01 03 64 6F 63 73 4C 10 00")...),
+		cat([]byte{0x5a, 3}, []byte("box"), []byte{5}, []byte("flong"), []byte{4}, []byte("1000"), []byte{0x5b, 13}, []byte("file://h/home")),
 	}
 }
 
@@ -266,7 +267,21 @@ func TestEachRuleOfTheFormatRefusesWhatBreaksIt(t *testing.T) {
 		"ECHO applied past uint64":            cat([]byte{0x55, 0x00}, uv(^uint64(0)), uv(1)),
 		"REBUILT reason 4":                    {0x58, 1, 4},
 		"CONSUMED twice":                      {0x59, 1, 0x59, 2},
-		"reserved state opcode 0x5a":          {0x5a},
+		"reserved state opcode 0x5c":          {0x5c},
+		"CONTAINER name with C1":              cat([]byte{0x5a}, uv(4), []byte("a\u009cb"), []byte{0, 0}),
+		"CONTAINER name with a newline":       cat([]byte{0x5a}, uv(3), []byte("a\nb"), []byte{0, 0}),
+		"CONTAINER runtime with bidi":         cat([]byte{0x5a, 0}, uv(5), []byte("a\u202eb"), []byte{0}),
+		"CONTAINER name over the bound":       cat([]byte{0x5a}, uv(screen.MaxContainerValue+1), bytes.Repeat([]byte("a"), screen.MaxContainerValue+1), []byte{0, 0}),
+		"CONTAINER uid with a leading zero":   cat([]byte{0x5a, 0, 0}, uv(2), []byte("01")),
+		"CONTAINER uid past 2^32 - 1":         cat([]byte{0x5a, 0, 0}, uv(10), []byte("4294967296")),
+		"CONTAINER uid over 10 bytes":         cat([]byte{0x5a, 0, 0}, uv(11), []byte("10000000000")),
+		"CONTAINER truncated":                 {0x5a, 0, 0},
+		"CONTAINER twice":                     {0x5a, 0, 0, 0, 0x5a, 0, 0, 0},
+		"CWD http":                            cat([]byte{0x5b}, uv(9), []byte("http://h/")),
+		"CWD with an encoded ESC":             cat([]byte{0x5b}, uv(12), []byte("file://h/%1B")),
+		"CWD with a space":                    cat([]byte{0x5b}, uv(11), []byte("file://h/ a")),
+		"CWD over MaxCwd":                     cat([]byte{0x5b}, uv(screen.MaxCwd+1), []byte("file://h/"), bytes.Repeat([]byte("x"), screen.MaxCwd-8)),
+		"CWD twice":                           {0x5b, 0, 0x5b, 0},
 		"PEN no flags":                        {0x4c, 0x00},
 		"PEN reserved flag":                   {0x4c, 0x40},
 		"PEN colour kind 3":                   {0x4c, 0x01, 0x03},
@@ -410,7 +425,13 @@ func TestStateOpsRoundTrip(t *testing.T) {
 	to.Clipboard = screen.Clipboard{Seq: 3, Data: []byte("\x1b]52;c;?\x07")}
 	to.Rebuilt = screen.Rebuilt{Seq: 2, Reason: screen.RebuiltMemory}
 	to.Cursor.Shape = 6
+	to.Container = screen.Container{Name: "frisket · a;b\\c", Runtime: "flong", UID: "4294967295"}
+	to.Cwd = "file://host/home/dan/%E6%BC%A2"
 	roundTrip(t, from, to)
+	// A mark cleared is a mark of three empty values; the directory too.
+	cleared := to.Clone()
+	cleared.Container, cleared.Cwd = screen.Container{}, ""
+	roundTrip(t, to, cleared)
 	// A clipboard of exactly MaxClipboard passes; the empty write clears.
 	to2 := to.Clone()
 	to2.Clipboard = screen.Clipboard{Seq: 4, Data: make([]byte, screen.MaxClipboard)}
@@ -418,6 +439,28 @@ func TestStateOpsRoundTrip(t *testing.T) {
 	to3 := to2.Clone()
 	to3.Clipboard = screen.Clipboard{Seq: 5}
 	roundTrip(t, to2, to3)
+}
+
+// §5.11 example 9: flong's mark and a directory, in exact bytes both ways,
+// and the clear in 4 bytes.
+func TestAContainerMarkAndADirectoryAreTheSpecsBytes(t *testing.T) {
+	from := base80x24()
+	to := from.Clone()
+	to.Container = screen.Container{Name: "box", Runtime: "flong", UID: "1000"}
+	to.Cwd = "file://h/home"
+	want := examples(t)[8]
+	if d := to.Diff(from); !bytes.Equal(d, want) {
+		t.Fatalf("Diff = % x, want % x", d, want)
+	}
+	g := from.Clone()
+	if err := g.Apply(want); err != nil || !g.Equal(to) {
+		t.Fatalf("Apply: %v, container %+v, cwd %q", err, g.Container, g.Cwd)
+	}
+	cleared := to.Clone()
+	cleared.Container = screen.Container{}
+	if d := cleared.Diff(to); !bytes.Equal(d, []byte{0x5a, 0, 0, 0}) {
+		t.Fatalf("the clear is % x", d)
+	}
 }
 
 func TestAWorstCaseFullScreenStaysWithinMaxDiffAndTheBudget(t *testing.T) {

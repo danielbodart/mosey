@@ -703,6 +703,18 @@ func (e *encoder) state() {
 		e.out = append(e.out, opConsumed)
 		e.out = binary.AppendUvarint(e.out, to.InputConsumed)
 	}
+	if to.Container != from.Container {
+		e.out = append(e.out, opContainer)
+		for _, v := range []string{to.Container.Name, to.Container.Runtime, to.Container.UID} {
+			e.out = binary.AppendUvarint(e.out, uint64(len(v)))
+			e.out = append(e.out, v...)
+		}
+	}
+	if to.Cwd != from.Cwd {
+		e.out = append(e.out, opCwd)
+		e.out = binary.AppendUvarint(e.out, uint64(len(to.Cwd)))
+		e.out = append(e.out, to.Cwd...)
+	}
 }
 
 // history writes the lines of the target's history that the receiver does

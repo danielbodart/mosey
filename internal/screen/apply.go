@@ -24,30 +24,32 @@ func (e *diffError) Unwrap() error { return ErrInvalidDiff }
 
 // The opcodes of docs/spec/screen.md §5.4.
 const (
-	opTextLong = 0x40
-	opSize     = 0x41
-	opRows     = 0x42
-	opScroll   = 0x43
-	opPos      = 0x44
-	opCol      = 0x45
-	opNext     = 0x46
-	opSkip     = 0x47
-	opErase    = 0x48
-	opErased   = 0x49
-	opRepeat   = 0x4a
-	opCopy     = 0x4b
-	opPen      = 0x4c
-	opLink     = 0x4d
-	opCursor   = 0x50
-	opHere     = 0x51
-	opCurStyle = 0x52
-	opTitle    = 0x53
-	opModes    = 0x54
-	opEcho     = 0x55
-	opBell     = 0x56
-	opClip     = 0x57
-	opRebuilt  = 0x58
-	opConsumed = 0x59
+	opTextLong  = 0x40
+	opSize      = 0x41
+	opRows      = 0x42
+	opScroll    = 0x43
+	opPos       = 0x44
+	opCol       = 0x45
+	opNext      = 0x46
+	opSkip      = 0x47
+	opErase     = 0x48
+	opErased    = 0x49
+	opRepeat    = 0x4a
+	opCopy      = 0x4b
+	opPen       = 0x4c
+	opLink      = 0x4d
+	opCursor    = 0x50
+	opHere      = 0x51
+	opCurStyle  = 0x52
+	opTitle     = 0x53
+	opModes     = 0x54
+	opEcho      = 0x55
+	opBell      = 0x56
+	opClip      = 0x57
+	opRebuilt   = 0x58
+	opConsumed  = 0x59
+	opContainer = 0x5a
+	opCwd       = 0x5b
 	// The history ops of phase 3 (§2.5, §5.6).
 	opHist  = 0x60
 	opHLine = 0x61
@@ -92,6 +94,8 @@ const (
 	onceClip
 	onceRebuilt
 	onceConsumed
+	onceContainer
+	onceCwd
 )
 
 // Apply turns g into the grid a Diff was made towards. The diff is hostile:
@@ -293,10 +297,56 @@ func (d *decoder) step(code byte) error {
 		n, err := d.varint("CONSUMED", ^uint64(0))
 		d.out.InputConsumed = n
 		return err
+	case opContainer:
+		return d.container()
+	case opCwd:
+		return d.cwd()
 	case opHist:
 		return d.hist()
 	}
 	return d.fail("unknown opcode %#02x", code)
+}
+
+// container is CONTAINER: the whole mark, each value through the
+// allow-list (docs/spec/screen.md §4.6, §5.6).
+func (d *decoder) container() error {
+	if err := d.onceOnly(onceContainer, "CONTAINER"); err != nil {
+		return err
+	}
+	name, err := d.str("CONTAINER name", 0, MaxContainerValue)
+	if err != nil {
+		return err
+	}
+	runtime, err := d.str("CONTAINER runtime", 0, MaxContainerValue)
+	if err != nil {
+		return err
+	}
+	uid, err := d.str("CONTAINER uid", 0, MaxContainerUID)
+	if err != nil {
+		return err
+	}
+	c := Container{Name: name, Runtime: runtime, UID: uid}
+	if !ValidContainer(c) {
+		return d.fail("CONTAINER outside the allow-list")
+	}
+	d.out.Container = c
+	return nil
+}
+
+// cwd is CWD: the directory URI, through the allow-list (§4.7, §5.6).
+func (d *decoder) cwd() error {
+	if err := d.onceOnly(onceCwd, "CWD"); err != nil {
+		return err
+	}
+	s, err := d.str("CWD", 0, MaxCwd)
+	if err != nil {
+		return err
+	}
+	if !ValidCwd(s) {
+		return d.fail("CWD outside the allow-list")
+	}
+	d.out.Cwd = s
+	return nil
 }
 
 // hist is HIST: the start of phase 3, once (§5.6).

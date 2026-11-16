@@ -101,6 +101,9 @@ func TestValidNamesTheBrokenInvariant(t *testing.T) {
 		"mouse":          {func(g *screen.Grid) { g.Modes.Mouse = 4 }, "G8"},
 		"kitty flags":    {func(g *screen.Grid) { g.Modes.KittyKeyboard = 32 }, "G8"},
 		"rebuilt reason": {func(g *screen.Grid) { g.Rebuilt.Reason = 4 }, "G8"},
+		"container name": {func(g *screen.Grid) { g.Container.Name = "a\nb" }, "G8"},
+		"container uid":  {func(g *screen.Grid) { g.Container.UID = "-1" }, "G8"},
+		"directory":      {func(g *screen.Grid) { g.Cwd = "file://h/%1b" }, "G8"},
 	} {
 		g := screen.NewGrid(4, 2)
 		c.mess(g)
