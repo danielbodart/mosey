@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -74,6 +75,44 @@ func TestDirAndTypeStartASessionAndAreIgnoredOnResume(t *testing.T) {
 	second.typeLine("exit")
 	if status := second.exits(); status != 0 {
 		t.Errorf("the second client exited %d after exit, not 0; log:\n%s", status, second.log())
+	}
+	waitFor(t, "the session to end", func() bool { return len(spawners(mosey)) == 0 })
+}
+
+// -type's text is typed once bash has drawn its first prompt (bootstrap.md
+// §9.2.3), so it shows once, after that prompt, as a person who waited
+// would have typed it. Typed ahead, before the prompt, the tty echoed it
+// at once and bash's line editor again after the prompt: twice.
+func TestTypedTextShowsOnceAfterTheFirstPrompt(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("no bash")
+	}
+	home := t.TempDir()
+	// A login bash reads ~/.bash_profile last, so the prompt is known
+	// whatever /etc/profile sets.
+	if err := os.WriteFile(filepath.Join(home, ".bash_profile"), []byte("PS1='PROMPT$ '\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := startSSHDWith(t, sshdOptions{shell: bash, home: home})
+	mosey := buildMosey(t, "e2e")
+
+	c := startClient(t, "the client", mosey, s, "-type", "echo typed-once")
+	c.showsLine(`typed-once`)
+	// The output shows after the line that made it, so by now both
+	// echoes, if there were two, are on the screen.
+	screen := screenOf([]byte(c.screen.String()), 100, 30)
+	if n := strings.Count(screen, "echo typed-once"); n != 1 {
+		t.Errorf("the typed command shows %d times, want 1:\n%s", n, screen)
+	}
+	if !regexp.MustCompile(`(?m)^PROMPT\$ echo typed-once$`).MatchString(screen) {
+		t.Errorf("the typed command is not after the first prompt:\n%s", screen)
+	}
+
+	c.typeLine("exit")
+	if status := c.exits(); status != 0 {
+		t.Errorf("the client exited %d after exit, not 0; log:\n%s", status, c.log())
 	}
 	waitFor(t, "the session to end", func() bool { return len(spawners(mosey)) == 0 })
 }

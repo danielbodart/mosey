@@ -166,9 +166,10 @@ ssh ──stdin──► launcher                       spawner                p
    9. Start the login shell on the pty's slave (§2.5), then close the
       slave. The shell starts this late so a failure earlier leaves no
       shell behind, and so its start-up overlaps the client's handshake.
-      If the line has a `type`, write its text and one CR to the pty
-      master now, in one write (`bootstrap.md` §9.2.3); a failure is
-      logged and the session goes on.
+      If the line has a `type`, wait for proto's `FirstOutput`, or
+      `TypeWait` (2 s), whichever comes first, then write its text and
+      one CR to the pty master, in one write (`bootstrap.md` §9.2.3); a
+      failure is logged and the session goes on.
    10. Send `Ready{line}` to the launcher and close B. From here on the
       launcher's fate does not matter.
    11. Supervise (§5) and serve the attach socket until the session ends
@@ -507,6 +508,7 @@ mosey speaks N`.
 | 0x32 | KillEmu | proto → spawner | 0 |
 | 0x33 | Attached | proto → spawner | 0 |
 | 0x34 | Detached | proto → spawner | 0 |
+| 0x35 | FirstOutput | proto → spawner | 0 |
 | 0x40 | ClientLine | launcher → spawner | 0 |
 | 0x41 | Ready | spawner → launcher | 0 |
 | 0x42 | Failed | spawner → launcher | 0 |
@@ -672,6 +674,15 @@ the attached client has been silent for `SilentAfter` (§2.4). The greeting
 says `detached` from then until the next `Attached`, and the spawner's
 idle timer runs from it.
 
+**0x35 FirstOutput** (proto → spawner): type only. Length 1. Proto's
+pty reader sends it once, after its first read of the master that
+returns bytes: the shell has written something, its prompt as a rule,
+so the spawner may type a `type`'s text without it showing twice
+(`bootstrap.md` §9.2.3). Proto sends it whether or not there is text to
+type: proto never sees the `ClientLine`. Only proto reads the master, so
+it is the one that can tell; the spawner reading it too would take
+output from the emulator.
+
 **0x40 ClientLine** (launcher → spawner): type, then the line as read
 from stdin including its `\n`, 1..`MaxClientLine` bytes.
 `MaxClientLine` = 8192 [`bootstrap.md` §6.2].
@@ -702,6 +713,9 @@ one place a compromised proto could reach further. It accepts exactly:
 - `KillEmu`, any number, at most one per emu generation acted on.
 - `Attached` and `Detached`, any number (each is a fixed layout and
   changes only what the greeting says).
+- `FirstOutput`, any number: only the first before `Ready` does anything
+  (it ends the wait to type a `type`'s text early, which `TypeWait`
+  would end anyway), and every later one is ignored.
 
 Anything else (another type, a second `Credential`, a malformed
 message, any fd) is a violation: the spawner logs it, SIGKILLs proto,
@@ -1377,7 +1391,8 @@ is its threads of control and the ordering rules the IPC imposes:
 - **pty reader**: reads the master in chunks of up to 16 KiB, calls
   `Emulator.Write`, then reads `Terminal.EchoOff` (`TCGETS`) and hands
   `Emulator.Snapshot` plus the echo-off bit to SSP. It never writes the
-  pty (§4.3). EIO on the read means every slave fd has closed.
+  pty (§4.3). EIO on the read means every slave fd has closed. After its
+  first read that returns bytes it sends the spawner `FirstOutput`.
 - **pty writer**: keystrokes first, then replies (§4.3). It keeps the
   echo ack's write log, reads the echo-off bit before each key event and
   publishes if it changed, and arms the 50 ms echo-ack publish
@@ -1422,6 +1437,7 @@ is its threads of control and the ordering rules the IPC imposes:
 | `SilentAfter`: a silent client counts as detached | 15 s | proto | [D] `bootstrap.md` §9.2: five 3 s heartbeats (D11) |
 | `IdleTimeout`: a detached session is hung up | 7 days | spawner | [D] Dan, D8 R4 |
 | `HangupGrace`: SIGHUP, then the teardown | 10 s | spawner | [choice] `bootstrap.md` §9.3 |
+| `TypeWait`: the most a `type` waits for the shell's first output | 2 s | spawner | [choice] `bootstrap.md` §9.2.3 |
 | a resume's hold on the greeting | `handshake.CredentialTTL`, 30 s | spawner | [derived] `bootstrap.md` §9.2 |
 | emu restart backoff | 50 ms, ×2, ≤ 5 s; reset after 60 s alive | spawner | [S4 §3.8] |
 | emu restart budget | 10 per 60 s | spawner | [S4 §3.8] |

@@ -97,6 +97,11 @@ type Session struct {
 	// other takes its place, or has been silent for SilentAfter: the
 	// session waits for a resume (bootstrap.md §9.2).
 	Detached func()
+	// FirstOutput, if set, is called once, after the pty reader's first
+	// read that returns bytes: the shell has written something, its
+	// prompt as a rule. proto tells the spawner, which types -type's text
+	// only then, so it shows once (bootstrap.md §9.2.3).
+	FirstOutput func()
 	// SilentAfter is how long the attached client may go unheard before
 	// it counts as detached; zero is the package's SilentAfter.
 	SilentAfter time.Duration
@@ -745,9 +750,14 @@ func (s *Session) release() {
 // closed: the shell is gone.
 func (s *Session) readPTY(ctx context.Context) error {
 	buf := make([]byte, ptyReadChunk)
+	first := s.FirstOutput
 	for {
 		n, err := s.Terminal.Read(buf)
 		if n > 0 {
+			if first != nil {
+				first()
+				first = nil
+			}
 			s.em.Write(buf[:n])
 			s.queueReplies(s.em.TakeReplies())
 			s.publish()

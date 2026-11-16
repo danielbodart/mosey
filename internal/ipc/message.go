@@ -74,23 +74,24 @@ const (
 
 // The types of server.md §3.2. The high nibble names the direction.
 const (
-	typeStart      = 0x01
-	typeEmuLink    = 0x02
-	typeShellExit  = 0x03
-	typeAgentConn  = 0x04
-	typeResume     = 0x05
-	typeEmuPaused  = 0x06
-	typeInit       = 0x10
-	typeOutput     = 0x11
-	typeResize     = 0x12
-	typeFlush      = 0x13
-	typeUpdate     = 0x20
-	typeReplies    = 0x21
-	typeCredential = 0x30
-	typeExit       = 0x31
-	typeKillEmu    = 0x32
-	typeAttached   = 0x33
-	typeDetached   = 0x34
+	typeStart       = 0x01
+	typeEmuLink     = 0x02
+	typeShellExit   = 0x03
+	typeAgentConn   = 0x04
+	typeResume      = 0x05
+	typeEmuPaused   = 0x06
+	typeInit        = 0x10
+	typeOutput      = 0x11
+	typeResize      = 0x12
+	typeFlush       = 0x13
+	typeUpdate      = 0x20
+	typeReplies     = 0x21
+	typeCredential  = 0x30
+	typeExit        = 0x31
+	typeKillEmu     = 0x32
+	typeAttached    = 0x33
+	typeDetached    = 0x34
+	typeFirstOutput = 0x35
 	// 0x40 to 0x4F are the attach protocol, stable across releases
 	// (server.md §2.8); everything else is private to one build.
 	typeClientLine = 0x40
@@ -253,6 +254,12 @@ type Attached struct {
 // in its place: the session waits for a resume (server.md §2.4).
 type Detached struct{}
 
+// FirstOutput tells the spawner the shell has written its first output
+// to the pty, its prompt as a rule, so -type's text can be typed after it
+// and show once (bootstrap.md §9.2.3). Only proto reads the master, so
+// only proto can tell.
+type FirstOutput struct{}
+
 // ClientLine is the bootstrap line, as the launcher read it from ssh's
 // stdin, with its newline.
 type ClientLine struct{ Line []byte }
@@ -268,27 +275,28 @@ type Failed struct{ Text string }
 // shell up: `mosey -kill` (bootstrap.md §9.5).
 type Hangup struct{}
 
-func (Start) typ() byte      { return typeStart }
-func (EmuLink) typ() byte    { return typeEmuLink }
-func (ShellExit) typ() byte  { return typeShellExit }
-func (AgentConn) typ() byte  { return typeAgentConn }
-func (Resume) typ() byte     { return typeResume }
-func (EmuPaused) typ() byte  { return typeEmuPaused }
-func (Init) typ() byte       { return typeInit }
-func (Output) typ() byte     { return typeOutput }
-func (Resize) typ() byte     { return typeResize }
-func (Flush) typ() byte      { return typeFlush }
-func (Update) typ() byte     { return typeUpdate }
-func (Replies) typ() byte    { return typeReplies }
-func (Credential) typ() byte { return typeCredential }
-func (Exit) typ() byte       { return typeExit }
-func (KillEmu) typ() byte    { return typeKillEmu }
-func (Attached) typ() byte   { return typeAttached }
-func (Detached) typ() byte   { return typeDetached }
-func (ClientLine) typ() byte { return typeClientLine }
-func (Ready) typ() byte      { return typeReady }
-func (Failed) typ() byte     { return typeFailed }
-func (Hangup) typ() byte     { return typeHangup }
+func (Start) typ() byte       { return typeStart }
+func (EmuLink) typ() byte     { return typeEmuLink }
+func (ShellExit) typ() byte   { return typeShellExit }
+func (AgentConn) typ() byte   { return typeAgentConn }
+func (Resume) typ() byte      { return typeResume }
+func (EmuPaused) typ() byte   { return typeEmuPaused }
+func (Init) typ() byte        { return typeInit }
+func (Output) typ() byte      { return typeOutput }
+func (Resize) typ() byte      { return typeResize }
+func (Flush) typ() byte       { return typeFlush }
+func (Update) typ() byte      { return typeUpdate }
+func (Replies) typ() byte     { return typeReplies }
+func (Credential) typ() byte  { return typeCredential }
+func (Exit) typ() byte        { return typeExit }
+func (KillEmu) typ() byte     { return typeKillEmu }
+func (Attached) typ() byte    { return typeAttached }
+func (Detached) typ() byte    { return typeDetached }
+func (FirstOutput) typ() byte { return typeFirstOutput }
+func (ClientLine) typ() byte  { return typeClientLine }
+func (Ready) typ() byte       { return typeReady }
+func (Failed) typ() byte      { return typeFailed }
+func (Hangup) typ() byte      { return typeHangup }
 
 // route is who may send a type to whom, and how many fds it carries.
 type route struct {
@@ -297,27 +305,28 @@ type route struct {
 }
 
 var routes = map[byte]route{
-	typeStart:      {Spawner, Proto, 2},
-	typeEmuLink:    {Spawner, Proto, 1},
-	typeShellExit:  {Spawner, Proto, 0},
-	typeAgentConn:  {Spawner, Proto, 1},
-	typeResume:     {Spawner, Proto, 0},
-	typeEmuPaused:  {Spawner, Proto, 0},
-	typeInit:       {Proto, Emu, 0},
-	typeOutput:     {Proto, Emu, 0},
-	typeResize:     {Proto, Emu, 0},
-	typeFlush:      {Proto, Emu, 0},
-	typeUpdate:     {Emu, Proto, 0},
-	typeReplies:    {Emu, Proto, 0},
-	typeCredential: {Proto, Spawner, 0},
-	typeExit:       {Proto, Spawner, 0},
-	typeKillEmu:    {Proto, Spawner, 0},
-	typeAttached:   {Proto, Spawner, 0},
-	typeDetached:   {Proto, Spawner, 0},
-	typeClientLine: {Launcher, Spawner, 0},
-	typeReady:      {Spawner, Launcher, 0},
-	typeFailed:     {Spawner, Launcher, 0},
-	typeHangup:     {Launcher, Spawner, 0},
+	typeStart:       {Spawner, Proto, 2},
+	typeEmuLink:     {Spawner, Proto, 1},
+	typeShellExit:   {Spawner, Proto, 0},
+	typeAgentConn:   {Spawner, Proto, 1},
+	typeResume:      {Spawner, Proto, 0},
+	typeEmuPaused:   {Spawner, Proto, 0},
+	typeInit:        {Proto, Emu, 0},
+	typeOutput:      {Proto, Emu, 0},
+	typeResize:      {Proto, Emu, 0},
+	typeFlush:       {Proto, Emu, 0},
+	typeUpdate:      {Emu, Proto, 0},
+	typeReplies:     {Emu, Proto, 0},
+	typeCredential:  {Proto, Spawner, 0},
+	typeExit:        {Proto, Spawner, 0},
+	typeKillEmu:     {Proto, Spawner, 0},
+	typeAttached:    {Proto, Spawner, 0},
+	typeDetached:    {Proto, Spawner, 0},
+	typeFirstOutput: {Proto, Spawner, 0},
+	typeClientLine:  {Launcher, Spawner, 0},
+	typeReady:       {Spawner, Launcher, 0},
+	typeFailed:      {Spawner, Launcher, 0},
+	typeHangup:      {Launcher, Spawner, 0},
 }
 
 // ErrMalformed is wrapped by every refusal of a message: a violation by the
@@ -401,7 +410,7 @@ func Marshal(m Message) ([]byte, error) {
 		if m.Peer.Addr().IsValid() {
 			b = binary.BigEndian.AppendUint16(b, m.Peer.Port())
 		}
-	case Flush, Detached, AgentConn, Hangup:
+	case Flush, Detached, FirstOutput, AgentConn, Hangup:
 	case Update:
 		var flags byte
 		if m.More {
@@ -655,6 +664,8 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		return m, nil
 	case typeDetached:
 		return Detached{}, fixed(0)
+	case typeFirstOutput:
+		return FirstOutput{}, fixed(0)
 	case typeHangup:
 		return Hangup{}, fixed(0)
 	case typeClientLine:

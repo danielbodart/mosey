@@ -44,6 +44,7 @@ func examples() []Message {
 		Hangup{},
 		Attached{Peer: netip.MustParseAddrPort("[2001:db8::7]:65535")},
 		Detached{},
+		FirstOutput{},
 		ClientLine{Line: line(1)}, ClientLine{Line: line(MaxClientLine)},
 		Ready{Line: line(MaxCredentialLine)},
 		Failed{Text: "x"}, Failed{Text: strings.Repeat(" ", MaxFailed)},

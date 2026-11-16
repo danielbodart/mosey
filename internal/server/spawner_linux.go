@@ -132,9 +132,12 @@ type spawner struct {
 	log     *slog.Logger
 	logFile *cappedWriter
 
-	launcher   *ipc.Conn
-	ctl        *ipc.Conn
-	ctlMsgs    chan ctlEvent
+	launcher *ipc.Conn
+	ctl      *ipc.Conn
+	ctlMsgs  chan ctlEvent
+	// spoke closes when proto says the shell has written its first
+	// output (ipc.FirstOutput), for typeInto.
+	spoke      chan struct{}
 	advertised netip.Addr
 	port       uint16
 	master     *os.File
@@ -363,7 +366,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 		return err
 	}
 	slave.Close()
-	s.typeInto(cl.Type)
+	s.typeInto(ctx, cl.Type)
 
 	if err := s.launcher.Send(ipc.Ready{Line: line}); err != nil {
 		s.log.Warn("telling the launcher", "err", err)
@@ -415,9 +418,20 @@ func (s *spawner) awaitCredential(ctx context.Context) ([]byte, error) {
 // supervise, until the first error.
 func (s *spawner) readCtl() {
 	s.ctlMsgs = make(chan ctlEvent, 8)
+	s.spoke = make(chan struct{})
 	go func() {
+		spoke := s.spoke
 		for {
 			m, err := s.ctl.Recv()
+			// FirstOutput only ever ends typeInto's wait, so it goes no
+			// further; any after the first are ignored (server.md §3.4).
+			if _, ok := m.(ipc.FirstOutput); ok {
+				if spoke != nil {
+					close(spoke)
+					spoke = nil
+				}
+				continue
+			}
 			s.ctlMsgs <- ctlEvent{m, err}
 			if err != nil {
 				return
@@ -635,14 +649,27 @@ func (s *spawner) startShell(cl bootstrap.ClientLine, agentSock string, slave *o
 }
 
 // typeInto types -type's text into the new shell, then Enter
-// (bootstrap.md §9.2.3), as tmux send-keys TEXT Enter does: one write to
-// the pty master as soon as the shell has started, without waiting for a
-// prompt. The tty holds it as typeahead until the shell reads its first
-// line, and ICRNL makes the CR, what a terminal's Enter sends, the
-// newline that ends it. It goes before Ready, so before anything the
-// client types. A failure costs the text, not the session.
-func (s *spawner) typeInto(text string) {
+// (bootstrap.md §9.2.3), as tmux send-keys TEXT Enter does, once the
+// shell has written its first output, its prompt as a rule, or TypeWait
+// has passed. Typed before the prompt, the tty would echo it at once and
+// the line editor again after the prompt, so it would show twice; typed
+// after, it shows once, as a person who waited would type it. Only proto
+// reads the master, so proto says when (ipc.FirstOutput): the spawner
+// reading it too would take output from the emulator. The CR is what a
+// terminal's Enter sends; ICRNL makes it the newline that ends the line.
+// It goes before Ready, so before anything the client types. A failure
+// costs the text, not the session.
+func (s *spawner) typeInto(ctx context.Context, text string) {
 	if text == "" {
+		return
+	}
+	wait := time.NewTimer(TypeWait)
+	defer wait.Stop()
+	select {
+	case <-s.spoke:
+	case <-wait.C:
+		s.log.Info("the shell wrote nothing in time; typing -type's text anyway", "after", TypeWait)
+	case <-ctx.Done():
 		return
 	}
 	b := append([]byte(text), '\r')

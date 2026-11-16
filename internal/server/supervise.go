@@ -24,6 +24,13 @@ const (
 	HangupGrace = 10 * time.Second
 )
 
+// TypeWait is the most -type's text waits for the shell's first output
+// before it is typed anyway (bootstrap.md §9.2.3) [choice]: far longer
+// than an ordinary shell takes to draw its first prompt, and short enough
+// that a shell which prints nothing only delays the text. The wait comes
+// before Ready, so T3 + TypeWait stays well inside the launcher's T2.
+const TypeWait = 2 * time.Second
+
 // idleClock is D8 R4's idle timeout (bootstrap.md §9.3): it runs while
 // the session is detached, from the moment it became so, and an attach
 // stops it. It is its own type so that rule is tested in a synctest

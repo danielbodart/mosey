@@ -154,6 +154,11 @@ func RunProto(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 				log.Warn("telling the spawner the client detached", "err", err)
 			}
 		},
+		FirstOutput: func() {
+			if err := ctl.Send(ipc.FirstOutput{}); err != nil {
+				log.Warn("telling the spawner the shell has written", "err", err)
+			}
+		},
 	}
 	em.repaint = sess.Repaint
 	resume := func(clientPublic []byte) error {

@@ -385,8 +385,9 @@ the timeouts T1–T3 are `server.md` §8.
    only `credid`, `sessionid`, `psk` and `public`, the four things it
    alone knows; a compromised or buggy proto cannot choose where the
    client sends UDP. Only then does the spawner start
-   the login shell with the line's environment (§6.2), and send `Ready`
-   (0x41) with the line.
+   the login shell with the line's environment (§6.2), type a `type`'s
+   text once the shell has written its first output (§9.2.3), and send
+   `Ready` (0x41) with the line.
 4. **Launcher.** If the line says `agent=yes` and sshd set
    `SSH_AUTH_SOCK`, trigger ssh's bind (§8, "Server"). Then write the line
    from `Ready` to stdout in **one** write.
@@ -446,7 +447,8 @@ confirmation holds a shell forever. Until server.md adds it, proto's
 
 The shell is still started *before* the first confirmation, at step 3,
 on purpose: its start-up (rc files, often hundreds of milliseconds)
-overlaps the client's handshake. Starting it later would not protect
+overlaps the client's handshake (except with a `type`, whose `Ready`
+waits for the shell's first output, §9.2.3). Starting it later would not protect
 anything: the user's rc files have already run once for the same SSH login,
 since sshd ran `SHELL -c` to start the launcher (§6.5 exists because rc
 files print), and that login is the user. See the review notes (§15).
@@ -1825,27 +1827,37 @@ attached with: a tmux user's `tmux new-session -c DIR` followed by
   spawner resolves the same `dir` the same way and starts the login shell
   there (`server.md` §2.5); should it have gone in between, starting the
   shell fails and the session with it (`Failed`, `internal`).
-- **The text.** Once the login shell has started, the spawner writes
+- **The text.** Once the login shell has started and has written its
+  first output to the pty (its prompt, as a rule), the spawner writes
   `type`'s text and then one CR (0x0D, what a terminal's Enter key sends)
-  into the pty master, in one write. "Started" means the spawner's
-  fork and exec of the shell have returned: it does not wait for a prompt
-  [choice: the simplest rule that works]. The text sits in the tty's
-  input queue, as a fast typist's typeahead would, until the shell reads
-  its first line, and the tty's `ICRNL` turns the CR into the newline that
-  ends that line. This is what `tmux send-keys TEXT Enter` sends: the
-  keys, as if typed. Two consequences of typing ahead: the tty echoes
-  the text when it arrives, before the shell has drawn its prompt, so
-  the text shows once above the first prompt and again after it, as the
-  line editor reads it ([shells]: bash 5 from NixOS through the e2e
-  test's throwaway sshd, 2026-11-16, shows `echo hi`, then
-  `PROMPT$ echo hi`, then `hi`); and a program the rc files run that
-  reads the terminal (a prompt for a passphrase, say) gets the text
-  instead of the shell. The text is typed into the shell, never run by the server:
-  it is the user's own command, with the user's own `PATH` and aliases,
-  and when it exits the user is at that shell's prompt in DIR. It is
-  written before the spawner sends `Ready`, so it always comes before
-  anything the client types. A failed write is logged and the session
-  goes on.
+  into the pty master, in one write, as a person who waited for the
+  prompt would type it (Dan, 2026-11-16). Proto reads the master, so it
+  is proto that sees the first output: its pty reader sends the spawner
+  `FirstOutput` (`server.md` §3.3) after its first read that returns
+  bytes, and the spawner waits for that, for at most `TypeWait` = 2 s
+  [choice: far longer than an ordinary shell takes to draw its first
+  prompt, short enough that a shell which prints nothing, or rc files
+  that take longer, only delay the text, never lose it]. When `TypeWait`
+  passes first, it types anyway, and the text is then typeahead: it
+  sits in the tty's input queue until the shell reads its first line,
+  and the tty echoes it when it arrives, so it may show twice, once
+  before the prompt and once after it. Waiting fixes exactly that: typed
+  ahead, bash 5 (NixOS, through the e2e test's throwaway sshd,
+  2026-11-16) showed `echo hi`, then `PROMPT$ echo hi`, then `hi`
+  [shells]; typed after the prompt it shows `PROMPT$ echo hi` once. The
+  tty's `ICRNL` turns the CR into the newline that ends the line. This
+  is what `tmux send-keys TEXT Enter` sends: the keys, as if typed. A
+  prompt is not proof the shell is reading, so a program the rc files
+  run that reads the terminal after printing something (a prompt for a
+  passphrase, say) gets the text instead of the shell. The text is typed
+  into the shell, never run by the server: it is the user's own command,
+  with the user's own `PATH` and aliases, and when it exits the user is
+  at that shell's prompt in DIR. It is written before the spawner sends
+  `Ready`, so it always comes before anything the client types; the
+  price is that a line with a `type` has its `Ready`, and so its
+  credential, wait for the shell's first output (at most `TypeWait`,
+  well inside T2), where a line without one does not. A failed write is
+  logged and the session goes on.
 
 ### 9.3 How long a session lives (D8 R4)
 
@@ -2402,6 +2414,9 @@ durations in the commit message; 10 s each in CI):
   detaches, `-s work -dir other -type …` resumes it, still in `$HOME/sub`
   (`other` does not exist, and nothing is typed); `-new -dir missing` is
   refused with §6.4's `dir` message, exit 1, and starts no session.
+  With bash as the login shell (`TestTypedTextShowsOnceAfterTheFirstPrompt`,
+  skipped without bash), `-type 'echo typed-once'` shows the typed line
+  once, right after the first prompt, then its output.
 - **Reconnect, R3** (§9.2.2), on netsim in virtual time
   (`TestAClientWhosePathDiesReconnectsByItselfAndKeepsItsScreen`,
   `TestAReconnectThatFindsTheSessionGoneOrTakenEndsTheClient`), the
