@@ -144,3 +144,87 @@ func TestLoginShellPrefersSHELLThenPasswdThenBinSh(t *testing.T) {
 		t.Errorf("nothing at all: %s %s", shell, home)
 	}
 }
+
+// rawFD is a non-blocking duplicate of f's descriptor, for I/O that must
+// stop when the kernel would block rather than wait.
+func rawFD(t *testing.T, f *os.File) int {
+	t.Helper()
+	rc, err := f.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd := -1
+	if err := rc.Control(func(orig uintptr) { fd, err = unix.Dup(int(orig)) }); err != nil || fd < 0 {
+		t.Fatalf("duplicating the descriptor: %v", err)
+	}
+	t.Cleanup(func() { unix.Close(fd) })
+	if err := unix.SetNonblock(fd, true); err != nil {
+		t.Fatal(err)
+	}
+	return fd
+}
+
+// drain writes x to fd, or reads it, until the kernel would block, and
+// says how many bytes moved and, for a read, how many of them were x.
+func drain(fd int, write bool) (moved, xs int) {
+	b := make([]byte, 1024)
+	for i := range b {
+		b[i] = 'x'
+	}
+	for {
+		var n int
+		var err error
+		if write {
+			n, err = unix.Write(fd, b)
+		} else {
+			n, err = unix.Read(fd, b)
+			xs += strings.Count(string(b[:max(n, 0)]), "x")
+		}
+		if n <= 0 || err != nil {
+			return moved, xs
+		}
+		moved += n
+	}
+}
+
+// What proto's hold rests on (docs/spec/screen.md §2.5): a program whose
+// output the server stops reading blocks once the kernel holds a bounded
+// amount, and an interrupt typed at the keyboard (ISIG without NOFLSH, a
+// fresh pty's default) discards that output but for what already sits in
+// the master's line-discipline buffer, 4 KiB. So after Ctrl-C at most
+// 4 KiB of a flood is still to cross [measured here, Linux 6.18: 20-22 KB
+// held, 4,095 bytes kept].
+func TestAnInterruptDiscardsTheOutputNotYetRead(t *testing.T) {
+	m, s := openPTY(t, Size{80, 24})
+	mfd, sfd := rawFD(t, m), rawFD(t, s)
+	tio, err := unix.IoctlGetTermios(sfd, unix.TCGETS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tio.Lflag&unix.ISIG == 0 || tio.Lflag&unix.NOFLSH != 0 {
+		t.Fatalf("a fresh pty has lflag %#x: not ISIG without NOFLSH", tio.Lflag)
+	}
+	// Raw output, so every byte written is a byte read.
+	tio.Oflag &^= unix.OPOST
+	if err := unix.IoctlSetTermios(sfd, unix.TCSETS, tio); err != nil {
+		t.Fatal(err)
+	}
+	held := 0
+	for range 5 {
+		n, _ := drain(sfd, true)
+		held += n
+		time.Sleep(10 * time.Millisecond) // the kernel moves it to the master's side
+	}
+	if held < 4096 || held > 1<<20 {
+		t.Fatalf("the kernel held %d bytes before the writer would block", held)
+	}
+	if _, err := unix.Write(mfd, []byte{0x03}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	_, kept := drain(mfd, false)
+	if kept > 4096 {
+		t.Errorf("%d of %d bytes written survived the interrupt, more than the line discipline's 4 KiB", kept, held)
+	}
+	t.Logf("held %d bytes; %d survived the interrupt", held, kept)
+}

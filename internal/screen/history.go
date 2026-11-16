@@ -21,6 +21,14 @@ const (
 	HistoryCells = 200_000
 )
 
+// WindowLines is how many lines the window holds at cols columns: all
+// HistoryLines up to 200 columns, and HistoryCells' worth beyond. proto
+// holds a program's output back to a quarter of it while a client is
+// listening (docs/spec/screen.md §2.5).
+func WindowLines(cols int) int {
+	return min(HistoryLines, HistoryCells/max(cols, 1))
+}
+
 // History is the lines that scrolled off the top of the primary screen,
 // for the client to print into the local terminal's own scrollback
 // (docs/spec/screen.md §2.5). It is part of the screen, so SSP's

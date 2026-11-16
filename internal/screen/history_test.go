@@ -228,3 +228,11 @@ func TestRoundTripsOfGeneratedHistories(t *testing.T) {
 		t.Errorf("only %d of 3000 versions changed the history", seen)
 	}
 }
+
+func TestTheWindowHoldsAThousandLinesUpTo200ColumnsAndFewerBeyond(t *testing.T) {
+	for cols, want := range map[int]int{0: 1000, 1: 1000, 80: 1000, 200: 1000, 250: 800, screen.MaxCols: 200} {
+		if got := screen.WindowLines(cols); got != want {
+			t.Errorf("WindowLines(%d) = %d, want %d", cols, got, want)
+		}
+	}
+}
