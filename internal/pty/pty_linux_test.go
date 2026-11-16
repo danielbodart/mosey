@@ -209,19 +209,42 @@ func TestAnInterruptDiscardsTheOutputNotYetRead(t *testing.T) {
 	if err := unix.IoctlSetTermios(sfd, unix.TCSETS, tio); err != nil {
 		t.Fatal(err)
 	}
+	// The kernel moves what is written to the master's side in the
+	// background, freeing room as it goes, so write until several looks
+	// in a row find no room at all.
 	held := 0
-	for range 5 {
+	for idle, deadline := 0, time.Now().Add(10*time.Second); idle < 5; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the writer never blocked: %d bytes held", held)
+		}
 		n, _ := drain(sfd, true)
-		held += n
-		time.Sleep(10 * time.Millisecond) // the kernel moves it to the master's side
+		if held += n; n == 0 {
+			idle++
+		} else {
+			idle = 0
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if held < 4096 || held > 1<<20 {
 		t.Fatalf("the kernel held %d bytes before the writer would block", held)
 	}
-	if _, err := unix.Write(mfd, []byte{0x03}); err != nil {
+	// The line discipline acts on input in the background too, in order:
+	// once the line "z" after the ^C is readable on the slave, the ^C's
+	// flush has happened. Reading the master any sooner would take output
+	// the interrupt was about to discard.
+	if _, err := unix.Write(mfd, []byte("\x03z\n")); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(time.Millisecond) {
+		if n, err := unix.IoctlGetInt(sfd, unix.TIOCINQ); err != nil {
+			t.Fatalf("asking the slave how much input waits: %v", err)
+		} else if n >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the line after the ^C never reached the slave")
+		}
+	}
 	_, kept := drain(mfd, false)
 	if kept > 4096 {
 		t.Errorf("%d of %d bytes written survived the interrupt, more than the line discipline's 4 KiB", kept, held)
