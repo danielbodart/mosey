@@ -500,11 +500,11 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 }
 
 // reconnectNotice is the status line R3 shows (loop.status): how long
-// the server has been silent, that mosey is reconnecting over ssh, and the
+// the server has been silent, that mosey is reconnecting, and the
 // last try's failure, reduced to its first line of printable ASCII and
 // MaxNoticeErr bytes, since it may carry what ssh printed.
 func reconnectNotice(silent time.Duration, lastErr string) string {
-	text := "mosey: no contact for " + silent.Round(time.Second).String() + "; reconnecting over ssh"
+	text := "mosey: no contact for " + silent.Round(time.Second).String() + "; reconnecting"
 	if lastErr == "" {
 		return text
 	}

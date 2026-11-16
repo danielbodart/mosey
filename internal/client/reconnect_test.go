@@ -292,14 +292,14 @@ func TestAFailingReconnectIsShownOnTheScreenUntilTheServerIsHeard(t *testing.T) 
 		last := func() string { d := h.paint.drawnSoFar(); return d[len(d)-1] }
 		time.Sleep(ReconnectAfter)
 		synctest.Wait()
-		trying := "shell|mosey: no contact for 15s; reconnecting over ssh"
+		trying := "shell|mosey: no contact for 15s; reconnecting"
 		failed := trying + " (last try: ssh: connect to host far port 22: Network is unreachable)"
 		if d := h.paint.drawnSoFar(); !slices.Contains(d, trying) || last() != failed {
 			t.Fatalf("drew %q; want %q then %q", d, trying, failed)
 		}
 		time.Sleep(time.Second)
 		synctest.Wait()
-		if want := "shell|mosey: no contact for 16s; reconnecting over ssh (last try: ssh: connect to host far port 22: Network is unreachable)"; last() != want {
+		if want := "shell|mosey: no contact for 16s; reconnecting (last try: ssh: connect to host far port 22: Network is unreachable)"; last() != want {
 			t.Errorf("a second later drew %q, want %q", last(), want)
 		}
 		h.first.hear()
@@ -315,7 +315,7 @@ func TestAFailingReconnectIsShownOnTheScreenUntilTheServerIsHeard(t *testing.T) 
 // at most MaxNoticeErr bytes of it: it may hold whatever ssh printed.
 func TestTheReconnectNoticeQuotesOnlyAPrintableLineOfTheFailure(t *testing.T) {
 	got := reconnectNotice(61500*time.Millisecond, "ssh: \x1b]0;evil\x07denied\nsecond line")
-	if want := "mosey: no contact for 1m2s; reconnecting over ssh (last try: ssh: ]0;evildenied)"; got != want {
+	if want := "mosey: no contact for 1m2s; reconnecting (last try: ssh: ]0;evildenied)"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 	long := reconnectNotice(time.Second, strings.Repeat("x", 500))

@@ -1827,7 +1827,7 @@ own session, in the background, and never asks the user anything:
 - **What the user sees.** Nothing is asked, but nothing is hidden either:
   from the first try until the server is heard again or the new transport
   is in, the screen's top row is replaced, in reverse video, by `mosey: no
-  contact for DURATION; reconnecting over ssh`, followed after a failed
+  contact for DURATION; reconnecting`, followed after a failed
   try by ` (last try: REASON)`, REASON the failure's first line in
   printable ASCII, at most 120 bytes [choice: a line's worth; the log has
   it whole], since it may carry what ssh said. DURATION is kept current

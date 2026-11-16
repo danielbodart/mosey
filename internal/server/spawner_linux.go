@@ -260,9 +260,14 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	cols, rows := screen.ClampSize(int(cl.Cols), int(cl.Rows))
 
 	// Pin no mount; outlive the ssh login's hangup; never die of a write
-	// to a closed pipe.
+	// to a closed pipe. Caught, not ignored: an ignored signal stays
+	// ignored across exec, so the shell would start with SIGHUP ignored,
+	// and a shell that keeps that (dash, a common /bin/sh) would never end
+	// for -kill or the idle timeout (§2.4). Exec resets a caught signal to
+	// its default. The channel is never read; Notify drops what does not
+	// fit.
 	os.Chdir("/")
-	signal.Ignore(syscall.SIGHUP, syscall.SIGPIPE)
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGHUP, syscall.SIGPIPE)
 	if err := s.openLog(); err != nil {
 		return err
 	}
