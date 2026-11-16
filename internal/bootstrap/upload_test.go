@@ -224,13 +224,34 @@ func shells(t *testing.T) []string {
 	return found
 }
 
-// remotePath is the PATH the remote-command tests give their shells: the
-// usual system directories, as an ssh login would have, then this
-// process's own PATH. Nix's build sandbox has no /usr/bin or /bin
-// coreutils, only those on its PATH, so without that tail uname and mkdir
-// are missing there and the probe reads "unknown unknown".
-func remotePath(dirs ...string) string {
-	return strings.Join(append(dirs, "/usr/bin", "/bin", "/run/current-system/sw/bin", os.Getenv("PATH")), ":")
+// remoteTools are the commands the remote scripts and writeMosey's fakes
+// run; the rest are shell builtins.
+var remoteTools = []string{"uname", "cat", "ls", "mkdir", "mktemp", "chmod", "rm"}
+
+// remotePath is the PATH the remote-command tests give their shells: dirs,
+// then a directory of links to remoteTools and nothing else. The tools are
+// found in the usual system directories, as an ssh login would have them,
+// then this process's own PATH (Nix's build sandbox has coreutils only on
+// its PATH). Linking them rather than putting those directories on PATH
+// keeps the test hermetic: a host with mosey installed (NixOS puts it in
+// /run/current-system/sw/bin beside coreutils) would otherwise answer the
+// cases that need no mosey on PATH.
+func remotePath(t *testing.T, dirs ...string) string {
+	t.Helper()
+	tools := t.TempDir()
+	search := filepath.SplitList(strings.Join([]string{"/usr/bin", "/bin", "/run/current-system/sw/bin", os.Getenv("PATH")}, ":"))
+	for _, tool := range remoteTools {
+		for _, d := range search {
+			p := filepath.Join(d, tool)
+			if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
+				if err := os.Symlink(p, filepath.Join(tools, tool)); err != nil {
+					t.Fatal(err)
+				}
+				break
+			}
+		}
+	}
+	return strings.Join(append(dirs, tools), ":")
 }
 
 // needTools skips the test when the shell cannot find a command the
@@ -272,7 +293,7 @@ func writeMosey(t *testing.T, path, answer, name string) {
 // installer would refuse to replace is run as it is.
 func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 	const ours = "1 1"
-	needTools(t, remotePath(), "uname", "cat", "ls")
+	needTools(t, remotePath(t), "uname", "cat", "ls")
 	for _, shell := range shells(t) {
 		for _, c := range []struct {
 			name      string
@@ -368,7 +389,7 @@ func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 				continue
 			}
 			cmd := exec.Command(shell, "-c", SSH{Protocol: ours}.RemoteCommand())
-			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath(dirs...)}
+			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath(t, dirs...)}
 			cmd.Dir = home
 			cmd.Stdin = strings.NewReader("THE-LINE\n")
 			out, err := cmd.Output()
@@ -403,7 +424,7 @@ func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 // than replaced. This pins that limitation (a HOME with a trailing slash
 // is rare, and the user can fix it), so a change to it is deliberate.
 func TestAHomeWithATrailingSlashHidesTheInstalledCopyOnPath(t *testing.T) {
-	needTools(t, remotePath(), "uname", "cat", "ls")
+	needTools(t, remotePath(t), "uname", "cat", "ls")
 	if _, err := os.Stat("/bin/sh"); err != nil {
 		t.Skip("no /bin/sh")
 	}
@@ -411,7 +432,7 @@ func TestAHomeWithATrailingSlashHidesTheInstalledCopyOnPath(t *testing.T) {
 	local := filepath.Join(home, ".local", "bin")
 	writeMosey(t, filepath.Join(local, "mosey"), "1 2", "installed")
 	cmd := exec.Command("/bin/sh", "-c", SSH{Protocol: "1 1"}.RemoteCommand())
-	cmd.Env = []string{"HOME=" + home + "/", "PATH=" + remotePath(local)}
+	cmd.Env = []string{"HOME=" + home + "/", "PATH=" + remotePath(t, local)}
 	cmd.Dir = home
 	cmd.Stdin = strings.NewReader("THE-LINE\n")
 	out, err := cmd.Output()
@@ -437,14 +458,14 @@ func keepsPath(shell, bin string) bool {
 // on its status, and removes the temporary file whatever happened
 // (§4.7.6).
 func TestTheUploadScriptRunsTheCopyAsItsInstaller(t *testing.T) {
-	needTools(t, remotePath(), "mkdir", "mktemp", "cat", "chmod", "rm")
+	needTools(t, remotePath(t), "mkdir", "mktemp", "cat", "chmod", "rm")
 	for _, shell := range shells(t) {
 		for _, status := range []string{"0", "1"} {
 			home := t.TempDir()
 			copy := []byte("#!/bin/sh\necho \"$@\" > \"$HOME/args\"\nexit " + status + "\n")
 			sum := sha256.Sum256(copy)
 			cmd := exec.Command(shell, "-c", uploadCommand(sum, int64(len(copy))))
-			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath()}
+			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath(t)}
 			cmd.Dir = home
 			cmd.Stdin = bytes.NewReader(copy)
 			out, err := cmd.CombinedOutput()
