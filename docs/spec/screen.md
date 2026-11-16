@@ -457,8 +457,10 @@ Everything not listed in §1 is consumed by the server's emulator and never
 reaches the client in any form. That includes:
 
 - DCS, APC, PM and SOS strings;
-- sixel and kitty graphics (answered "unsupported"; kitty uploads that
-  name a file are refused);
+- sixel and kitty graphics (sixel is not advertised and a kitty graphics
+  query goes unanswered, as from a terminal without graphics: the emulator
+  drops every APC it would answer with, since proto refuses APC replies;
+  kitty uploads that name a file are refused);
 - OSC 4/10/11 colour queries, which the emulator answers with the client's
   colours from `emu.Options`;
 - OSC 7, OSC 9, OSC 777 and OSC 133;

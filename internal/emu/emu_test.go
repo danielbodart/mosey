@@ -264,6 +264,18 @@ func TestXTVersionIsMosey(t *testing.T) {
 	}
 }
 
+// Claude Code's start-up probe: a kitty graphics query among others. tuios
+// answers it "OK" in APC, which proto refuses as dishonest and kills emu
+// for; the query must go unanswered and the others still be answered.
+func TestAGraphicsQueryIsNotAnsweredButTheOthersAre(t *testing.T) {
+	e := newEmu(t, 80, 24)
+	e.Write([]byte("\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c" +
+		"\x1b_Gi=32,a=q,t=d,f=24;!!!\x1b\\\x1b[>c"))
+	if r := string(e.TakeReplies()); r != "\x1b[?62;22c\x1b[>1;10;0c" {
+		t.Fatalf("replies %q", r)
+	}
+}
+
 func TestTheReplyQueueIsBoundedAndNeverBlocks(t *testing.T) {
 	e := newEmu(t, 80, 24)
 	e.Write(bytes.Repeat([]byte("\x1b[6n\x1b[c"), 200_000))

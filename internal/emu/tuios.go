@@ -1,6 +1,7 @@
 package emu
 
 import (
+	"bytes"
 	"image/color"
 	"time"
 
@@ -172,6 +173,7 @@ func (e *tuios) syncCheck() {
 // queue keeps replies up to ReplyQueue bytes. A batch that does not fit is
 // dropped whole rather than cut, so what is kept is whole answers.
 func (e *tuios) queue(r []byte) {
+	r = dropAPC(r)
 	if len(r) == 0 {
 		return
 	}
@@ -180,6 +182,36 @@ func (e *tuios) queue(r []byte) {
 		return
 	}
 	e.replies = append(e.replies, r...)
+}
+
+// dropAPC removes every APC string from tuios' answers. tuios answers a
+// kitty graphics query "OK" when nothing has taken its graphics, and a
+// malformed payload with an error, both as APC; but no graphics reaches the
+// client (D9), so "OK" would be a lie, and proto refuses any APC as
+// something no honest emulator says (server.md §4.2), killing emu: Claude
+// Code's start-up probe did exactly that. With no answer, the program sees
+// a terminal without graphics, as screen.md §4 says it should.
+func dropAPC(r []byte) []byte {
+	i := bytes.Index(r, []byte("\x1b_"))
+	if i < 0 {
+		return r
+	}
+	out := append([]byte(nil), r[:i]...)
+	for i >= 0 {
+		rest := r[i+2:]
+		end := bytes.Index(rest, []byte("\x1b\\"))
+		if end < 0 {
+			return out
+		}
+		r = rest[end+2:]
+		i = bytes.Index(r, []byte("\x1b_"))
+		if i < 0 {
+			out = append(out, r...)
+		} else {
+			out = append(out, r[:i]...)
+		}
+	}
+	return out
 }
 
 func (e *tuios) TakeReplies() []byte {
