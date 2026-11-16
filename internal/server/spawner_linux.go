@@ -162,6 +162,9 @@ type spawner struct {
 	agent      *agentListener
 	agentConns chan *os.File
 	agentDone  chan struct{}
+	// socketsClosed: closeSockets has run, at the shell's exit or the
+	// teardown, whichever came first.
+	socketsClosed bool
 	// resumes carries each resume the attach socket has checked to the
 	// supervision loop, which forwards it to proto; pending is those
 	// forwarded and not yet answered, in order (proto answers in order).
@@ -723,6 +726,10 @@ func (s *spawner) supervise(ctx context.Context) error {
 		case st := <-shellDone:
 			shellDone = nil
 			s.shell = nil
+			// The session is ending: out of sight now, before the client
+			// hears of it, so the client's next plain `mosey HOST` cannot
+			// pick it as detached and fail to resume it.
+			s.closeSockets()
 			s.log.Info("the shell exited", "status", describe(st))
 			if err := s.ctl.Send(ipc.ShellExit{Status: status(st)}); err != nil {
 				s.teardown("the shell exited")
@@ -907,17 +914,16 @@ func describe(st *os.ProcessState) string {
 	return fmt.Sprintf("exit %d", st.ExitCode())
 }
 
-// teardown ends the session in server.md §2.4's order: proto (EOF on C,
-// then SIGKILL), the shell (the hangup when the last master closes, then
-// SIGKILL of its pid only, so a job the user detached survives as it does
-// an ssh logout), then emu.
-func (s *spawner) teardown(why string) {
-	start := time.Now()
-	// The sockets first, so no resume reaches a session that is ending
-	// (server.md §2.6). The agent socket goes before the attach socket
-	// because closing the attach listener removes the session's
-	// directory, which it can only do once agent.sock has left it
-	// (server.md §2.7).
+// closeSockets takes the session out of sight: no launcher lists it or
+// resumes it after this (server.md §2.6). The agent socket goes before the
+// attach socket because closing the attach listener removes the session's
+// directory, which it can only do once agent.sock has left it (server.md
+// §2.7). It is safe to call twice.
+func (s *spawner) closeSockets() {
+	if s.socketsClosed {
+		return
+	}
+	s.socketsClosed = true
 	if s.agent != nil {
 		s.agent.Close()
 		close(s.agentDone)
@@ -925,6 +931,15 @@ func (s *spawner) teardown(why string) {
 	if s.attach != nil {
 		s.attach.Close()
 	}
+}
+
+// teardown ends the session in server.md §2.4's order: proto (EOF on C,
+// then SIGKILL), the shell (the hangup when the last master closes, then
+// SIGKILL of its pid only, so a job the user detached survives as it does
+// an ssh logout), then emu.
+func (s *spawner) teardown(why string) {
+	start := time.Now()
+	s.closeSockets()
 	if s.proto != nil {
 		if s.ctl != nil {
 			s.ctl.Close()

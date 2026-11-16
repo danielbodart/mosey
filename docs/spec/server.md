@@ -247,7 +247,7 @@ generation.
 
 | trigger | who sees it | what happens |
 |---|---|---|
-| the shell exits | spawner (`wait4`) | `ShellExit{status}` to proto, which drains the pty until EIO or T5, lets SSP deliver the final screen (until the client acks it, or T6), tells the client the session is over with `Conn.End(EndShellExited)` (`transport.md` §8.4) and sends `Exit{ShellExited}` |
+| the shell exits | spawner (`wait4`) | the spawner closes the agent and attach sockets at once, as the teardown does, so the session is no longer listed and a plain `mosey DEST` cannot pick an ending session to resume; then `ShellExit{status}` to proto, which drains the pty until EIO or T5, lets SSP deliver the final screen (until the client acks it, or T6), tells the client the session is over with `Conn.End(EndShellExited)` (`transport.md` §8.4) and sends `Exit{ShellExited}` |
 | no client ever confirms a credential | proto | once every credential it minted has expired unconfirmed (`handshake.CredentialTTL`, 30 s [D20], from the last one minted) with no client ever attached, nothing can connect, so `Exit{NoClient}` |
 | the client detaches | proto (`transport.Ended`, or its connection failing) | **the session does not end** (D8, `bootstrap.md` §9.3): proto closes that connection, tells the spawner (`Detached`) and waits for a resume |
 | the client falls silent | proto (nothing authentic from it for `SilentAfter`, 15 s, `bootstrap.md` §9.2) | **the session does not end**: proto keeps the connection, since the client may be in a dead spot, and tells the spawner `Detached`, so a plain `mosey DEST` may take it (D8 R1); when the client is heard again proto says `Attached` again |
@@ -386,7 +386,10 @@ since it holds the keys.
   [choice: a resume takes milliseconds; more are closed at once]; resumes
   reach proto one at a time, in order.
 - **Teardown** (§2.4) removes the socket and its directory first, so a
-  resume never reaches a session that is ending.
+  resume never reaches a session that is ending; when the shell exits it
+  goes even sooner, before proto is told (§2.4's first row), because the
+  client hears the session is over before proto's `Exit` reaches the
+  spawner.
 
 ### 2.7 The agent socket (D25)
 

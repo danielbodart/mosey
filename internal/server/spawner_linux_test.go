@@ -147,7 +147,9 @@ func fakeProto(f *os.File) error {
 	case <-time.After(10 * time.Second):
 		return fmt.Errorf("the shell did not exit")
 	}
-	time.Sleep(100 * time.Millisecond) // the last output, read after EIO
+	// The last output, read after EIO; and long enough for the test to
+	// see the session gone from the listing before proto's Exit ends it.
+	time.Sleep(time.Second)
 	g := screen.NewGrid(0, 0)
 	em.Snapshot(g)
 	saw := "nothing"
@@ -210,6 +212,20 @@ func TestTheSpawnerRunsASessionAndRebuildsEmu(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(30 * time.Second)
+	// Once the shell has exited the session is no longer listed, though
+	// proto has not yet said Exit: a launcher must not pick it to resume.
+	for !strings.Contains(sessionLog(state), "the shell exited") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the shell did not exit; log:\n%s", sessionLog(state))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if live := liveSessions(sessionsDir(l.getenv)); len(live) != 0 && !strings.Contains(sessionLog(state), "session ended") {
+		for _, s := range live {
+			s.f.Close()
+		}
+		t.Errorf("%d session(s) still listed after the shell exited", len(live))
+	}
 	for !strings.Contains(sessionLog(state), "session ended") {
 		if time.Now().After(deadline) {
 			t.Fatalf("the session did not end; log:\n%s", sessionLog(state))
