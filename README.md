@@ -71,10 +71,11 @@ config, keys and agent, exactly as Mosh does. It aims to be:
 - **Scrollback in your own terminal, so no tmux needed for it.** Lines
   that scroll off the remote screen are printed into your terminal's own
   scrollback, so the mouse wheel, search and selection work as they do
-  locally, with no scroll mode to learn. When you attach or resume, the
-  last 1000 lines come first; full-screen programs (vim, less) use your
-  terminal's alternate screen and leave no history, as they would
-  locally. The server keeps the newest 1000 lines for the client, so
+  locally, with no scroll mode to learn. When you attach or resume, one
+  screenful of the lines that scrolled off just above the screen comes
+  first, as many as your terminal has rows; full-screen programs (vim,
+  less) use your terminal's alternate screen and leave no history, as
+  they would locally. The server keeps the newest 1000 lines for the client, so
   when more than that scroll past before the client gets them (a long
   outage, or simply a flood such as `cat` of a big file, which can
   outrun even a fast link between two frames), it prints one

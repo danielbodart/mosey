@@ -248,6 +248,21 @@ as they do for any local program.
   empty: G5's link budget is per screen, and a window of 200,000 cells,
   each with a distinct 2 KiB link, would hold 400 MB. The text and its
   style stay; the link is dropped by the emulator (§6.2).
+- **A fresh client reprints one screenful.** On attach or resume, the
+  server sends the whole window, as for any client that starts from
+  version 0, but a new client process prints only the newest of its
+  lines: as many as its local terminal has rows, the lines that
+  scrolled off just above the screen it then draws (Dan, 2026-11-16:
+  "One screenful: the lines that scrolled off just above the current
+  screen, as many as the window has rows"). A resume usually follows
+  earlier use of the same terminal, whose own scrollback may already
+  hold those lines, and a screenful keeps any repeat to one screen
+  rather than a thousand lines. The cut is the client's alone: the
+  window is SSP state that both ends hold and compare (above), so the
+  server keeps and sends it as before, and a reconnect (R3), which
+  keeps its renderer, still prints everything it has not printed
+  (§8.7). After that first frame, new history flows into the
+  scrollback as it scrolls.
 - **Numbering belongs to proto.** emu numbers its own history from 0 in
   each generation; proto keeps the session's numbering across emu
   rebuilds and client attaches, as it keeps the counters (§7.2). A
@@ -267,7 +282,7 @@ as they do for any local program.
 | `MaxLinks` | 4096 distinct links per grid | [derived]: a full 1000 × 500 screen of `ls --hyperlink` names stays under it; it bounds client memory, which tuios does not (S2 measured link storage growing without limit) | both ends, G5 |
 | `MaxLinkBytes` | 1 MiB of distinct link text per grid | [derived]: matches S2's link-table cap [measured S2]; 4096 × 2048 would be 8 MiB, more than a screen needs | both ends, G5 |
 | `MaxClipboard` | 64 KiB of decoded data | [derived]: [D27] asks for a cap and leaves the value to this spec. 64 KiB covers a long yank, and its 87 KiB of base64 is a few dozen datagrams. A larger write is dropped whole, never truncated: a truncated paste is a different paste | emu drops; client: CLIP |
-| `HistoryLines` | 1000 lines | [D]: the recent history a client prints on attach or resume, and the most lines that can scroll between two states the client renders, through an outage or a flood, before lines are not shown (§2.5). A thousand lines is a screenful of build log many times over, and at 80 columns about 80 KB before compression, so a resume over a slow path reprints it in a moment rather than many seconds; D23's 10,000-line emulator scrollback would be ten times that on every resume | both ends: the window (§2.5), and a diff carries at most this many lines (§5.6) |
+| `HistoryLines` | 1000 lines | [D]: the most lines that can scroll between two states the client renders, through an outage or a flood, before lines are not shown (§2.5). A thousand lines is a screenful of build log many times over, and at 80 columns about 80 KB before compression, so the window a client is sent on attach or resume crosses a slow path in a moment rather than many seconds; D23's 10,000-line emulator scrollback would be ten times that on every resume. Of that window, a fresh client prints only one screenful (§2.5, §8.7) | both ends: the window (§2.5), and a diff carries at most this many lines (§5.6) |
 | `HistoryCells` | 200,000 cells | [derived]: `HistoryLines` lines at 200 columns, so the window is 1000 lines at any usual width and 200 at the D23 clamp's 1000; it bounds the window's memory (about 11 MB at 56 B a `Cell`) and its share of `MaxDiff` | both ends, as `HistoryLines` |
 | `MaxDiff` | 64 MiB | [derived] §5.12 | `Apply` (a longer diff is refused unread), `ssp.Config.MaxRemoteBytes`, the IPC `Update` |
 | cells written per diff | `2 × cols × rows` | [derived]: an encoder writes each cell at most once, plus one erase pass; this bounds the decoder's work, not only the diff's length | `Apply`, §5.8 |
@@ -1607,8 +1622,11 @@ print, and whether it has printed any. On each `Render(g)`, unless
 alternate screen; an honest server sends none meanwhile):
 
 1. With `first` the number of `g`'s oldest held line:
-   - the first time, it prints the whole window: on attach or resume the
-     recent history comes first (§2.5);
+   - the first time, it prints the newest `L` lines of the window, `L`
+     the local terminal's rows (the grid's rows while it has no size),
+     or all of them if there are fewer: on attach or resume one
+     screenful of recent history comes first (§2.5), counted in history
+     lines before the wrapping of step 2;
    - if `first > printed`, it prints a **marker**, a line of its own
      reading `… N lines not shown` (`...` without `Capabilities.UTF8`),
      `N = first − printed`, then the whole window;
