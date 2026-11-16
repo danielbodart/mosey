@@ -147,7 +147,9 @@ request). The decisions are in §2. Gaps they left:
    that scroll off the remote screen printed into the local terminal's
    own scrollback, so mosey needs no tmux for history (Dan, 2026-11-15;
    `screen.md` §2.5 and §8.7), with a fresh client reprinting one
-   screenful of it on resume (Dan, 2026-11-16). Next:
+   screenful of it on resume (Dan, 2026-11-16), and a flood held back
+   while a client listens, so no line is cut, with a queue small enough
+   that Ctrl-C stays prompt (Dan, 2026-11-16). Next:
    Dan's call on O15.)
 2. `docs/threat-model.md` grows with the slices.
 3. Release pipeline (D10) from the first commit. Then use it daily, on

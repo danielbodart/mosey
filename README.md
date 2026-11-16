@@ -75,10 +75,12 @@ config, keys and agent, exactly as Mosh does. It aims to be:
   screenful of the lines that scrolled off just above the screen comes
   first, as many as your terminal has rows; full-screen programs (vim,
   less) use your terminal's alternate screen and leave no history, as
-  they would locally. The server keeps the newest 1000 lines for the
-  client, so when more than that scroll past before the client gets them
-  (a long outage, or simply a flood such as `cat` of a big file, which
-  can outrun even a fast link between two frames), it prints one
+  they would locally. While your client is connected, a flood such as
+  `cat` of a big file waits for it, as under ssh, so every line arrives;
+  only a few hundred lines are ever queued, so Ctrl-C still brings the
+  prompt back promptly. While you are detached, or your client has been
+  silent for 15 s, the program runs on and the server keeps the newest
+  1000 lines; when more than that scrolled past, the client prints one
   `… N lines not shown` line for the gap and carries on.
 - **Zero install.** `mosey host` copies its own static binary across when
   the host doesn't have it. One binary is both client and server, so you can
