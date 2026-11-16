@@ -392,8 +392,7 @@ plus `InputConsumed` (the client's input flow control, `ssp.md` §10.1),
 `Rebuilt` (D23's rebuild notice) and `History` (the scrollback window,
 `screen.md` §2.5). `allow.go` is the allow-list and the
 bounds. `render.Renderer` (`Render`, `Invalidate`, `Enter`, `Leave`,
-`Resize` for the local size it clips to, `SetLabel` for the client's own
-container mark, the host as typed) draws a Grid, with the
+`Resize` for the local size it clips to) draws a Grid, with the
 `Capabilities` from `render.FromEnv`, the locale's UTF-8 among them.
 
 **predict.** `New(Config{Mode})`, then `Key(n, bytes)` for each key event

@@ -56,10 +56,7 @@ bytes are ever written to the user's real terminal:
    (§4.7).
 
 Every other byte the client writes comes from a fixed table in
-`internal/render` (§8.2), with numbers formatted by the client. The
-client's own container mark (§8.4) is the user's own input, the host as
-typed on the command line, not remote data, and passes the same
-allow-list before it is written.
+`internal/render` (§8.2), with numbers formatted by the client.
 
 Kinds 5 and 6 were added to the list after slice 1 (Dan, 2026-11-16). D9
 says "anything deliberately passed through goes through a strict
@@ -1260,7 +1257,7 @@ All examples are at 80 × 24 unless a size is given. Bytes are in hex.
    | bytes | op |
    |---|---|
    | `5A 03` `box` `05` `flong` `04` `1000` | CONTAINER `box`, `flong`, uid 1000 |
-   | `5B 0E` `file://h/home` | CWD, 14 bytes |
+   | `5B 0D` `file://h/home` | CWD, 13 bytes |
 
    Clearing the mark is `5A 00 00 00`, 4 bytes.
 
@@ -1751,9 +1748,10 @@ this (§10).
 4. **Title.** If `Title` changed, write `OSC 2 ; title ST`. Without
    `Capabilities.UTF8`, each non-ASCII rune of the title is written as
    `?` (§8.3).
-5. **Container mark.** The mark the terminal should show is `Container`
-   if any of its fields is set, and otherwise the client's own (below).
-   If that differs from the one it last wrote, write `OSC 666 ;
+5. **Container mark.** The client carries the far side's mark
+   faithfully, as `ssh` would: whatever the far side last set is what
+   the local terminal shows, and a far-side clear clears it. If
+   `Container` differs from the mark it last wrote, write `OSC 666 ;
    vte.container. ST`, which unsets every property, and then, if the
    mark has any field set, `OSC 666 ; <items> ST` with one item per
    non-empty field, in the order name, runtime, uid. Clearing first is
@@ -1765,15 +1763,12 @@ this (§10).
      the allow-list leaves no newline or other control to escape;
    - without `Capabilities.UTF8`, with each non-ASCII rune as `?`.
 
-   **The client's own mark.** The client sets
-   `Renderer.SetLabel(host)` from the host as the user typed it on the
-   command line (`client.Session.Destination`, or the server's address
-   if there is none), so every mosey session is labelled, with flong on
-   the far side or not: `Name` the host, after `SanitizeTitle` and then
-   `ValidContainerValue` (empty if it fails), `Runtime` `mosey`, no
-   `UID` (Dan, 2026-11-16). `Enter` writes it (§8.6). A mark from the
-   far side replaces it while one is set; when the far side clears its
-   mark, the client's comes back.
+   The client never marks the terminal itself (Dan, 2026-11-16): his
+   Console colours a session as remote from its process tree, which
+   knows `mosey` as it knows `ssh`, and as a container only from the
+   termprops, so a mark of the client's own would make every mosey tab
+   look like a container. A fresh renderer has written no mark, so on
+   attach or resume the first frame writes the grid's current one.
 6. **Directory.** If `Cwd` changed and is not empty, write `OSC 7 ; Cwd
    ST` after checking it again with `ValidCwd`. A `Cwd` that becomes
    empty writes nothing: OSC 7 has no form that unsets the directory.
@@ -1829,8 +1824,7 @@ local input is the user's own, not remote data (§11 item 6).
   3. `CSI ? 25 l`;
   4. a CUP to the local last row, then one LF per local row: what the
      user's terminal showed scrolls into its history, as `clear` does in
-     many terminals, rather than being drawn over;
-  5. the client's own container mark, if it has a label (§8.4 item 5).
+     many terminals, rather than being drawn over.
 
   It then marks everything as needing a draw.
 - **`Leave`** undoes everything it or any `Render` set, then restores the
@@ -1849,10 +1843,10 @@ local input is the user's own, not remote data (§11 item 6).
      screen, as after `ssh`. After the alternate screen, or with nothing
      drawn, it goes to the last row and one LF;
   9. `CSI 23 ; 2 t` (pop the title);
-  10. `OSC 666 ; vte.container. ST`, if it wrote any mark, so the local
-      terminal is no longer labelled as the remote host or its
-      container. The client cannot read what mark the terminal had
-      before it, so it restores none: the termprops are unset.
+  10. `OSC 666 ; vte.container. ST`, if a far-side mark is shown, so a
+      detach or exit does not leave the local terminal labelled as the
+      remote container. The client cannot read what mark the terminal
+      had before it, so it restores none: the termprops are unset.
 
   It writes no OSC 7. There is no form that unsets the directory, and
   the client does not know which directory the local terminal last
@@ -2190,10 +2184,9 @@ agreed first).
     **`Grid.Cwd`**, opcodes `0x5A` CONTAINER and `0x5B` CWD (§4.6, §4.7,
     §5.6), taken from the "more state" range, so `0x5C`–`0x5F` stay
     reserved; `handshake.ProtocolVersion` 2 for them (§5.2). emu fills
-    them from tuios' `PrivateOSC` and `WorkingDirectory` callbacks;
-    `render.Renderer.SetLabel(host)` names the client's own mark, which
-    `client.Session.Run` sets from `Destination`. Owners: screen,
-    handshake and bootstrap-client (container slice).
+    them from tuios' `PrivateOSC` and `WorkingDirectory` callbacks, and
+    `render` writes them (§8.4). Owners: screen and handshake (container
+    slice).
 
 ## Review notes
 
