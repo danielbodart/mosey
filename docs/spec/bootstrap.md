@@ -77,11 +77,14 @@ enter raw mode, run Session
 ## 2. The command line the client accepts
 
 ```
-mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-- SSH-OPTION...] DESTINATION
+mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-- SSH-OPTION...] [DESTINATION]
 ```
 
+With no `DESTINATION` the session is on this machine, and no ssh is run
+(§2.2).
+
 - `DESTINATION` is passed to ssh unchanged: `host`, `user@host`, an alias
-  from `~/.ssh/config`, or `ssh://user@host:port`. It must be non-empty, at
+  from `~/.ssh/config`, or `ssh://user@host:port`. If given, it must be at
   most 1024 bytes, must not start with `-`, and must not contain bytes below
   0x21 or 0x7F (ssh would read a space as the start of the command). Anything
   else is a usage error (exit 2).
@@ -157,6 +160,81 @@ usage error.
 [ssh] the flags win over any `-o` whatever the order (`ssh -o
 ForwardAgent=no -A` and `ssh -A -o ForwardAgent=no` both resolve to
 `forwardagent yes`; `-t -o RequestTTY=no` resolves to `requesttty true`).
+
+### 2.2 No DESTINATION: this machine
+
+`mosey`, `mosey -s NAME`, `mosey -new`, `mosey -list` and `mosey -kill
+NAME` with no `DESTINATION` act on this user's sessions on the machine the
+client runs on, with no ssh at all: mosey as a local terminal multiplexer,
+and an end-to-end test that needs no sshd [D: Dan, 2026-11-16].
+
+**The local launcher.** Where §4.1 runs `ssh ... -- DEST "exec /bin/sh -c
+'exec mosey --serve'"`, the client runs the server binary itself, as
+`SERVER --serve` (or `--serve=list`, or `--serve=kill NAME`), with no shell
+between: `SERVER` is `-remote`'s path if given, otherwise the client's own
+file (`os.Executable`). Its stdin, stdout and stderr are what ssh's would
+have been, and everything else is unchanged: the ClientLine up stdin, the
+CredentialLine (or ErrorLine) down stdout through `ReadCredential`, its
+stderr through the §6.5 filter, then the handshake, SSP, prediction,
+resume and R3. There is nothing for SSH to vouch for (D6): the client
+started the server itself, as the same user.
+
+What is skipped, because it is all about ssh: `ssh -G` (`Resolve` returns
+a config holding only `hostname 127.0.0.1`, for §7.2), §2.1's options,
+§4.7's probe and upload, §8's bind capture and `BatchMode`. A path given
+to `-remote` here is run as it is, so it needs none of §4.1's quoting
+rules; a bare name is looked up on the client's `PATH`.
+
+**The same sessions.** The launcher, its spawner and the attach sockets
+(`R/mosey/SID-HEX/attach.sock`, `server.md` §2.6) are exactly those of an
+ssh login to this host, so a session started locally is listed by `mosey
+-list THISHOST` from elsewhere and can be taken with `mosey -s NAME
+THISHOST` (D26), and one started over ssh can be taken here. Two
+consequences follow:
+
+- The launcher gets the client's environment, less `SSH_CONNECTION`,
+  `SSH_CLIENT`, `SSH_TTY` and `SSH_AUTH_SOCK`: this is not an ssh login,
+  even when the client itself runs inside one. With no `SSH_CONNECTION`
+  the spawner advertises no address and binds the wildcard (`server.md`
+  §2.2), so a client from another network can still reach a session
+  started here; the local client finds it on `127.0.0.1` (§7.2's fallback,
+  loopback being allowed since the destination is loopback). A session
+  that was started over ssh advertises the address that login reached, and
+  the local client sends there. The shell inherits the rest of the
+  client's environment, as under tmux, where under ssh it would have
+  sshd's.
+- A local `-dir` is relative to `$HOME`, as over ssh, not to the client's
+  working directory.
+
+**The agent.** There is no ssh, so no session-bind to capture (§8), and no
+far host for one to name: the shell is a process of the same user on the
+same machine as the agent, and could open its socket directly. So the
+shell gets the agent the client has, through the session's own agent
+socket (`agent.md` §4.1), with nothing replayed (`agent.Forwarder.Unbound`):
+each connection reaches the agent as any local process's does. The socket
+forwarded is the client's `SSH_AUTH_SOCK`; with none, the agent is off.
+`-a` turns it off; `-A` with no `SSH_AUTH_SOCK` says `mosey: not forwarding
+the agent: SSH_AUTH_SOCK is not set`. Since the shell's socket is the
+session's, not the client's, the agent follows whichever client is
+attached: one taken over ssh with `-A` gets that client's agent, bound as
+§8 says, and one taken back here gets this terminal's again.
+
+**Flags that need a destination.** `-upload` and `-ssh` say how to reach a
+host or what to copy to it; with no `DESTINATION` they are a usage error
+(`mosey: -upload needs a DESTINATION: with none, mosey runs here, without
+ssh`), not silently ignored, since giving them means the host was most
+likely forgotten. ssh options after `--` cannot arise: the last word is
+always the destination. `-A`, `-a`, `-remote`, `-predict`, `-dir`, `-type`
+and the session flags mean what they mean over ssh.
+
+**Messages** name `this machine` where they would name `DEST` (`no sessions
+on this machine`, `no session called NAME on this machine`), and a hint
+names no host (`resume it with: mosey -s NAME`). A launcher that prints no
+line is named with its status (`SERVER exited with status N and no mosey
+line`), and one that cannot be run with `running SERVER: ERR`.
+
+No protocol number changes: the lines, the hello and the greeting are as
+over ssh.
 
 ---
 
@@ -1002,7 +1080,8 @@ reflects the flags with ssh's own precedence:
 | anything else | that path ([ssh]: `ssh -G` has already expanded `~`) |
 
 It is a pure function of `Config` and the environment (`AgentSocket`, unit
-tested). Off: the bootstrap runs with `ForwardAgent=no`, the ClientLine says
+tested). A session on this machine, with no ssh, decides otherwise (§2.2).
+Off: the bootstrap runs with `ForwardAgent=no`, the ClientLine says
 `agent=no`, and the Hello has no `ChannelAgent`. On: §8, and `agent.md`.
 
 ---
@@ -1734,7 +1813,9 @@ own session, in the background, and never asks the user anything:
   graphical askpass instead; its stderr goes to
   the client's log and never to the screen, nothing is copied over
   (§4.7.1), and the agent's bind is captured afresh, so the new transport
-  forwards this login's agent. A try that has not dialled within
+  forwards this login's agent. For a session on this machine (§2.2) a
+  try runs the local launcher again, with no ssh and so nothing to ask. A
+  try that has not dialled within
   `ReconnectTry` = 60 s [D: twice the 30 s credential TTL, the longest a
   healthy try can need] is abandoned.
 - **Backoff.** The first try starts at 15 s of silence; after a failed try
@@ -1946,7 +2027,7 @@ NAME          STATE     SINCE
 quiet-heron   detached  2026-11-14T09:30:12+00:00
 ```
 
-`SINCE` is in the client's local zone, as §9.1's times are. With no line it prints `no sessions on DEST`.
+`SINCE` is in the client's local zone, as §9.1's times are. With no line it prints `no sessions on DEST` (`on this machine` with no destination, §2.2).
 
 A lister sends no ClientLine; the spawner sees the connection close after
 its greeting and does nothing.
@@ -2189,8 +2270,9 @@ type SSH struct {
 }
 
 func (s SSH) Check() error // §2 and §4.1: destination and Server rules
-func (s SSH) Resolve(ctx context.Context) (Config, error) // runs ssh -G
-func (s SSH) Command(ctx context.Context, c Config) *exec.Cmd
+func (s SSH) Local() bool  // no Destination: this machine, with no ssh (§2.2)
+func (s SSH) Resolve(ctx context.Context) (Config, error) // runs ssh -G; locally LocalConfig()
+func (s SSH) Command(ctx context.Context, c Config) *exec.Cmd // locally the server itself (§2.2)
 // UploadCommand is §4.7.6's ssh, which reads the binary on stdin.
 func (s SSH) UploadCommand(ctx context.Context, c Config, hash [32]byte, size int64) *exec.Cmd
 
@@ -2346,6 +2428,14 @@ missing `~/.local` and `~/.local/bin` are made 0700.
 remembered-hosts file; the release fetch against a local HTTPS server:
 the right asset is chosen, a hash mismatch, a missing asset, a 404, an
 oversized body and an `http` redirect are each refused before any upload.
+With no destination (§2.2): the server stand-in is run with no ssh and
+no `ssh -G`, as `--serve`, `--serve=list` or `--serve=kill NAME`, without
+the client's `SSH_CONNECTION` or `SSH_AUTH_SOCK`; the agent decision of
+§2.2 for each of `-A`, `-a` and neither, with and without
+`SSH_AUTH_SOCK`; R3's try resumes on loopback with the agent unbound; and
+the messages name this machine. In `cmd/mosey`, every session command
+parses with no destination, and `-upload` or `-ssh` without one is a
+usage error.
 
 **Fuzz** (each run locally for at least a few minutes before it lands,
 durations in the commit message; 10 s each in CI):
@@ -2376,6 +2466,16 @@ durations in the commit message; 10 s each in CI):
   `MaxListed` rows, none longer than its fields allow.
 
 **End to end, `internal/e2e`:**
+
+- **This machine, no ssh** (§2.2; no sshd needed, so it always runs on
+  Linux). The real binary with no destination, its `HOME`,
+  `XDG_RUNTIME_DIR` and `SHELL` the test's own: a session starts and
+  predicts (`-predict always`), detaches on SIGHUP with a hint naming no
+  host, is listed detached, and is reattached by `-s NAME` with its shell's
+  state; `-dir` of no directory starts nothing, then starts there;
+  `-kill` ends a session; a throwaway agent is the shell's unless `-a`.
+  With the throwaway sshd as well, a session started locally is listed
+  over ssh and taken over by `-s NAME HOST`.
 
 - **Fake ssh, always runs.** `SSH.Program` is a test helper binary that
   takes ssh's argv, checks it is the §4.1 shape, and runs the remote command
