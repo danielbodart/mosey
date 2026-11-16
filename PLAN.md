@@ -146,7 +146,8 @@ request). The decisions are in §2. Gaps they left:
    session can stand in for a tmux one (Dan, 2026-11-15), and lines
    that scroll off the remote screen printed into the local terminal's
    own scrollback, so mosey needs no tmux for history (Dan, 2026-11-15;
-   `screen.md` §2.5 and §8.7). Next:
+   `screen.md` §2.5 and §8.7), with a fresh client reprinting one
+   screenful of it on resume (Dan, 2026-11-16). Next:
    Dan's call on O15.)
 2. `docs/threat-model.md` grows with the slices.
 3. Release pipeline (D10) from the first commit. Then use it daily, on
