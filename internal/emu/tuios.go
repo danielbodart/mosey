@@ -3,6 +3,7 @@ package emu
 import (
 	"bytes"
 	"image/color"
+	"regexp"
 	"time"
 
 	uv "github.com/charmbracelet/ultraviolet"
@@ -173,7 +174,7 @@ func (e *tuios) syncCheck() {
 // queue keeps replies up to ReplyQueue bytes. A batch that does not fit is
 // dropped whole rather than cut, so what is kept is whole answers.
 func (e *tuios) queue(r []byte) {
-	r = dropAPC(r)
+	r = honestModes(dropAPC(r))
 	if len(r) == 0 {
 		return
 	}
@@ -212,6 +213,26 @@ func dropAPC(r []byte) []byte {
 		}
 	}
 	return out
+}
+
+// unsupportedMode matches tuios' DECRQM answer for a mode it keeps but the
+// session cannot carry to the user's terminal: 1001, 1005, 1015 and 1016
+// have no screen.MouseEncoding (§11 item 10), so the local terminal would
+// encode the mouse as X10 or cell SGR while the program parsed something
+// else; 2031 and 2048 are notifications, which are unsolicited and so get
+// no reply allowance from proto (server.md §4.1), and in-band resize's CSI
+// 48 t is not on its list either. A program told "not recognised" (0)
+// uses what does work; one told "supported" waits for what never comes.
+var (
+	unsupportedMode = regexp.MustCompile(`\x1b\[\?(1001|1005|1015|1016|2031|2048);[0-4]\$y`)
+	inBandResize    = regexp.MustCompile(`\x1b\[48;[0-9;]*t`)
+)
+
+// honestModes says "not recognised" for the modes unsupportedMode names and
+// drops in-band resize reports, which SIGWINCH already carries.
+func honestModes(r []byte) []byte {
+	r = unsupportedMode.ReplaceAll(r, []byte("\x1b[?${1};0$$y"))
+	return inBandResize.ReplaceAll(r, nil)
 }
 
 func (e *tuios) TakeReplies() []byte {

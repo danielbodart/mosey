@@ -276,6 +276,30 @@ func TestAGraphicsQueryIsNotAnsweredButTheOthersAre(t *testing.T) {
 	}
 }
 
+// A mode the session cannot carry is reported "not recognised", so the
+// program falls back to one that works; the others keep tuios' answer.
+func TestModesTheSessionCannotCarryAreReportedUnrecognised(t *testing.T) {
+	for mode, want := range map[string]string{
+		"1001": "0", "1005": "0", "1015": "0", "1016": "0", "2031": "0", "2048": "0",
+		"1006": "2", "2026": "2", "1004": "2",
+	} {
+		e := newEmu(t, 80, 24)
+		e.Write([]byte("\x1b[?" + mode + "$p"))
+		if r, w := string(e.TakeReplies()), "\x1b[?"+mode+";"+want+"$y"; r != w {
+			t.Errorf("mode %s: reply %q, want %q", mode, r, w)
+		}
+	}
+}
+
+func TestInBandResizeReportsAreNotSent(t *testing.T) {
+	e := newEmu(t, 80, 24)
+	e.Write([]byte("\x1b[?2048h"))
+	e.Resize(100, 30)
+	if r := e.TakeReplies(); len(r) != 0 {
+		t.Fatalf("replies %q", r)
+	}
+}
+
 func TestTheReplyQueueIsBoundedAndNeverBlocks(t *testing.T) {
 	e := newEmu(t, 80, 24)
 	e.Write(bytes.Repeat([]byte("\x1b[6n\x1b[c"), 200_000))

@@ -457,6 +457,10 @@ Everything not listed in §1 is consumed by the server's emulator and never
 reaches the client in any form. That includes:
 
 - DCS, APC, PM and SOS strings;
+- DECRQM for modes the session cannot carry to the user's terminal (mouse
+  1001, 1005, 1015, 1016; notifications 2031, 2048), answered "not
+  recognised" so the program uses what works, and in-band resize reports
+  (`CSI 48 ; … t`), never sent: SIGWINCH carries the size;
 - sixel and kitty graphics (sixel is not advertised and a kitty graphics
   query goes unanswered, as from a terminal without graphics: the emulator
   drops every APC it would answer with, since proto refuses APC replies;
