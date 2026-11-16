@@ -9,16 +9,23 @@ import (
 	"time"
 )
 
-// Local says whether this is mosey with no DESTINATION: a session on this
-// machine, started with no ssh (§2.2).
-func (s SSH) Local() bool { return s.Destination == "" }
+// LocalDestination is the DESTINATION that is this machine, with no ssh
+// (§2.2): the one word every user already reads as this machine, asked
+// for by name so that a bare mosey starts nothing (Dan, 2026-11-16).
+const LocalDestination = "localhost"
+
+// Local says whether this is mosey localhost: a session on this machine,
+// started with no ssh (§2.2). Only the word itself counts, in any case;
+// 127.0.0.1, ::1 and me@localhost go through ssh like any other host, so
+// the ssh path can still be run against this machine.
+func (s SSH) Local() bool { return strings.EqualFold(s.Destination, LocalDestination) }
 
 // checkLocal is Check for the local launcher (§2.2). The server path is
 // run with no shell between, so it needs none of ValidServer's quoting
 // rules; ssh's own options have no ssh to go to.
 func (s SSH) checkLocal() error {
 	if len(s.Options.Args) > 0 {
-		return &UsageError{"mosey: ssh options need a DESTINATION"}
+		return &UsageError{"mosey: ssh options have no use with " + LocalDestination + ", which runs without ssh"}
 	}
 	return s.checkRole()
 }

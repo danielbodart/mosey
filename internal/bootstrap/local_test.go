@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-// With no destination there is no ssh (§2.2): the server binary is run
+// With localhost there is no ssh (§2.2): the server binary is run
 // directly as the launcher or a role, with no shell to quote for, so a
 // path with a space is fine.
-func TestNoDestinationRunsTheServerHereWithNoSSH(t *testing.T) {
-	s := SSH{Program: "/nonexistent/ssh", Server: "/opt/my tools/mosey"}
+func TestLocalhostRunsTheServerHereWithNoSSH(t *testing.T) {
+	s := SSH{Program: "/nonexistent/ssh", Destination: "localhost", Server: "/opt/my tools/mosey"}
 	if !s.Local() || s.Probes() {
 		t.Fatalf("Local %v, Probes %v", s.Local(), s.Probes())
 	}
@@ -38,7 +38,7 @@ func TestNoDestinationRunsTheServerHereWithNoSSH(t *testing.T) {
 // bootstrap needs from a config is §7.2's fallback host, which is
 // loopback.
 func TestALocalResolveNeedsNoSSHAndNamesLoopback(t *testing.T) {
-	c, err := SSH{Program: "/nonexistent/ssh"}.Resolve(context.Background())
+	c, err := SSH{Program: "/nonexistent/ssh", Destination: "LOCALHOST"}.Resolve(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestALocalServerIsThisBinaryUnlessNamed(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	if got := (SSH{}).Command(context.Background(), nil); got.Path != exe || got.Err != nil {
+	if got := (SSH{Destination: "localhost"}).Command(context.Background(), nil); got.Path != exe || got.Err != nil {
 		t.Errorf("%q (%v), want %q", got.Path, got.Err, exe)
 	}
 }
@@ -71,10 +71,30 @@ func TestTheLocalLauncherDropsTheMarksOfAnSSHLogin(t *testing.T) {
 // ssh options have no ssh to go to, and a role is still checked.
 func TestALocalCommandLineIsChecked(t *testing.T) {
 	var u *UsageError
-	if err := (SSH{Options: SSHOptions{Args: []string{"-v"}}}).Check(); !errors.As(err, &u) {
+	if err := (SSH{Destination: "localhost", Options: SSHOptions{Args: []string{"-v"}}}).Check(); !errors.As(err, &u) {
 		t.Errorf("ssh options: %v", err)
 	}
-	if err := (SSH{Role: RoleKill, RoleArg: "-x"}).Check(); !errors.As(err, &u) {
+	if err := (SSH{Destination: "localhost", Role: RoleKill, RoleArg: "-x"}).Check(); !errors.As(err, &u) {
 		t.Errorf("a bad session name: %v", err)
+	}
+}
+
+// Only the word localhost, in any case, is this machine: an address, a
+// user@ or a longer name goes through ssh, so the ssh path can be run
+// against this machine too.
+func TestOnlyTheWordLocalhostIsThisMachine(t *testing.T) {
+	for _, d := range []string{"localhost", "Localhost", "LOCALHOST"} {
+		if !(SSH{Destination: d}).Local() {
+			t.Errorf("%q is not this machine", d)
+		}
+	}
+	for _, d := range []string{"", "127.0.0.1", "::1", "me@localhost", "localhost.", "localhost:22", "ssh://localhost"} {
+		if (SSH{Destination: d}).Local() {
+			t.Errorf("%q is this machine", d)
+		}
+	}
+	var u *UsageError
+	if err := (SSH{}).Check(); !errors.As(err, &u) {
+		t.Errorf("no destination: %v", err)
 	}
 }

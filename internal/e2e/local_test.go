@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -14,7 +15,7 @@ import (
 	"github.com/danielbodart/mosey/internal/bootstrap"
 )
 
-// thisMachine is what a local mosey (no DESTINATION, bootstrap.md §2.2)
+// thisMachine is what a local mosey (localhost, bootstrap.md §2.2)
 // sees of the machine it runs on: a home, a runtime directory for the
 // attach sockets and a login shell, all the test's own, so nothing
 // touches the user's sessions, agent or rc files (CLAUDE.md).
@@ -52,13 +53,14 @@ func (m *thisMachine) env(state, agentSock string) []string {
 	return env
 }
 
-// startLocal is the real mosey client with no destination, on a pty of
-// its own, as a user at a terminal on this machine runs it.
-func startLocal(t *testing.T, name, mosey string, m *thisMachine, agentSock string, flags ...string) *realClient {
+// startLocal is the real mosey client given flags and then localhost, and
+// after it any words, on a pty of its own, as a user at a terminal on this
+// machine runs it.
+func startLocal(t *testing.T, name, mosey string, m *thisMachine, agentSock string, flags []string, words ...string) *realClient {
 	t.Helper()
 	master, slave := openPTY(t)
 	c := &realClient{t: t, label: name, master: master, screen: &screenLog{}, exited: make(chan error, 1), state: t.TempDir()}
-	c.cmd = exec.Command(mosey, flags...)
+	c.cmd = exec.Command(mosey, append(append(slices.Clone(flags), "localhost"), words...)...)
 	c.cmd.Stdin, c.cmd.Stdout, c.cmd.Stderr = slave, slave, slave
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 	c.cmd.Env = m.env(c.state, agentSock)
@@ -82,23 +84,23 @@ func startLocal(t *testing.T, name, mosey string, m *thisMachine, agentSock stri
 	return c
 }
 
-// localCmd runs a local mosey that does not attach (-list, -kill) and
-// returns what it printed and its exit status.
+// localCmd runs a local mosey that does not attach (-list, -kill), with
+// localhost after args, and returns what it printed and its exit status.
 func localCmd(t *testing.T, mosey string, m *thisMachine, args ...string) (string, int) {
 	t.Helper()
-	cmd := exec.Command(mosey, args...)
+	cmd := exec.Command(mosey, append(slices.Clone(args), "localhost")...)
 	cmd.Env = m.env(t.TempDir(), "")
 	out, err := cmd.CombinedOutput()
 	return string(out), bootstrap.ExitStatus(err)
 }
 
-var detachedHere = regexp.MustCompile(`detached from session ([A-Za-z0-9._-]+); resume it with: mosey -s ([A-Za-z0-9._-]+)\r?\n`)
+var detachedHere = regexp.MustCompile(`detached from session ([A-Za-z0-9._-]+); resume it with: mosey -s ([A-Za-z0-9._-]+) localhost\r?\n`)
 
-// mosey with no DESTINATION is this machine, with no ssh at all (no sshd
-// is started; bootstrap.md §2.2), and is the same session life as over
+// mosey localhost is this machine, with no ssh at all (no sshd is
+// started; bootstrap.md §2.2), and is the same session life as over
 // ssh: a plain client starts a session and runs its shell, with the
 // prediction path drawing typing ahead of the echo; closing its terminal
-// detaches and names the session with a hint that names no host; -list
+// detaches and names the session with a hint that names localhost; -list
 // shows it detached; -s NAME reattaches it, the shell's state intact;
 // -kill ends another; and exit ends the session and leaves nothing.
 func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
@@ -106,7 +108,7 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 	m := newMachine(t)
 	mosey := buildMosey(t, "e2e")
 
-	first := startLocal(t, "the first local client", mosey, m, "", "-predict", "always")
+	first := startLocal(t, "the first local client", mosey, m, "", []string{"-predict", "always"})
 	first.shows("$")
 	first.typeLine("M=kept-$((40+2)); echo set-$((1+1))")
 	first.shows("set-2")
@@ -125,11 +127,11 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 
 	out, status := localCmd(t, mosey, m, "-list")
 	if status != 0 || !regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(name)+`\s+detached\s+\d{4}-`).MatchString(out) ||
-		!strings.Contains(out, "attach to one with: mosey -s NAME\n") {
+		!strings.Contains(out, "attach to one with: mosey -s NAME localhost\n") {
 		t.Fatalf("mosey -list exited %d:\n%s", status, out)
 	}
 
-	second := startLocal(t, "the second local client", mosey, m, "", "-s", name)
+	second := startLocal(t, "the second local client", mosey, m, "", []string{"-s", name})
 	second.shows("set-2") // the screen as the shell left it
 	second.typeLine("echo got-$M")
 	second.shows("got-kept-42")
@@ -139,18 +141,18 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 
 	// -dir names no directory yet: nothing is started, and the client
 	// says where it looked.
-	none := startLocal(t, "a client given no directory", mosey, m, "", "-new", "-dir", "work")
-	if status := none.exits(); status != 1 || !strings.Contains(none.screen.String(), "work is not a directory on this machine") {
+	none := startLocal(t, "a client given no directory", mosey, m, "", []string{"-new", "-dir", "work"})
+	if status := none.exits(); status != 1 || !strings.Contains(none.screen.String(), "work is not a directory on localhost") {
 		t.Errorf("-dir of no directory exited %d:\n%s", status, none.screen.String())
 	}
 	if err := os.Mkdir(filepath.Join(m.home, "work"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	third := startLocal(t, "the third local client", mosey, m, "", "-new", "-dir", "work", "-type", "echo typed-$((6*7)); pwd")
+	third := startLocal(t, "the third local client", mosey, m, "", []string{"-new", "-dir", "work", "-type", "echo typed-$((6*7)); pwd"})
 	third.shows("typed-42")
 	third.shows(filepath.Join(m.home, "work"))
 	fresh := third.name()
-	if out, status := localCmd(t, mosey, m, "-kill", fresh); status != 0 || !strings.Contains(out, "ended session "+fresh+" on this machine") {
+	if out, status := localCmd(t, mosey, m, "-kill", fresh); status != 0 || !strings.Contains(out, "ended session "+fresh+" on localhost") {
 		t.Errorf("mosey -kill %s exited %d:\n%s", fresh, status, out)
 	}
 	if status := third.exits(); status != 0 {
@@ -162,7 +164,7 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 		t.Errorf("the second client exited %d after exit, not 0", status)
 	}
 	waitFor(t, "every session's processes to end", func() bool { return len(spawners(mosey)) == 0 })
-	if out, _ := localCmd(t, mosey, m, "-list"); !strings.Contains(out, "no sessions on this machine") {
+	if out, _ := localCmd(t, mosey, m, "-list"); !strings.Contains(out, "no sessions on localhost") {
 		t.Errorf("mosey -list after the end:\n%s", out)
 	}
 }
@@ -177,7 +179,7 @@ func TestALocalSessionHasTheTerminalsAgentUnlessToldNot(t *testing.T) {
 	m := newMachine(t)
 	mosey := buildMosey(t, "e2e")
 
-	c := startLocal(t, "the local client", mosey, m, keys.sock)
+	c := startLocal(t, "the local client", mosey, m, keys.sock, nil)
 	c.shows("$")
 	c.typeLine("printenv SSH_AUTH_SOCK; ssh-add -l")
 	c.shows(agentKeyComment)
@@ -189,7 +191,7 @@ func TestALocalSessionHasTheTerminalsAgentUnlessToldNot(t *testing.T) {
 		t.Errorf("exit status %d", st)
 	}
 
-	off := startLocal(t, "the local client with -a", mosey, m, keys.sock, "-a")
+	off := startLocal(t, "the local client with -a", mosey, m, keys.sock, []string{"-a"})
 	off.shows("$")
 	off.typeLine("echo agent-${SSH_AUTH_SOCK:-none}")
 	off.shows("agent-none")
@@ -209,7 +211,7 @@ func TestALocalSessionCanBeTakenOverSSHFromElsewhere(t *testing.T) {
 	m := &thisMachine{home: s.home, runtime: s.runtime}
 	mosey := buildMosey(t, "e2e")
 
-	local := startLocal(t, "the local client", mosey, m, "")
+	local := startLocal(t, "the local client", mosey, m, "", nil)
 	local.shows("$")
 	local.typeLine("M=here-$((40+2))")
 	name := local.name()

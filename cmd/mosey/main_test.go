@@ -46,8 +46,8 @@ func TestABadCommandLineIsAUsageError(t *testing.T) {
 		{"--", "far", "ls"},
 		{"-remote", "mo sey", "far"},
 		{"-remote", "-x", "far"},
-		{"--", "-p", "1", "-oProxyCommand=x"}, // the last word is the destination
-		{"-h"},
+		{"--", "-p", "1", "-oProxyCommand=x"}, // no destination
+		{"--", "-v", "--", "far"},
 	} {
 		_, err := parseArgs(args)
 		var u *bootstrap.UsageError
@@ -177,10 +177,10 @@ func TestDirAndTypeOnTheCommandLine(t *testing.T) {
 	}
 }
 
-// No DESTINATION is this machine, with no ssh (bootstrap.md §2.2): every
+// localhost is this machine, with no ssh (bootstrap.md §2.2): every
 // session command works, -A and -a still say whether the shell gets the
 // agent, and -remote names the local binary, which needs no quoting.
-func TestNoDestinationIsThisMachine(t *testing.T) {
+func TestLocalhostIsThisMachine(t *testing.T) {
 	for _, c := range []struct {
 		args          []string
 		attach        bootstrap.Attach
@@ -189,16 +189,17 @@ func TestNoDestinationIsThisMachine(t *testing.T) {
 		dir, typ, bin string
 		agent         byte
 	}{
-		{args: nil, attach: bootstrap.AttachAuto},
-		{args: []string{"--"}, attach: bootstrap.AttachAuto},
-		{args: []string{"-s", "far"}, attach: bootstrap.AttachName, name: "far"}, // far is the name
-		{args: []string{"-new"}, attach: bootstrap.AttachNew},
-		{args: []string{"-list"}, attach: bootstrap.AttachAuto, list: true},
-		{args: []string{"-kill", "work"}, attach: bootstrap.AttachAuto, kill: "work"},
-		{args: []string{"-s", "work", "-dir", "Projects/x", "-type", "claude"}, attach: bootstrap.AttachName, name: "work", dir: "Projects/x", typ: "claude"},
-		{args: []string{"-remote", "/opt/my tools/mosey"}, attach: bootstrap.AttachAuto, bin: "/opt/my tools/mosey"},
-		{args: []string{"-a"}, attach: bootstrap.AttachAuto, agent: 'a'},
-		{args: []string{"-a", "-A"}, attach: bootstrap.AttachAuto, agent: 'A'},
+		{args: []string{"localhost"}, attach: bootstrap.AttachAuto},
+		{args: []string{"LocalHost"}, attach: bootstrap.AttachAuto},
+		{args: []string{"--", "localhost"}, attach: bootstrap.AttachAuto},
+		{args: []string{"-s", "far", "localhost"}, attach: bootstrap.AttachName, name: "far"},
+		{args: []string{"-new", "localhost"}, attach: bootstrap.AttachNew},
+		{args: []string{"-list", "localhost"}, attach: bootstrap.AttachAuto, list: true},
+		{args: []string{"-kill", "work", "localhost"}, attach: bootstrap.AttachAuto, kill: "work"},
+		{args: []string{"-s", "work", "-dir", "Projects/x", "-type", "claude", "localhost"}, attach: bootstrap.AttachName, name: "work", dir: "Projects/x", typ: "claude"},
+		{args: []string{"-remote", "/opt/my tools/mosey", "localhost"}, attach: bootstrap.AttachAuto, bin: "/opt/my tools/mosey"},
+		{args: []string{"-a", "localhost"}, attach: bootstrap.AttachAuto, agent: 'a'},
+		{args: []string{"-a", "-A", "localhost"}, attach: bootstrap.AttachAuto, agent: 'A'},
 	} {
 		got, err := parseArgs(c.args)
 		if err != nil {
@@ -213,17 +214,54 @@ func TestNoDestinationIsThisMachine(t *testing.T) {
 			t.Errorf("%q: %+v", c.args, got)
 		}
 	}
+	// Only the word itself: an address or a user@ is a host for ssh, so
+	// the ssh path can still be run against this machine.
+	for _, dest := range []string{"127.0.0.1", "::1", "me@localhost", "localhost.", "localhost2"} {
+		got, err := parseArgs([]string{dest})
+		if err != nil || got.ssh.Local() || got.ssh.Destination != dest || got.ssh.Program != "ssh" {
+			t.Errorf("%q: %+v %v", dest, got.ssh, err)
+		}
+	}
 	// What only says how to use ssh, or what to copy to a host over it,
-	// is refused, not ignored: it means the user forgot the host.
+	// is refused, not ignored.
 	for _, args := range [][]string{
-		{"-upload", "yes"},
-		{"-upload=ask"},
-		{"-ssh", "/usr/bin/ssh"},
-		{"-list", "-ssh", "ssh"},
+		{"-upload", "yes", "localhost"},
+		{"-upload=ask", "localhost"},
+		{"-ssh", "/usr/bin/ssh", "localhost"},
+		{"-list", "-ssh", "ssh", "localhost"},
+		{"--", "-p", "22", "localhost"},
 	} {
 		_, err := parseArgs(args)
 		var u *bootstrap.UsageError
-		if !errors.As(err, &u) || !strings.Contains(u.Msg, "needs a DESTINATION") {
+		if !errors.As(err, &u) || !strings.Contains(u.Msg, "no use with localhost") {
+			t.Errorf("%q: %v", args, err)
+		}
+	}
+}
+
+// mosey alone starts nothing and is the usage, as -h is; flags with no
+// DESTINATION are a mistake that says how to name this machine
+// (bootstrap.md §2).
+func TestNoDestinationIsTheUsageOrAMistake(t *testing.T) {
+	for _, args := range [][]string{nil, {}, {"-h"}, {"-help"}} {
+		c, err := parseArgs(args)
+		if err != nil || !c.help {
+			t.Errorf("%q: %+v %v", args, c, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"-list"},
+		{"-s", "work"},
+		{"-new"},
+		{"-kill", "work"},
+		{"-a"},
+		{"--"},
+		{"--", "-p", "22"},
+		{"-dir", "src"},
+	} {
+		_, err := parseArgs(args)
+		var u *bootstrap.UsageError
+		if !errors.As(err, &u) || !strings.Contains(u.Msg, "needs a DESTINATION; use localhost for this machine") {
 			t.Errorf("%q: %v", args, err)
 		}
 	}

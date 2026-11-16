@@ -316,7 +316,7 @@ SSH_CONNECTION='127.0.0.1 40000 127.0.0.1 22' exec /bin/sh -c "$last"
 	}
 	start := func(remote string) *run {
 		master, slave := openPTY(t)
-		cmd := exec.Command(mosey, "-ssh", ssh, "-remote", remote, "localhost")
+		cmd := exec.Command(mosey, "-ssh", ssh, "-remote", remote, "127.0.0.1")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+t.TempDir(), "XDG_RUNTIME_DIR="+runtimeDir(t), "TERM=xterm-256color")

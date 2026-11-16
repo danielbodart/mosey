@@ -34,8 +34,8 @@ func localStandIn(t *testing.T, dir string, stdout []byte, status string) string
 
 func localSpawn(server string, agentFlag byte, env map[string]string, stderr *bytes.Buffer) *spawn {
 	return &spawn{
-		// No Destination is this machine; the ssh named is never run.
-		ssh:    bootstrap.SSH{Program: "/nonexistent/ssh", Server: server, Options: bootstrap.SSHOptions{Agent: agentFlag}},
+		// localhost is this machine; the ssh named is never run.
+		ssh:    bootstrap.SSH{Destination: "localhost", Program: "/nonexistent/ssh", Server: server, Options: bootstrap.SSHOptions{Agent: agentFlag}},
 		line:   testLine(),
 		stderr: stderr,
 		log:    slog.New(slog.DiscardHandler),
@@ -43,7 +43,7 @@ func localSpawn(server string, agentFlag byte, env map[string]string, stderr *by
 	}
 }
 
-// With no destination the bootstrap runs the server binary itself, with
+// With localhost the bootstrap runs the server binary itself, with
 // no ssh and no ssh -G, and exchanges the same two lines over its stdin
 // and stdout (bootstrap.md §2.2). The launcher sees none of the marks of
 // an ssh login the client itself may be running under.
@@ -132,39 +132,39 @@ func TestALocalServerThatGivesNoLineIsNamed(t *testing.T) {
 	}
 }
 
-// -list, -kill and the end of a session speak of this machine, and the
-// commands they suggest name no host (bootstrap.md §2.2).
-func TestLocalMessagesNameThisMachine(t *testing.T) {
+// -list, -kill and the end of a session name this machine localhost, and
+// so do the commands they suggest (bootstrap.md §2.2).
+func TestLocalMessagesNameLocalhost(t *testing.T) {
 	dir := t.TempDir()
 	server := localStandIn(t, dir, []byte("MOSEY-LIST 1 quiet-heron detached 1794651234\n"), "0")
 	var out, errs bytes.Buffer
-	if err := List(context.Background(), ListOptions{SSH: bootstrap.SSH{Server: server}, Stdout: &out, Stderr: &errs}); err != nil {
+	if err := List(context.Background(), ListOptions{SSH: bootstrap.SSH{Destination: "localhost", Server: server}, Stdout: &out, Stderr: &errs}); err != nil {
 		t.Fatal(err)
 	}
 	if argv, _ := os.ReadFile(filepath.Join(dir, "argv")); string(argv) != "--serve=list\n" {
 		t.Errorf("list ran %q", argv)
 	}
-	if !strings.Contains(out.String(), "quiet-heron") || errs.String() != "attach to one with: mosey -s NAME\n" {
+	if !strings.Contains(out.String(), "quiet-heron") || errs.String() != "attach to one with: mosey -s NAME localhost\n" {
 		t.Errorf("stdout %q, stderr %q", out.String(), errs.String())
 	}
 
 	server = localStandIn(t, dir, nil, "0")
 	out.Reset()
-	if err := List(context.Background(), ListOptions{SSH: bootstrap.SSH{Server: server}, Stdout: &out, Stderr: &errs}); err != nil || out.String() != "no sessions on this machine\n" {
+	if err := List(context.Background(), ListOptions{SSH: bootstrap.SSH{Destination: "localhost", Server: server}, Stdout: &out, Stderr: &errs}); err != nil || out.String() != "no sessions on localhost\n" {
 		t.Errorf("%v: %q", err, out.String())
 	}
 
 	server = localStandIn(t, dir, []byte("MOSEY-ERROR 1 session -\n"), "1")
 	var f *Failure
-	if err := Kill(context.Background(), KillOptions{SSH: bootstrap.SSH{Server: server}, Name: "play", Stdout: &out, Stderr: &errs}); !errors.As(err, &f) || f.Msg != "no session called play on this machine" {
+	if err := Kill(context.Background(), KillOptions{SSH: bootstrap.SSH{Destination: "localhost", Server: server}, Name: "play", Stdout: &out, Stderr: &errs}); !errors.As(err, &f) || f.Msg != "no session called play on localhost" {
 		t.Errorf("a kill of nothing: %v", err)
 	}
 	if argv, _ := os.ReadFile(filepath.Join(dir, "argv")); string(argv) != "--serve=kill\nplay\n" {
 		t.Errorf("kill ran %q", argv)
 	}
 
-	d := &DetachedError{Name: "quiet-heron", Local: true}
-	if want := "detached from session quiet-heron; resume it with: mosey -s quiet-heron"; d.Error() != want {
+	d := &DetachedError{Name: "quiet-heron", Destination: "localhost"}
+	if want := "detached from session quiet-heron; resume it with: mosey -s quiet-heron localhost"; d.Error() != want {
 		t.Errorf("%q", d.Error())
 	}
 }
@@ -180,7 +180,7 @@ func TestALocalReconnectRunsTheLauncherAgainWithNoSSH(t *testing.T) {
 		Port: 60001, CredentialID: [8]byte{9}, SessionID: sid, Name: "work", Public: bytes.Repeat([]byte{6}, bootstrap.PublicKeySize),
 	})
 	o := Options{
-		SSH:      bootstrap.SSH{Program: "/nonexistent/ssh", Server: localStandIn(t, dir, stdout, "0")},
+		SSH:      bootstrap.SSH{Destination: "localhost", Program: "/nonexistent/ssh", Server: localStandIn(t, dir, stdout, "0")},
 		Terminal: newFakeTerm(100, 30),
 		Log:      slog.New(slog.DiscardHandler),
 		Getenv:   func(name string) string { return map[string]string{"SSH_AUTH_SOCK": "/run/agent.sock"}[name] },

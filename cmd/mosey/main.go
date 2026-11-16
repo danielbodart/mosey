@@ -24,28 +24,28 @@ var version = "dev"
 
 const usage = `mosey -- a remote terminal for bad networks
 
-  mosey [OPTIONS] [DESTINATION]
+  mosey [OPTIONS] DESTINATION
         Log in to DESTINATION with ssh, as your ssh config says, and stay
         connected over UDP as the network comes and goes. Resumes your
         most recently detached session there, or starts a new one; it
         never takes a session another terminal is using.
-        With no DESTINATION the session is on this machine, started
-        without ssh: the same sessions as mosey THISHOST would find, so
-        one started here can be taken from another device, and back.
+        DESTINATION localhost is this machine, started without ssh: the
+        same sessions as mosey THISHOST would find, so one started here
+        can be taken from another device, and back.
 
-  mosey -s NAME [OPTIONS] [DESTINATION]
+  mosey -s NAME [OPTIONS] DESTINATION
         Attach to the session called NAME, taking it over from wherever
         it is attached (that client is told), or start it if there is
         none. NAME is up to 32 letters, digits, '-', '_' and '.'.
 
-  mosey -new [OPTIONS] [DESTINATION]
+  mosey -new [OPTIONS] DESTINATION
         Start a new session, with a generated name.
 
-  mosey -list [OPTIONS] [DESTINATION]
+  mosey -list [OPTIONS] DESTINATION
         List your sessions there (or here): name, attached or detached,
         and since when.
 
-  mosey -kill NAME [OPTIONS] [DESTINATION]
+  mosey -kill NAME [OPTIONS] DESTINATION
         End the session called NAME: its shell gets SIGHUP.
 
   OPTIONS: [-dir DIR] [-type TEXT] [-remote PATH] [-upload ask|yes|no]
@@ -73,10 +73,10 @@ const usage = `mosey -- a remote terminal for bad networks
         never by this. -remote PATH runs that remote binary instead and
         copies nothing.
 
-        -A and -a are ssh's own: forward the agent or don't. With no
-        DESTINATION the session's shell has this terminal's agent,
-        unless -a; -upload, -ssh and ssh options need a DESTINATION,
-        and -remote PATH names the local mosey to run.
+        -A and -a are ssh's own: forward the agent or don't. With
+        localhost the session's shell has this terminal's agent, unless
+        -a; -upload, -ssh and ssh options are refused, and -remote PATH
+        names the local mosey to run.
 
         -predict says when to show your typing before the server echoes
         it: adaptive (the default) on a slow link, always, or never.
@@ -84,13 +84,14 @@ const usage = `mosey -- a remote terminal for bad networks
 
   A session lives on the server until its shell exits: exit or Ctrl-D
   there ends it. Closing this terminal, or your own machine sleeping,
-  crashing or rebooting, only detaches; plain mosey [DESTINATION] picks
+  crashing or rebooting, only detaches; plain mosey DESTINATION picks
   it up again. While mosey runs it rides out a dead spot, and reconnects
   by itself (over ssh, to a DESTINATION) if it hears nothing for 15 s.
   There is no detach key.
   A session left detached for 7 days is ended.
 
   mosey -version
+  mosey -h        this, as is mosey with nothing after it
 `
 
 func main() {
@@ -109,6 +110,9 @@ type cli struct {
 	upload      client.UploadMode
 	predict     predict.Mode
 	showVersion bool
+	// help is mosey alone, -h or -help: the usage on stdout, and nothing
+	// started (bootstrap.md §2).
+	help bool
 	// attach and name are which session (bootstrap.md §9.2): AttachAuto
 	// for a plain mosey DEST, AttachName and the name for -s, AttachNew
 	// for -new. list is -list and kill -kill's name (§9.4, §9.5).
@@ -122,10 +126,10 @@ type cli struct {
 }
 
 // parseArgs reads `mosey [-remote PATH] [-upload MODE] [-ssh PROGRAM]
-// [-A | -a] [-predict MODE] [-- SSH-OPTION...] [DESTINATION]`. Every plain
-// word belongs to the client (D7): the destination is the last argument,
-// whatever it is called, and with none the session is on this machine
-// (bootstrap.md §2.2).
+// [-A | -a] [-predict MODE] [-- SSH-OPTION...] DESTINATION`. Every plain
+// word belongs to the client (D7): the destination is the first one,
+// whatever it is called, and localhost is this machine, with no ssh
+// (bootstrap.md §2.2). Nothing at all is the usage.
 func parseArgs(args []string) (cli, error) {
 	var c cli
 	flags := flag.NewFlagSet("mosey", flag.ContinueOnError)
@@ -147,7 +151,16 @@ func parseArgs(args []string) (cli, error) {
 	flags.StringVar(&c.kill, "kill", "", "end the session called `NAME`")
 	flags.StringVar(&c.dir, "dir", "", "start a new session's shell in `DIR`")
 	flags.StringVar(&c.typ, "type", "", "type `TEXT` and Enter into a new session's shell")
-	if err := flags.Parse(args); err != nil {
+	if len(args) == 0 {
+		// A bare mosey starts nothing: this machine is asked for by name,
+		// as localhost (Dan, 2026-11-16; bootstrap.md §2).
+		c.help = true
+		return c, nil
+	}
+	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
+		c.help = true
+		return c, nil
+	} else if err != nil {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: " + err.Error()}
 	}
 	mode, err := client.ParseUploadMode(*upload)
@@ -192,24 +205,32 @@ func parseArgs(args []string) (cli, error) {
 	default:
 		c.attach = bootstrap.AttachAuto
 	}
-	rest := flags.Args()
+	// The flag parser stops at the first plain word, or after a --; what
+	// follows a -- is ssh's options up to DESTINATION, found by ssh's own
+	// getopt rules (bootstrap.md §2). Without a --, the first word left
+	// is DESTINATION itself.
+	sshArgs, rest := bootstrap.SplitSSHOptions(flags.Args())
 	if len(rest) == 0 {
-		// No DESTINATION is this machine, with no ssh (bootstrap.md §2.2):
-		// the flags that only say how to use ssh, or what to copy to a host
+		return cli{}, &bootstrap.UsageError{Msg: "mosey: needs a DESTINATION; use " + bootstrap.LocalDestination + " for this machine"}
+	}
+	if len(rest) > 1 {
+		return cli{}, &bootstrap.UsageError{Msg: fmt.Sprintf("mosey: %q after the destination", rest[1])}
+	}
+	c.ssh.Destination = rest[0]
+	opts, err := bootstrap.ParseSSHOptions(sshArgs)
+	if err != nil {
+		return cli{}, err
+	}
+	if c.ssh.Local() {
+		// localhost is this machine, with no ssh (bootstrap.md §2.2): the
+		// flags that only say how to use ssh, or what to copy to a host
 		// over it, are a mistake here, not something to ignore.
 		for _, f := range []string{"ssh", "upload"} {
 			if flagGiven(flags, f) {
-				return cli{}, &bootstrap.UsageError{Msg: "mosey: -" + f + " needs a DESTINATION: with none, mosey runs here, without ssh"}
+				return cli{}, &bootstrap.UsageError{Msg: "mosey: -" + f + " has no use with " + bootstrap.LocalDestination + ", which runs without ssh"}
 			}
 		}
 		c.ssh.Program = ""
-		c.ssh.Options.Agent = byte(agent)
-		return c, c.ssh.Check()
-	}
-	c.ssh.Destination = rest[len(rest)-1]
-	opts, err := bootstrap.ParseSSHOptions(rest[:len(rest)-1])
-	if err != nil {
-		return cli{}, err
 	}
 	// ssh's last-wins rule: options after -- come after mosey's own flags.
 	if opts.Agent == 0 {
@@ -261,11 +282,15 @@ func runClient(args []string) int {
 	c, err := parseArgs(args)
 	if err != nil {
 		var u *bootstrap.UsageError
-		if errors.As(err, &u) && u.Msg != "mosey: "+flag.ErrHelp.Error() {
+		if errors.As(err, &u) {
 			fmt.Fprintln(os.Stderr, u.Msg)
 		}
 		fmt.Fprint(os.Stderr, usage)
 		return client.StatusUsage
+	}
+	if c.help {
+		fmt.Print(usage)
+		return 0
 	}
 	if c.showVersion {
 		fmt.Println(version)

@@ -177,7 +177,7 @@ func Run(ctx context.Context, o Options) error {
 	var g *GoneError
 	switch {
 	case errors.As(err, &d):
-		d.Destination, d.Local = o.SSH.Destination, o.SSH.Local()
+		d.Destination = o.SSH.Destination
 	case errors.As(err, &g):
 		g.Destination = where(o.SSH)
 	}

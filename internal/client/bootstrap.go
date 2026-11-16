@@ -351,20 +351,14 @@ func (b *spawn) show(p []byte) {
 }
 
 // where names the host for the user's messages: the destination as they
-// typed it, or this machine when there is none (bootstrap.md §2.2).
+// typed it, localhost for this machine (bootstrap.md §2.2).
 func where(s bootstrap.SSH) string {
-	if s.Local() {
-		return "this machine"
-	}
 	return s.Destination
 }
 
 // again is the destination to repeat in a command the user is told to
-// run, with its leading space: nothing for this machine.
+// run, with its leading space.
 func again(s bootstrap.SSH) string {
-	if s.Local() {
-		return ""
-	}
 	return " " + s.Destination
 }
 

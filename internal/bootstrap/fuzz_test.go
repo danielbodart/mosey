@@ -264,6 +264,12 @@ func FuzzSSHOptions(f *testing.F) {
 	f.Add("-o\x00-X\x00-a")
 	f.Fuzz(func(t *testing.T, joined string) {
 		args := strings.Split(joined, "\x00")
+		// The split loses nothing, and what it leaves starts at a word
+		// that is not an option.
+		opts, rest := SplitSSHOptions(args)
+		if !slices.Equal(append(slices.Clone(opts), rest...), args) || len(rest) > 0 && len(rest[0]) > 1 && rest[0][0] == '-' {
+			t.Fatalf("%q split into %q and %q", args, opts, rest)
+		}
 		o, err := ParseSSHOptions(args)
 		if err != nil {
 			return

@@ -18,7 +18,7 @@ import (
 // user's own ssh, config, keys and known_hosts, with the few options the
 // bootstrap needs placed first so nothing in the user's config undoes them.
 //
-// With no Destination it is the local launcher instead (§2.2): no ssh at
+// With Destination localhost it is the local launcher instead (§2.2): no ssh at
 // all, the server binary run directly on this machine with the same two
 // lines on its stdin and stdout, so everything after the bootstrap, and
 // every session, is the same as over ssh to this host.
@@ -27,7 +27,7 @@ type SSH struct {
 	Program string
 	// Destination is what the user typed: host, user@host, an alias from
 	// their ssh config, or ssh://user@host:port. Passed to ssh unchanged,
-	// after --. Empty is this machine (§2.2).
+	// after --. LocalDestination is this machine, with no ssh (§2.2).
 	Destination string
 	// Options are the user's own ssh options, filtered (§2.1).
 	Options SSHOptions

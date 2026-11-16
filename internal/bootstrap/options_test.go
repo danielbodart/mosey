@@ -85,3 +85,27 @@ func TestBadSSHOptionsAreUsageErrors(t *testing.T) {
 		}
 	}
 }
+
+// What follows mosey's -- is ssh's options up to DESTINATION, which is the
+// first word that is neither an option nor an option's value, by ssh's
+// own getopt rules; everything from it on is the rest (§2).
+func TestSSHOptionsEndAtTheDestination(t *testing.T) {
+	for _, c := range []struct {
+		in, opts, rest []string
+	}{
+		{nil, nil, nil},
+		{[]string{"far"}, []string{}, []string{"far"}},
+		{[]string{"-p", "2222", "far", "ls", "-la"}, []string{"-p", "2222"}, []string{"far", "ls", "-la"}},
+		{[]string{"-p2222", "-v", "far"}, []string{"-p2222", "-v"}, []string{"far"}},
+		{[]string{"-vo", "User=x", "far"}, []string{"-vo", "User=x"}, []string{"far"}},
+		{[]string{"-o", "-X", "far"}, []string{"-o", "-X"}, []string{"far"}}, // a value, not an option
+		{[]string{"-v", "-", "x"}, []string{"-v"}, []string{"-", "x"}},
+		{[]string{"-p"}, []string{"-p"}, []string{}},
+		{[]string{"-v", "--", "far"}, []string{"-v", "--"}, []string{"far"}}, // ParseSSHOptions refuses the second --
+	} {
+		opts, rest := SplitSSHOptions(c.in)
+		if !slices.Equal(opts, c.opts) || !slices.Equal(rest, c.rest) {
+			t.Errorf("%q: %q then %q", c.in, opts, rest)
+		}
+	}
+}
