@@ -135,3 +135,38 @@ func TestTheForwarderServesOnlyAgentChannelsWithABind(t *testing.T) {
 		t.Errorf("the terminal's type: %v", err)
 	}
 }
+
+// A local session's forwarder (bootstrap.md §2.2) has no bind to replay:
+// the agent's first frame is the far program's own request, as it would
+// be from any local process, and the answer comes back untouched.
+func TestAnUnboundForwarderRelaysWithNoBindFirst(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		agentSide, forwarded := net.Pipe()
+		server := muxes(t, &Forwarder{Unbound: true, Dial: func(context.Context) (net.Conn, error) { return forwarded, nil }})
+		request := frame(msgRequestIdentities)
+		reply := frame(append([]byte{msgSuccess}, "keys"...)...)
+		agentDone := make(chan error, 1)
+		go func() {
+			got, err := readFrame(agentSide, MaxCaptureFrame)
+			if err != nil || !bytes.Equal(got, request) {
+				agentDone <- errors.New("the first thing the agent read is not the far program's request")
+				return
+			}
+			agentSide.Write(reply)
+			agentDone <- nil
+			io.Copy(io.Discard, agentSide)
+			agentSide.Close()
+		}()
+		farProgram, local := net.Pipe()
+		go Serve(context.Background(), server, local, nil)
+		farProgram.Write(request)
+		got, err := readFrame(farProgram, 1<<20)
+		if err != nil || !bytes.Equal(got, reply) {
+			t.Fatalf("the far program read %q (%v), not the agent's reply", got, err)
+		}
+		if err := <-agentDone; err != nil {
+			t.Fatal(err)
+		}
+		farProgram.Close()
+	})
+}

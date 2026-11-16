@@ -26,7 +26,14 @@ type Forwarder struct {
 	// Dial connects to the user's agent: the socket bootstrap.md §5 chose.
 	Dial func(ctx context.Context) (net.Conn, error)
 	Bind Bind
-	Log  *slog.Logger
+	// Unbound is a session on this very machine, started with no ssh
+	// (bootstrap.md §2.2): there is no far host to bind the agent to,
+	// and the shell is a process of the same user beside the agent, which
+	// it could open directly. So nothing is replayed, and each connection
+	// is what any local process's is. Without it a zero Bind refuses
+	// every channel (D25: no trustworthy bind, no agent).
+	Unbound bool
+	Log     *slog.Logger
 }
 
 // DialUnix is a Forwarder.Dial for the agent socket at path.
@@ -38,10 +45,10 @@ func DialUnix(path string) func(ctx context.Context) (net.Conn, error) {
 }
 
 // Accept takes an agent channel: anything else is refused. The agent
-// connection is made, and the bind replayed and answered, before the
+// connection is made, and any bind replayed and answered, before the
 // channel is accepted, so a channel that is accepted reaches an agent.
 func (f *Forwarder) Accept(ctx context.Context, typ uint8) (func(*channel.Stream), error) {
-	if typ != uint8(handshake.ChannelAgent) || f.Bind.IsZero() {
+	if typ != uint8(handshake.ChannelAgent) || f.Bind.IsZero() && !f.Unbound {
 		return nil, channel.ErrRefused
 	}
 	ctx, cancel := context.WithTimeout(ctx, DialTimeout)
@@ -51,10 +58,12 @@ func (f *Forwarder) Accept(ctx context.Context, typ uint8) (func(*channel.Stream
 		f.log().Warn("connecting to the agent", "err", err)
 		return nil, fmt.Errorf("connecting to the agent: %w", err)
 	}
-	if err := Replay(ctx, conn, f.Bind); err != nil {
-		conn.Close()
-		f.log().Warn("replaying the session-bind", "err", err)
-		return nil, err
+	if !f.Unbound {
+		if err := Replay(ctx, conn, f.Bind); err != nil {
+			conn.Close()
+			f.log().Warn("replaying the session-bind", "err", err)
+			return nil, err
+		}
 	}
 	return func(s *channel.Stream) { Relay(conn, s) }, nil
 }
