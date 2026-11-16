@@ -77,9 +77,19 @@ enter raw mode, run Session
 ## 2. The command line the client accepts
 
 ```
-mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-- SSH-OPTION...] DESTINATION
+mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-- SSH-OPTION...] DESTINATION [COMMAND [ARG...]]
 mosey
 ```
+
+The words are read in that order, and each part ends where the next
+begins: mosey's own flags, Go's `flag` rules, up to the first word that
+is not one of them or up to `--`; after a `--`, ssh's options, by ssh's
+getopt rules (§2.1), up to the first word that is neither an option nor
+an option's value; then `DESTINATION`, the first such word; then
+everything after it, untouched, is the command. So mosey never reads the
+command's own flags (`mosey far ls -la`), and the ssh options always come
+before the destination, after `--` (`mosey -s work -- -p 2222 far
+claude`), which is where they went before commands existed.
 
 A `DESTINATION` of `localhost` (any case) is this machine, and no ssh is
 run (§2.2). `mosey` with no arguments at all prints the usage on stdout
@@ -136,6 +146,27 @@ opening a shell was surprising, so this machine is asked for by name].
   program exits.
 - `SSH-OPTION`s after `--` are filtered (§2.1) and passed to both ssh
   invocations.
+- `COMMAND [ARG...]`, the words after `DESTINATION`, are a command to run
+  in place of the interactive shell, as `ssh DEST COMMAND` runs one (Dan,
+  2026-11-16: `mosey dan-desktop claude` should end, and leave the
+  terminal, when claude does). They are joined with single spaces, as
+  ssh joins them, and the result is run by the user's shell as `SHELL -c
+  TEXT`, so quoting and expansion are that shell's (§9.2.3). The command
+  runs on the session's pty, in DIR if `-dir` is given; when it exits the
+  session ends, and the client exits as it does when a shell exits. Like
+  `-dir`, it applies only when a session is **created**; a plain `mosey
+  DEST COMMAND` always creates one, as `-new` does, with a generated name
+  [D: the command is what the user asked for, and resuming an unrelated
+  detached shell would quietly not run it]. `-s NAME DEST COMMAND` starts
+  NAME running the command if there is no session NAME, and otherwise
+  takes NAME over as it is and says so on stderr (`mosey: session NAME
+  was already running, so the command was not run`). A session started
+  with a command is an ordinary named session: it can be detached,
+  listed, taken over and killed. The joined text is 1 to 1024 bytes of
+  UTF-8 with no control character but tab (§6.2's `cmdtext`); anything
+  else, a command with `-type` (both say what to run, and typing into a
+  command is not what `-type` means), or with `-list` or `-kill`, is a
+  usage error.
 
 Every plain word belongs to the client (D7): `mosey server` connects to a
 host called `server`. Server mode is only ever the flag `--serve` as
@@ -1159,7 +1190,7 @@ word    = 1*64( ALPHA / DIGIT / "." / "_" / "+" / "-" )
 
 ```
 client-line = "MOSEY-CLIENT" SP proto SP attach SP agent
-              SP cols SP rows SP env SP dir SP type SP public LF
+              SP cols SP rows SP env SP dir SP type SP public [SP cmd] LF
 proto   = dec                       ; = 2
 attach  = "auto"                    ; R1: the newest detached session, else a new one (§9.2)
         / "new"                     ; -new: a new session with a generated name
@@ -1184,6 +1215,8 @@ b64text = base64url, no padding, of 1..1024 bytes
 dirtext = 1..1024 bytes of UTF-8, no control character (Unicode Cc)
 typetext = 1..1024 bytes of UTF-8, no control character (Unicode Cc) but TAB
 public  = b64(1216)                 ; 1622 characters
+cmd     = b64text                   ; the command after DEST; the base64url of a cmdtext
+cmdtext = 1..1024 bytes of UTF-8, no control character (Unicode Cc) but TAB
 ```
 
 | Field | Meaning |
@@ -1195,6 +1228,7 @@ public  = b64(1216)                 ; 1622 characters
 | `env` | the client's locale and terminal variables, from the allow-list only. A variable that is unset, empty, longer than 64 bytes or holds a byte outside `vchar` is left out (logged at debug), never escaped. The server gives the locale variables to the shell; what it does with `TERM` and `COLORTERM` is `server.md`'s (the shell's `TERM` describes the server's emulator, not the client's terminal) |
 | `dir` | `-dir`: the directory a new session's login shell starts in, relative to the remote `$HOME` unless absolute (§9.2.3). `-` for none: the shell starts in `$HOME` (`server.md` §2.5). Only a session the line creates uses it |
 | `type` | `-type`: the text typed into a new session's pty once its shell has started, followed by Enter (§9.2.3). `-` for none. Only a session the line creates uses it |
+| `cmd` | the command after `DESTINATION` (§2), joined with spaces, run as `SHELL -c CMD` in place of the interactive shell (§9.2.3). Absent, not `-`, when there is none. Only a session the line creates uses it; a line with `cmd` has no `type` |
 | `public` | the client's one-shot X-Wing encapsulation key, `OneShotKey.PublicKey()`, 1216 bytes [S1, measured from `crypto/hpke`] |
 
 `dir` and `type` are base64url because a path or a command holds spaces,
@@ -1216,10 +1250,24 @@ and zsh, and where readline's `convert-meta` is on (bash's default in a C
 or 8-bit locale) a byte of 0x80 or above is read as a Meta chord. The
 text is the user's own, so that is what typing it would do anyway.
 
-Size: at most 5708 bytes [derived: the fixed fields and their 9 spaces come
+`cmd` follows the same rules, `cmdtext` being `typetext` again [choice:
+a command a user types on one line; the bound keeps the longest line
+under `MaxClientLine`]. Unlike every other field it is optional, and
+last: a line with no command is byte for byte the line of before
+commands, so the line's version did not change (protocol numbers change
+only with Dan's approval, 2026-11-16). A launcher of this version that
+predates commands counts the fields and refuses a line with one as
+`line`; the client, having sent one, says so (`DEST's mosey could not
+read this request: it may be older than this one, and unable to run a
+command`). The parser still takes exactly one form of each line: the
+field is either absent or a valid `b64text`, never `-` and never empty.
+
+Size: at most 7075 bytes [derived: the fixed fields and their 9 spaces come
 to 1698 with the longest attach, `resume:SID:CREDID` at 41 bytes; env at
 most 1277 (156 bytes of names, 17 × 65 for `=` and value, 16 commas);
-`dir` and `type` 1366 each (the base64url of 1024 bytes); LF 1].
+`dir` and `type` 1366 each (the base64url of 1024 bytes); `cmd` 1366 and
+its space; LF 1. A line with `cmd` has `type` `-`, so the true bound is
+lower, but nothing relies on that].
 **`MaxClientLine` = 8192** [derived: the next power of two, so the
 server's read bound is fixed and generous].
 
@@ -1238,7 +1286,7 @@ MOSEY-CLIENT 2 new no 211 58 COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256
 
 ```
 cred-line = "MOSEY-CONNECT" SP proto SP addr SP port
-            SP credid SP sessionid SP name SP psk SP public LF
+            SP credid SP sessionid SP name SP psk SP public [SP "existing"] LF
 addr      = "-" / ipv4 / ipv6       ; netip.Addr.String() form, no zone, never 4-in-6;
                                     ; not unspecified, multicast or 255.255.255.255
 port      = dec                     ; 1..65535
@@ -1258,6 +1306,7 @@ public    = b64(1216)               ; 1622 characters
 | `name` | the session's name (D8 R2): the one the user gave with `-s`, or the one the launcher generated. The client shows it and keeps it, in memory only, for R3. Its grammar is letters, digits and `-_.`, so it is safe to print as it is |
 | `psk` | `Credential.PSK`, 32 bytes [S1] |
 | `public` | `Credential.ServerPublic`, the server's one-shot X-Wing key, 1216 bytes [S1] |
+| `existing` | present only in answer to a ClientLine with a `cmd`, when the line took a session that was already running, so the command was not run (§9.2.3); the client says so. A launcher writes it on no line in answer to one without a `cmd`, so a client from before commands never sees it |
 
 The parser is canonical, so `addr` must be exactly what `netip.Addr.String()`
 gives for an unmapped, zone-free address: `::ffff:192.0.2.1`, `fe80::1%eth0`
@@ -1269,8 +1318,8 @@ and `ff00::/8` (`IsMulticast`), and the limited broadcast
 belong to the grammar and the fuzzer; the checks that need the client's own
 interfaces or config are §7.2's.
 
-Size: at most 1797 bytes [derived: 13 + 1 + 39 (longest IPv6 text) +
-5 + 11 + 22 + 32 + 43 + 1622, 8 spaces, LF]. **`MaxCredentialLine` = 2048**
+Size: at most 1806 bytes [derived: 13 + 1 + 39 (longest IPv6 text) +
+5 + 11 + 22 + 32 + 43 + 1622, 8 spaces, LF, and 9 for ` existing`]. **`MaxCredentialLine` = 2048**
 [derived].
 
 The client turns it into a `handshake.Credential` (ID, SessionID, PSK,
@@ -1894,14 +1943,14 @@ own session, in the background, and never asks the user anything:
   that reused the name after the old one ended; that this meets R3's "by
   name" is also Dan's to confirm.
 
-#### 9.2.3 Where a new session starts: `-dir` and `-type`
+#### 9.2.3 How a new session starts: `-dir`, `-type` and a command
 
 `-dir DIR` and `-type TEXT` (§2) travel as the ClientLine's `dir` and
 `type` (§6.2). They are what a session is started with, never what it is
 attached with: a tmux user's `tmux new-session -c DIR` followed by
 `tmux send-keys TEXT Enter`, without tmux (Dan, 2026-11-15).
 
-- **Only on creation.** The launcher uses them only when §9.2's table has
+- **Only on creation.** The launcher uses them (and `cmd`, below) only when §9.2's table has
   it start a session (`new:NAME`): a plain `mosey DEST` with no session
   detached, `-new`, or `-s NAME` with no session NAME. When it takes an
   existing session they are ignored, with no error and no message: the
@@ -1963,6 +2012,31 @@ attached with: a tmux user's `tmux new-session -c DIR` followed by
   credential, wait for the shell's first output (at most `TypeWait`,
   well inside T2), where a line without one does not. A failed write is
   logged and the session goes on.
+- **The command.** A line with a `cmd` (§2, §6.2) starts the session
+  running the command instead of an interactive shell: the spawner runs
+  the shell `server.md` §2.5 picks as `SHELL -c CMD`, with the same
+  argv[0] (`-` and its base name, so it is a login shell and reads the
+  same profile, and so has the same `PATH`, as the interactive one; ssh
+  runs its command with a non-login shell, but there sshd's own login
+  set the environment up, where here the spawner's environment is a
+  non-interactive ssh command's), the same environment and the same
+  directory, `dir` included. `CMD` is the text as it came, one argument
+  to `exec`: the server puts it through no shell but that one and
+  interpolates it into nothing. When the shell exits the session ends
+  as any session whose shell exits does (§9.3): proto sends END and the
+  client exits 0. The command's exit status is not passed on: END's
+  body is one reason byte (`transport.md` §8.4), and carrying the
+  status would change that frame, and so the handshake's protocol
+  number, and have proto wait for the spawner's `ShellExit` after the
+  pty's EOF, which it does not now. A `cmd` is only for a session the
+  line creates: a plain `mosey DEST CMD` is sent as `new`, never
+  `auto` (§2), and the `resume:SID` line for a session that is taken
+  has no `cmd`, as it has no `dir` or `type`. When a line with a `cmd`
+  takes an existing session (`name:NAME` with NAME running), the
+  launcher adds `existing` to the credential line it passes on (§6.3),
+  and the client prints `mosey: session NAME was already running, so
+  the command was not run` on stderr before the screen goes up. The
+  launcher adds it to no other line, so no older client sees it.
 
 ### 9.3 How long a session lives (D8 R4)
 
@@ -2115,6 +2189,7 @@ type ClientLine struct {
 	Env             map[string]string // allow-listed names only; Marshal sorts
 	Dir, Type       string            // dir, type: "" is "-" (§6.2, §9.2.3)
 	Public          []byte            // 1216 bytes
+	Command         string            // cmd: "" is no field (§6.2, §9.2.3)
 }
 
 // CredentialLine is §6.3. Marshal always writes proto = Version.
@@ -2126,6 +2201,7 @@ type CredentialLine struct {
 	Name            string // sname
 	PSK             [32]byte
 	Public          []byte // 1216 bytes
+	Existing        bool   // "existing": a cmd was not run (§9.2.3)
 }
 
 // ValidSessionName is §6.2's sname.
@@ -2325,9 +2401,9 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Name | Value | Provenance |
 |---|---|---|
 | `bootstrap.Version` | 2 | ours (§6.1: 2 added `dir` and `type`) |
-| `MaxClientLine` | 8192 B | [derived] §6.2: at most 5708 B used |
+| `MaxClientLine` | 8192 B | [derived] §6.2: at most 7075 B used |
 | `-dir`, `-type` length | 1–1024 B each | [choice] §6.2: macOS `PATH_MAX`; a quarter of termios(3)'s 4096-byte canonical line |
-| `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1797 B used |
+| `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1806 B used |
 | `MaxErrorLine` | 128 B, frozen | [derived] §6.4: at most 100 B used |
 | Session with no confirmed credential | ends after `handshake.CredentialTTL` (30 s) | [derived] §4.5 |
 | Spawner backstop (requirement on server.md) | CredentialTTL + 10 s | [choice] §4.5 |
@@ -2451,6 +2527,11 @@ command parses with `localhost`, in any case, as this machine, and
 `127.0.0.1`, `::1` and `me@localhost` as hosts for ssh; `-upload`, `-ssh`
 or ssh options with `localhost` are a usage error, as is any command
 line with flags and no `DESTINATION`; `mosey` alone is the usage, exit 0.
+The words after `DESTINATION` are the command, joined with spaces, with
+their own flags untouched (`far ls -la`), with ssh options before the
+destination after `--`; a command makes a plain `mosey DEST` `-new`; a
+command with `-type`, `-list` or `-kill`, or outside `cmdtext`, is a
+usage error.
 
 **Fuzz** (each run locally for at least a few minutes before it lands,
 durations in the commit message; 10 s each in CI):
@@ -2458,9 +2539,11 @@ durations in the commit message; 10 s each in CI):
 - `FuzzParseClientLine`, `FuzzParseCredentialLine`, `FuzzParseErrorLine`:
   no panic; anything accepted re-marshals to the identical bytes; no
   accepted CredentialLine has an unspecified, multicast or limited
-  broadcast `addr`; no accepted ClientLine has a `dir` or `type` outside
-  `dirtext` and `typetext` (§6.2), checked against a reference written
-  out rune by rune in the test.
+  broadcast `addr`; no accepted ClientLine has a `dir`, `type` or `cmd`
+  outside `dirtext`, `typetext` and `cmdtext` (§6.2), checked against a
+  reference written out rune by rune in the test, and the seeds include
+  lines with and without `cmd`, and credential lines with and without
+  `existing`.
 - `FuzzChooseAddr`: no panic; the result, if any, breaks no row of §7.2.
 - `FuzzReadCredential`: no panic; at most `MaxPreamble + MaxCredentialLine`
   bytes read; the result, if any, re-marshals to a line present in the
@@ -2491,6 +2574,10 @@ durations in the commit message; 10 s each in CI):
   `-kill` ends a session; a throwaway agent is the shell's unless `-a`.
   With the throwaway sshd as well, a session started locally is listed
   over ssh and taken over by `-s NAME HOST`.
+  A command, `mosey localhost sh -c 'echo ran-$((6*7)); exit 3'`, shows
+  its output and the client exits when it does, with status 0 (§9.2.3);
+  `-s NAME localhost CMD` with NAME running says the command was not
+  run, and attaches.
 
 - **Fake ssh, always runs.** `SSH.Program` is a test helper binary that
   takes ssh's argv, checks it is the §4.1 shape, and runs the remote command

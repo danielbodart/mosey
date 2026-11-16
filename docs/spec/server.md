@@ -293,6 +293,11 @@ triggers above (nothing emu does is one of them):
   directory. One that is not a directory fails the start.
 - **argv[0]** is `-` plus the shell's base name, the login-shell
   convention (S4 `startShell`).
+- **A command.** If the `ClientLine` has a `cmd` (`bootstrap.md` §9.2.3),
+  the same shell, argv[0], directory and environment, with the arguments
+  `-c` and the command's text as one argument: `-bash -c 'claude'`. The
+  text goes to `exec` as it is, so the user's shell is the only one that
+  reads it (Dan, 2026-11-16: as `ssh HOST COMMAND`).
 - **Process.** `SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}`,
   stdin, stdout and stderr all the slave. No `Pdeathsig`: the shell
   belongs to the user, and teardown hangs it up instead (§2.4).
@@ -640,7 +645,7 @@ tokens proto passes on is bounded by the request's reply allowance
 **0x30 Credential** (proto → spawner): type, then the credential line,
 1..`MaxCredentialLine` bytes including its final `\n`.
 `MaxCredentialLine` = 2048 [`bootstrap.md` §6.3: the longest line is
-1862 bytes].
+1806 bytes].
 
 **0x31 Exit** (proto → spawner): type; code (1): 1 ShellExited, 3
 NoClient, 5 Error (2 was ClientClosed and is refused since the resume
