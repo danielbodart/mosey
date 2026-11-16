@@ -2,27 +2,71 @@
 
 # mosey
 
-A remote terminal for bad networks. It roams between networks, stays usable
-on lossy links and picks up where it left off.
+A remote terminal for bad networks, and a simple stand-in for tmux. It
+roams between networks, stays usable on lossy links, and keeps your
+sessions running until you come back to them, from this machine or
+another.
 
 > To *mosey* is to wander along at an easy pace.
 
 **Status: in daily use.** The design is settled ([PLAN.md](PLAN.md)) and
-the specs are written ([docs/spec/](docs/spec)). `mosey HOST` bootstraps over your `ssh` and gives
-you an interactive shell over encrypted UDP, with the emulator sandboxed on
-the server, and copies itself to a host that doesn't have it (see
-[Zero install](#zero-install)). Sessions survive the client: a later
-`mosey HOST` picks a detached one up again, from here or another device,
-every session has a name you can attach to with `-s`, and a client that
-loses its server for a while logs in again by itself to get its session
-back (see [Using it](#using-it)), and your ssh-agent comes along when your ssh config
-forwards it (see [Agent forwarding](#agent-forwarding)). Client and host
-need not run the same version: mosey uses whatever mosey the host has. While you type,
-both ends send cover traffic on a fixed tick, which hides the timing of
-keys within a run of typing (see [What it is](#what-it-is)). On a slow
-link your typing shows up at once, before the server echoes it (see
-[Predictive echo](#predictive-echo)). Every green commit is already
+the specs are written ([docs/spec/](docs/spec)). Every green commit is
 released (see [Installing](#installing)).
+
+## Quick start
+
+mosey is one command for two jobs: Mosh's (a terminal on another machine
+that survives bad networks) and the simple half of tmux's (sessions that
+keep running when you close the window, and that you pick up again by
+name). The same sessions serve both, so you can start one at your desk
+and carry on from your laptop. You need mosey on your machine (see
+[Installing](#installing)); it copies itself to a host that lacks it.
+
+**Like Mosh: a remote shell that doesn't die.**
+
+```sh
+mosey dan-desktop              # log in with your own ssh; resume your last detached session there, or start one
+mosey dan-desktop claude       # run a program instead of a shell; mosey exits when it does
+```
+
+Change wifi, close the laptop lid, go through a tunnel: at worst the
+screen freezes, and it carries on when the network comes back. Your typing
+shows up at once even on a slow link. If the host has been silent for
+15 s, mosey logs in again by itself in the background.
+
+**Like tmux: named sessions that outlive the window.**
+
+```sh
+mosey -s work localhost        # attach to "work" on this machine, or create it; no ssh involved
+mosey -list localhost          # what's running here
+mosey -kill work localhost     # end it
+```
+
+Close the terminal window to detach; there is no detach key. Run `mosey
+-s work localhost` again and you're back where you left off, with the
+lines that scrolled past printed into your terminal's own scrollback, so
+the mouse wheel and search just work. Typing `exit` in the shell ends the
+session.
+
+**Both at once: one session, any device.**
+
+```sh
+mosey -s work localhost                           # at the desk
+mosey -s work dan-desktop                         # later, from the laptop: takes "work" over
+mosey -s ai -dir Projects/x dan-desktop claude    # claude in ~/Projects/x: started the first time, returned to after
+```
+
+`-s NAME` is create-or-attach: the first time, it starts NAME; every time
+after, it takes you back, cutting off any other client still attached.
+Plain `mosey HOST` never takes a session that's attached elsewhere, so a
+second terminal gets a session of its own. Your ssh-agent follows
+whichever client is attached.
+
+What it doesn't do: panes, windows or a status bar. Use your terminal's
+own tabs and splits for those; mosey is one session per window. The
+server side runs on Linux.
+
+The full reference is [Using it](#using-it).
 
 ## What it is
 
