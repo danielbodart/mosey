@@ -41,7 +41,7 @@ decision wins.
 | `internal/sandbox` | Landlock deny-all, seccomp cBPF compiler and per-role policies, `DUMPABLE=0` (D22) | proto, emu | **server-proc** | `doc.go`, `sandbox.go`, `bpf.go`, `sandbox_linux.go`, `sandbox_other.go` |
 | `internal/nocore` | `DUMPABLE=0` and `RLIMIT_CORE=0` for every process that holds a secret (threat-model.md §4.10) | client, launcher, spawner, proto, emu | **server-proc** | `doc.go`, `nocore.go` |
 | `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | launcher, spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
-| `internal/server` | The four roles (launcher, spawner, proto, emu); proto's `Session`, runnable in process for tests; the emu reply grammar | all server roles | **server-proc** | `doc.go`, `proto.go`, `launcher.go`, `spawner_linux.go`, `protorole.go`, `emurole.go`, `ipcemu.go`, `reply.go` |
+| `internal/server` | The four roles (launcher, spawner, proto, emu); proto's `Session`, runnable in process for tests; the emu reply grammar | all server roles | **server-proc** | `doc.go`, `proto.go`, `launcher.go`, `spawner_linux.go`, `startdir.go`, `protorole.go`, `emurole.go`, `ipcemu.go`, `reply.go` |
 | `internal/bootstrap` | The SSH command line, the stdin and stdout lines (D6, D20, D25); D7's probe line, upload command and release rules | client, spawner | **bootstrap-client** | `doc.go`, `line.go`, `ssh.go`, `probe.go`, `upload.go` |
 | `internal/install` | `mosey --serve=install`: puts an uploaded copy at `~/.cache/mosey/mosey` safely (D7, `bootstrap.md` §4.7.7) | server host (one-shot) | **bootstrap-client** | `doc.go`, `install.go`, `install_unix.go` |
 | `internal/terminal` | The client's own tty: raw mode, size, SIGWINCH | client | **bootstrap-client** | `terminal.go` |
@@ -235,6 +235,12 @@ if it speaks the launcher's attach protocol, and it goes on running its
 own binary. The client and the session's proto check each other's
 protocol number in the handshake (one byte in each hello;
 `Conn.Protocol`).
+A line that creates a session may carry `-dir` and `-type`
+(`bootstrap.md` §9.2.3): the launcher checks the directory before
+anything starts (`CodeDir` if it is not one), and the spawner starts the
+shell there (`startDir`) and types the text into the pty, followed
+by Enter (`typeInto`). A resume drops both, so the same command goes back to
+the session.
 The session runs on until its shell exits, `mosey -kill` (`ipc.Hangup`)
 or 7 days detached (`IdleTimeout`), the last two a SIGHUP from the
 spawner. `mosey -list` reads the greetings and prints `MOSEY-LIST` lines,
