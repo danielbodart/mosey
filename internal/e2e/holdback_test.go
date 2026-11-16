@@ -264,9 +264,9 @@ func waitFinished(t *testing.T, prog *ttyShell, n int, limit time.Duration) time
 // client listens: seq 5000 and seq 20000, far more than the 1000-line
 // window, scroll past at whatever pace the client acknowledges, and every
 // line is printed once, in order, with no marker, over every network
-// profile. A profile's outage of SilentAfter or more makes the client
-// silent, and then the window may cut; that run must still account for
-// every line, and says so.
+// profile. netsim's seed is fixed (newSimNet), and under it no profile's
+// outage during these runs lasts SilentAfter, so the client must never
+// go silent: a run where it did would lift the hold and prove nothing.
 func TestAFloodWhileTheClientListensReachesTheScrollbackWhole(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
 	for _, total := range []int{5000, 20000} {
@@ -283,13 +283,10 @@ func TestAFloodWhileTheClientListensReachesTheScrollbackWhole(t *testing.T) {
 					took := time.Since(began)
 					s.converge()
 					got := numbers(transcript(s.user.bytes(), 80, 24))
-					if quiet.count() > 0 {
-						markers, err := accountedFor(got, total)
-						if err != nil {
-							t.Errorf("%s: silent %d times; %v", p.Name, quiet.count(), err)
-						}
-						t.Logf("%s: the client went silent %d times; %d markers", p.Name, quiet.count(), markers)
-					} else if err := exactlyOnce(got, total); err != nil {
+					if n := quiet.count(); n > 0 {
+						t.Errorf("%s: the client went silent %d times, so the hold lifted; no profile's outage under this seed lasts SilentAfter", p.Name, n)
+					}
+					if err := exactlyOnce(got, total); err != nil {
 						t.Errorf("%s: %v", p.Name, err)
 					}
 					t.Logf("%s: seq %d took %v (%.0f lines/s)", p.Name, total, took.Round(time.Millisecond), float64(total)/took.Seconds())
