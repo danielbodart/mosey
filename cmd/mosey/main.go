@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -108,6 +109,12 @@ const usage = `mosey -- a remote terminal for bad networks
   There is no detach key.
   A session left detached for 7 days is ended.
 
+  mosey -completion bash|zsh|fish
+        Print that shell's completion script, which completes
+        DESTINATION from your ssh config and known hosts as ssh does,
+        the flags, and -s and -kill's sessions on localhost:
+        source <(mosey -completion bash) in ~/.bashrc.
+
   mosey -version
   mosey -h        this, as is mosey with nothing after it
 `
@@ -145,6 +152,44 @@ type cli struct {
 	// joins them, run in place of the interactive shell of a session this
 	// command creates (§2, §9.2.3); "" is none.
 	command string
+	// completion is -completion's shell: its completion script is printed,
+	// and nothing started.
+	completion string
+}
+
+// clientFlags are the client's flags that parseArgs reads into something
+// other than cli itself.
+type clientFlags struct {
+	upload, prediction *string
+	agent              agentFlag
+	fresh              *bool
+}
+
+// newFlags is the client's flag set, writing into c and the clientFlags it
+// returns. It is a function of its own so that -completion lists the very
+// flags parseArgs takes, and the completion scripts cannot drift from them.
+func newFlags(c *cli) (*flag.FlagSet, *clientFlags) {
+	var f clientFlags
+	flags := flag.NewFlagSet("mosey", flag.ContinueOnError)
+	flags.SetOutput(io.Discard) // runClient prints the error and usage once
+	flags.Usage = func() {}
+	// No -remote is D7: whatever mosey the host has, PATH's or the installed
+	// copy, and a copy over only if it has none (bootstrap.md §4.7).
+	flags.StringVar(&c.ssh.Server, "remote", "", "the remote mosey `binary`, run as PATH --serve")
+	f.upload = flags.String("upload", string(client.UploadAsk), "copy mosey to a host without it: ask, yes or no")
+	flags.StringVar(&c.ssh.Program, "ssh", "ssh", "the ssh `program`")
+	f.prediction = flags.String("predict", predict.Adaptive.String(), "show typing before the echo: adaptive, always or never")
+	flags.Var(f.agent.letter('A'), "A", "forward the agent, as ssh -A")
+	flags.Var(f.agent.letter('a'), "a", "do not forward the agent, as ssh -a")
+	flags.BoolVar(&c.showVersion, "version", false, "print the version")
+	flags.StringVar(&c.name, "s", "", "attach to, take over or start the session called `NAME`")
+	f.fresh = flags.Bool("new", false, "start a new session, with a generated name")
+	flags.BoolVar(&c.list, "list", false, "list the sessions on DESTINATION")
+	flags.StringVar(&c.kill, "kill", "", "end the session called `NAME`")
+	flags.StringVar(&c.dir, "dir", "", "start a new session's shell in `DIR`")
+	flags.StringVar(&c.typ, "type", "", "type `TEXT` and Enter into a new session's shell")
+	flags.StringVar(&c.completion, "completion", "", "print the completion script for `SHELL`: bash, zsh or fish")
+	return flags, &f
 }
 
 // parseArgs reads `mosey [-remote PATH] [-upload MODE] [-ssh PROGRAM]
@@ -155,25 +200,7 @@ type cli struct {
 // untouched. Nothing at all is the usage.
 func parseArgs(args []string) (cli, error) {
 	var c cli
-	flags := flag.NewFlagSet("mosey", flag.ContinueOnError)
-	flags.SetOutput(io.Discard) // runClient prints the error and usage once
-	flags.Usage = func() {}
-	// No -remote is D7: whatever mosey the host has, PATH's or the installed
-	// copy, and a copy over only if it has none (bootstrap.md §4.7).
-	flags.StringVar(&c.ssh.Server, "remote", "", "the remote mosey `binary`, run as PATH --serve")
-	upload := flags.String("upload", string(client.UploadAsk), "copy mosey to a host without it: ask, yes or no")
-	flags.StringVar(&c.ssh.Program, "ssh", "ssh", "the ssh `program`")
-	prediction := flags.String("predict", predict.Adaptive.String(), "show typing before the echo: adaptive, always or never")
-	var agent agentFlag
-	flags.Var(agent.letter('A'), "A", "forward the agent, as ssh -A")
-	flags.Var(agent.letter('a'), "a", "do not forward the agent, as ssh -a")
-	flags.BoolVar(&c.showVersion, "version", false, "print the version")
-	flags.StringVar(&c.name, "s", "", "attach to, take over or start the session called `NAME`")
-	fresh := flags.Bool("new", false, "start a new session, with a generated name")
-	flags.BoolVar(&c.list, "list", false, "list the sessions on DESTINATION")
-	flags.StringVar(&c.kill, "kill", "", "end the session called `NAME`")
-	flags.StringVar(&c.dir, "dir", "", "start a new session's shell in `DIR`")
-	flags.StringVar(&c.typ, "type", "", "type `TEXT` and Enter into a new session's shell")
+	flags, f := newFlags(&c)
 	if len(args) == 0 {
 		// A bare mosey starts nothing: this machine is asked for by name,
 		// as localhost (Dan, 2026-11-16; bootstrap.md §2).
@@ -186,19 +213,27 @@ func parseArgs(args []string) (cli, error) {
 	} else if err != nil {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: " + err.Error()}
 	}
-	mode, err := client.ParseUploadMode(*upload)
+	mode, err := client.ParseUploadMode(*f.upload)
 	if err != nil {
 		return cli{}, err
 	}
 	c.upload = mode
-	if c.predict, err = predict.ParseMode(*prediction); err != nil {
+	if c.predict, err = predict.ParseMode(*f.prediction); err != nil {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: -predict: " + err.Error()}
 	}
 	if c.showVersion {
 		return c, nil
 	}
+	// -completion, like -version, starts nothing and so needs no
+	// DESTINATION; an empty or unknown shell is a mistake.
+	if flagGiven(flags, "completion") {
+		if !slices.Contains(completionShells, c.completion) {
+			return cli{}, &bootstrap.UsageError{Msg: fmt.Sprintf("mosey: -completion %q: the shell is one of %s", c.completion, strings.Join(completionShells, ", "))}
+		}
+		return c, nil
+	}
 	named, kill := c.name != "" || flagGiven(flags, "s"), c.kill != "" || flagGiven(flags, "kill")
-	if n := btoi(named) + btoi(*fresh) + btoi(c.list) + btoi(kill); n > 1 {
+	if n := btoi(named) + btoi(*f.fresh) + btoi(c.list) + btoi(kill); n > 1 {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: -s, -new, -list and -kill exclude each other"}
 	}
 	for _, n := range []struct {
@@ -223,7 +258,7 @@ func parseArgs(args []string) (cli, error) {
 	switch {
 	case named:
 		c.attach = bootstrap.AttachName
-	case *fresh:
+	case *f.fresh:
 		c.attach = bootstrap.AttachNew
 	default:
 		c.attach = bootstrap.AttachAuto
@@ -259,7 +294,7 @@ func parseArgs(args []string) (cli, error) {
 	}
 	// ssh's last-wins rule: options after -- come after mosey's own flags.
 	if opts.Agent == 0 {
-		opts.Agent = byte(agent)
+		opts.Agent = byte(f.agent)
 	}
 	c.ssh.Options = opts
 	if err := c.ssh.Check(); err != nil {
@@ -338,6 +373,10 @@ func runClient(args []string) int {
 	}
 	if c.showVersion {
 		fmt.Println(version)
+		return 0
+	}
+	if c.completion != "" {
+		fmt.Print(completionScript(c.completion))
 		return 0
 	}
 	// Before the one-shot key exists, and for the whole session after it:

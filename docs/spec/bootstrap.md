@@ -181,6 +181,15 @@ opening a shell was surprising, so this machine is asked for by name].
   else, a command with `-type` (both say what to run, and typing into a
   command is not what `-type` means), or with `-list` or `-kill`, is a
   usage error.
+- `-completion bash|zsh|fish` prints that shell's completion script on
+  stdout and exits 0, starting nothing and needing no `DESTINATION`, as
+  `-version` does; any other shell, or none, is a usage error [D: Dan,
+  2026-11-16: `mosey d<TAB>` should offer the hosts `ssh d<TAB>` does].
+  The scripts hand `DESTINATION` to the shell's own ssh host completion,
+  and get mosey's flags from the flag set the client parses with, so
+  they cannot drift from it. TAB never runs ssh: `-s` and `-kill`
+  complete from `mosey -list localhost`, and only when `DESTINATION` is
+  `localhost` or not yet typed.
 
 Every plain word belongs to the client (D7): `mosey server` connects to a
 host called `server`. Server mode is only ever the flag `--serve` as

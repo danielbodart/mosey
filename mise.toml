@@ -67,10 +67,10 @@ description = "Every fuzz target for FUZZTIME each (default 10s): a smoke test, 
 run = "scripts/fuzz.sh"
 
 [tasks.shellcheck]
-description = "shellcheck the scripts"
-sources = ["scripts/*.sh"]
+description = "shellcheck the scripts, and the bash completion script mosey -completion bash prints"
+sources = ["scripts/*.sh", "cmd/mosey/completion/mosey.bash"]
 outputs = { auto = true }
-run = "shellcheck scripts/*.sh"
+run = "shellcheck scripts/*.sh cmd/mosey/completion/mosey.bash"
 
 # actionlint runs shellcheck over every run: block too, so a workflow's
 # shell is held to the scripts' standard.

@@ -26,6 +26,11 @@ const (
 	agentLetter = "Aa"
 )
 
+// SSHValueLetters are the ssh option letters that take a value: what
+// mosey's shell completion needs to find DESTINATION after -- as
+// SplitSSHOptions does.
+const SSHValueLetters = passValues
+
 // UsageError is a mistake on the command line (exit 2).
 type UsageError struct{ Msg string }
 

@@ -175,6 +175,26 @@ binary, fetched by the hash in the tag's `nix/release.json`, not a build
 from source, so it is the file `SHA256SUMS` and the attestation vouch for.
 Trunk has no package (no release, no file): always pin a tag.
 
+### Shell completion
+
+`mosey -completion bash|zsh|fish` prints a completion script for that
+shell. `mosey d<TAB>` then offers the hosts `ssh d<TAB>` would (your ssh
+config's `Host` entries, known hosts, `user@host`) and `localhost`; the
+flags and their values complete too, `-s` and `-kill` with your sessions
+on this machine (never another host's: TAB doesn't run ssh), and the
+words after the host as a command.
+
+```sh
+source <(mosey -completion bash)          # in ~/.bashrc
+source <(mosey -completion zsh)           # in ~/.zshrc, after compinit
+mosey -completion fish | source           # in ~/.config/fish/config.fish
+```
+
+Hosts come from the shell's own ssh completion: bash-completion's
+known-hosts helper in bash (without bash-completion, the `Host` lines of
+`~/.ssh/config` and the files it `Include`s), `_ssh` in zsh, and fish's
+own host list in fish.
+
 ## Using it
 
 mosey copies itself over the first time if the host has no mosey at all
