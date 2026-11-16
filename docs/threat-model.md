@@ -731,7 +731,7 @@ execution (R4).
   `server.md`:** exec `/proc/self/exe` on Linux rather than the path
   `os.Executable` returned, so the roles are the same file the spawner
   is even if the path is replaced in between. D7 itself replaces
-  `~/.cache/mosey/mosey` in place when a client of another protocol
+  `~/.local/bin/mosey` in place when a client of another protocol
   needs it (`bootstrap.md` §4.7.7), so this is also what keeps a running
   session on its own binary; against a same-uid writer it is only
   hygiene (T12).
@@ -763,9 +763,9 @@ execution (R4).
 ### 4.13 Auto-upload (D7) — T5, T12, T13, and the release channel
 
 `bootstrap.md` §4.7. The client uses whatever mosey the host has: `mosey`
-on `PATH`, else the cached copy `~/.cache/mosey/mosey`. Only where there is
-neither, or the cached copy speaks another protocol, does it copy a build
-there (its own file, or its own version's release asset), and the copy
+on `PATH`, else `~/.local/bin/mosey`. Only where there is neither, or
+`~/.local/bin/mosey` (on `PATH` or not) speaks another protocol, does it
+copy a build there (its own file, or its own version's release asset), and the copy
 then runs as the user. Upgrading a host's mosey is Nix's or the user's,
 never the client's.
 
@@ -789,11 +789,12 @@ never the client's.
   usual one, uses no network and trusts nothing but the file the user is
   already running.
 - **The installer** (`mosey --serve=install`, `bootstrap.md` §4.7.7) is the
-  only writer of `~/.cache/mosey`. It checks length and SHA-256 through
+  only writer of `~/.local/bin/mosey`. It checks length and SHA-256 through
   one descriptor; the rename that follows goes by name, inside a
   directory only the user can write, and what it moved is then checked to
   be that same file (device and inode) and removed if not, so a
-  cut-short, altered or swapped copy is never left installed; works below `~/.cache` only through `O_NOFOLLOW` descriptors,
+  cut-short, altered or swapped copy is never left installed; works
+  below `~/.local` only through `O_NOFOLLOW` descriptors,
   so a planted symlink cannot redirect the write; requires every directory
   to be the user's and writable by nobody else; and never replaces a file
   that is not the user's (D7). **T13** (another local user) cannot plant
@@ -802,21 +803,27 @@ never the client's.
   provenance or anything else [S7 §10].
 - **The probe** runs `mosey` from the remote `PATH` as it is, as ssh
   would run any command there: the host's own install, trusted as the
-  host's other programs are. It runs the cached copy only where the
-  installer would have written it: no symlink at `~/.cache/mosey` or the
-  file, and both, and `~/.cache`, the user's (`bootstrap.md` §4.7.2). It
+  host's other programs are, except that `~/.local/bin/mosey`, the file
+  the installer writes, is first asked its protocol when it is where the
+  installer would have written it, so one of another protocol can be
+  replaced. Off `PATH` it runs that file only where the installer would
+  have written it: no symlink at `~/.local/bin` or the file, and
+  both, and `~/.local`, the user's (`bootstrap.md` §4.7.2). It
   asks the copy its protocol numbers and nothing more, so it cannot tell
   a copy that T12 replaced with one that answers correctly; the
   install-time hash check is done on the far side, by the copy itself,
   and catches damage, not substitution. A server that answers with
   another protocol is refused with both numbers named, never talked to
-  in a protocol it does not speak; the client replaces only the cached
-  copy, the one file it wrote, and only with consent.
-- **Hopping.** A session served from the cached copy, on a host with no
-  `mosey` on `PATH`, gets `~/.cache/mosey` first on its shell's `PATH`
-  (`server.md` §2.5). That directory is the user's alone and its one
-  file is the installer's, so this puts nothing on `PATH` that the user's
-  own sessions were not already running.
+  in a protocol it does not speak; the client replaces only
+  `~/.local/bin/mosey`, the one file it writes, and only with consent.
+- **Hopping.** A session served from `~/.local/bin/mosey`, on a host
+  with no `mosey` on `PATH`, gets `~/.local/bin` first on its shell's
+  `PATH` (`server.md` §2.5), as the stock login profiles already put it
+  when it exists. That directory must be the user's and writable by
+  nobody else before the probe runs anything from it, so this puts
+  nothing on `PATH` that the user could not already run; T12 could
+  plant other commands there, as it could in any directory of the
+  user's on `PATH`.
 - **The probe line** comes from the far host (T5). It is parsed strictly
   and fuzzed, and it chooses only which public build is sent. Nothing the
   far host says appears unfiltered in the consent question, which is made

@@ -286,7 +286,7 @@ pathchar = ALPHA / DIGIT / "." / "_" / "/" / "+" / "-"
 and must not start with `-`. A `-remote` outside this is a usage error. The
 leading `~/` is left for the remote `/bin/sh` to expand (it is the start of
 a word in its script, and the outer shell sees it only inside quotes),
-which is what D7's `~/.cache/mosey/mosey` needs [shells: checked
+which is what D7's `~/.local/bin/mosey` needs [shells: checked
 under each outer shell above]. `--serve` must be the binary's first
 argument: `cmd/mosey` tests only `os.Args[1]`.
 
@@ -308,11 +308,11 @@ Two ways, chosen by whether the user named one:
   (§6.4), and is never replaced: the user named it.
 - **No `-remote` (the default): D7.** The remote command becomes §4.7's
   probe, which runs `mosey` on the remote `PATH`, of whatever version, or
-  else `~/.cache/mosey/mosey` if it speaks the client's protocol, and
+  else `~/.local/bin/mosey` if it speaks the client's protocol, and
   otherwise prints the remote's platform; the client then copies a build
   over, with the user's consent, and starts again once (§4.7). The lines
   of §6 do not change. `mosey --serve=protocol` is what the probe asks
-  the cached copy.
+  `~/.local/bin/mosey`.
 
 ### 4.3 The client's process handling
 
@@ -541,7 +541,7 @@ once its release job has started, the cancellation lets it finish
 
 Why bare files: the hash in `SHA256SUMS` is then the hash of the very
 bytes the client sends and the remote installs at
-`~/.cache/mosey/mosey`, so one hash is checked on download, after the
+`~/.local/bin/mosey`, so one hash is checked on download, after the
 copy, and against a file already there; and the client needs no archive
 parser for a file from the network [derived]. Why the version in the name:
 a downloaded file says what it is.
@@ -564,26 +564,35 @@ binary, never by the client while it moves between hosts; the next session
 on that host runs the new binary.
 
 The host's mosey is, in order: `mosey` on the remote `PATH`; otherwise the
-single file `~/.cache/mosey/mosey`, which only D7 writes. When there is
-neither, or the cached file speaks another protocol than the client
-(§4.7.2), the client copies a static build to `~/.cache/mosey/mosey`,
-hash-checked, asking the first time, never replacing a file someone else
-owns. Nothing here changes the lines of §6 or what a server does once it
-is running.
+single file `~/.local/bin/mosey`, asked for by its path, since the
+non-login `ssh host cmd` that runs the probe may not have `~/.local/bin`
+on `PATH`. When there is neither, or `~/.local/bin/mosey` (found either
+way) speaks another protocol than the client (§4.7.2), the client copies
+a static build to `~/.local/bin/mosey`, hash-checked, asking the first
+time, never replacing a file someone else owns (Dan, 2026-11-16: "On a
+protocol mismatch, mosey replaces that file after asking"). A `mosey` on
+`PATH` anywhere else is never replaced. Nothing here changes the lines of
+§6 or what a server does once it is running.
+
+Why `~/.local/bin` (Dan, 2026-11-16, closing §14 question G): it is the
+one directory the stock login profiles already put on `PATH` when it
+exists (Debian's and Ubuntu's `~/.profile`, Fedora's `~/.bashrc`; the
+XDG Base Directory spec names it for user executables), so a session
+served from it can hop on with no rc file edited (§4.7.9).
 
 ```
 client                                                     far host
 ------                                                     --------
-ssh … "PROBE"   + ClientLine  ──────────────────────────►  mosey on PATH?                         exec it --serve
-                                                           else ~/.cache/mosey/mosey, if its
+ssh … "PROBE"   + ClientLine  ──────────────────────────►  mosey on PATH, not ~/.local/bin/mosey? exec it --serve
+                                                           else ~/.local/bin/mosey, if its
                                                              --serve=protocol is the client's?    exec it --serve
                               ◄──────── MOSEY-PROBE 1 Linux x86_64   (neither: say what this host is)
 ask the user (first time per host)
 pick the binary: our own file, or the release asset, SHA-256 checked
-ssh … "UPLOAD"  + the binary  ──────────────────────────►  mktemp in ~/.cache/mosey; cat; run it as
+ssh … "UPLOAD"  + the binary  ──────────────────────────►  mktemp in ~/.local/bin; cat; run it as
                                                            --serve=install HASH SIZE TEMP: checks, hash, rename
                               ◄──────── exit 0
-ssh … "PROBE"   + ClientLine  ──────────────────────────►  ~/.cache/mosey/mosey --serve   (as §4.4)
+ssh … "PROBE"   + ClientLine  ──────────────────────────►  ~/.local/bin/mosey --serve   (as §4.4)
 ```
 
 #### 4.7.1 When it applies
@@ -596,7 +605,7 @@ Only when the user gave no `-remote` (§4.2).
 reconnect (the launcher again), `mosey -list DEST` (`--serve=list`, §9.4)
 and `mosey -kill NAME DEST` (`--serve=kill`, §9.5). The probe runs the
 host's mosey with that command's flag, so a host whose only mosey is the
-one D7 put in `~/.cache/mosey/` is found by all of them. **Only the three
+one D7 put in `~/.local/bin/` is found by all of them. **Only the three
 that the user typed to get a session upload.** When the probe answers
 `MOSEY-PROBE`:
 
@@ -606,9 +615,9 @@ that the user typed to get a session upload.** When the probe answers
 | R3's background reconnect (§9.2.2) | nothing is copied and nothing is asked (D8 R3): the attempt fails, is logged, and is tried again after the backoff |
 | `mosey -list DEST`, `mosey -kill NAME DEST` | nothing is copied: `mosey: no mosey on DEST, so no sessions: mosey DEST starts one, copying mosey there`, exit 1. Listing or ending is not a reason to install anything. |
 
-`~/.cache` is literal: the remote's `XDG_CACHE_HOME` is not consulted. The
-probe, the upload and the installer must agree on one path without a round
-trip to ask, and D7 names this one.
+`~/.local/bin` is literal: nothing in the remote's environment moves it.
+The probe, the upload and the installer must agree on one path without a
+round trip to ask, and D7 names this one.
 
 #### 4.7.2 The probe
 
@@ -617,33 +626,43 @@ The remote command (one argument, as §4.1; `B H` is the client's
 now `1 1`):
 
 ```
-exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; c="$HOME/.cache/mosey"; f="$c/mosey"; w=; for d in "$HOME/" "$HOME/.cache/" "$c/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; if test -h "$c" || test -h "$f" || test -n "$w"; then :; elif test -O "$HOME/.cache" && test -O "$c" && test -O "$f" && [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
+exec /bin/sh -c 'b="$HOME/.local/bin"; f="$b/mosey"; p=$(command -v mosey 2>/dev/null); case $p in "$f"|"") ;; *) exec mosey FLAG;; esac; w=; for d in "$HOME/" "$HOME/.local/" "$b/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; if test -h "$b" || test -h "$f" || test -n "$w"; then :; elif test -O "$HOME/.local" && test -O "$b" && test -O "$f"; then if [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; p=; fi; if [ -n "$p" ]; then exec "$f" FLAG; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
 ```
 
-- **`PATH` first** (Dan, 2026-11-15). A `mosey` on the remote `PATH` is
-  exec'd with `FLAG`, the command's own (§4.7.1: `--serve` for the
-  launcher, which reads the ClientLine as in §4.4, or `--serve=list`), as
-  it is: it was put there by Nix, a package or the user, and upgrading it
-  is theirs. It is not asked anything first. If it speaks another
-  protocol, the bootstrap line or the handshake says so and the client
-  fails with one line naming both numbers (§6.4, `transport.md` §3.6); it
-  never replaces a file it did not install.
-- **Otherwise the cached copy**, `~/.cache/mosey/mosey`, under the
-  installer's rules (§4.7.7): neither `~/.cache/mosey` nor the file is a
-  symlink (`test -h`); they and `~/.cache` (which may be one) are the
-  user's (`test -O`, which follows a link); and neither the home,
-  `~/.cache` nor `~/.cache/mosey` may be written by its group or others
-  (the group and other `w` of `ls -ld`'s mode string, which POSIX fixes
-  and is the one portable way `/bin/sh` has to read a mode; a directory
-  `ls` cannot read counts as writable). So the probe never runs a file
-  from a place the installer would refuse to write, and nobody but the
-  user (or root) can swap the file between the checks and the exec. It
-  is asked
-  `--serve=protocol` (server.md §1), with stdin on `/dev/null` (the
-  ClientLine waiting on stdin is the launcher's) and stderr dropped, and
-  exec'd only if it prints exactly the client's own answer. Its software
-  version does not matter: a copy left by an older client that speaks
-  the same protocol is used as it is.
+- **`PATH` first** (Dan, 2026-11-15). A `mosey` on the remote `PATH`
+  other than `~/.local/bin/mosey` is exec'd with `FLAG`, the command's
+  own (§4.7.1: `--serve` for the launcher, which reads the ClientLine as
+  in §4.4, or `--serve=list`), as it is: it was put there by Nix, a
+  package or the user, and upgrading it is theirs. It is not asked
+  anything first. If it speaks another protocol, the bootstrap line or
+  the handshake says so and the client fails with one line naming both
+  numbers (§6.4, `transport.md` §3.6); it never replaces a file it did
+  not install. "Other than" is the path `command -v` printed compared,
+  as a string, with `$HOME/.local/bin/mosey`: what `PATH` resolved to,
+  not what a link points at.
+- **Otherwise `~/.local/bin/mosey`**, whether `PATH` found it or not
+  (Dan, 2026-11-16: the file mosey installs is the one it may replace),
+  under the installer's rules (§4.7.7): neither `~/.local/bin` nor the
+  file is a symlink (`test -h`); they and `~/.local` (which may be one)
+  are the user's (`test -O`, which follows a link); and neither the
+  home, `~/.local` nor `~/.local/bin` may be written by its group or
+  others (the group and other `w` of `ls -ld`'s mode string, which POSIX
+  fixes and is the one portable way `/bin/sh` has to read a mode; a
+  directory `ls` cannot read counts as writable). So the probe never
+  asks a file from a place the installer would refuse to write, and
+  nobody but the user (or root) can swap the file between the checks and
+  the exec. It is asked `--serve=protocol` (server.md §1), with stdin on
+  `/dev/null` (the ClientLine waiting on stdin is the launcher's) and
+  stderr dropped, and exec'd only if it prints exactly the client's own
+  answer. Its software version does not matter: a copy left by an older
+  client that speaks the same protocol is used as it is. One that
+  answers anything else gets the `MOSEY-PROBE` line, so the client
+  offers to replace it (§4.7.5, §4.7.7), even when `PATH` found it.
+- **A `~/.local/bin/mosey` on `PATH` that fails those rules** (a
+  symlink, say, which the user made and mosey never would) is exec'd as
+  it is, as any other `PATH` mosey is: the installer would refuse to
+  replace it, so offering to would only fail, and the user's `PATH`
+  chose it. Not on `PATH`, it is not run at all, as before.
 - **`--serve=protocol`** prints one line, the bootstrap line version
   (§6.1) and the handshake protocol (`transport.md` §2.3), as decimals
   separated by a space: `1 1` now. It is the one thing every mosey answers
@@ -651,23 +670,25 @@ exec /bin/sh -c 'if command -v mosey >/dev/null 2>&1; then exec mosey FLAG; fi; 
   it: that is spoken between server binaries on one host, never by the
   client.
 - **Neither:** one `MOSEY-PROBE` line on stdout, then exit 0. It does not
-  say whether a cached file was there that the probe could not use: the
-  install is the same either way (the installer replaces the user's own
+  say whether a `~/.local/bin/mosey` was there that the probe could not
+  use: the install is the same either way (the installer replaces the user's own
   regular file and names what it refuses, §4.7.7), and one question
   covers both (§4.7.5). The probe never exits 126 or 127 itself, so
   `ErrNoServer` from an exit status means only what it meant in slice 1.
 - **`command -v` and `test -O`.** `command -v` is POSIX. `test -O` is not,
   but dash, bash, BusyBox ash and the BSD and macOS `/bin/sh` all have it;
-  a `/bin/sh` without it makes the test false, so the cache is not run and
-  the client offers to copy, and the installer then says why it cannot.
+  a `/bin/sh` without it makes the test false, so `~/.local/bin/mosey`
+  is not asked (but is exec'd if `PATH` found it, as above) and
+  otherwise the client offers to copy, and the installer then says why
+  it cannot.
 - **Quoting.** The text inside the single quotes has no `'`, no `\` (fish
   reads `\'` and `\\` inside single quotes), no `!` and no newline (csh
   refuses a newline inside quotes), so every login shell of §4.1 passes it
   to `/bin/sh` unchanged [shells: run under each in §12's test].
-- **Cost.** In the everyday case one exec of `/bin/sh` on top of slice
-  1's command; without one on `PATH`, three of `ls` and, with a cached
-  copy, one of `mosey --serve=protocol` (a Go binary's start, a few
-  milliseconds). No extra round trip.
+- **Cost.** With a `mosey` on `PATH` elsewhere, one exec of `/bin/sh`
+  on top of slice 1's command; otherwise three of `ls` and, with a
+  `~/.local/bin/mosey`, one of `mosey --serve=protocol` (a Go binary's
+  start, a few milliseconds). No extra round trip.
 
 **The probe line**, read by `ReadCredential` (§6.5) like the other lines of
 ours and fuzzed with them:
@@ -725,7 +746,7 @@ goes when a macOS server lands.
   binary, so its version is a release's]. Anything else is a development
   build: `mosey: this is a development build (V) and DEST is OS/ARCH,
   which it cannot copy itself to: build mosey for OS/ARCH and put it at
-  ~/.cache/mosey/mosey there, or pass -remote`.
+  ~/.local/bin/mosey there, or pass -remote`.
 
   The download: `SHA256SUMS` first, then the binary, both from
   `https://github.com/danielbodart/mosey/releases/download/v<V>/`. HTTPS
@@ -767,14 +788,14 @@ upload's command line (§4.7.6), and the installer refuses anything else.
 after the probe's ssh has exited, so no ssh is reading `/dev/tty`:
 
 ```
-mosey: DEST has no mosey this one can use. Copy this one (OS/ARCH, N.N MB) to ~/.cache/mosey/ there? [y/N] 
-mosey: DEST has no mosey this one can use. Download mosey V for OS/ARCH from GitHub and copy it to ~/.cache/mosey/ there? [y/N] 
+mosey: DEST has no mosey this one can use. Copy this one (OS/ARCH, N.N MB) to ~/.local/bin/ there? [y/N] 
+mosey: DEST has no mosey this one can use. Download mosey V for OS/ARCH from GitHub and copy it to ~/.local/bin/ there? [y/N] 
 ```
 
 (the first for the client's own platform, the second for another, which is
 asked before anything is downloaded). The same question covers a host
-with no mosey at all and one whose cached copy the probe could not use,
-which the install replaces (§4.7.7).
+with no mosey at all and one whose `~/.local/bin/mosey` the probe could
+not use, which the install replaces (§4.7.7).
 The answer is one line read from the terminal, at most 64 bytes counted.
 Every field in it is the client's own (the destination as typed, its
 version, the platform mapped through §4.7.3), never a remote string.
@@ -803,7 +824,7 @@ forwarded), with this remote command (`HASH` as 64 lower-case hex digits,
 `SIZE` in decimal):
 
 ```
-exec /bin/sh -c 'umask 077; d="$HOME/.cache/mosey"; mkdir -p "$d" || exit 1; t=$(mktemp "$d/.upload.XXXXXXXX") || exit 1; cat >"$t" && chmod 700 "$t" && "$t" --serve=install HASH SIZE "$t"; s=$?; rm -f "$t"; exit $s'
+exec /bin/sh -c 'umask 077; d="$HOME/.local/bin"; mkdir -p "$d" || exit 1; t=$(mktemp "$d/.upload.XXXXXXXX") || exit 1; cat >"$t" && chmod 700 "$t" && "$t" --serve=install HASH SIZE "$t"; s=$?; rm -f "$t"; exit $s'
 ```
 
 - **stdin is the binary**, written whole and then closed; nothing else.
@@ -811,11 +832,16 @@ exec /bin/sh -c 'umask 077; d="$HOME/.cache/mosey"; mkdir -p "$d" || exit 1; t=$
   print). ssh's stderr goes to the user through §6.5's filter, which is
   how the installer's refusals are read.
 - **`umask 077`**: every directory and file the shell makes is the user's
-  alone. **`mktemp`** creates the file with `O_EXCL`, so the shell never
-  writes through a name someone planted [mktemp(1): GNU coreutils,
+  alone, `~/.local` and `~/.local/bin` included when they are missing.
+  A `~/.local/bin` made here reaches `PATH` at the user's next login,
+  when the profile sees it exists (§4.7.9); the session's own login
+  shell starts after the install, so it is one of those. **`mktemp`**
+  creates the file with `O_EXCL`, so the shell never writes through a
+  name someone planted [mktemp(1): GNU coreutils,
   busybox and macOS all create mode 0600 with `O_EXCL`]. The temporary file
-  sits in `~/.cache/mosey`, not `/tmp`: `/tmp` is often `noexec`, and the
-  rename into place must stay on one filesystem.
+  sits in `~/.local/bin`, not `/tmp`: `/tmp` is often `noexec`, and the
+  rename into place must stay on one filesystem. Its name starts with a
+  dot and lives only while the installer runs.
 - **The copy installs itself.** The shell runs the uploaded file as
   `--serve=install` (§4.7.7). Running it proves it runs on that host, and
   the checks are Go's, not whatever `sha256sum` or `shasum` the host has
@@ -836,52 +862,52 @@ ssh's exit status:
 | Status | Meaning | Client says (exit 1) |
 |---|---|---|
 | 0 | installed | `mosey: copied mosey to DEST` and goes on (§4.7.8) |
-| 126 | the copy would not run | `mosey: the copy of mosey would not run on DEST: is ~/.cache on a filesystem mounted noexec?` |
+| 126 | the copy would not run | `mosey: the copy of mosey would not run on DEST: is ~/.local/bin on a filesystem mounted noexec?` |
 | 255 | ssh failed | `mosey: ssh to DEST failed` |
 | other | refused or failed; stderr has said why | `mosey: copying mosey to DEST failed (exit N; see above)` |
 
 #### 4.7.7 The installer: `mosey --serve=install HASH SIZE TEMP`
 
 A server role (`server.md` §1) that runs once, from the uploaded file, and
-is the only code that writes the cache. It is not sandboxed (it must write
-the user's home) and reads nothing from the network. In order:
+is the only code that writes `~/.local/bin/mosey`. It is not sandboxed
+(it must write the user's home) and reads nothing from the network. In order:
 
 1. **Arguments.** Exactly three. `HASH` 64 lower-case hex digits; `SIZE`
    a decimal from 1 to `MaxBinary`; `TEMP` exactly
-   `$HOME/.cache/mosey/.upload.` followed by 1 to 64 `pathchar`s other
+   `$HOME/.local/bin/.upload.` followed by 1 to 64 `pathchar`s other
    than `/`. `HOME` must be absolute. Anything else: refused.
 2. **Home.** `open($HOME, O_DIRECTORY)`, following symlinks (a home under
    `/home → /usr/home` is ordinary). It must be owned by the user or root
    and writable by neither group nor others: sshd's own `StrictModes` rule
    for the home directory [sshd_config(5)].
-3. **`~/.cache`.** Created 0700 if absent. Opened relative to the home's
-   descriptor, **following a symlink** here only: a `~/.cache` that is a
-   link to another disk is common and is the user's own doing. What it
-   resolves to must be a directory owned by the user and writable by
-   neither group nor others.
-4. **`~/.cache/mosey`.** Created 0700 if absent, then opened relative to
+3. **`~/.local`.** Created 0700 if absent. Opened relative to the home's
+   descriptor, **following a symlink** here only: a `~/.local` that is a
+   link to another disk is the user's own doing. What it resolves to
+   must be a directory owned by the user and writable by neither group
+   nor others.
+4. **`~/.local/bin`.** Created 0700 if absent, then opened relative to
    its parent's descriptor with `O_NOFOLLOW | O_DIRECTORY`: a symlink is
    refused (`ELOOP` or `ENOTDIR`), so nothing planted can send the
    install elsewhere. It must be owned by the user and writable by
-   neither group nor others.
+   neither group nor others; the usual 0755 is fine.
 5. **The upload.** `TEMP`'s last component, opened relative to
-   `~/.cache/mosey` with `O_NOFOLLOW`: a regular file, owned by the user,
+   `~/.local/bin` with `O_NOFOLLOW`: a regular file, owned by the user,
    one link, exactly `SIZE` bytes, and SHA-256 equal to `HASH`, all read
    through that one descriptor. On a mismatch it is unlinked and the
    installer refuses.
-6. **What is there now.** `fstatat(~/.cache/mosey, "mosey",
+6. **What is there now.** `fstatat(~/.local/bin, "mosey",
    AT_SYMLINK_NOFOLLOW)`: absent is fine; a regular file owned by the user
    is replaced (§4.7.2: one that speaks another protocol); a symlink, a
    directory, anything else, or **a file owned by anyone else** is refused
    and left exactly as it is (D7: never replaces a file someone else
    owns).
 7. **Install.** `fchmod 0700`, `fsync` and `fstat` on the upload, then
-   `renameat(~/.cache/mosey, TEMP, ~/.cache/mosey, "mosey")`, atomic
+   `renameat(~/.local/bin, TEMP, ~/.local/bin, "mosey")`, atomic
    within the filesystem. `rename(2)` takes names, so TEMP is looked up
-   again here: `fstatat(~/.cache/mosey, "mosey", AT_SYMLINK_NOFOLLOW)`
+   again here: `fstatat(~/.local/bin, "mosey", AT_SYMLINK_NOFOLLOW)`
    must then show the device and inode of the descriptor that was
    hashed, or the file is unlinked and the installer refuses. Then
-   `fsync` of `~/.cache/mosey`. A session running from the file it
+   `fsync` of `~/.local/bin`. A session running from the file it
    replaces is unaffected: its processes keep the old file open, and its
    spawner re-executes its roles through `/proc/self/exe`, never by path
    (`server.md` §2.3, threat-model §4.11), so they are the old binary too.
@@ -889,14 +915,14 @@ the user's home) and reads nothing from the network. In order:
 Every step works through the descriptors of the step before
 (`openat`, `mkdirat`, `fstatat`, `renameat`), so no directory is looked up
 twice and no symlink can redirect a step. The one name looked up twice is
-TEMP, by the rename, inside `~/.cache/mosey`, which only the user can
+TEMP, by the rename, inside `~/.local/bin`, which only the user can
 write; step 7's inode check catches a swap there after the fact. Exit 0 and nothing
 on stdout on success; on any refusal one line on stderr,
 `mosey --serve=install: WHAT`, naming the path and the rule, and exit 1.
 
-Other users: the cache is under the user's home and every directory in it
-is the user's alone, so another user can neither plant nor replace a file
-there. The same user can (threat-model T12), which is why the copy is never
+Other users: `~/.local/bin` is under the user's home and every directory
+on the way is the user's alone, so another user can neither plant nor
+replace a file there. The same user can (threat-model T12), which is why the copy is never
 a trust anchor (S7 §10, threat-model §4.13).
 
 #### 4.7.8 Starting again
@@ -911,18 +937,26 @@ as a first attempt would.
 
 #### 4.7.9 Hopping on
 
-A session whose server is the cached copy, on a host with no `mosey` on
-`PATH`, gets `~/.cache/mosey` put first on its login shell's `PATH`
-(`server.md` §2.5), so `mosey otherhost` typed inside it finds the same
-file and carries on (D7: "a host can hop on with it"). Nothing else on the
-host changes: no rc file is edited and nothing is linked into a `PATH`
-directory. **This is known not to work on Debian or NixOS**, the two most
-common hosts: a login shell whose profile sets `PATH` outright, rather
-than adding to it, undoes it by the first prompt (Debian's `/etc/profile`
-and NixOS's `set-environment` both do, for bash), so `mosey otherhost` is
-not found there. Hopping is proven (§12's e2e test) only for a shell
-whose profile does not reset `PATH`. Whether to accept that or to touch
-something the profile reads is open for Dan: §14 question G.
+`mosey otherhost` typed inside a session finds a mosey to carry on with
+(D7: "a host can hop on with it") wherever the login profile puts
+`~/.local/bin` on `PATH`, which the stock profiles do when the directory
+exists: Debian's and Ubuntu's `~/.profile`, Fedora's `~/.bashrc` (Dan,
+2026-11-16, closing §14 question G). No rc file is edited. A
+`~/.local/bin` that the install itself made is there before the session's
+login shell starts (§4.7.8 starts again after the install), so that
+shell's profile sees it; any other shell already open on the host sees
+it at its next login.
+
+As well, a session whose server is `~/.local/bin/mosey`, on a host whose
+spawner `PATH` lacks `~/.local/bin`, gets it put first on its login
+shell's `PATH` (`server.md` §2.5). That covers a shell whose profile adds
+to `PATH` without naming `~/.local/bin`; a profile that sets `PATH`
+outright (Debian's `/etc/profile`, NixOS's `set-environment`) undoes it,
+and on Debian `~/.profile` then adds `~/.local/bin` back.
+
+**NixOS needs mosey from Nix** to hop on: no stock NixOS profile puts
+`~/.local/bin` on `PATH`. Hopping is proven by §12's e2e test for a shell
+whose profile keeps `PATH`; `tests/install.nix` covers the install only.
 
 #### 4.7.10 Costs and failures
 
@@ -930,8 +964,8 @@ The first session on a host with no mosey costs three SSH logins (probe,
 upload, start) instead of one, and one prompt the first time ever per
 host; every later session, one login, whichever client version runs it.
 Upgrading the client does not touch the host: a host keeps the mosey it
-has until Nix, a package or the user replaces it, or, for the cached
-copy, until a client of another protocol replaces it.
+has until Nix, a package or the user replaces it, or, for
+`~/.local/bin/mosey`, until a client of another protocol replaces it.
 
 | Situation | What happens |
 |---|---|
@@ -939,9 +973,10 @@ copy, until a client of another protocol replaces it.
 | offline, other platform | §4.7.4's fetch error and the advice to copy it by hand |
 | development build, other platform | §4.7.4's message, before any download |
 | no consent | `mosey: not copying mosey to DEST` |
-| `mosey` on `PATH` of another protocol | `mosey: DEST's mosey speaks protocol P; this mosey speaks N` (§6.4), exit 1; nothing is copied |
-| `~/.cache/mosey` is a symlink, or the cached file is a symlink or someone else's | the installer refuses (stderr says which), exit 1 |
-| `~/.cache` on a `noexec` mount | upload exit 126, §4.7.6 |
+| `mosey` on `PATH`, not `~/.local/bin/mosey`, of another protocol | `mosey: DEST's mosey speaks protocol P; this mosey speaks N` (§6.4), exit 1; nothing is copied |
+| `~/.local/bin/mosey` of another protocol, on `PATH` or not | the question of §4.7.5, then the install replaces it |
+| `~/.local/bin` is a symlink, or `~/.local/bin/mosey` is a symlink or someone else's | the installer refuses (stderr says which), exit 1 |
+| `~/.local/bin` on a `noexec` mount | upload exit 126, §4.7.6 |
 | the probe line does not parse | `ErrBadLine`, as for any malformed line of ours |
 | a `-remote` was given | none of this: §4.2 |
 
@@ -1854,8 +1889,8 @@ it.
 `mosey -list DEST` runs `mosey --serve=list` over the bootstrap's own ssh
 command (§4.1, its last argument `exec /bin/sh -c 'exec SERVER
 --serve=list'`, or with no `-remote` §4.7.2's probe running
-`--serve=list`, which finds the host's mosey, `PATH`'s or the cached
-copy), with stdin
+`--serve=list`, which finds the host's mosey, `PATH`'s or
+`~/.local/bin/mosey`), with stdin
 closed. A probe that answers `MOSEY-PROBE` is reported as §4.7.1 says,
 not shown as a list, and nothing is copied. The server connects to every
 attach socket as the launcher does (without the lock: it chooses
@@ -1913,7 +1948,7 @@ reported as `-list`'s are.
 | ssh cannot start | `mosey: running PROGRAM: ERR` | 1 |
 | `ErrNoLine`, ssh exit 255 | (ssh has already said why on stderr) `mosey: ssh to DEST failed` | 1 |
 | `ErrNoLine`, ssh exit 126/127 (`ErrNoServer`, with `-remote`) | `mosey: no mosey at SERVER on DEST: install it there or pass -remote` | 1 |
-| `*VersionError`, or ErrorLine `version` (any server: `PATH`'s, `-remote`'s, or the cached copy) | `mosey: DEST's mosey speaks protocol P; this mosey speaks N` (§6.4) | 1 |
+| `*VersionError`, or ErrorLine `version` (any server: `PATH`'s, `-remote`'s, or `~/.local/bin/mosey`) | `mosey: DEST's mosey speaks protocol P; this mosey speaks N` (§6.4) | 1 |
 | the handshake's `*IncompatibleVersionError` | `mosey: DEST's mosey speaks handshake protocol P; this mosey speaks N` (`transport.md` §3.6) | 1 |
 | ProbeLine (`ErrNoServer`, no `-remote`) | the upload of §4.7, and its messages; for `-list` and `-kill`, §4.7.1's messages and no upload; for R3's reconnect, a log line and another try | 1 |
 | `ErrNoLine`, other exit | `mosey: the remote mosey exited with status N` | 1 |
@@ -2068,9 +2103,9 @@ func IsRelease(v string) bool
 func AssetName(v, goos, goarch string) string
 // ParseSums finds name's hash in a SHA256SUMS file (§4.6, §4.7.4).
 func ParseSums(sums []byte, name string) ([32]byte, error)
-// CachePath is ~/.cache/mosey/mosey (§4.7), as the remote /bin/sh
+// InstallPath is ~/.local/bin/mosey (§4.7), as the remote /bin/sh
 // expands it.
-const CachePath = "~/.cache/mosey/mosey"
+const InstallPath = "~/.local/bin/mosey"
 // ProtocolAnswer is what `mosey --serve=protocol` prints (§4.7.2), LF
 // excluded: the bootstrap line version and the handshake protocol.
 func ProtocolAnswer(handshakeProtocol int) string
@@ -2119,7 +2154,7 @@ type SSH struct {
 	Destination  string
 	Options      SSHOptions
 	Server       string // the remote mosey binary, §4.1's charset; "" is §4.7's probe
-	Protocol     string // ProtocolAnswer: what the probe asks the cached copy (§4.7.2)
+	Protocol     string // ProtocolAnswer: what the probe asks ~/.local/bin/mosey (§4.7.2)
 	AgentCapture string // the capture socket (§8); "" is ForwardAgent=no
 	Role         string // "" runs --serve; "list" --serve=list (§9.4); "kill" --serve=kill RoleArg (§9.5)
 	RoleArg      string // kill's session name, an sname
@@ -2262,20 +2297,23 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
   LF and TAB, nor 0x7F.
 - The agent decision table of §5.
 - The probe and the upload command (§4.7) under each outer shell that is
-  installed, as for §4.1: the probe execs a `PATH` mosey whatever it
-  says, prefers it to a cached copy, execs a cached copy that answers the
-  client's protocol, skips one that answers anything else (`other`), a
-  symlinked one or a symlinked `~/.cache/mosey`, and prints a ProbeLine
-  that parses when there is none (`none`); the upload command installs
+  installed, as for §4.1: the probe execs a `PATH` mosey elsewhere
+  whatever it says, prefers it to `~/.local/bin/mosey`, execs a
+  `~/.local/bin/mosey` that answers the client's protocol, on `PATH` or
+  not, skips one that answers anything else (`other`), on `PATH` or not,
+  skips a symlinked one or a symlinked `~/.local/bin` off `PATH` and
+  execs it as it is on `PATH`, and prints a ProbeLine that parses when
+  there is none (`none`); the upload command installs
   through a stand-in installer and removes its temporary file.
 - `Platform`, `IsRelease`, `AssetName` and `ParseSums`, each row and rule.
 
 **Unit, `internal/install`:** a fresh install; replacing the user's own
-older file; refusing, and leaving untouched, a `~/.cache/mosey` that is a
+older file; refusing, and leaving untouched, a `~/.local/bin` that is a
 symlink, a file that is a symlink, a directory or
 someone else's (the "user" is a field, so a test can play another uid), a
 group- or world-writable directory, a size or hash mismatch (the upload is
-removed), a `TEMP` outside `~/.cache/mosey`, a relative `HOME`.
+removed), a `TEMP` outside `~/.local/bin`, a relative `HOME`; a
+missing `~/.local` and `~/.local/bin` are made 0700.
 
 **Unit, `internal/client`:** the consent table of §4.7.5 and the
 remembered-hosts file; the release fetch against a local HTTPS server:
@@ -2374,17 +2412,18 @@ durations in the commit message; 10 s each in CI):
   a temporary directory and its `PATH` the test's own (the throwaway
   sshd's `SetEnv HOME= PATH=`), and no `-remote`: on a host with no
   mosey the client asks, is told `y`, copies itself, and ends with a
-  working session and `~/.cache/mosey/mosey` byte-for-byte the client's
-  file, whose shell finds `mosey` in `~/.cache/mosey` (§4.7.9); a client
+  working session and `~/.local/bin/mosey` byte-for-byte the client's
+  file, whose shell finds `mosey` in `~/.local/bin` (§4.7.9); a client
   of another version then uses that copy as it is and copies nothing; a
-  cached copy of another protocol is replaced; a `mosey` on `PATH` of
+  `~/.local/bin/mosey` of another protocol is replaced, whether or not
+  `PATH` names `~/.local/bin`; a `mosey` elsewhere on `PATH` of
   another version is used as it is, and one of another protocol fails
-  with §6.4's line and nothing is copied; and a cached file that is a
-  symlink, or a `~/.cache/mosey` that is one, is refused with nothing
+  with §6.4's line and nothing is copied; and a `~/.local/bin/mosey` that
+  is a symlink, or a `~/.local/bin` that is one, is refused with nothing
   written through it.
 - **NixOS VM** (`tests/install.nix`, CI's `vm-install`): a host with no
   mosey gets one by consent and runs the session from
-  `~/.cache/mosey/mosey`; a second run asks nothing.
+  `~/.local/bin/mosey`; a second run asks nothing.
 - The netsim end-to-end test starts at `client.Session` and does not involve
   ssh at all; this document's part is that a `CredentialLine` round-tripped
   through Marshal/Parse yields the `handshake.Credential` it is given.
@@ -2410,7 +2449,7 @@ durations in the commit message; 10 s each in CI):
 | a compromised proto chooses where the client sends UDP | the spawner checks `addr`, `port` and `name` against its own (§4.4 step 3) |
 | failed bootstraps pile up detached shells | a session with no confirmed credential ends after CredentialTTL (§4.5) |
 | late remote bytes corrupt the session screen | ssh's stderr after the line goes, filtered, only to the log file (§7.4) |
-| a planted symlink or another user's file redirects the auto-upload's install (D7) | the installer works through `O_NOFOLLOW` descriptors below `~/.cache`, checks owner and mode at every level, and never replaces what is not the user's (§4.7.7) |
+| a planted symlink or another user's file redirects the auto-upload's install (D7) | the installer works through `O_NOFOLLOW` descriptors below `~/.local`, checks owner and mode at every level, and never replaces what is not the user's (§4.7.7) |
 | a corrupt, cut-short or substituted binary is installed (D7) | the installer checks the length and SHA-256 the client computed or read from `SHA256SUMS` before the rename (§4.7.4, §4.7.7) |
 | a compromised GitHub release, CDN or account serves another binary with a matching `SHA256SUMS` (D7) | **not covered by the client** (§14 question C, parked): the release job attests every binary (§4.6), so a person can catch it with `gh attestation verify`, but the client checks only `SHA256SUMS` |
 | a hostile remote lies about its platform | it chooses which public build it is sent, nothing more (§4.7.2) |
@@ -2443,8 +2482,8 @@ D. **A local cache of downloaded releases** (§4.7.4). Each host of a
    `$XDG_CACHE_HOME/mosey/` would save that, at the cost of one more
    file the client must re-verify before trusting.
 
-E. **Old versions in `~/.cache/mosey`.** *Closed by D7 as amended
-   2026-11-15*: there is one file, `~/.cache/mosey/mosey`, replaced only
+E. **Old versions of the installed copy.** *Closed by D7 as amended
+   2026-11-15*: there is one file, `~/.local/bin/mosey`, replaced only
    when it speaks another protocol, so nothing piles up.
 
 D. **Telling a client taken over long ago** (§9.1). *Answered by the
@@ -2455,19 +2494,11 @@ F. **A background reconnect that finds its session held by another
    client** (PLAN O15, §9.2.2). For Dan: it exits as taken over today;
    it could take the session back as `-s` does.
 
-G. **Hopping through a login profile that sets `PATH`** (§4.7.9). For
-   Dan. The session's shell is a login shell (D14), and some profiles
-   assign `PATH` rather than add to it: Debian's `/etc/profile` and
-   NixOS's `set-environment` do, for bash, so on those hosts the
-   `~/.cache/mosey` mosey puts first is gone by the prompt and `mosey
-   otherhost` is not found. A host that has mosey on `PATH` is
-   unaffected. Making it survive means touching something the profile
-   reads, which this slice does not do. The choice: (a) accept it as it
-   is, hopping working only where the profile adds to `PATH` (or where
-   mosey is on `PATH` already); (b) edit an rc file to add
-   `~/.cache/mosey`; or (c) link `~/.cache/mosey/mosey` into a directory
-   already on `PATH` (such as `~/.local/bin` or `~/bin`). (b) and (c) are
-   user-visible changes outside `~/.cache`, which D7 so far avoids.
+G. **Hopping through a login profile that sets `PATH`** (§4.7.9).
+   *Closed by Dan, 2026-11-16*: mosey installs to `~/.local/bin/mosey`,
+   which the stock login profiles put on `PATH` (Debian and Ubuntu
+   `~/.profile`, Fedora `~/.bashrc`), so hopping works there with no rc
+   file edited. NixOS needs mosey from Nix.
 
 ---
 

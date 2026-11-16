@@ -43,7 +43,7 @@ decision wins.
 | `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | launcher, spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
 | `internal/server` | The four roles (launcher, spawner, proto, emu); proto's `Session`, runnable in process for tests; the emu reply grammar | all server roles | **server-proc** | `doc.go`, `proto.go`, `launcher.go`, `spawner_linux.go`, `startdir.go`, `protorole.go`, `emurole.go`, `ipcemu.go`, `reply.go` |
 | `internal/bootstrap` | The SSH command line, the stdin and stdout lines (D6, D20, D25); D7's probe line, upload command and release rules | client, spawner | **bootstrap-client** | `doc.go`, `line.go`, `ssh.go`, `probe.go`, `upload.go` |
-| `internal/install` | `mosey --serve=install`: puts an uploaded copy at `~/.cache/mosey/mosey` safely (D7, `bootstrap.md` §4.7.7) | server host (one-shot) | **bootstrap-client** | `doc.go`, `install.go`, `install_unix.go` |
+| `internal/install` | `mosey --serve=install`: puts an uploaded copy at `~/.local/bin/mosey` safely (D7, `bootstrap.md` §4.7.7) | server host (one-shot) | **bootstrap-client** | `doc.go`, `install.go`, `install_unix.go` |
 | `internal/terminal` | The client's own tty: raw mode, size, SIGWINCH | client | **bootstrap-client** | `terminal.go` |
 | `internal/client` | `mosey host`: bootstrap (copying mosey over first if need be, D7), then `Session` (SSP + render + input) | client | **bootstrap-client** | `client.go`, `upload.go` |
 | `cmd/mosey` | The one binary: `main.go` is the client (`mosey host`), `server.go` the server (`mosey --serve`, re-executing itself as `mosey --serve=proto` and `mosey --serve=emu`; a flag, so it never collides with a host called server) | | **bootstrap-client** (`main.go`), **server-proc** (`server.go`) | `main.go`, `server.go` |
@@ -79,7 +79,7 @@ predict                         (screen; golang.org/x/text/width) -- never parse
 emu                             (screen)
 bootstrap                       ()              -- raw bytes; never handshake
 pty, sandbox, ipc, nocore       ()
-install                         (bootstrap)     -- the size bound and CachePath only
+install                         (bootstrap)     -- the size bound and InstallPath only
 terminal                        ()
 server                          (all of the above but client, terminal, render)
 client                          (all of the above but server, pty, sandbox, ipc, emu)
@@ -421,7 +421,7 @@ stable attach protocol (`server.md` §2.8) `ClientLine`, `Ready`,
 `ParseSSHOptions`, `Config` (from `SSH.Resolve`, which runs `ssh -G`),
 `SSH.Command(ctx, Config)`, `AgentSocket` and `ChooseAddr`; for D7 the
 `ProbeLine`, `NoServerError`, `SSH.UploadCommand`, `Platform`,
-`IsRelease`, `AssetName`, `ParseSums`, `CachePath` and
+`IsRelease`, `AssetName`, `ParseSums`, `InstallPath` and
 `ProtocolAnswer`. The spawner
 uses `ParseClientLine`, `MarshalCredentialLine` and `MarshalErrorLine`.
 The resume slice adds `SessionLine` (the attach socket's greeting) with
@@ -493,6 +493,6 @@ when the server ends the session, and otherwise tells the server with
 | Agent channel (D15, D25) | **built** (agent slice): `agent.md`, `internal/channel`, `internal/agent`, `Conn.SendChannel`/`RecvChannel`, `ipc.AgentConn`, `server.md` §2.7 |
 | Prediction (D12) | **built** (prediction slice): `prediction.md`, `internal/predict`, `Grid.EchoApplied`, the server's echo ack (`prediction.md` §3.1), `mosey -predict` |
 | Chaff (D11, O10) | **built** (chaff slice; the client's 64 B chaffing floor in the dequoin slice): `ssp.Chaffer`, `transport.Conn.SendChaff` and `ChaffArrived`, `ssp.md` §9.1 |
-| Auto-upload (D7) | Landed, and simplified 2026-11-15 to one cached file used only where the host has no mosey: `bootstrap.md` §4.7, `internal/install`; the release job attests every binary for `gh attestation verify` by hand (`bootstrap.md` §4.6); a client-side signature check is parked (PLAN O16) |
+| Auto-upload (D7) | Landed, simplified 2026-11-15 to one installed file used only where the host has no mosey, and moved 2026-11-16 to `~/.local/bin/mosey` so hopping needs no rc file: `bootstrap.md` §4.7, `internal/install`; the release job attests every binary for `gh attestation verify` by hand (`bootstrap.md` §4.6); a client-side signature check is parked (PLAN O16) |
 | NAT traversal (O6) | packet type `0x05` |
 | macOS server (D22) | `pty_other.go`, `sandbox_other.go` return `ErrUnsupported` |

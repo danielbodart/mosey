@@ -40,8 +40,8 @@ the same file, re-executed with a flag. A plain word never selects a role
 | `mosey --serve=spawner` | **spawner**: binds UDP, opens the pty, starts the shell, starts and supervises proto and emu | no | the session |
 | `mosey --serve=proto` | **proto**: keys, UDP, transport, SSP, every protocol parser, the pty master, the reply grammar | Landlock + seccomp | the session |
 | `mosey --serve=emu` | **emu**: tuios.dev/vt and nothing else | Landlock + seccomp | until it dies; restarted |
-| `mosey --serve=protocol` | prints the bootstrap line version and the handshake protocol, `1 1` (D7's probe asks the cached copy, `bootstrap.md` §4.7.2) | no | instant |
-| `mosey --serve=install HASH SIZE TEMP` | installs the uploaded copy it is running from as `~/.cache/mosey/mosey` (D7, `bootstrap.md` §4.7.7) | no | instant |
+| `mosey --serve=protocol` | prints the bootstrap line version and the handshake protocol, `1 1` (D7's probe asks `~/.local/bin/mosey`, `bootstrap.md` §4.7.2) | no | instant |
+| `mosey --serve=install HASH SIZE TEMP` | installs the uploaded copy it is running from as `~/.local/bin/mosey` (D7, `bootstrap.md` §4.7.7) | no | instant |
 | `mosey --serve=list` | **lister**: reads every session's greeting (§2.6) and prints one line each (`bootstrap.md` §9.4) | no | instant |
 
 Any other `--serve=` value prints `mosey --serve: unknown role` and exits
@@ -207,7 +207,7 @@ ssh ──stdin──► launcher                       spawner                p
 Both are started the same way:
 
 - `Path`: `Spawner.Self`, which on Linux is `/proc/self/exe`, never the
-  file's path: D7 replaces `~/.cache/mosey/mosey` in place when a client
+  file's path: D7 replaces `~/.local/bin/mosey` in place when a client
   of another protocol needs it (`bootstrap.md` §4.7.7), and a running
   session that restarts emu, or a session started a moment before the
   rename, must exec its own binary, not the new file at the old path.
@@ -311,15 +311,15 @@ triggers above (nothing emu does is one of them):
   - The locale variables (`LANG`, `LANGUAGE`, `LC_*`) from the
     `ClientLine`, replacing any of the same name.
   - **Hopping** (D7, `bootstrap.md` §4.7.9): if the spawner's binary is
-    the cached copy, `$HOME/.cache/mosey/mosey` (the same file, by device
-    and inode, as `/proc/self/exe` when the shell starts), and no
-    `mosey` is on the environment's `PATH`, `PATH` gets
-    `$HOME/.cache/mosey` put first, so `mosey otherhost` in the session
-    finds it. A `PATH` that already has a `mosey`, or a server that is
-    not the cached copy (Nix's, a package's, `-remote`'s), leaves `PATH`
-    as it is. A login profile that assigns `PATH` outright undoes this,
-    and Debian's and NixOS's do, so there it does not work (`bootstrap.md`
-    §4.7.9, §14 question G, open).
+    `$HOME/.local/bin/mosey` (the same file, by device and inode, as
+    `/proc/self/exe` when the shell starts), and no `mosey` is on the
+    environment's `PATH`, `PATH` gets `$HOME/.local/bin` put first, so
+    `mosey otherhost` in the session finds it. A `PATH` that already has
+    a `mosey` (`~/.local/bin` itself, say), or a server anywhere else
+    (Nix's, a package's, `-remote`'s), leaves `PATH` as it is. A login
+    profile that assigns `PATH` outright undoes this; the stock Debian,
+    Ubuntu and Fedora profiles then add `~/.local/bin` back themselves,
+    and NixOS needs mosey from Nix (`bootstrap.md` §4.7.9).
   The spawner re-checks each `ClientLine` variable against
   `bootstrap.md` §6.2's names and its `vchar` alphabet, 1–64 bytes,
   whatever the parser accepted. Anything else is dropped and logged.
@@ -1619,8 +1619,8 @@ it lands, with the duration and exec count in the commit message.
   version is attached as it is, running its own binary; one of another
   attach protocol is passed over by `auto`, refused with `attach` by
   `name` and `resume`, and keeps its name from a new session.
-- Hopping (§2.5): `PATH` gets `~/.cache/mosey` first only when the
-  binary is the cached copy and `PATH` has no `mosey`.
+- Hopping (§2.5): `PATH` gets `~/.local/bin` first only when the
+  binary is `~/.local/bin/mosey` and `PATH` has no `mosey`.
 - `Session`: a client silent for `SilentAfter` is reported `Detached`
   and, when heard again, `Attached`, without losing its connection.
 - `Session` (in process, netsim, synctest): a client vanishes without
