@@ -634,8 +634,11 @@ func ValidDir(d string) bool { return validText(d, false) }
 
 // ValidType says whether t may be a -type (§6.2's typetext): as ValidDir,
 // but a tab is allowed. No CR or LF means the text is one line, and the
-// one Enter after it is the server's; no ESC or Ctrl-C means it can only
-// be typed, never drive the line editor.
+// one Enter after it is the server's; no ESC or other C0 or C1 control
+// means it carries no escape sequence and no signal key such as Ctrl-C.
+// What remains is read by the shell's line editor as if the user typed
+// it: a tab starts completion, and under readline's convert-meta a byte
+// of 0x80 or above is a Meta chord, as it would be from the keyboard.
 func ValidType(t string) bool { return validText(t, true) }
 
 func validText(s string, tab bool) bool {

@@ -1077,6 +1077,11 @@ each [choice: `PATH_MAX` on macOS, so any of our platforms can name the
 directory; for `type`, a quarter of the 4096 bytes termios(3) says a
 canonical-mode line holds, so the text and its Enter always arrive as one
 line the shell can read].
+The check keeps out control characters, not the line editor: what is
+left arrives as if the user typed it, so a TAB starts completion in bash
+and zsh, and where readline's `convert-meta` is on (bash's default in a C
+or 8-bit locale) a byte of 0x80 or above is read as a Meta chord. The
+text is the user's own, so that is what typing it would do anyway.
 
 Size: at most 5708 bytes [derived: the fixed fields and their 9 spaces come
 to 1698 with the longest attach, `resume:SID:CREDID` at 41 bytes; env at
