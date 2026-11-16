@@ -300,8 +300,21 @@ func TestAFloodWhileTheClientListensReachesTheScrollbackWhole(t *testing.T) {
 					s := startTTYSession(t, p, prog, quiet.hook)
 					began := time.Now()
 					s.typeLine(fmt.Sprintf("seq %d", total))
+					// Each look at the client's screen replays all it was
+					// sent, so looking every 50 ms through a flood is
+					// quadratic, and under -race it outran CI's ten
+					// minutes. The program cannot finish more than the
+					// hold's queue ahead of the client, so waiting for it
+					// first, cheaply, leaves the screen a few seconds to
+					// catch up, which it is looked at once a second for.
+					waitFinished(t, prog, 1, 10*time.Minute)
 					last := fmt.Sprintf("line-%04d", total)
-					s.wait(last, func() bool { return strings.Contains(s.clientScreen(), last) })
+					for deadline := time.Now().Add(time.Minute); !strings.Contains(s.clientScreen(), last); {
+						if time.Now().After(deadline) {
+							t.Fatalf("%s: no %s on the screen a minute after the program finished:\n%s", p.Name, last, s.clientScreen())
+						}
+						time.Sleep(time.Second)
+					}
 					took := time.Since(began)
 					s.converge()
 					got := numbers(transcript(s.user.bytes(), 80, 24))
