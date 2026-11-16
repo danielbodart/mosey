@@ -7,9 +7,8 @@ on lossy links and picks up where it left off.
 
 > To *mosey* is to wander along at an easy pace.
 
-**Status: pre-alpha. Don't rely on it yet.** The design is settled
-([PLAN.md](PLAN.md)) and the specs are written ([docs/spec/](docs/spec)).
-The first slice works: `mosey HOST` bootstraps over your `ssh` and gives
+**Status: in daily use.** The design is settled ([PLAN.md](PLAN.md)) and
+the specs are written ([docs/spec/](docs/spec)). `mosey HOST` bootstraps over your `ssh` and gives
 you an interactive shell over encrypted UDP, with the emulator sandboxed on
 the server, and copies itself to a host that doesn't have it (see
 [Zero install](#zero-install)). Sessions survive the client: a later
