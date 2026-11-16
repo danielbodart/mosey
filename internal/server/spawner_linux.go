@@ -362,10 +362,11 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 
 	// The shell starts this late so a failure earlier leaves none behind,
 	// and so its start-up overlaps the client's handshake.
-	if err := s.startShell(cl.Env, agentSock, slave); err != nil {
+	if err := s.startShell(cl, agentSock, slave); err != nil {
 		return err
 	}
 	slave.Close()
+	s.typeInto(cl.Type)
 
 	if err := s.launcher.Send(ipc.Ready{Line: line}); err != nil {
 		s.log.Warn("telling the launcher", "err", err)
@@ -607,17 +608,19 @@ func oomKilled(cgroup string) bool {
 	return false
 }
 
-func (s *spawner) startShell(env map[string]string, agentSock string, slave *os.File) error {
-	passwd, _ := os.Open(s.cfg.Passwd)
-	path, home := pty.LoginShell(s.getenv, passwd, os.Getuid())
-	if passwd != nil {
-		passwd.Close()
+func (s *spawner) startShell(cl bootstrap.ClientLine, agentSock string, slave *os.File) error {
+	path, home := shellAndHome(s.getenv, s.cfg.Passwd)
+	// The launcher checked -dir already; should it have gone since, the
+	// session fails rather than start somewhere the user did not ask.
+	dir, err := startDir(home, cl.Dir)
+	if err != nil {
+		return fmt.Errorf("the shell's directory: %w", err)
 	}
 	hop := hopDir(s.cfg.Environ, "/proc/self/exe")
 	if hop != "" {
 		s.log.Info("the server is the cached copy: putting it on the shell's PATH", "dir", hop)
 	}
-	proc, err := pty.Shell{Path: path, Dir: home, Env: shellEnv(s.cfg.Environ, env, agentSock, hop, s.log)}.Start(slave)
+	proc, err := pty.Shell{Path: path, Dir: dir, Env: shellEnv(s.cfg.Environ, cl.Env, agentSock, hop, s.log)}.Start(slave)
 	if err != nil {
 		return fmt.Errorf("starting the shell %s: %w", path, err)
 	}
@@ -630,6 +633,25 @@ func (s *spawner) startShell(env map[string]string, agentSock string, slave *os.
 	s.shell = c
 	s.log.Info("shell started", "shell", path, "pid", proc.Pid)
 	return nil
+}
+
+// typeInto types -type's text into the new shell, then Enter
+// (bootstrap.md §9.2.3), as tmux send-keys TEXT Enter does: one write to
+// the pty master as soon as the shell has started, without waiting for a
+// prompt. The tty holds it as typeahead until the shell reads its first
+// line, and ICRNL makes the CR, what a terminal's Enter sends, the
+// newline that ends it. It goes before Ready, so before anything the
+// client types. A failure costs the text, not the session.
+func (s *spawner) typeInto(text string) {
+	if text == "" {
+		return
+	}
+	b := append([]byte(text), '\r')
+	if _, err := s.master.Write(b); err != nil {
+		s.log.Warn("typing -type's text into the shell", "err", err)
+		return
+	}
+	s.log.Info("typed -type's text into the shell", "bytes", len(text))
 }
 
 // violation is proto breaking §3.4: the spawner is unsandboxed, so it

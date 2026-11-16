@@ -124,6 +124,15 @@ func (l *Launcher) run(ctx context.Context) error {
 	case c.err != nil:
 		return c.err
 	case c.start:
+		// -dir is checked here, before anything starts, so a missing one
+		// is the user's clear error and no session (bootstrap.md §9.2.3).
+		// The spawner resolves it again to start the shell there.
+		if cl.Dir != "" {
+			_, home := shellAndHome(l.getenv, passwdFile)
+			if _, err := startDir(home, cl.Dir); err != nil {
+				return &LaunchError{Code: bootstrap.CodeDir, Text: fmt.Sprintf("the directory %q is not one: %v", cl.Dir, err)}
+			}
+		}
 		cl.Attach, cl.Name, cl.HasHolder = bootstrap.AttachNew, c.name, false
 		return l.start(ctx, bootstrap.MarshalClientLine(cl), cl)
 	}
@@ -132,8 +141,11 @@ func (l *Launcher) run(ctx context.Context) error {
 	// A reconnect keeps its holder (resume:SID:CREDID): the spawner holds
 	// the session for that client while the new credential is out, so the
 	// same client's next try still finds it its own (bootstrap.md §9.2.2).
+	// -dir and -type are for a session being created: an existing one
+	// ignores them, so they are not passed on (bootstrap.md §9.2.3).
 	to := cl
 	to.Attach, to.SessionID, to.Name = bootstrap.AttachResume, sessions[c.take].SessionID, ""
+	to.Dir, to.Type = "", ""
 	return l.resume(ctx, taken.f, taken.greeting, bootstrap.MarshalClientLine(to), cl)
 }
 

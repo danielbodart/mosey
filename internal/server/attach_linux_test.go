@@ -213,7 +213,7 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	out, _, err = run(auto)
 	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeInternal ||
 		!strings.Contains(err.Error(), "starting the spawner") {
-		t.Errorf("a plain client with only an attach-2 session detached: %v, %q; want it to start a session", err, out)
+		t.Errorf("a plain client with only an attach-1 session detached: %v, %q; want it to start a session", err, out)
 	}
 	// Named, by -s or by R3, it is refused with both numbers: its number
 	// on the line, both on stderr.
@@ -225,7 +225,7 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 		e, perr := bootstrap.ParseErrorLine([]byte(out))
 		if err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "1-2" ||
 			!strings.Contains(errs, "session work speaks attach protocol 1; this mosey speaks 2") {
-			t.Errorf("%s of an attach-2 session: %v, stdout %q, stderr %q", name, err, out, errs)
+			t.Errorf("%s of an attach-1 session: %v, stdout %q, stderr %q", name, err, out, errs)
 		}
 	}
 	// R3's reconnect of a session that is not there.
@@ -390,7 +390,7 @@ func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
 	err := Kill(&out, getenv, "elder")
 	if e, perr := bootstrap.ParseErrorLine(out.Bytes()); err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "1-2" ||
 		!strings.Contains(err.Error(), "session elder speaks attach protocol 1; this mosey speaks 2") {
-		t.Errorf("kill of an attach-2 session: %v, %q", err, out.String())
+		t.Errorf("kill of an attach-1 session: %v, %q", err, out.String())
 	}
 	select {
 	case sid := <-asked:
