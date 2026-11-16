@@ -128,7 +128,17 @@ mosey -s NAME host         # attach to the session called NAME, taking it over; 
 mosey -new host            # always start a fresh session, with a generated name
 mosey -list host           # your sessions on host: name, attached or detached, since when
 mosey -kill NAME host      # end the session called NAME (its shell gets SIGHUP)
+mosey -s work -dir src/app -type 'claude' host
+                           # create session work in ~/src/app running claude; later, just go back to it
 ```
+
+`-dir` and `-type` say how a session starts: its shell starts in that
+directory (relative to your home there), and the text is typed into it,
+followed by Enter, as `tmux new-session -c DIR` and `tmux send-keys TEXT
+Enter` would. They only apply when the command creates the session; when
+it resumes one they are ignored, so the same command takes you back.
+When the program exits you are at a shell in that directory, with your
+whole `PATH`.
 
 Plain `mosey host` never takes over a session that is attached somewhere
 else, so a second terminal to the same host gets a session of its own.

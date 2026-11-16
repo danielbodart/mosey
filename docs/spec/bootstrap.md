@@ -1788,13 +1788,15 @@ attached with: a tmux user's `tmux new-session -c DIR` followed by
   [choice: the simplest rule that works]. The text sits in the tty's
   input queue, as a fast typist's typeahead would, until the shell reads
   its first line, and the tty's `ICRNL` turns the CR into the newline that
-  ends that line. This is what `tmux send-keys TEXT Enter` does to a new
-  pane, so a shell, its rc files and its line editor see exactly what
-  they would see under tmux. Two consequences, both tmux's too: the tty
-  echoes typeahead when it arrives, so the text may show before the
-  prompt as well as after it, and a program the rc files run that reads
-  the terminal (a prompt for a passphrase, say) gets the text instead of
-  the shell. The text is typed into the shell, never run by the server:
+  ends that line. This is what `tmux send-keys TEXT Enter` sends: the
+  keys, as if typed. Two consequences of typing ahead: the tty echoes
+  the text when it arrives, before the shell has drawn its prompt, so
+  the text shows once above the first prompt and again after it, as the
+  line editor reads it ([shells]: bash 5 from NixOS through the e2e
+  test's throwaway sshd, 2026-11-16, shows `echo hi`, then
+  `PROMPT$ echo hi`, then `hi`); and a program the rc files run that
+  reads the terminal (a prompt for a passphrase, say) gets the text
+  instead of the shell. The text is typed into the shell, never run by the server:
   it is the user's own command, with the user's own `PATH` and aliases,
   and when it exits the user is at that shell's prompt in DIR. It is
   written before the spawner sends `Ready`, so it always comes before

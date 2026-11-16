@@ -275,6 +275,10 @@ func (b *spawn) refused(e *bootstrap.RemoteError) error {
 		return fail(e, "no such session on %s", b.ssh.Destination)
 	case bootstrap.CodeTaken:
 		return fail(e, "the session on %s is held by another client", b.ssh.Destination)
+	case bootstrap.CodeDir:
+		// -dir names no directory there; nothing was started (§9.2.3).
+		// The text is the user's own, checked for controls (§6.2).
+		return fail(e, "%s is not a directory on %s, so no session was started", b.line.Dir, b.ssh.Destination)
 	case bootstrap.CodeInternal:
 		return fail(e, "the server failed to start (see above)")
 	}

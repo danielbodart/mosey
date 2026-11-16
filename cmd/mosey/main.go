@@ -45,8 +45,20 @@ const usage = `mosey -- a remote terminal for bad networks
   mosey -kill NAME [OPTIONS] DESTINATION
         End the session called NAME: its shell gets SIGHUP.
 
-  OPTIONS: [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a]
-           [-predict adaptive|always|never] [-- SSH-OPTION...]
+  OPTIONS: [-dir DIR] [-type TEXT] [-remote PATH] [-upload ask|yes|no]
+           [-ssh PROGRAM] [-A | -a] [-predict adaptive|always|never]
+           [-- SSH-OPTION...]
+
+        -dir and -type apply only when a new session is started, and
+        are ignored when an existing one is resumed or taken over.
+        -dir DIR starts its shell in DIR, relative to your home there
+        unless absolute; if DIR is not a directory, nothing is started.
+        -type TEXT types TEXT into that shell, then Enter, so
+        mosey -s work -dir src/app -type 'claude' DESTINATION
+        opens a session in ~/src/app running claude, leaves you at its
+        shell when claude exits, and goes back to it when run again.
+        Each is at most 1024 bytes of text, with no control character
+        (but tab, in -type).
 
         The server is whatever mosey DESTINATION has, of any version:
         mosey on its PATH, or else ~/.cache/mosey/mosey. If it has none,
@@ -96,6 +108,9 @@ type cli struct {
 	name   string
 	list   bool
 	kill   string
+	// dir and typ are -dir and -type, for a session this command
+	// creates (§9.2.3).
+	dir, typ string
 }
 
 // parseArgs reads `mosey [-remote PATH] [-upload MODE] [-ssh PROGRAM]
@@ -120,6 +135,8 @@ func parseArgs(args []string) (cli, error) {
 	fresh := flags.Bool("new", false, "start a new session, with a generated name")
 	flags.BoolVar(&c.list, "list", false, "list the sessions on DESTINATION")
 	flags.StringVar(&c.kill, "kill", "", "end the session called `NAME`")
+	flags.StringVar(&c.dir, "dir", "", "start a new session's shell in `DIR`")
+	flags.StringVar(&c.typ, "type", "", "type `TEXT` and Enter into a new session's shell")
 	if err := flags.Parse(args); err != nil {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: " + err.Error()}
 	}
@@ -145,6 +162,17 @@ func parseArgs(args []string) (cli, error) {
 		if n.given && !bootstrap.ValidSessionName(n.name) {
 			return cli{}, &bootstrap.UsageError{Msg: fmt.Sprintf("mosey: %s %q: a session name is 1 to 32 letters, digits, '-', '_' and '.', starting with a letter or digit", n.flag, n.name)}
 		}
+	}
+	// -dir and -type say how a session starts, so they go with the
+	// commands that may start one (§2, §9.2.3). Empty is not given.
+	if (c.dir != "" || c.typ != "") && (c.list || kill) {
+		return cli{}, &bootstrap.UsageError{Msg: "mosey: -dir and -type start a session, so they go with neither -list nor -kill"}
+	}
+	if c.dir != "" && !bootstrap.ValidDir(c.dir) {
+		return cli{}, &bootstrap.UsageError{Msg: fmt.Sprintf("mosey: -dir: at most %d bytes of text with no control character", bootstrap.MaxStartText)}
+	}
+	if c.typ != "" && !bootstrap.ValidType(c.typ) {
+		return cli{}, &bootstrap.UsageError{Msg: fmt.Sprintf("mosey: -type: at most %d bytes of text with no control character but tab", bootstrap.MaxStartText)}
 	}
 	switch {
 	case named:
@@ -271,6 +299,8 @@ func runClient(args []string) int {
 		Getenv:   os.Getenv,
 		Attach:   c.attach,
 		Name:     c.name,
+		Dir:      c.dir,
+		Type:     c.typ,
 		Upload:   c.upload,
 		Predict:  c.predict,
 		// The terminal is still cooked when D7 asks (bootstrap.md

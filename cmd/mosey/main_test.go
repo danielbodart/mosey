@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
@@ -142,5 +143,38 @@ func TestPredictIsAdaptiveByDefaultAndTakesMoshsNames(t *testing.T) {
 	var u *bootstrap.UsageError
 	if _, err := parseArgs([]string{"-predict", "experimental", "far"}); !errors.As(err, &u) {
 		t.Errorf("-predict experimental: %v", err)
+	}
+}
+
+// -dir and -type go with every command that may start a session, and are
+// held to the line's grammar here, as a usage error (bootstrap.md §2).
+func TestDirAndTypeOnTheCommandLine(t *testing.T) {
+	for _, c := range []struct {
+		args     []string
+		dir, typ string
+	}{
+		{[]string{"-dir", "src/my project", "-type", "claude -w x", "far"}, "src/my project", "claude -w x"},
+		{[]string{"-s", "work", "-dir", "/srv", "far"}, "/srv", ""},
+		{[]string{"-new", "-type", "vim\tx", "far"}, "", "vim\tx"},
+		{[]string{"-dir", "", "far"}, "", ""},
+	} {
+		got, err := parseArgs(c.args)
+		if err != nil || got.dir != c.dir || got.typ != c.typ {
+			t.Errorf("%q: dir %q, type %q, %v", c.args, got.dir, got.typ, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"-list", "-dir", "src", "far"},
+		{"-kill", "work", "-type", "ls", "far"},
+		{"-type", "echo a\recho b", "far"},
+		{"-type", "\x1b[A", "far"},
+		{"-dir", "a\tb", "far"},
+		{"-dir", strings.Repeat("d", bootstrap.MaxStartText+1), "far"},
+	} {
+		_, err := parseArgs(args)
+		var u *bootstrap.UsageError
+		if !errors.As(err, &u) {
+			t.Errorf("%q: %v", args, err)
+		}
 	}
 }

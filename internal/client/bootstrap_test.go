@@ -67,6 +67,7 @@ func testLine() bootstrap.ClientLine {
 		Cols:   80,
 		Rows:   24,
 		Env:    map[string]string{"TERM": "xterm"},
+		Dir:    "src/my project",
 		Public: bytes.Repeat([]byte{5}, bootstrap.PublicKeySize),
 	}
 }
@@ -118,7 +119,7 @@ func TestTheLinesAreExchangedThroughSSH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := bootstrap.ParseClientLine(stdin); err != nil || got.Cols != 80 || got.Env["TERM"] != "xterm" {
+	if got, err := bootstrap.ParseClientLine(stdin); err != nil || got.Cols != 80 || got.Env["TERM"] != "xterm" || got.Dir != "src/my project" {
 		t.Errorf("the server read %q: %v", stdin, err)
 	}
 	argv, _ := os.ReadFile(filepath.Join(r.dir, "argv"))
@@ -150,6 +151,7 @@ func TestTheServersRefusalIsExplained(t *testing.T) {
 		"MOSEY-ERROR 1 line -\n":             "the server could not read this client's request: a bug, please report it",
 		"MOSEY-ERROR 1 unsupported attach\n": "the remote mosey can't do attach yet",
 		"MOSEY-ERROR 1 internal -\n":         "the server failed to start (see above)",
+		"MOSEY-ERROR 2 dir -\n":              "src/my project is not a directory on far, so no session was started",
 		"MOSEY-ERROR 1 overloaded -\n":       "the server refused: overloaded (see above)",
 		"MOSEY-CONNECT 2 nope\n":             "far sent a malformed mosey line",
 		"MOSEY-CONNECT 9 later\n":            "far's mosey speaks protocol 9; this mosey speaks 2",

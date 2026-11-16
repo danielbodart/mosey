@@ -43,6 +43,11 @@ type Options struct {
 	// AttachNew for -new.
 	Attach bootstrap.Attach
 	Name   string
+	// Dir and Type are -dir and -type (bootstrap.md §9.2.3): where a
+	// session this command creates starts its shell, and what is typed
+	// into it. A session that is resumed ignores them; R3's reconnect
+	// never sends them.
+	Dir, Type string
 
 	// D7's auto-upload (bootstrap.md §4.7), when SSH.Server is "".
 	//
@@ -108,6 +113,8 @@ func Run(ctx context.Context, o Options) error {
 		line: bootstrap.ClientLine{
 			Attach: o.Attach,
 			Name:   o.Name,
+			Dir:    o.Dir,
+			Type:   o.Type,
 			Cols:   uint16(size.Cols),
 			Rows:   uint16(size.Rows),
 			Env:    env,
