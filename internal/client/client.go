@@ -48,6 +48,11 @@ type Options struct {
 	// into it. A session that is resumed ignores them; R3's reconnect
 	// never sends them.
 	Dir, Type string
+	// Command is the command after the host (bootstrap.md §2, §9.2.3), run
+	// in place of the interactive shell of a session this command
+	// creates; "" is none. A session that is taken instead does not run
+	// it, and Run says so on Stderr.
+	Command string
 
 	// D7's auto-upload (bootstrap.md §4.7), when SSH.Server is "".
 	//
@@ -111,14 +116,15 @@ func Run(ctx context.Context, o Options) error {
 	b := &spawn{
 		ssh: o.SSH,
 		line: bootstrap.ClientLine{
-			Attach: o.Attach,
-			Name:   o.Name,
-			Dir:    o.Dir,
-			Type:   o.Type,
-			Cols:   uint16(size.Cols),
-			Rows:   uint16(size.Rows),
-			Env:    env,
-			Public: key.PublicKey(),
+			Attach:  o.Attach,
+			Name:    o.Name,
+			Dir:     o.Dir,
+			Type:    o.Type,
+			Command: o.Command,
+			Cols:    uint16(size.Cols),
+			Rows:    uint16(size.Rows),
+			Env:     env,
+			Public:  key.PublicKey(),
 		},
 		stderr: o.Stderr,
 		log:    o.Log,
@@ -154,7 +160,12 @@ func Run(ctx context.Context, o Options) error {
 		fmt.Fprintf(o.Stderr, "mosey: UDP goes straight to %s, not through the ssh proxy\n", server)
 		o.Log.Info("ssh went through a proxy; UDP does not", "server", server)
 	}
-	o.Log.Info("session", "name", line.Name)
+	o.Log.Info("session", "name", line.Name, "existing", line.Existing)
+	if o.Command != "" && line.Existing {
+		// -s NAME found NAME running: it is taken as it is (bootstrap.md
+		// §9.2.3). Said while the terminal is still cooked.
+		fmt.Fprintf(o.Stderr, "mosey: session %s was already running, so the command was not run\n", line.Name)
+	}
 	s := &Session{
 		Conn:         pc,
 		Server:       server,

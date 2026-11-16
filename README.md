@@ -144,7 +144,21 @@ mosey -list host           # your sessions on host: name, attached or detached, 
 mosey -kill NAME host      # end the session called NAME (its shell gets SIGHUP)
 mosey -s work -dir src/app -type 'claude' host
                            # create session work in ~/src/app running claude; later, just go back to it
+mosey host claude          # a new session running claude instead of a shell; it and mosey end when claude does
+mosey -s work -- -p 2222 host claude
+                           # ssh's own options go after --, before the host
 ```
+
+**A command after the host** runs in place of your shell, as `ssh host
+command` would: the words are joined with spaces and run by your shell's
+`-c`, so `mosey host ls -la` passes `-la` to `ls`, and quoting is your
+shell's. When the command exits, the session ends and mosey exits (with
+status 0: the command's own status is not passed back). It only ever
+starts a session: plain `mosey host COMMAND` always starts a new one, and
+`mosey -s NAME host COMMAND` runs it only if NAME isn't running already;
+if it is, mosey says so and takes NAME over as it is. The session is an
+ordinary one while it runs: you can detach, list, take over and kill it.
+`-dir` sets where it runs; `-type` and a command exclude each other.
 
 **`localhost` is this machine**, with no ssh at all: `mosey localhost`,
 `mosey -s work localhost`, `mosey -new localhost`, `mosey -list

@@ -20,10 +20,10 @@ const (
 	// ClientLine's dir and type (§6.2, §9.2.3).
 	Version = 2
 	// MaxClientLine bounds the stdin line, LF included. The longest legal
-	// line is 5708 bytes (§6.2); this is the next power of two, so the
+	// line is 5710 bytes (§6.2); this is the next power of two, so the
 	// launcher's read bound is fixed and generous.
 	MaxClientLine = 8192
-	// MaxCredentialLine bounds the stdout line, LF included: at most 1862
+	// MaxCredentialLine bounds the stdout line, LF included: at most 1806
 	// bytes are used (§6.3).
 	MaxCredentialLine = 2048
 	// MaxErrorLine bounds an ErrorLine, LF included. It is frozen with the
@@ -45,7 +45,7 @@ const (
 
 	maxWord     = 64
 	maxEnvValue = 64
-	// MaxStartText bounds -dir and -type, in bytes (§6.2): macOS's
+	// MaxStartText bounds -dir, -type and a command, in bytes (§6.2): macOS's
 	// PATH_MAX, and a quarter of the 4096-byte line termios(3) says the
 	// tty's canonical mode holds, so typed text and its Enter are always
 	// one line the shell can read.
@@ -66,6 +66,9 @@ const (
 	attachNewNamed = "new:"
 	attachName     = "name:"
 	attachResume   = "resume:"
+
+	// credentialExisting is the CredentialLine's optional last word (§6.3).
+	credentialExisting = "existing"
 )
 
 // Attach is which session a ClientLine asks for (§6.2, §9.2).
@@ -143,6 +146,11 @@ type ClientLine struct {
 	Dir, Type string
 	// Public is the client's one-shot X-Wing public key (D20).
 	Public []byte
+	// Command is the command after DESTINATION (§2, §9.2.3), run as
+	// SHELL -c Command in place of the interactive shell; "" is none, and
+	// no field at all, so a line without one is the line of before
+	// commands. Only a new session uses it; a resume ignores it.
+	Command string
 }
 
 // CredentialLine is what the server prints on ssh's stdout (§6.3).
@@ -159,6 +167,11 @@ type CredentialLine struct {
 	PSK  [PSKSize]byte
 	// Public is the server's one-shot X-Wing public key.
 	Public []byte
+	// Existing says the line took a session that was already running, so
+	// the ClientLine's Command was not run (§6.3, §9.2.3). A launcher sets
+	// it only in answer to a line with a Command, so a client from before
+	// commands never sees the word.
+	Existing bool
 }
 
 // ErrorLine is a server's refusal (§6.4). Its grammar is frozen for every
@@ -241,6 +254,9 @@ func MarshalClientLine(c ClientLine) []byte {
 	b = appendText(b, c.Dir)
 	b = appendText(b, c.Type)
 	b = appendField(b, b64.EncodeToString(c.Public))
+	if c.Command != "" {
+		b = b64.AppendEncode(append(b, ' '), []byte(c.Command))
+	}
 	return append(b, '\n')
 }
 
@@ -248,7 +264,14 @@ func MarshalClientLine(c ClientLine) []byte {
 // canonical (§6.1, §6.2). Its input comes from ssh's stdin, to the
 // unsandboxed spawner, so it is fuzzed.
 func ParseClientLine(line []byte) (ClientLine, error) {
-	fields, err := splitLine(line, MaxClientLine, clientMagic, 11)
+	// The command is the one optional field, and last (§6.2): a line
+	// with one has one more space. The count only picks the shape; every
+	// field is still checked, and the whole re-marshalled.
+	n := 11
+	if bytes.Count(line, []byte(" ")) == n-1 {
+		n++
+	}
+	fields, err := splitLine(line, MaxClientLine, clientMagic, n)
 	if err != nil {
 		return ClientLine{}, err
 	}
@@ -277,7 +300,18 @@ func ParseClientLine(line []byte) (ClientLine, error) {
 	if c.Public, err = decodeLen(fields[9], PublicKeySize, "public key"); err != nil {
 		return ClientLine{}, err
 	}
-	// fields[10] is the empty remainder after the LF, checked by splitLine.
+	if n == 12 {
+		if c.Command, err = parseText(fields[10], ValidCommand, "command"); err != nil {
+			return ClientLine{}, err
+		}
+		if c.Type != "" {
+			// Both say what to run; typing into a command is not -type's
+			// meaning (§2).
+			return ClientLine{}, badLine("a command and a type")
+		}
+	}
+	// The last field is the empty remainder after the LF, checked by
+	// splitLine. A "-" command parses as none, and so is refused here.
 	if !bytes.Equal(MarshalClientLine(c), line) {
 		return ClientLine{}, badLine("client line is not canonical")
 	}
@@ -362,6 +396,9 @@ func MarshalCredentialLine(c CredentialLine) []byte {
 	b = appendField(b, c.Name)
 	b = b64.AppendEncode(append(b, ' '), c.PSK[:])
 	b = b64.AppendEncode(append(b, ' '), c.Public)
+	if c.Existing {
+		b = appendField(b, credentialExisting)
+	}
 	return append(b, '\n')
 }
 
@@ -369,11 +406,22 @@ func MarshalCredentialLine(c CredentialLine) []byte {
 // anything not canonical (§6.1, §6.3), and any address no server could
 // legitimately have been reached on (threat-model §4.9).
 func ParseCredentialLine(line []byte) (CredentialLine, error) {
-	fields, err := splitLine(line, MaxCredentialLine, credentialMagic, 10)
+	// existing is the one optional field, and last (§6.3).
+	n := 10
+	if bytes.Count(line, []byte(" ")) == n-1 {
+		n++
+	}
+	fields, err := splitLine(line, MaxCredentialLine, credentialMagic, n)
 	if err != nil {
 		return CredentialLine{}, err
 	}
 	var c CredentialLine
+	if n == 11 {
+		if string(fields[9]) != credentialExisting {
+			return CredentialLine{}, badLine("credential line ends %q", fields[9])
+		}
+		c.Existing = true
+	}
 	if c.Addr, err = parseLineAddr(fields[2]); err != nil {
 		return CredentialLine{}, err
 	}
@@ -641,6 +689,12 @@ func ValidDir(d string) bool { return validText(d, false) }
 // of 0x80 or above is a Meta chord, as it would be from the keyboard.
 func ValidType(t string) bool { return validText(t, true) }
 
+// ValidCommand says whether t may be a command (§6.2's cmdtext): as
+// ValidType. It is one line the user's shell reads with -c, so a tab is
+// fine and a newline, which would make it two commands nobody typed on
+// one line, is not.
+func ValidCommand(t string) bool { return validText(t, true) }
+
 func validText(s string, tab bool) bool {
 	if len(s) < 1 || len(s) > MaxStartText || !utf8.ValidString(s) {
 		return false
@@ -663,7 +717,7 @@ func appendText(b []byte, t string) []byte {
 	return b64.AppendEncode(append(b, ' '), []byte(t))
 }
 
-// parseText reads a dir or type field. The encoded length is bounded
+// parseText reads a dir, type or command field. The encoded length is bounded
 // before anything is decoded.
 func parseText(f []byte, valid func(string) bool, what string) (string, error) {
 	if string(f) == "-" {

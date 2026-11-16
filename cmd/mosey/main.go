@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
@@ -33,6 +34,15 @@ const usage = `mosey -- a remote terminal for bad networks
         same sessions as mosey THISHOST would find, so one started here
         can be taken from another device, and back.
 
+  mosey [-s NAME | -new] [OPTIONS] DESTINATION COMMAND [ARG...]
+        Start a session running COMMAND in place of your shell, as ssh
+        DESTINATION COMMAND would run it (your shell's -c, with the words
+        joined by spaces); when it exits, so does the session, and mosey.
+        Without -s it is always a new session. With -s NAME, if NAME is
+        running already it is taken as it is, and COMMAND is not run.
+        Words after DESTINATION are all COMMAND's, so its own flags are
+        safe: mosey DESTINATION ls -la.
+
   mosey -s NAME [OPTIONS] DESTINATION
         Attach to the session called NAME, taking it over from wherever
         it is attached (that client is told), or start it if there is
@@ -52,16 +62,17 @@ const usage = `mosey -- a remote terminal for bad networks
            [-ssh PROGRAM] [-A | -a] [-predict adaptive|always|never]
            [-- SSH-OPTION...]
 
-        -dir and -type apply only when a new session is started, and
-        are ignored when an existing one is resumed or taken over.
+        -dir, -type and a COMMAND apply only when a new session is
+        started, and are ignored when an existing one is resumed or
+        taken over; -type and a COMMAND exclude each other.
         -dir DIR starts its shell in DIR, relative to your home there
         unless absolute; if DIR is not a directory, nothing is started.
         -type TEXT types TEXT into that shell, then Enter, so
         mosey -s work -dir src/app -type 'claude' DESTINATION
         opens a session in ~/src/app running claude, leaves you at its
         shell when claude exits, and goes back to it when run again.
-        Each is at most 1024 bytes of text, with no control character
-        (but tab, in -type).
+        Each, and COMMAND, is at most 1024 bytes of text, with no
+        control character (but tab, in -type and COMMAND).
 
         The server is whatever mosey DESTINATION has, of any version:
         mosey on its PATH, or else ~/.local/bin/mosey. If it has none,
@@ -72,6 +83,9 @@ const usage = `mosey -- a remote terminal for bad networks
         A host's mosey is upgraded with Nix or by replacing the binary,
         never by this. -remote PATH runs that remote binary instead and
         copies nothing.
+
+        ssh's own options go after --, before DESTINATION:
+        mosey -- -p 2222 DESTINATION.
 
         -A and -a are ssh's own: forward the agent or don't. With
         localhost the session's shell has this terminal's agent, unless
@@ -123,13 +137,18 @@ type cli struct {
 	// dir and typ are -dir and -type, for a session this command
 	// creates (§9.2.3).
 	dir, typ string
+	// command is the words after DESTINATION, joined with spaces as ssh
+	// joins them, run in place of the interactive shell of a session this
+	// command creates (§2, §9.2.3); "" is none.
+	command string
 }
 
 // parseArgs reads `mosey [-remote PATH] [-upload MODE] [-ssh PROGRAM]
-// [-A | -a] [-predict MODE] [-- SSH-OPTION...] DESTINATION`. Every plain
-// word belongs to the client (D7): the destination is the first one,
-// whatever it is called, and localhost is this machine, with no ssh
-// (bootstrap.md §2.2). Nothing at all is the usage.
+// [-A | -a] [-predict MODE] [-- SSH-OPTION...] DESTINATION [COMMAND
+// [ARG...]]`. Every plain word belongs to the client (D7): the destination
+// is the first one, whatever it is called, and localhost is this machine,
+// with no ssh (bootstrap.md §2.2); every word after it is the command's,
+// untouched. Nothing at all is the usage.
 func parseArgs(args []string) (cli, error) {
 	var c cli
 	flags := flag.NewFlagSet("mosey", flag.ContinueOnError)
@@ -213,10 +232,12 @@ func parseArgs(args []string) (cli, error) {
 	if len(rest) == 0 {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: needs a DESTINATION; use " + bootstrap.LocalDestination + " for this machine"}
 	}
-	if len(rest) > 1 {
-		return cli{}, &bootstrap.UsageError{Msg: fmt.Sprintf("mosey: %q after the destination", rest[1])}
-	}
 	c.ssh.Destination = rest[0]
+	if len(rest) > 1 {
+		if err := c.setCommand(rest[1:], kill); err != nil {
+			return cli{}, err
+		}
+	}
 	opts, err := bootstrap.ParseSSHOptions(sshArgs)
 	if err != nil {
 		return cli{}, err
@@ -241,6 +262,28 @@ func parseArgs(args []string) (cli, error) {
 		return cli{}, err
 	}
 	return c, nil
+}
+
+// setCommand takes the words after DESTINATION as the command (bootstrap.md
+// §2, §9.2.3): joined with single spaces, as ssh joins them, for the
+// user's shell to read with -c. It only starts sessions, so a plain mosey
+// DEST COMMAND is -new: resuming an unrelated detached shell would quietly
+// not run what was asked for.
+func (c *cli) setCommand(words []string, kill bool) error {
+	switch {
+	case c.list || kill:
+		return &bootstrap.UsageError{Msg: "mosey: a command starts a session, so it goes with neither -list nor -kill"}
+	case c.typ != "":
+		return &bootstrap.UsageError{Msg: "mosey: -type and a command both say what to run; give one"}
+	}
+	c.command = strings.Join(words, " ")
+	if !bootstrap.ValidCommand(c.command) {
+		return &bootstrap.UsageError{Msg: fmt.Sprintf("mosey: the command: at most %d bytes of text with no control character but tab", bootstrap.MaxStartText)}
+	}
+	if c.attach == bootstrap.AttachAuto {
+		c.attach = bootstrap.AttachNew
+	}
+	return nil
 }
 
 // flagGiven says whether name was on the command line, even with an empty
@@ -313,7 +356,7 @@ func runClient(args []string) int {
 
 	log, closeLog := clientLog()
 	defer closeLog()
-	log.Info("starting", "version", version, "destination", c.ssh.Destination, "attach", c.attach, "name", c.name, "list", c.list, "kill", c.kill)
+	log.Info("starting", "version", version, "destination", c.ssh.Destination, "attach", c.attach, "name", c.name, "list", c.list, "kill", c.kill, "command", c.command != "")
 
 	if c.list || c.kill != "" {
 		var err error
@@ -346,6 +389,7 @@ func runClient(args []string) int {
 		Name:     c.name,
 		Dir:      c.dir,
 		Type:     c.typ,
+		Command:  c.command,
 		Upload:   c.upload,
 		Predict:  c.predict,
 		// The terminal is still cooked when D7 asks (bootstrap.md

@@ -56,17 +56,21 @@ type Shell struct {
 	Dir string
 	// Env is its whole environment.
 	Env []string
+	// Command, if set, is run by the shell with -c in place of an
+	// interactive session (bootstrap.md §9.2.3, server.md §2.5), as one
+	// argument: the shell is the only thing that reads it.
+	Command string
 }
 
 // Start starts the shell as a login shell (argv[0] is "-" and its base
-// name), as the leader of a new session with slave as its controlling
+// name), with -c and Command if there is one, as the leader of a new session with slave as its controlling
 // terminal and as its stdin, stdout and stderr. It has no parent-death
 // signal: the shell is the user's, and the spawner hangs it up instead.
 // The caller closes slave once Start returns.
 func (s Shell) Start(slave *os.File) (*os.Process, error) {
 	cmd := &exec.Cmd{
 		Path:   s.Path,
-		Args:   []string{"-" + filepath.Base(s.Path)},
+		Args:   s.args(),
 		Dir:    s.Dir,
 		Env:    s.Env,
 		Stdin:  slave,
@@ -78,6 +82,17 @@ func (s Shell) Start(slave *os.File) (*os.Process, error) {
 		return nil, err
 	}
 	return cmd.Process, nil
+}
+
+// args is the shell's argv: a login shell's argv[0], and -c and the
+// command when there is one. A login shell reads the user's profile, so
+// the command gets the PATH the interactive shell would have had.
+func (s Shell) args() []string {
+	argv := []string{"-" + filepath.Base(s.Path)}
+	if s.Command != "" {
+		argv = append(argv, "-c", s.Command)
+	}
+	return argv
 }
 
 // LoginShell finds the user's shell and home directory as server.md §2.5

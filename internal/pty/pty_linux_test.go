@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -145,6 +146,44 @@ func TestALoginShellLeadsItsSessionWithThePTYAsItsTerminal(t *testing.T) {
 	want := fmt.Sprintf("argv0=-%s leader=true tty=true fg=true", filepath.Base(self))
 	if strings.TrimSpace(line) != want {
 		t.Fatalf("shell said %q, want %q", line, want)
+	}
+}
+
+// A command is the login shell's -c, as one argument the shell alone
+// reads (bootstrap.md §9.2.3): its quotes and $ are the shell's to expand,
+// and its exit ends the shell.
+func TestACommandIsRunByTheLoginShellWithDashC(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	if got := (Shell{Path: "/bin/zsh", Command: "ls -la"}).args(); !slices.Equal(got, []string{"-zsh", "-c", "ls -la"}) {
+		t.Errorf("argv %q", got)
+	}
+	if got := (Shell{Path: "/bin/zsh"}).args(); !slices.Equal(got, []string{"-zsh"}) {
+		t.Errorf("argv %q", got)
+	}
+	m, s := openPTY(t, Size{80, 24})
+	home := t.TempDir()
+	p, err := Shell{Path: "/bin/sh", Dir: "/", Env: []string{"HOME=" + home}, Command: `x='a b'; echo "ran-$((6*7)) $x"; exit 3`}.Start(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	// Everything until the shell has gone and the master reads EIO: a
+	// login shell's profile may write first.
+	m.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var out []byte
+	buf := make([]byte, 4096)
+	for {
+		n, rerr := m.Read(buf)
+		out = append(out, buf[:n]...)
+		if rerr != nil {
+			break
+		}
+	}
+	st, err := p.Wait()
+	if err != nil || !strings.Contains(string(out), "ran-42 a b\r\n") || st.ExitCode() != 3 {
+		t.Errorf("read %q, exit %v (%v)", out, st, err)
 	}
 }
 

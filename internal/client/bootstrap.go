@@ -295,6 +295,11 @@ func (b *spawn) explain(err error, status int) error {
 func (b *spawn) refused(e *bootstrap.RemoteError) error {
 	switch e.Code {
 	case bootstrap.CodeLine:
+		if b.line.Command != "" {
+			// A launcher of this line version from before commands counts
+			// the fields and refuses the one it does not know (§6.2).
+			return fail(e, "%s's mosey could not read this request: it may be older than this one, and unable to run a command", where(b.ssh))
+		}
 		return fail(e, "the server could not read this client's request: a bug, please report it")
 	case bootstrap.CodeVersion:
 		// A line version the server cannot read: there is one each side,

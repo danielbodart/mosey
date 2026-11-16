@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/danielbodart/mosey/internal/emu"
 	"github.com/danielbodart/mosey/internal/handshake"
@@ -26,7 +28,8 @@ func (c *closeWatch) Close() error {
 // A session tells Ending how it ended while the emulator is still open:
 // proto sends Exit then, so the spawner hears the session is over before
 // emu's socket closes, and never takes emu's exit at the end for a death
-// to restart (server.md §2.4, §5.2).
+// to restart (server.md §2.4, §5.2). Its shell exits before any client
+// attaches, so it waits for one, and ends when none comes.
 func TestASessionSaysItIsEndingBeforeItClosesTheEmulator(t *testing.T) {
 	master, slave, err := pty.Open(pty.Size{Cols: 80, Rows: 24})
 	if err != nil {
@@ -45,9 +48,10 @@ func TestASessionSaysItIsEndingBeforeItClosesTheEmulator(t *testing.T) {
 	var closedWhenEnding atomic.Bool
 	var ended atomic.Value
 	s := &Session{
-		Listener: transport.Listen(udp, handshake.NewCredentials(nil), nil),
-		Terminal: ptyTerminal{master},
-		Emulator: em,
+		Listener:      transport.Listen(udp, handshake.NewCredentials(nil), nil),
+		Terminal:      ptyTerminal{master},
+		Emulator:      em,
+		noClientAfter: 50 * time.Millisecond,
 		Ending: func(err error) {
 			calls.Add(1)
 			closedWhenEnding.Store(em.closed.Load())
@@ -60,8 +64,8 @@ func TestASessionSaysItIsEndingBeforeItClosesTheEmulator(t *testing.T) {
 	slave.Close()
 	err = <-done
 	s.Listener.Close()
-	if err != nil {
-		t.Fatalf("Run returned %v for a shell that exited", err)
+	if !errors.Is(err, ErrNoClient) {
+		t.Fatalf("Run returned %v for a shell that exited with no client", err)
 	}
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("Ending was called %d times", n)
@@ -69,7 +73,7 @@ func TestASessionSaysItIsEndingBeforeItClosesTheEmulator(t *testing.T) {
 	if closedWhenEnding.Load() {
 		t.Error("the emulator was closed before Ending was called")
 	}
-	if got := ended.Load().(errBox).err; got != nil {
+	if got := ended.Load().(errBox).err; got != err {
 		t.Errorf("Ending was told %v, not what Run returned", got)
 	}
 	if !em.closed.Load() {

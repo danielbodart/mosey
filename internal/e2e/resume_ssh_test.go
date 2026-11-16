@@ -30,9 +30,16 @@ type realClient struct {
 
 func startClient(t *testing.T, name, mosey string, s *sshd, flags ...string) *realClient {
 	t.Helper()
+	return startCommand(t, name, mosey, s, flags)
+}
+
+// startCommand is startClient with words after the host: a command
+// (bootstrap.md §2, §9.2.3).
+func startCommand(t *testing.T, name, mosey string, s *sshd, flags []string, words ...string) *realClient {
+	t.Helper()
 	master, slave := openPTY(t)
 	c := &realClient{t: t, label: name, master: master, screen: &screenLog{}, exited: make(chan error, 1), state: t.TempDir()}
-	args := append(append([]string{}, flags...), "-remote", mosey, "--", "-F", s.config, s.host)
+	args := append(append(append([]string{}, flags...), "-remote", mosey, "--", "-F", s.config, s.host), words...)
 	c.cmd = exec.Command(mosey, args...)
 	c.cmd.Stdin, c.cmd.Stdout, c.cmd.Stderr = slave, slave, slave
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}

@@ -141,11 +141,12 @@ func (l *Launcher) run(ctx context.Context) error {
 	// A reconnect keeps its holder (resume:SID:CREDID): the spawner holds
 	// the session for that client while the new credential is out, so the
 	// same client's next try still finds it its own (bootstrap.md §9.2.2).
-	// -dir and -type are for a session being created: an existing one
-	// ignores them, so they are not passed on (bootstrap.md §9.2.3).
+	// -dir, -type and a command are for a session being created: an
+	// existing one ignores them, so they are not passed on (bootstrap.md
+	// §9.2.3).
 	to := cl
 	to.Attach, to.SessionID, to.Name = bootstrap.AttachResume, sessions[c.take].SessionID, ""
-	to.Dir, to.Type = "", ""
+	to.Dir, to.Type, to.Command = "", "", ""
 	return l.resume(ctx, taken.f, taken.greeting, bootstrap.MarshalClientLine(to), cl)
 }
 
@@ -253,8 +254,20 @@ func (l *Launcher) resume(ctx context.Context, f *os.File, greeting, line []byte
 	switch m := m.(type) {
 	case ipc.Ready:
 		l.trigger(ctx, cl)
-		_, err := l.Stdout.Write(m.Line)
-		clear(m.Line)
+		line := m.Line
+		if cl.Command != "" {
+			// The command was not run, and the client says so; only a
+			// client that sent one is told, so no older one sees the word
+			// (bootstrap.md §6.3, §9.2.3).
+			marked, err := markExisting(m.Line)
+			clear(m.Line)
+			if err != nil {
+				return err
+			}
+			line = marked
+		}
+		_, err := l.Stdout.Write(line)
+		clear(line)
 		if err != nil {
 			return &silentError{fmt.Errorf("writing the credential line: %w", err)}
 		}
@@ -263,6 +276,20 @@ func (l *Launcher) resume(ctx context.Context, f *os.File, greeting, line []byte
 		return errors.New(m.Text)
 	}
 	return errors.New("the session did not answer")
+}
+
+// markExisting is the session's credential line with existing added
+// (bootstrap.md §6.3). The line is parsed and written again rather than
+// edited, so what goes out is a line the client will read; the copies of
+// the PSK are wiped.
+func markExisting(line []byte) ([]byte, error) {
+	c, err := bootstrap.ParseCredentialLine(line)
+	if err != nil {
+		return nil, fmt.Errorf("the session's credential line: %w", err)
+	}
+	defer clear(c.PSK[:])
+	c.Existing = true
+	return bootstrap.MarshalCredentialLine(c), nil
 }
 
 // trigger makes the client's ssh send its session-bind to the client's

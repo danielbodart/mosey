@@ -48,7 +48,11 @@ func TestAClientLineSurvivesARoundTrip(t *testing.T) {
 	for _, n := range EnvNames {
 		max.Env[n] = strings.Repeat("x", 64)
 	}
-	for _, c := range []ClientLine{sampleClientLine(), max, {Cols: 1, Rows: 1, Public: key(0)}} {
+	// A command and a type exclude each other, so a command is the
+	// longest line by its space, its type being "-".
+	maxCommand := max
+	maxCommand.Type, maxCommand.Command = "", strings.Repeat("c", MaxStartText)
+	for _, c := range []ClientLine{sampleClientLine(), max, maxCommand, {Cols: 1, Rows: 1, Public: key(0)}} {
 		line := MarshalClientLine(c)
 		got, err := ParseClientLine(line)
 		if err != nil {
@@ -62,8 +66,75 @@ func TestAClientLineSurvivesARoundTrip(t *testing.T) {
 		}
 	}
 	// The longest legal line is the size §6.2 derives.
+	if n := len(MarshalClientLine(maxCommand)); n != 5710 {
+		t.Errorf("longest client line is %d bytes, §6.2 says 5710", n)
+	}
 	if n := len(MarshalClientLine(max)); n != 5708 {
-		t.Errorf("longest client line is %d bytes, §6.2 says 5708", n)
+		t.Errorf("longest client line with a type is %d bytes, not 5708", n)
+	}
+}
+
+// A command is the line's one optional field, and last (§6.2): a line
+// with none is exactly the line of before commands, and one with a
+// command carries it in base64url, which survives the trip.
+func TestACommandIsAnOptionalLastField(t *testing.T) {
+	plain := sampleClientLine()
+	without := MarshalClientLine(plain)
+	c := plain
+	c.Command = "claude --resume 'my work'\tü"
+	with := MarshalClientLine(c)
+	if !bytes.Equal(with[:len(without)-1], without[:len(without)-1]) || !bytes.HasSuffix(with, []byte(" "+b64.EncodeToString([]byte(c.Command))+"\n")) {
+		t.Errorf("a command is not one field added at the end:\n%q\n%q", without, with)
+	}
+	got, err := ParseClientLine(with)
+	if err != nil || got.Command != c.Command {
+		t.Errorf("%q, %v", got.Command, err)
+	}
+	if got, err := ParseClientLine(without); err != nil || got.Command != "" {
+		t.Errorf("no command: %q, %v", got.Command, err)
+	}
+	both := c
+	both.Type = "vim"
+	if _, err := ParseClientLine(MarshalClientLine(both)); !errors.Is(err, ErrBadLine) {
+		t.Errorf("a command and a type: %v", err)
+	}
+	base := string(without[:len(without)-1])
+	for name, field := range map[string]string{
+		"a dash":            "-",
+		"not base64url":     "a+b/",
+		"padding":           "Y2xhdWRl=",
+		"a newline":         b64.EncodeToString([]byte("ls\nrm -rf ~")),
+		"an escape":         b64.EncodeToString([]byte("\x1b[A")),
+		"a NUL":             b64.EncodeToString([]byte("ls\x00")),
+		"not UTF-8":         b64.EncodeToString([]byte("\xff")),
+		"over 1024 bytes":   b64.EncodeToString([]byte(strings.Repeat("c", MaxStartText+1))),
+		"two command words": "Y2xhdWRl Y2xhdWRl",
+	} {
+		if _, err := ParseClientLine([]byte(base + " " + field + "\n")); !errors.Is(err, ErrBadLine) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// existing is the CredentialLine's one optional word, and last (§6.3).
+func TestExistingIsAnOptionalLastWordOfTheCredentialLine(t *testing.T) {
+	c := sampleCredentialLine()
+	without := MarshalCredentialLine(c)
+	c.Existing = true
+	with := MarshalCredentialLine(c)
+	if string(with) != string(without[:len(without)-1])+" existing\n" {
+		t.Errorf("%q", with[len(with)-20:])
+	}
+	if got, err := ParseCredentialLine(with); err != nil || !got.Existing {
+		t.Errorf("%+v, %v", got.Existing, err)
+	}
+	if got, err := ParseCredentialLine(without); err != nil || got.Existing {
+		t.Errorf("%+v, %v", got.Existing, err)
+	}
+	for _, word := range []string{"Existing", "-", "new", "existing existing"} {
+		if _, err := ParseCredentialLine([]byte(string(without[:len(without)-1]) + " " + word + "\n")); !errors.Is(err, ErrBadLine) {
+			t.Errorf("%q: %v", word, err)
+		}
 	}
 }
 
@@ -134,6 +205,7 @@ func TestACredentialLineSurvivesARoundTrip(t *testing.T) {
 	longest.Addr = netip.MustParseAddr("2001:ffff:ffff:ffff:ffff:ffff:ffff:ffff")
 	longest.Port = 65535
 	longest.Name = strings.Repeat("n", MaxSessionName)
+	longest.Existing = true
 	noAddr := sampleCredentialLine()
 	noAddr.Addr = netip.Addr{}
 	for _, c := range []CredentialLine{sampleCredentialLine(), longest, noAddr} {
@@ -144,12 +216,12 @@ func TestACredentialLineSurvivesARoundTrip(t *testing.T) {
 		}
 		if got.Addr != c.Addr || got.Port != c.Port || got.CredentialID != c.CredentialID ||
 			got.SessionID != c.SessionID || got.PSK != c.PSK || !bytes.Equal(got.Public, c.Public) ||
-			got.Name != c.Name {
+			got.Name != c.Name || got.Existing != c.Existing {
 			t.Errorf("round trip changed %+v", got)
 		}
 	}
-	if n := len(MarshalCredentialLine(longest)); n != 1797 {
-		t.Errorf("longest credential line is %d bytes, §6.3 says 1797", n)
+	if n := len(MarshalCredentialLine(longest)); n != 1806 {
+		t.Errorf("longest credential line is %d bytes, §6.3 says 1806", n)
 	}
 }
 

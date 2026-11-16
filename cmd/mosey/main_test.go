@@ -42,8 +42,8 @@ func TestTheClientCommandLine(t *testing.T) {
 func TestABadCommandLineIsAUsageError(t *testing.T) {
 	for _, args := range [][]string{
 		{"-bogus", "far"},
+		{"far", "echo\x1b[2J"},
 		{"--", "-t", "far"},
-		{"--", "far", "ls"},
 		{"-remote", "mo sey", "far"},
 		{"-remote", "-x", "far"},
 		{"--", "-p", "1", "-oProxyCommand=x"}, // no destination
@@ -262,6 +262,58 @@ func TestNoDestinationIsTheUsageOrAMistake(t *testing.T) {
 		_, err := parseArgs(args)
 		var u *bootstrap.UsageError
 		if !errors.As(err, &u) || !strings.Contains(u.Msg, "needs a DESTINATION; use localhost for this machine") {
+			t.Errorf("%q: %v", args, err)
+		}
+	}
+}
+
+// The words after DESTINATION are a command, as ssh takes one
+// (bootstrap.md §2, §9.2.3): joined with spaces, never read as mosey's or
+// ssh's flags, with ssh's options before the destination after --. A
+// plain mosey DEST COMMAND starts a new session rather than resume an
+// unrelated one; -s and -new keep their meaning.
+func TestTheWordsAfterTheDestinationAreACommand(t *testing.T) {
+	for _, c := range []struct {
+		args    []string
+		dest    string
+		ssh     []string
+		command string
+		attach  bootstrap.Attach
+		name    string
+		dir     string
+	}{
+		{args: []string{"far", "claude"}, dest: "far", command: "claude", attach: bootstrap.AttachNew},
+		{args: []string{"far", "ls", "-la", "--", "-s", "x"}, dest: "far", command: "ls -la -- -s x", attach: bootstrap.AttachNew},
+		{args: []string{"far", "sh", "-c", "echo $((6*7)); exit 3"}, dest: "far", command: "sh -c echo $((6*7)); exit 3", attach: bootstrap.AttachNew},
+		{args: []string{"-s", "work", "-dir", "src", "far", "claude"}, dest: "far", command: "claude", attach: bootstrap.AttachName, name: "work", dir: "src"},
+		{args: []string{"-new", "far", "htop"}, dest: "far", command: "htop", attach: bootstrap.AttachNew},
+		{args: []string{"--", "-p", "2222", "-v", "far", "top", "-d", "1"}, dest: "far", ssh: []string{"-p", "2222", "-v"}, command: "top -d 1", attach: bootstrap.AttachNew},
+		{args: []string{"-s", "work", "--", "-oUser=me", "far", "claude"}, dest: "far", ssh: []string{"-o", "User=me"}, command: "claude", attach: bootstrap.AttachName, name: "work"},
+		{args: []string{"localhost", "htop"}, dest: "localhost", command: "htop", attach: bootstrap.AttachNew},
+		{args: []string{"far"}, dest: "far", attach: bootstrap.AttachAuto},
+	} {
+		got, err := parseArgs(c.args)
+		if err != nil {
+			t.Errorf("%q: %v", c.args, err)
+			continue
+		}
+		if got.ssh.Destination != c.dest || !slices.Equal(got.ssh.Options.Args, c.ssh) || got.command != c.command ||
+			got.attach != c.attach || got.name != c.name || got.dir != c.dir {
+			t.Errorf("%q: %+v", c.args, got)
+		}
+	}
+	for _, args := range [][]string{
+		{"-list", "far", "ls"},
+		{"-kill", "work", "far", "ls"},
+		{"-type", "vim", "far", "ls"},
+		{"far", "ls\nrm"},
+		{"far", strings.Repeat("c", bootstrap.MaxStartText+1)},
+		{"far", strings.Repeat("c", bootstrap.MaxStartText/2), strings.Repeat("c", bootstrap.MaxStartText/2)}, // the joining space counts
+		{"--", "-p", "22", "localhost", "ls"},
+	} {
+		_, err := parseArgs(args)
+		var u *bootstrap.UsageError
+		if !errors.As(err, &u) {
 			t.Errorf("%q: %v", args, err)
 		}
 	}

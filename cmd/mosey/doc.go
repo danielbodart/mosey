@@ -1,7 +1,7 @@
 // Command mosey is the one mosey binary: the client, `mosey host`, which
 // logs in with the system ssh, starts `mosey --serve` there, and then talks
 // to it over UDP, roaming with the network and drawing the screen the
-// server sends (or, with no host, starts `mosey --serve` itself on this
+// server sends (or, for localhost, starts `mosey --serve` itself on this
 // machine, docs/spec/bootstrap.md §2.2); and the server, `mosey --serve`,
 // with its roles (server.go).
 //

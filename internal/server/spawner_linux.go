@@ -638,7 +638,7 @@ func (s *spawner) startShell(cl bootstrap.ClientLine, agentSock string, slave *o
 	if hop != "" {
 		s.log.Info("the server is ~/.local/bin/mosey: putting ~/.local/bin on the shell's PATH", "dir", hop)
 	}
-	proc, err := pty.Shell{Path: path, Dir: dir, Env: shellEnv(s.cfg.Environ, cl.Env, agentSock, hop, s.log)}.Start(slave)
+	proc, err := pty.Shell{Path: path, Dir: dir, Env: shellEnv(s.cfg.Environ, cl.Env, agentSock, hop, s.log), Command: cl.Command}.Start(slave)
 	if err != nil {
 		return fmt.Errorf("starting the shell %s: %w", path, err)
 	}
@@ -649,7 +649,7 @@ func (s *spawner) startShell(cl bootstrap.ClientLine, agentSock string, slave *o
 	}()
 	c.cmd = &exec.Cmd{Process: proc}
 	s.shell = c
-	s.log.Info("shell started", "shell", path, "pid", proc.Pid)
+	s.log.Info("shell started", "shell", path, "pid", proc.Pid, "command", cl.Command != "")
 	return nil
 }
 

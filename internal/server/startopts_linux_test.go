@@ -41,7 +41,7 @@ func TestAMissingDirIsRefusedBeforeAnythingStarts(t *testing.T) {
 // Taking an existing session ignores -dir and -type, without an error,
 // even a -dir that does not exist: the line its spawner gets has neither
 // (bootstrap.md §9.2.3).
-func TestResumingASessionIgnoresDirAndType(t *testing.T) {
+func TestResumingASessionIgnoresDirTypeAndCommand(t *testing.T) {
 	runtime := runtimeDir(t)
 	base := filepath.Join(runtime, "mosey")
 	if err := makePrivateDir(base); err != nil {
@@ -80,5 +80,24 @@ func TestResumingASessionIgnoresDirAndType(t *testing.T) {
 		if sent := <-got; !bytes.Equal(sent, want) {
 			t.Errorf("%v: the spawner got %q, not resume:SID with no dir or type", attach.Attach, sent)
 		}
+	}
+
+	// A command is not passed on either, and the client that sent one is
+	// told, by existing on the credential line, that it was not run
+	// (bootstrap.md §6.3, §9.2.3). Only that client: the lines above,
+	// with no command, came back as the session gave them.
+	cl := bootstrap.ClientLine{Attach: bootstrap.AttachName, Name: "work", Command: "claude", Dir: "missing", Cols: 80, Rows: 24, Public: key}
+	var stdout, stderr bytes.Buffer
+	l := &Launcher{Stdin: bytes.NewReader(bootstrap.MarshalClientLine(cl)), Stdout: &stdout, Stderr: &stderr,
+		Env: []string{"HOME=" + t.TempDir(), "XDG_RUNTIME_DIR=" + runtime}}
+	if err := l.Run(t.Context()); err != nil {
+		t.Fatalf("%v, stderr %q", err, stderr.String())
+	}
+	if c, err := bootstrap.ParseCredentialLine(stdout.Bytes()); err != nil || !c.Existing || c.SessionID != sid || c.Name != "work" {
+		t.Errorf("the client got %q: %+v, %v", stdout.String(), c, err)
+	}
+	want := bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: sid, Cols: 80, Rows: 24, Public: key})
+	if sent := <-got; !bytes.Equal(sent, want) {
+		t.Errorf("the spawner got %q, not resume:SID with no command", sent)
 	}
 }

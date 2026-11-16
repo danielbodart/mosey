@@ -1228,7 +1228,7 @@ cmdtext = 1..1024 bytes of UTF-8, no control character (Unicode Cc) but TAB
 | `env` | the client's locale and terminal variables, from the allow-list only. A variable that is unset, empty, longer than 64 bytes or holds a byte outside `vchar` is left out (logged at debug), never escaped. The server gives the locale variables to the shell; what it does with `TERM` and `COLORTERM` is `server.md`'s (the shell's `TERM` describes the server's emulator, not the client's terminal) |
 | `dir` | `-dir`: the directory a new session's login shell starts in, relative to the remote `$HOME` unless absolute (§9.2.3). `-` for none: the shell starts in `$HOME` (`server.md` §2.5). Only a session the line creates uses it |
 | `type` | `-type`: the text typed into a new session's pty once its shell has started, followed by Enter (§9.2.3). `-` for none. Only a session the line creates uses it |
-| `cmd` | the command after `DESTINATION` (§2), joined with spaces, run as `SHELL -c CMD` in place of the interactive shell (§9.2.3). Absent, not `-`, when there is none. Only a session the line creates uses it; a line with `cmd` has no `type` |
+| `cmd` | the command after `DESTINATION` (§2), joined with spaces, run as `SHELL -c CMD` in place of the interactive shell (§9.2.3). Absent, not `-`, when there is none. Only a session the line creates uses it; a line with `cmd` and a `type` is refused (`line`) |
 | `public` | the client's one-shot X-Wing encapsulation key, `OneShotKey.PublicKey()`, 1216 bytes [S1, measured from `crypto/hpke`] |
 
 `dir` and `type` are base64url because a path or a command holds spaces,
@@ -1262,12 +1262,11 @@ read this request: it may be older than this one, and unable to run a
 command`). The parser still takes exactly one form of each line: the
 field is either absent or a valid `b64text`, never `-` and never empty.
 
-Size: at most 7075 bytes [derived: the fixed fields and their 9 spaces come
+Size: at most 5710 bytes [derived: the fixed fields and their 9 spaces come
 to 1698 with the longest attach, `resume:SID:CREDID` at 41 bytes; env at
 most 1277 (156 bytes of names, 17 × 65 for `=` and value, 16 commas);
-`dir` and `type` 1366 each (the base64url of 1024 bytes); `cmd` 1366 and
-its space; LF 1. A line with `cmd` has `type` `-`, so the true bound is
-lower, but nothing relies on that].
+`dir` 1366 (the base64url of 1024 bytes); then either `type` at 1366
+with no `cmd`, or `type` `-` and `cmd` at 1366 and its space; LF 1].
 **`MaxClientLine` = 8192** [derived: the next power of two, so the
 server's read bound is fixed and generous].
 
@@ -2401,7 +2400,7 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Name | Value | Provenance |
 |---|---|---|
 | `bootstrap.Version` | 2 | ours (§6.1: 2 added `dir` and `type`) |
-| `MaxClientLine` | 8192 B | [derived] §6.2: at most 7075 B used |
+| `MaxClientLine` | 8192 B | [derived] §6.2: at most 5710 B used |
 | `-dir`, `-type` length | 1–1024 B each | [choice] §6.2: macOS `PATH_MAX`; a quarter of termios(3)'s 4096-byte canonical line |
 | `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1806 B used |
 | `MaxErrorLine` | 128 B, frozen | [derived] §6.4: at most 100 B used |

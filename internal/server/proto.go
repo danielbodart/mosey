@@ -168,8 +168,12 @@ type Session struct {
 	// agentIn carries local agent connections to serveAgents.
 	agentIn chan io.ReadWriteCloser
 	// firstAttach closes when the first client attaches, so serveAgents
-	// can stop holding connections made before it (agent.md §4.2).
+	// can stop holding connections made before it (agent.md §4.2), and a
+	// shell that exited first stops waiting for one (server.md §2.4).
 	firstAttach chan struct{}
+	// noClientAfter is how long the session waits for its first client;
+	// zero is handshake.CredentialTTL (server.md §2.4). Tests shorten it.
+	noClientAfter time.Duration
 }
 
 // SilentAfter is how long proto hears nothing authentic from the attached
@@ -368,7 +372,19 @@ func (s *Session) Run(ctx context.Context) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := f(ctx); err != nil {
+			err := f(ctx)
+			if errors.Is(err, errShellExited) {
+				// A shell that ended before any client attached, as a
+				// quick command does (mosey HOST ls), waits for the first
+				// one, so it is shown the final screen and told, rather
+				// than dial a session already gone. noClient bounds the
+				// wait, by cancelling ctx (server.md §2.4).
+				select {
+				case <-s.firstAttach:
+				case <-ctx.Done():
+				}
+			}
+			if err != nil {
 				cancel(err)
 			}
 		}()
@@ -382,7 +398,11 @@ func (s *Session) Run(ctx context.Context) error {
 
 	// Until a client attaches, the session lives as long as a credential
 	// minted for it could still be confirmed (server.md §2.4).
-	noClient := time.NewTimer(handshake.CredentialTTL)
+	noClientAfter := s.noClientAfter
+	if noClientAfter == 0 {
+		noClientAfter = handshake.CredentialTTL
+	}
+	noClient := time.NewTimer(noClientAfter)
 	defer noClient.Stop()
 	attachedOnce := false
 	var cur *attachment
@@ -431,7 +451,7 @@ func (s *Session) Run(ctx context.Context) error {
 			}
 		case <-s.minted:
 			if !attachedOnce {
-				noClient.Reset(handshake.CredentialTTL)
+				noClient.Reset(noClientAfter)
 			}
 		case c := <-conns:
 			// The listener revoked the old connection as it confirmed this

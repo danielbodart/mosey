@@ -27,6 +27,10 @@ func FuzzParseClientLine(f *testing.F) {
 	f.Add(MarshalClientLine(r))
 	r.Attach, r.Dir, r.Type = AttachNew, "/tmp", ""
 	f.Add(MarshalClientLine(r))
+	r.Command = "sh -c 'echo ran-$((6*7)); exit 3'\tü"
+	f.Add(MarshalClientLine(r))
+	r.Attach, r.Name, r.Dir = AttachName, "work", ""
+	f.Add(MarshalClientLine(r))
 	f.Add([]byte("MOSEY-CLIENT 1 dev new no 80 24 - AAAA\n"))
 	f.Add([]byte("MOSEY-CLIENT 2\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
@@ -51,8 +55,9 @@ func FuzzParseClientLine(f *testing.F) {
 				t.Fatalf("accepted env %s=%q", n, v)
 			}
 		}
-		if c.Dir != "" && !referenceText(c.Dir, false) || c.Type != "" && !referenceText(c.Type, true) {
-			t.Fatalf("accepted dir %q, type %q", c.Dir, c.Type)
+		if c.Dir != "" && !referenceText(c.Dir, false) || c.Type != "" && !referenceText(c.Type, true) ||
+			c.Command != "" && (!referenceText(c.Command, true) || c.Type != "") {
+			t.Fatalf("accepted dir %q, type %q, command %q", c.Dir, c.Type, c.Command)
 		}
 	})
 }
@@ -85,8 +90,8 @@ func FuzzValidDirAndType(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		if ValidDir(s) != referenceText(s, false) || ValidType(s) != referenceText(s, true) {
-			t.Fatalf("%q: ValidDir %v, ValidType %v", s, ValidDir(s), ValidType(s))
+		if ValidDir(s) != referenceText(s, false) || ValidType(s) != referenceText(s, true) || ValidCommand(s) != referenceText(s, true) {
+			t.Fatalf("%q: ValidDir %v, ValidType %v, ValidCommand %v", s, ValidDir(s), ValidType(s), ValidCommand(s))
 		}
 	})
 }
@@ -97,6 +102,8 @@ func FuzzParseCredentialLine(f *testing.F) {
 	l.Addr = netip.MustParseAddr("2001:db8::1")
 	f.Add(MarshalCredentialLine(l))
 	l.Addr = netip.Addr{}
+	f.Add(MarshalCredentialLine(l))
+	l.Existing = true
 	f.Add(MarshalCredentialLine(l))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		c, err := ParseCredentialLine(line)
