@@ -74,9 +74,11 @@ config, keys and agent, exactly as Mosh does. It aims to be:
   locally, with no scroll mode to learn. When you attach or resume, the
   last 1000 lines come first; full-screen programs (vim, less) use your
   terminal's alternate screen and leave no history, as they would
-  locally. If the client falls more than 1000 lines behind (a long
-  outage while something floods the screen), it prints one
-  `… N lines not shown` line and carries on.
+  locally. The server keeps the newest 1000 lines for the client, so
+  when more than that scroll past before the client gets them (a long
+  outage, or simply a flood such as `cat` of a big file, which can
+  outrun even a fast link between two frames), it prints one
+  `… N lines not shown` line for the gap and carries on.
 - **Zero install.** `mosey host` copies its own static binary across when
   the host doesn't have it. One binary is both client and server, so you can
   hop onwards from there.

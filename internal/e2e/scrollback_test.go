@@ -14,6 +14,7 @@ import (
 	"tuios.dev/vt"
 
 	"github.com/danielbodart/mosey/internal/netsim"
+	"github.com/danielbodart/mosey/internal/screen"
 )
 
 // Scrollback (PLAN §1: Mosh has none, so everyone runs tmux inside it),
@@ -93,27 +94,90 @@ func exactlyOnce(got []int, n int) error {
 	return nil
 }
 
-// A thousand lines printed at once all reach the user's terminal, in its
-// scrollback and then on its screen, in order and exactly once, over every
-// network profile: through loss, outages and roaming, in virtual time
-// (D18).
-func TestAThousandLinesReachTheLocalScrollbackInOrderExactlyOnce(t *testing.T) {
+// Five windows' worth of lines, printed a few hundred at a time, all reach
+// the user's terminal, in its scrollback and then on its screen, in order
+// and exactly once, over every network profile: through loss, outages and
+// roaming, in virtual time (D18). Each batch is smaller than the window
+// and the next waits until the user sees the last, so nothing is cut
+// (§2.5); what is checked is that no line is lost or printed twice across
+// the many diffs, retransmissions and acknowledgements in between.
+func TestManyWindowsOfLinesReachTheLocalScrollbackInOrderExactlyOnce(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
+	const batch, total = 400, 5 * screen.HistoryLines
 	for _, p := range netsim.Profiles() {
 		t.Run(p.Name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				s := startSimSession(t, p)
 				s.wait("prompt", func() bool { return strings.Contains(s.clientScreen(), "$") })
-				s.typeLine("seq 1000")
-				s.wait("the last line", func() bool { return strings.Contains(s.clientScreen(), "line-1000") })
+				s.prog.flood("\r\n")
+				for from := 1; from <= total; from += batch {
+					to := min(from+batch-1, total)
+					s.prog.flood(numbered(from, to))
+					last := fmt.Sprintf("line-%04d", to)
+					s.wait(last, func() bool { return strings.Contains(s.clientScreen(), last) })
+				}
 				s.converge()
-				if err := exactlyOnce(numbers(transcript(s.user.bytes(), 80, 24)), 1000); err != nil {
+				if err := exactlyOnce(numbers(transcript(s.user.bytes(), 80, 24)), total); err != nil {
 					t.Errorf("%s: %v", p.Name, err)
 				}
 				s.exit()
 			})
 		})
 	}
+}
+
+// More lines than the window, scrolled between two frames, are cut even
+// on a healthy link: nothing paces the program's output, and the server
+// keeps only the newest HistoryLines (§2.5). What the user's terminal gets
+// is still honest: every line it shows is in order and shown once, and a
+// marker stands for exactly the lines in each gap.
+func TestABurstLongerThanTheWindowIsCutWithAMarkerForTheGap(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	const total = 5 * screen.HistoryLines
+	for _, p := range netsim.Profiles() {
+		t.Run(p.Name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s := startSimSession(t, p)
+				s.wait("prompt", func() bool { return strings.Contains(s.clientScreen(), "$") })
+				// From the prompt's own row, so every line that scrolls off
+				// is a numbered one and a marker's count is all numbered.
+				s.prog.flood("\r" + numbered(1, total))
+				last := fmt.Sprintf("line-%04d", total)
+				s.wait(last, func() bool { return strings.Contains(s.clientScreen(), last) })
+				s.converge()
+				got := numbers(transcript(s.user.bytes(), 80, 24))
+				markers, err := accountedFor(got, total)
+				if err != nil {
+					t.Errorf("%s: %v", p.Name, err)
+				} else if markers == 0 {
+					t.Errorf("%s: %d lines and no marker; the burst was %d lines", p.Name, len(got), total)
+				}
+				s.exit()
+			})
+		})
+	}
+}
+
+// accountedFor checks that got is 1..n in order, each line once, but for
+// markers, each standing for exactly the lines missing where it is; it
+// returns how many markers there were.
+func accountedFor(got []int, n int) (markers int, err error) {
+	next := 1
+	for i, v := range got {
+		if v < 0 {
+			markers++
+			next += -v
+			continue
+		}
+		if v != next {
+			return markers, fmt.Errorf("entry %d is line-%04d where line-%04d was due", i, v, next)
+		}
+		next++
+	}
+	if next != n+1 {
+		return markers, fmt.Errorf("the lines end at %d, want %d", next-1, n)
+	}
+	return markers, nil
 }
 
 // A client that resumes a session first prints its recent history, then
@@ -155,37 +219,21 @@ func TestAClientThatFallsBehindPastTheWindowPrintsAMarker(t *testing.T) {
 		w.cut(false)
 		a.sees("line-3000")
 		got := numbers(transcript(a.user.bytes(), 80, 24))
-		marker := -1
-		for i, v := range got {
+		markers, err := accountedFor(got, 3000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if markers != 1 {
+			t.Fatalf("%d markers in %v", markers, got)
+		}
+		missed := 0
+		for _, v := range got {
 			if v < 0 {
-				if marker >= 0 {
-					t.Fatalf("two markers: %v", got)
-				}
-				marker = i
+				missed = -v
 			}
 		}
-		if marker < 0 {
-			t.Fatalf("no marker in %d numbered lines", len(got))
-		}
-		// Before the marker, 1..k; the marker says how many follow k
-		// unseen; after it, the rest, contiguous to 3000.
-		for i := range marker {
-			if got[i] != i+1 {
-				t.Fatalf("before the marker, line %d is %d", i+1, got[i])
-			}
-		}
-		next := marker + 1 - got[marker]
-		for _, v := range got[marker+1:] {
-			if v != next {
-				t.Fatalf("after the marker (%d not shown), %d where %d was due", -got[marker], v, next)
-			}
-			next++
-		}
-		if next != 3001 {
-			t.Fatalf("the lines end at %d", next-1)
-		}
-		if missed := -got[marker]; missed < 1000 {
-			t.Errorf("only %d lines not shown; the window is 1000 lines", missed)
+		if missed < screen.HistoryLines {
+			t.Errorf("only %d lines not shown; the window is %d lines", missed, screen.HistoryLines)
 		}
 		w.exitShell(a)
 	})

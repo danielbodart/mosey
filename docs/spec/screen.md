@@ -218,12 +218,32 @@ as they do for any local program.
 - **The acknowledgement is SSP's.** The server diffs from the version the
   client acknowledged [paper §2.3], so a diff carries exactly the lines
   numbered from the acknowledged `Next` on. The client prints each line
-  once, by number (§8.7). A client that fell behind by more than the
-  window, through a long outage while a program flooded the screen,
-  gets a diff that starts after a gap; it prints one line saying how many
-  lines are not shown, and carries on. Nothing waits for the client: the
-  window is the bound on what the server holds for it, in memory and in
-  each diff (§3, `threat-model.md` §4.6).
+  once, by number (§8.7), from its own copy of the state, keeping the
+  number of the next line to print itself. The brief asked for the
+  client to acknowledge the highest line it has *printed*; SSP's
+  acknowledgement says *received*. The difference would matter only if
+  the server held lines until they were printed, and it does not:
+  nothing waits for the client, and the window is the bound on what the
+  server holds for it, in memory and in each diff (§3,
+  `threat-model.md` §4.6). Whatever the client acknowledges, the server
+  keeps the newest `HistoryLines` and no more, so an acknowledgement of
+  printed lines would change nothing it sends.
+- **More than the window between two looks is cut.** Nothing paces the
+  program's output: the emulator keeps the newest `HistoryLines` of what
+  scrolled, and a line older than that is gone before any diff can carry
+  it. So the client misses lines whenever more than the window scroll
+  past between two states it renders: through a long outage while a
+  program floods the screen, but also on a healthy link, when a flood
+  (`cat` of a large file, a fast build log) scrolls more than
+  `HistoryLines` between two frames (the frame interval is
+  `clamp(SRTT/2, 20 ms, 250 ms)`, `ssp.md` §6.2). The client then gets a window
+  that starts after a gap; it prints one line saying how many lines are
+  not shown, and carries on, so what it does print is in order and never
+  doubled [measured here: 5000 lines at once over each netsim profile
+  print one marker and only the newest thousand or so,
+  `TestABurstLongerThanTheWindowIsCutWithAMarkerForTheGap`]. Holding the
+  program back instead, until the client has the lines, is open
+  (a question for Dan).
 - **No links in history.** A history cell's `Style.Link` is always
   empty: G5's link budget is per screen, and a window of 200,000 cells,
   each with a distinct 2 KiB link, would hold 400 MB. The text and its
@@ -247,7 +267,7 @@ as they do for any local program.
 | `MaxLinks` | 4096 distinct links per grid | [derived]: a full 1000 × 500 screen of `ls --hyperlink` names stays under it; it bounds client memory, which tuios does not (S2 measured link storage growing without limit) | both ends, G5 |
 | `MaxLinkBytes` | 1 MiB of distinct link text per grid | [derived]: matches S2's link-table cap [measured S2]; 4096 × 2048 would be 8 MiB, more than a screen needs | both ends, G5 |
 | `MaxClipboard` | 64 KiB of decoded data | [derived]: [D27] asks for a cap and leaves the value to this spec. 64 KiB covers a long yank, and its 87 KiB of base64 is a few dozen datagrams. A larger write is dropped whole, never truncated: a truncated paste is a different paste | emu drops; client: CLIP |
-| `HistoryLines` | 1000 lines | [D]: the recent history a client prints on attach or resume, and the most a client can fall behind before lines are not shown. A thousand lines is a screenful of build log many times over, and at 80 columns about 80 KB before compression, so a resume over a slow path reprints it in a moment rather than many seconds; D23's 10,000-line emulator scrollback would be ten times that on every resume | both ends: the window (§2.5), and a diff carries at most this many lines (§5.6) |
+| `HistoryLines` | 1000 lines | [D]: the recent history a client prints on attach or resume, and the most lines that can scroll between two states the client renders, through an outage or a flood, before lines are not shown (§2.5). A thousand lines is a screenful of build log many times over, and at 80 columns about 80 KB before compression, so a resume over a slow path reprints it in a moment rather than many seconds; D23's 10,000-line emulator scrollback would be ten times that on every resume | both ends: the window (§2.5), and a diff carries at most this many lines (§5.6) |
 | `HistoryCells` | 200,000 cells | [derived]: `HistoryLines` lines at 200 columns, so the window is 1000 lines at any usual width and 200 at the D23 clamp's 1000; it bounds the window's memory (about 11 MB at 56 B a `Cell`) and its share of `MaxDiff` | both ends, as `HistoryLines` |
 | `MaxDiff` | 64 MiB | [derived] §5.12 | `Apply` (a longer diff is refused unread), `ssp.Config.MaxRemoteBytes`, the IPC `Update` |
 | cells written per diff | `2 × cols × rows` | [derived]: an encoder writes each cell at most once, plus one erase pass; this bounds the decoder's work, not only the diff's length | `Apply`, §5.8 |
