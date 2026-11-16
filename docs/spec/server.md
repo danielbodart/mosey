@@ -297,7 +297,8 @@ triggers above (nothing emu does is one of them):
   the same shell, argv[0], directory and environment, with the arguments
   `-c` and the command's text as one argument: `-bash -c 'claude'`. The
   text goes to `exec` as it is, so the user's shell is the only one that
-  reads it (Dan, 2026-11-16: as `ssh HOST COMMAND`).
+  reads it (Dan, 2026-11-16: as `ssh HOST COMMAND`). The spawner keeps
+  the text for the greeting (§2.6), never for running it again.
 - **Process.** `SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}`,
   stdin, stdout and stderr all the slave. No `Pdeathsig`: the shell
   belongs to the user, and teardown hangs it up instead (§2.4).
@@ -393,6 +394,12 @@ since it holds the keys.
   without a name is refused. The name is in every greeting and in the
   log; proto never needs it, but the credential line carries it, so
   `Start` gives it to proto to print (§3.3).
+- **The command.** Likewise the first `ClientLine`'s `cmd`, if it has
+  one, is the session's for life and goes in every greeting as its
+  optional `cmd` (`bootstrap.md` §9.2.1), so a plain `mosey DEST CMD`
+  can find the session again and `-list` can show it (PLAN D8, option
+  C). A greeting is read whole, as one message of at most
+  `MaxSessionLine` (2048 bytes).
 - **Bounds.** At most `MaxAttachConns` = 4 connections are served at once
   [choice: a resume takes milliseconds; more are closed at once]; resumes
   reach proto one at a time, in order.

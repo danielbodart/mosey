@@ -118,8 +118,10 @@ opening a shell was surprising, so this machine is asked for by name].
   given wins, as in ssh ([ssh]: `ssh -A -a` resolves to `forwardagent no`,
   `ssh -a -A` to `yes`).
 - With none of the next four, `mosey DESTINATION` resumes the user's
-  most recently detached session there, or starts a new one if none is
-  detached (D8 R1, §9.2). There is no resume flag.
+  most recently detached session there that was started without a
+  command, or starts a new one if none is detached (D8 R1, §9.2); with a
+  `COMMAND`, the most recently detached one started with that command
+  (below). There is no resume flag.
 - `-s NAME` attaches to the session called NAME, taking it over if
   another client has it (D26), and starts it under that name if there is
   none (D8 R2). NAME is §6.2's `sname`: 1 to 32 letters, digits, `-`,
@@ -154,15 +156,27 @@ opening a shell was surprising, so this machine is asked for by name].
   TEXT`, so quoting and expansion are that shell's (§9.2.3). The command
   runs on the session's pty, in DIR if `-dir` is given; when it exits the
   session ends, and the client exits as it does when a shell exits. Like
-  `-dir`, it applies only when a session is **created**; a plain `mosey
-  DEST COMMAND` always creates one, as `-new` does, with a generated name
-  [D: the command is what the user asked for, and resuming an unrelated
-  detached shell would quietly not run it]. `-s NAME DEST COMMAND` starts
-  NAME running the command if there is no session NAME, and otherwise
-  takes NAME over as it is and says so on stderr (`mosey: session NAME
-  was already running, so the command was not run`). A session started
-  with a command is an ordinary named session: it can be detached,
-  listed, taken over and killed. The joined text is 1 to 1024 bytes of
+  `-dir`, it is run only when a session is **created**. A plain `mosey
+  DEST COMMAND` is R1 keyed by the command (PLAN D8, Dan, 2026-11-16,
+  option C: closing the window on `mosey dan-desktop claude` and running
+  it again should "connect back to the same one and resume it and not
+  create another instance if there's one there"): it resumes the most
+  recently detached session that was started with exactly that text,
+  byte for byte, and otherwise starts a new one running it, with a
+  generated name. It never takes an attached session, so a second window
+  running the same line gets a second instance. The match is on the
+  command alone: `-dir`, as on any resume, is ignored, and two sessions
+  of one program in two directories are told apart with `-s NAME`
+  [D: the command is what the user sees and names; a directory given
+  relative to a home would have to be resolved to be compared, and a
+  plain `mosey DEST -dir X` without a command does not match on it
+  either]. `-s NAME DEST COMMAND` starts NAME running the command if
+  there is no session NAME, and otherwise takes NAME over as it is; if
+  NAME was not started with that very command it says so on stderr
+  (`mosey: session NAME was already running, so the command was not
+  run`). A session started with a command is an ordinary named session:
+  it can be detached, listed (with its command), taken over and killed.
+  The joined text is 1 to 1024 bytes of
   UTF-8 with no control character but tab (§6.2's `cmdtext`); anything
   else, a command with `-type` (both say what to run, and typing into a
   command is not what `-type` means), or with `-list` or `-kill`, is a
@@ -1192,7 +1206,7 @@ word    = 1*64( ALPHA / DIGIT / "." / "_" / "+" / "-" )
 client-line = "MOSEY-CLIENT" SP proto SP attach SP agent
               SP cols SP rows SP env SP dir SP type SP public [SP cmd] LF
 proto   = dec                       ; = 2
-attach  = "auto"                    ; R1: the newest detached session, else a new one (§9.2)
+attach  = "auto"                    ; R1: the newest detached session started with this cmd (or none), else a new one (§9.2)
         / "new"                     ; -new: a new session with a generated name
         / "name:" sname             ; -s NAME: NAME, taken over if attached, else started
         / "new:" sname              ; launcher → spawner only: start a session called sname
@@ -1222,13 +1236,13 @@ cmdtext = 1..1024 bytes of UTF-8, no control character (Unicode Cc) but TAB
 | Field | Meaning |
 |---|---|
 | `proto` | `bootstrap.Version` |
-| `attach` | which session (D8, §9.2): `auto` for a plain `mosey DEST`, `new` for `-new`, `name:NAME` for `-s NAME`, and `resume:SID:CREDID` for R3's background reconnect, naming the session and the credential this client last held it with. `new:NAME` and `resume:SID` are what the launcher, having chosen, hands the session's spawner (§9.2), with a reconnect's CREDID kept (§9.2.2); a launcher refuses `new:NAME` from a client with `line`. The all-zero SID is refused: no session has it |
+| `attach` | which session (D8, §9.2): `auto` for a plain `mosey DEST` or `mosey DEST COMMAND`, `new` for `-new`, `name:NAME` for `-s NAME`, and `resume:SID:CREDID` for R3's background reconnect, naming the session and the credential this client last held it with. `new:NAME` and `resume:SID` are what the launcher, having chosen, hands the session's spawner (§9.2), with a reconnect's CREDID kept (§9.2.2); a launcher refuses `new:NAME` from a client with `line`. The all-zero SID is refused: no session has it |
 | `agent` | whether the client will forward an agent (D25). The server needs it at spawn time to give the shell an `SSH_AUTH_SOCK` (`agent.md` §4.1) and, for `new` and resume alike, to trigger ssh's bind (§8). Slice 1 sent `no` only and refused `yes` with `unsupported agent`; the agent slice accepts both |
 | `cols`, `rows` | the client terminal's size; a terminal that reports 0 is sent as 80×24. The server clamps it (D23, `screen.ClampSize`). The client sends its size again as the first userinput event after connecting, in case it changed during the bootstrap |
 | `env` | the client's locale and terminal variables, from the allow-list only. A variable that is unset, empty, longer than 64 bytes or holds a byte outside `vchar` is left out (logged at debug), never escaped. The server gives the locale variables to the shell; what it does with `TERM` and `COLORTERM` is `server.md`'s (the shell's `TERM` describes the server's emulator, not the client's terminal) |
 | `dir` | `-dir`: the directory a new session's login shell starts in, relative to the remote `$HOME` unless absolute (§9.2.3). `-` for none: the shell starts in `$HOME` (`server.md` §2.5). Only a session the line creates uses it |
 | `type` | `-type`: the text typed into a new session's pty once its shell has started, followed by Enter (§9.2.3). `-` for none. Only a session the line creates uses it |
-| `cmd` | the command after `DESTINATION` (§2), joined with spaces, run as `SHELL -c CMD` in place of the interactive shell (§9.2.3). Absent, not `-`, when there is none. Only a session the line creates uses it; a line with `cmd` and a `type` is refused (`line`) |
+| `cmd` | the command after `DESTINATION` (§2), joined with spaces, run as `SHELL -c CMD` in place of the interactive shell (§9.2.3). Absent, not `-`, when there is none. Only a session the line creates runs it; with `auto` it is also what the launcher matches a detached session on (§9.2). A line with `cmd` and a `type` is refused (`line`) |
 | `public` | the client's one-shot X-Wing encapsulation key, `OneShotKey.PublicKey()`, 1216 bytes [S1, measured from `crypto/hpke`] |
 
 `dir` and `type` are base64url because a path or a command holds spaces,
@@ -1259,7 +1273,11 @@ only with Dan's approval, 2026-11-16). A launcher of this version that
 predates commands counts the fields and refuses a line with one as
 `line`; the client, having sent one, says so (`DEST's mosey could not
 read this request: it may be older than this one, and unable to run a
-command`). The parser still takes exactly one form of each line: the
+command`). One from the first days of commands, before `auto` matched
+on `cmd` (§9.2), takes the newest detached session whatever it runs,
+and adds `existing`, so the client says the command was not run; no
+compatibility work is done about it (no users yet, Dan, 2026-11-15).
+The parser still takes exactly one form of each line: the
 field is either absent or a valid `b64text`, never `-` and never empty.
 
 Size: at most 5710 bytes [derived: the fixed fields and their 9 spaces come
@@ -1305,7 +1323,7 @@ public    = b64(1216)               ; 1622 characters
 | `name` | the session's name (D8 R2): the one the user gave with `-s`, or the one the launcher generated. The client shows it and keeps it, in memory only, for R3. Its grammar is letters, digits and `-_.`, so it is safe to print as it is |
 | `psk` | `Credential.PSK`, 32 bytes [S1] |
 | `public` | `Credential.ServerPublic`, the server's one-shot X-Wing key, 1216 bytes [S1] |
-| `existing` | present only in answer to a ClientLine with a `cmd`, when the line took a session that was already running, so the command was not run (§9.2.3); the client says so. A launcher writes it on no line in answer to one without a `cmd`, so a client from before commands never sees it |
+| `existing` | present only in answer to a ClientLine with a `cmd`, when the line took a session that was already running and was not started with that `cmd`, so the command was not run (§9.2.3: `name:NAME` only, since `auto` takes only a session started with the same `cmd`); the client says so. A launcher writes it on no line in answer to one without a `cmd`, so a client from before commands never sees it |
 
 The parser is canonical, so `addr` must be exactly what `netip.Addr.String()`
 gives for an unmapped, zone-free address: `::ffff:192.0.2.1`, `fe80::1%eth0`
@@ -1697,7 +1715,8 @@ the CredentialLine (§6.3), so the client can say it, and in the greeting
 
 | Command | ClientLine `attach` | What the launcher does, holding the lock |
 |---|---|---|
-| `mosey DEST` | `auto` | of the sessions the launcher can attach (step 5: any version's, if their attach protocol is this launcher's) that are `detached` (below), the one with the newest `since`, taken with `resume:SID`; if none is detached, a new session with a generated name, `new:NAME`. It never takes a session that is `new` or `attached` |
+| `mosey DEST` | `auto`, no `cmd` | of the sessions the launcher can attach (step 5: any version's, if their attach protocol is this launcher's) that are `detached` (below) and whose greeting has no `cmd` (§9.2.1: started without a command, `-type` and `-dir` ones included), the one with the newest `since`, taken with `resume:SID`; if there is none, a new session with a generated name, `new:NAME`. It never takes a session that is `new` or `attached`, nor one running a command |
+| `mosey DEST COMMAND` | `auto` with `cmd` | as `mosey DEST`, but of the sessions whose greeting's `cmd` is the line's, byte for byte (§9.2.3; PLAN D8, option C); if there is none, a new session with a generated name running the command |
 | `mosey -s NAME DEST` | `name:NAME` | session NAME (step 5: of any version; one of another attach protocol is `MOSEY-ERROR 2 attach P-N`), whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
 | `mosey -new DEST` | `new` | a new session with a generated name, `new:NAME` |
 | R3's reconnect | `resume:SID:CREDID` | §9.2.2 |
@@ -1705,8 +1724,9 @@ the CredentialLine (§6.3), so the client can say it, and in the greeting
 | `mosey -kill NAME DEST` | none: `--serve=kill NAME` (§9.5) | |
 
 Each row that can start a session (`auto`, `name:NAME`, `new`) uses the
-line's `dir` and `type` only when it does start one (§9.2.3); a row that
-takes an existing session ignores them.
+line's `dir`, `type` and `cmd` only when it does start one (§9.2.3); a
+row that takes an existing session ignores them, but for `auto`'s match
+on `cmd`.
 
 **What counts as detached.** A greeting says `detached` when its last
 client said it was leaving (END `detached`, §9.3), when that client's
@@ -1804,7 +1824,7 @@ message of printable ASCII (§6.1's rules), **not** an IPC message:
 
 ```
 session-line = "MOSEY-SESSION" SP aproto SP sessionid SP name
-               SP started SP state SP since SP peer SP holder LF
+               SP started SP state SP since SP peer SP holder [SP cmd] LF
 aproto       = dec              ; the attach protocol the spawner speaks,
                                 ; 1..255; "2" now
 sessionid    = b64(16)
@@ -1815,6 +1835,8 @@ since        = dec              ; unix seconds of the last change of state
 peer         = "-" / addrport   ; netip.AddrPort.String() of the last attached
                                 ; client, unmapped, no zone; "-" if none known
 holder       = "-" / b64(8)     ; the credential id that holds the session
+cmd          = b64text          ; §6.2: the command the session was started
+                                ; with; absent if it was started without one
 ```
 
 `new` is a session no client has attached to yet; `attached` one whose
@@ -1827,7 +1849,10 @@ except that a reconnect's pending resume names the CREDID the reconnecting
 client gave (§9.2.2), and `-` when the session is `new` or `detached`. A credential id is not
 secret: it travels in the clear in msg1 (`transport.md` §3.4), and only
 the user's own processes can read a greeting. R3 uses it to tell "still
-held by me" from "held by someone else" (§9.2.2).
+held by me" from "held by someone else" (§9.2.2). `cmd` is the `cmd`
+of the ClientLine that created the session, exactly as it came (§6.2,
+§9.2.3), for as long as the session lives; `auto` matches on it (§9.2)
+and `-list` shows it (§9.4).
 
 **Frozen in full** (D8 V1). The whole line is stable across releases:
 `aproto` is the one version of the attach protocol (`server.md` §2.8,
@@ -1845,10 +1870,21 @@ carries a ClientLine, so when that line's version went to 2 (§6.1) the
 attach protocol went to 2 with it: a spawner of attach protocol 1 would
 refuse a version-2 line. A session started by a binary of attach
 protocol 1 is therefore listed, but not taken (§9.2 step 5), until it
-ends; nothing else changed. `MaxSessionLine` = 256 bytes, also frozen, since every launcher
-reads the greeting into a buffer of that size [derived: the longest line
-is 13 + 3 + 22 + 32 + 12 + 8 + 12 + 47 + 11, 8 spaces and LF = 169, with
-the 12-digit bound on the times].
+ends; nothing else changed.
+
+**The optional `cmd`** (2026-11-16, within attach protocol 2: protocol
+numbers change only with Dan's approval, and there are no users yet).
+It is the one optional field, and last, as the ClientLine's `cmd` is
+(§6.2), so the greeting of a session started without a command is byte
+for byte the greeting of before. Releases from before it read the
+greeting into a buffer of 256 bytes and parse exactly 9 fields, so they
+pass over a session started with a command (it is not chosen, and not
+listed), and read every other as before. `MaxSessionLine` = 2048
+bytes [derived: the longest line without `cmd` is 13 + 3 + 22 + 32 + 12
++ 8 + 12 + 47 + 11, 8 spaces and LF = 169, with the 12-digit bound on the
+times; `cmd` adds a space and at most 1366, the base64url of 1024 bytes,
+so 1536; then the next power of two]. A seqpacket message of that size
+fits any socket buffer the kernel gives.
 
 #### 9.2.2 Reconnect (D8 R3)
 
@@ -2027,15 +2063,32 @@ attached with: a tmux user's `tmux new-session -c DIR` followed by
   body is one reason byte (`transport.md` §8.4), and carrying the
   status would change that frame, and so the handshake's protocol
   number, and have proto wait for the spawner's `ShellExit` after the
-  pty's EOF, which it does not now. A `cmd` is only for a session the
-  line creates: a plain `mosey DEST CMD` is sent as `new`, never
-  `auto` (§2), and the `resume:SID` line for a session that is taken
-  has no `cmd`, as it has no `dir` or `type`. When a line with a `cmd`
-  takes an existing session (`name:NAME` with NAME running), the
-  launcher adds `existing` to the credential line it passes on (§6.3),
-  and the client prints `mosey: session NAME was already running, so
-  the command was not run` on stderr before the screen goes up. The
-  launcher adds it to no other line, so no older client sees it.
+  pty's EOF, which it does not now. A `cmd` is run only by a session the
+  line creates; the `resume:SID` line for a session that is taken has no
+  `cmd`, as it has no `dir` or `type`.
+- **Returning to a command** (PLAN D8, Dan, 2026-11-16, option C). The
+  spawner keeps the `cmd` its session was created with and puts it in
+  every greeting (§9.2.1). A plain `mosey DEST CMD` is sent as `auto`
+  with the `cmd`, and the launcher takes the most recently detached
+  session whose greeting has that same `cmd`, compared byte for byte,
+  or starts a new one running it (§9.2's table). So closing the window
+  on `mosey dan-desktop claude` and running it again returns to that
+  claude, and a second window while the first is attached gets a
+  second claude. A plain `mosey DEST` with no `cmd` takes only a
+  session whose greeting has none, so it never drops the user into a
+  detached program, and `mosey DEST CMD` never into a detached shell.
+  The key is the command alone (§2): `-dir`, and `-type` for a shell,
+  only say how a session starts.
+- **Saying a command was not run.** When a line with a `cmd` takes a
+  session whose greeting's `cmd` is not that one (`name:NAME` with NAME
+  running something else, or a shell), the launcher adds `existing` to
+  the credential line it passes on (§6.3), and the client prints `mosey:
+  session NAME was already running, so the command was not run` on
+  stderr before the screen goes up. `-s NAME DEST CMD` returning to a
+  NAME it started with that same `cmd` says nothing, as `auto` never
+  does: that command is the one running. The launcher adds `existing`
+  to no line in answer to one without a `cmd`, so no older client sees
+  it.
 
 ### 9.3 How long a session lives (D8 R4)
 
@@ -2092,25 +2145,43 @@ nothing), reads each greeting, prints one line per session that answered,
 oldest first, and exits 0:
 
 ```
-list-line = "MOSEY-LIST" SP "1" SP lname SP lstate SP lsince LF
+list-line = "MOSEY-LIST" SP "1" SP lname SP lstate SP lsince [SP lcmd] LF
 lname     = sname
 lstate    = "new" / "attached" / "detached"
 lsince    = dec                 ; unix seconds of the last change of state
+lcmd      = b64text             ; §6.2: the greeting's cmd, absent if none
 ```
 
-The client reads ssh's stdout (at most 256 KiB), skips anything that is
+`lcmd` (2026-11-16) is optional and last, as the greeting's `cmd` is
+(§9.2.1), so a session started without a command is listed exactly as
+before and the line's `1` stays (protocol numbers change only with Dan's
+approval). A client from before it counts the fields and drops a line
+with one, saying how many it dropped.
+
+The client reads ssh's stdout (at most 2 MiB [derived: `MaxListed` ×
+`MaxListLine`]), skips anything that is
 not a `MOSEY-` line (a login shell's chatter, §6.5), and parses each
 `MOSEY-LIST` line with `ParseListLine`: canonical, at most `MaxListLine` =
-160 bytes [derived: 10 + 1 + 32 + 8 + 12, 4 spaces and LF = 68],
+2048 bytes [derived: 10 + 1 + 32 + 8 + 12, 4 spaces and LF = 68, and
+` lcmd` at most 1367, so 1435; then the next power of two],
 and fuzzed, since a hostile server writes it. At most `MaxListed` = 1024
 lines are shown [choice]; a line that does not parse is not shown, and
-the client says how many it dropped. Every field it prints is from a
-grammar of printable ASCII with no space, so the table the client lays out
-itself cannot carry an escape sequence (D9):
+the client says how many it dropped. Every field but `lcmd` is from a
+grammar of printable ASCII with no space; `lcmd` decodes to a `cmdtext`
+(valid UTF-8, no control character but tab), checked by the parser, and
+the client shows it with every rune that is not printable
+(`unicode.IsPrint` false: tab, format characters such as the bidi
+overrides, non-ASCII spaces) as `?`, and cut to 60 runes with `…` after
+[choice: one terminal line beside the other columns; the full text is
+the user's own and in their shell history]. So the table the client lays
+out itself cannot carry an escape sequence, nor reorder what it shows
+(D9). It is the last column, shown only when some session has a command,
+and empty for one that has none:
 
 ```
-NAME          STATE     SINCE
+NAME          STATE     SINCE                      COMMAND
 quiet-heron   detached  2026-11-14T09:30:12+00:00
+brave-otter   attached  2026-11-16T15:02:40+00:00  claude
 ```
 
 `SINCE` is in the client's local zone, as §9.1's times are. With no line it prints `no sessions on DEST` (`on localhost` for this machine, §2.2).
@@ -2239,24 +2310,26 @@ type SessionLine struct {
 	Since           time.Time
 	Peer            netip.AddrPort // the zero AddrPort is "-"
 	Holder          [8]byte        // HasHolder false is "-"
+	Command         string         // cmd; "" is absent (§9.2.3)
 	HasHolder       bool
 }
 
 const (
-	MaxSessionLine = 256
-	AttachProtocol = 1 // this build's attach protocol (§9.2.1)
+	MaxSessionLine = 2048
+	AttachProtocol = 2 // this build's attach protocol (§9.2.1)
 )
 
 // ListLine is §9.4: one session as --serve=list prints it, and the
 // client parses it; Name "" and State 0 are "-", Since zero is "-".
 type ListLine struct {
-	Name  string
-	State SessionState
-	Since time.Time
+	Name    string
+	State   SessionState
+	Since   time.Time
+	Command string // lcmd; "" is absent
 }
 
 const (
-	MaxListLine = 160
+	MaxListLine = 2048
 	MaxListed   = 1024
 )
 
@@ -2432,7 +2505,7 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Default size when the terminal says 0 | 80×24 | [choice]; the VT100's |
 | stderr filter line cut | 1024 B | [choice] |
 | Taken-over exit status | 3 | ours |
-| `MaxSessionLine` | 256 B | [derived] §9.2.1: at most 169 B used |
+| `MaxSessionLine` | 2048 B | [derived] §9.2.1: at most 1536 B used (169 without `cmd`) |
 | `bootstrap.AttachProtocol` | 2 | ours (§9.2.1, `server.md` §2.8: 2 since the ClientLine's version 2) |
 | Greeting deadline (launcher, lister) | 2 s per socket | [choice]: the spawner answers at once; a hung one is skipped, not waited on |
 | Session name (`sname`) | 1–32 B of letters, digits, `-_.` | [choice] §6.2: safe unquoted in any shell and on any terminal |
@@ -2444,7 +2517,7 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | `ReconnectTry` (one R3 try, to the dial) | 60 s | [D] §9.2.2: twice the credential TTL |
 | `IdleTimeout` (a detached session's shell is hung up) | 7 days | [D] Dan, 2026-11-15 (D8 R4); a constant (PLAN O14) |
 | `HangupGrace` (SIGHUP, then the teardown) | 10 s | [choice] §9.3 |
-| `MaxListLine`, `MaxListed` | 160 B, 1024 lines | [derived] §9.4: at most 68 B used; [choice] |
+| `MaxListLine`, `MaxListed` | 2048 B, 1024 lines | [derived] §9.4: at most 1435 B used (68 without `lcmd`); [choice] |
 | R3: no session | exit 1 | [choice] §9.2.2 |
 
 ---
@@ -2528,7 +2601,7 @@ or ssh options with `localhost` are a usage error, as is any command
 line with flags and no `DESTINATION`; `mosey` alone is the usage, exit 0.
 The words after `DESTINATION` are the command, joined with spaces, with
 their own flags untouched (`far ls -la`), with ssh options before the
-destination after `--`; a command makes a plain `mosey DEST` `-new`; a
+destination after `--`; a command keeps a plain `mosey DEST` `auto`, with the `cmd`; a
 command with `-type`, `-list` or `-kill`, or outside `cmdtext`, is a
 usage error.
 
@@ -2556,11 +2629,16 @@ durations in the commit message; 10 s each in CI):
   input naming exactly that name; anything accepted has no line outside
   the grammar.
 - `FuzzParseSessionLine`: no panic; anything accepted re-marshals to the
-  identical bytes.
+  identical bytes, and its `cmd`, if any, is a `cmdtext`; seeds with and
+  without `cmd`.
 - `FuzzParseListLine`: no panic; anything accepted re-marshals to the
-  identical bytes and every field it prints is printable ASCII with no
-  space; `FuzzReadList` for the whole of `-list`'s output: at most
+  identical bytes, every field but `lcmd` is printable ASCII with no
+  space, and `lcmd` is a `cmdtext`; seeds with and without `lcmd`;
+  `FuzzReadList` for the whole of `-list`'s output: at most
   `MaxListed` rows, none longer than its fields allow.
+- `FuzzListCommand` (`internal/client`): what `-list` shows of any
+  string is at most 60 runes and `…`, every one printable
+  (`unicode.IsPrint`).
 
 **End to end, `internal/e2e`:**
 
@@ -2576,7 +2654,16 @@ durations in the commit message; 10 s each in CI):
   A command, `mosey localhost sh -c 'echo ran-$((6*7)); exit 3'`, shows
   its output and the client exits when it does, with status 0 (§9.2.3);
   `-s NAME localhost CMD` with NAME running says the command was not
-  run, and attaches.
+  run, and attaches. Returning to a command
+  (`TestALocalCommandIsReturnedToAfterADetachAndNeverMixedWithAShell`):
+  `mosey localhost sh`, detached, is listed with its command, and the
+  same line run again returns to it, its shell's state intact, though a
+  shell session was detached since; while that one is attached a second
+  `mosey localhost sh` gets a new session; a plain `mosey localhost`
+  never takes the detached command session, nor `mosey localhost sh` the
+  detached shell, which a plain `mosey localhost` then does take.
+  `choose`'s unit tests (`internal/server`) cover the same rule, and that
+  `existing` is added only when the taken session's `cmd` differs.
 
 - **Fake ssh, always runs.** `SSH.Program` is a test helper binary that
   takes ssh's argv, checks it is the §4.1 shape, and runs the remote command
