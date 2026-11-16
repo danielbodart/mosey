@@ -240,10 +240,11 @@ or mosey session, where only chaff hides your typing rhythm.
 The server is the same `mosey` binary. On each connection `mosey HOST`
 uses whatever mosey the host has, of any version: `mosey` on its `PATH`,
 or else `~/.local/bin/mosey`, found in the same ssh login that starts
-the session. Only if there is neither does it ask, once per host:
+the session. Only if there is neither, or `~/.local/bin/mosey` speaks
+another protocol, does it ask, once per host:
 
 ```
-mosey: HOST has no mosey. Copy this one (linux/amd64, 9.8 MB) to ~/.local/bin/ there? [y/N]
+mosey: HOST has no mosey this one can use. Copy this one (linux/amd64, 9.8 MB) to ~/.local/bin/ there? [y/N]
 ```
 
 and copies its own file over ssh. If the host is another platform (a Mac
