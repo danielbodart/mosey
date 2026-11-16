@@ -315,8 +315,11 @@ triggers above (nothing emu does is one of them):
     `/proc/self/exe` when the shell starts), and no `mosey` is on the
     environment's `PATH`, `PATH` gets `$HOME/.local/bin` put first, so
     `mosey otherhost` in the session finds it. A `PATH` that already has
-    a `mosey` (`~/.local/bin` itself, say), or a server anywhere else
-    (Nix's, a package's, `-remote`'s), leaves `PATH` as it is. A login
+    a `mosey` (`~/.local/bin` itself, say), a server anywhere else
+    (Nix's, a package's, `-remote`'s), or a `~/.local/bin` that breaks
+    the installer's rules (`bootstrap.md` §4.7.2: a symlink, not the
+    user's, or it, `~/.local` or the home writable by group or others,
+    which `-remote` would otherwise skip) leaves `PATH` as it is. A login
     profile that assigns `PATH` outright undoes this; the stock Debian,
     Ubuntu and Fedora profiles then add `~/.local/bin` back themselves,
     and NixOS needs mosey from Nix (`bootstrap.md` §4.7.9).
@@ -1620,7 +1623,8 @@ it lands, with the duration and exec count in the commit message.
   attach protocol is passed over by `auto`, refused with `attach` by
   `name` and `resume`, and keeps its name from a new session.
 - Hopping (§2.5): `PATH` gets `~/.local/bin` first only when the
-  binary is `~/.local/bin/mosey` and `PATH` has no `mosey`.
+  binary is `~/.local/bin/mosey`, `PATH` has no `mosey`, and the
+  directory keeps the installer's rules.
 - `Session`: a client silent for `SilentAfter` is reported `Detached`
   and, when heard again, `Attached`, without losing its connection.
 - `Session` (in process, netsim, synctest): a client vanishes without

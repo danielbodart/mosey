@@ -295,6 +295,53 @@ func TestTheShellsAgentIsMoseysSocketWhenTheAgentIsForwarded(t *testing.T) {
 	}
 }
 
+// -remote ~/.local/bin/mosey skips the probe, so the server itself refuses
+// to put a ~/.local/bin on PATH that the probe would not run from: one its
+// group or others can write, or a symlink (bootstrap.md §4.7.2).
+func TestALocalBinOthersCanWriteNeverGoesOnThePath(t *testing.T) {
+	setup := func(t *testing.T) (home, dir, installed string) {
+		home = t.TempDir()
+		dir = filepath.Join(home, ".local", "bin")
+		installed = filepath.Join(dir, "mosey")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(installed, []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return home, dir, installed
+	}
+	env := func(home string) []string { return []string{"HOME=" + home, "PATH=" + t.TempDir()} }
+
+	for _, rel := range []string{".", ".local", ".local/bin"} {
+		t.Run("group-writable "+rel, func(t *testing.T) {
+			home, dir, installed := setup(t)
+			if got := hopDir(env(home), installed); got != dir {
+				t.Fatalf("before chmod: %q, want %q", got, dir)
+			}
+			if err := os.Chmod(filepath.Join(home, rel), 0o770); err != nil {
+				t.Fatal(err)
+			}
+			if got := hopDir(env(home), installed); got != "" {
+				t.Errorf("%s mode 0770: %q", rel, got)
+			}
+		})
+	}
+	t.Run("symlinked ~/.local/bin", func(t *testing.T) {
+		home, _, _ := setup(t)
+		real := filepath.Join(home, "realbin")
+		if err := os.Rename(filepath.Join(home, ".local", "bin"), real); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(real, filepath.Join(home, ".local", "bin")); err != nil {
+			t.Fatal(err)
+		}
+		if got := hopDir(env(home), filepath.Join(real, "mosey")); got != "" {
+			t.Errorf("a symlinked ~/.local/bin: %q", got)
+		}
+	})
+}
+
 // A session served from D7's ~/.local/bin/mosey, on a host with no mosey
 // on PATH, gets ~/.local/bin first on its shell's PATH, so `mosey
 // otherhost` in it finds the copy (bootstrap.md §4.7.9, server.md §2.5);

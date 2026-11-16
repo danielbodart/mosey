@@ -819,11 +819,13 @@ never the client's.
 - **Hopping.** A session served from `~/.local/bin/mosey`, on a host
   with no `mosey` on `PATH`, gets `~/.local/bin` first on its shell's
   `PATH` (`server.md` §2.5), as the stock login profiles already put it
-  when it exists. That directory must be the user's and writable by
-  nobody else before the probe runs anything from it, so this puts
-  nothing on `PATH` that the user could not already run; T12 could
-  plant other commands there, as it could in any directory of the
-  user's on `PATH`.
+  when it exists. The server itself checks the directory by the
+  installer's rules first (no symlink, the user's, writable by nobody
+  else, nor `~/.local` or the home), as the probe does, so a
+  `-remote ~/.local/bin/mosey`, which skips the probe, cannot put
+  commands others can write first on `PATH` either; T12 could plant
+  other commands there, as it could in any directory of the user's on
+  `PATH`.
 - **The probe line** comes from the far host (T5). It is parsed strictly
   and fuzzed, and it chooses only which public build is sent. Nothing the
   far host says appears unfiltered in the consent question, which is made

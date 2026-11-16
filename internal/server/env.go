@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 )
@@ -102,7 +103,10 @@ func shellEnv(base []string, from map[string]string, agentSock, hop string, log 
 // running binary: /proc/self/exe), and env's PATH has no mosey of its own
 // (so lacks ~/.local/bin), so `mosey otherhost` in the session finds it.
 // A server Nix, a package or -remote put anywhere else, or a host whose
-// PATH already has a mosey, changes nothing. A login profile that assigns
+// PATH already has a mosey, changes nothing. Nor does a ~/.local/bin that
+// breaks the installer's rules (bootstrap.md §4.7.2, §4.7.7), which the
+// probe checks but -remote ~/.local/bin/mosey skips: it would put
+// commands others can write first on the shell's PATH. A login profile that assigns
 // PATH outright undoes it; the stock Debian, Ubuntu and Fedora profiles
 // then put ~/.local/bin back themselves, and NixOS needs mosey from Nix
 // (Dan, 2026-11-16).
@@ -112,6 +116,9 @@ func hopDir(env []string, exe string) string {
 		return ""
 	}
 	dir := filepath.Join(home, ".local", "bin")
+	if !installersRulesHold(home) {
+		return ""
+	}
 	installed, err := os.Stat(filepath.Join(dir, "mosey"))
 	if err != nil {
 		return ""
@@ -129,6 +136,41 @@ func hopDir(env []string, exe string) string {
 		}
 	}
 	return dir
+}
+
+// installersRulesHold says whether home's ~/.local/bin is one the probe
+// would run ~/.local/bin/mosey from (bootstrap.md §4.7.2, ssh.go's
+// probeCommand): neither ~/.local/bin nor the file a symlink, both and
+// ~/.local this user's, and none of them nor home writable by its group
+// or others.
+func installersRulesHold(home string) bool {
+	local := filepath.Join(home, ".local")
+	bin := filepath.Join(local, "bin")
+	file := filepath.Join(bin, "mosey")
+	for _, p := range []string{bin, file} {
+		if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+	}
+	for _, p := range []string{home, local, bin, file} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			return false
+		}
+		// The file's own mode is the installer's 0700; the probe checks
+		// only the directories', so a mode bit there is not refused.
+		if p != file && fi.Mode().Perm()&0o022 != 0 {
+			return false
+		}
+		if p == home {
+			continue
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok || int(st.Uid) != os.Getuid() {
+			return false
+		}
+	}
+	return true
 }
 
 // lookup is name's value in env, the last one if it is there twice.
