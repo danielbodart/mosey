@@ -150,6 +150,15 @@ type Session struct {
 	cols      int
 	rows      int
 	holding   bool
+	// listening is whether the attached client is heard, the state in
+	// which the pty reader holds the program back on its acknowledgement
+	// (screen.md §2.5); histNext and histLen are the history of the screen
+	// last published, which the hold counts against. holdWake wakes a
+	// held reader when listening or the endpoint changes.
+	listening bool
+	histNext  uint64
+	histLen   int
+	holdWake  chan struct{}
 	// broken is an endpoint whose client broke the input protocol, for
 	// the main loop to drop.
 	broken chan *ssp.Endpoint[*screen.Grid, *userinput.Stream]
@@ -200,6 +209,7 @@ func (s *Session) init() {
 		}
 		s.repliesIn = make(chan struct{}, 1)
 		s.switched = make(chan struct{}, 1)
+		s.holdWake = make(chan struct{}, 1)
 		s.minted = make(chan struct{}, 1)
 		s.broken = make(chan *ssp.Endpoint[*screen.Grid, *userinput.Stream], 1)
 		s.shellExit = make(chan struct{})
@@ -395,12 +405,14 @@ func (s *Session) Run(ctx context.Context) error {
 			switch {
 			case !silent && time.Since(last) >= silentAfter:
 				silent, silentSince = true, last
+				s.listen(false)
 				s.Log.Info("the client is silent; the session counts as detached", "for", time.Since(last).Round(time.Millisecond))
 				if s.Detached != nil {
 					s.Detached()
 				}
 			case silent && last.After(silentSince):
 				silent = false
+				s.listen(true)
 				s.Log.Info("the silent client is heard again")
 				if s.Attached != nil {
 					s.Attached(cur.conn.Peer(), cur.conn.CredentialID())
@@ -425,6 +437,7 @@ func (s *Session) Run(ctx context.Context) error {
 			}
 			cur = s.attach(parent, c)
 			gone = cur.gone
+			s.listen(true)
 			if !attachedOnce {
 				close(s.firstAttach)
 			}
@@ -440,6 +453,7 @@ func (s *Session) Run(ctx context.Context) error {
 				continue
 			}
 			s.Log.Warn("the client broke the input protocol; dropping it")
+			s.listen(false)
 			s.drop(cur)
 			cur, gone = nil, nil
 			arm()
@@ -450,6 +464,7 @@ func (s *Session) Run(ctx context.Context) error {
 		case err := <-gone:
 			revoked := errors.Is(err, transport.ErrRevoked)
 			s.Log.Info("the client went", "why", err)
+			s.listen(false)
 			s.drop(cur)
 			cur, gone = nil, nil
 			arm()
@@ -709,6 +724,7 @@ func (s *Session) publish() *screen.Grid {
 		s.published = g
 	}
 	s.cols, s.rows = g.Size()
+	s.histNext, s.histLen = g.History.Next, len(g.History.Lines)
 	arm := held && !s.holding
 	if arm {
 		s.holding = true
@@ -747,12 +763,17 @@ func (s *Session) release() {
 // readPTY is the pty reader. It never writes to the pty: S2 measured the
 // design that did deadlocking against a program that never reads its input
 // (server.md §4.3). Any error, EIO above all, means every slave fd has
-// closed: the shell is gone.
+// closed: the shell is gone. While a client is listening it reads only as
+// room allows (screen.md §2.5).
 func (s *Session) readPTY(ctx context.Context) error {
 	buf := make([]byte, ptyReadChunk)
 	first := s.FirstOutput
 	for {
-		n, err := s.Terminal.Read(buf)
+		size, ok := s.room(ctx)
+		if !ok {
+			return nil
+		}
+		n, err := s.Terminal.Read(buf[:size])
 		if n > 0 {
 			if first != nil {
 				first()
@@ -769,6 +790,73 @@ func (s *Session) readPTY(ctx context.Context) error {
 			return errShellExited
 		}
 	}
+}
+
+// listen says whether the attached client is heard, and wakes a held
+// reader to look again.
+func (s *Session) listen(on bool) {
+	s.mu.Lock()
+	s.listening = on
+	s.mu.Unlock()
+	s.wake(s.holdWake)
+}
+
+// holdLines is how many unacknowledged lines of history stop the pty
+// reader while a client listens, and how many bytes it reads at once
+// meanwhile: a quarter of the window at the screen's width. A byte scrolls
+// at most one line of what cat, seq or a build log write (a line feed,
+// or a wrap after at least one character), so the lines the client lacks
+// stay under half the window, and the client, which prints each frame as
+// it arrives, can be as far again behind in printing what it acknowledged
+// before a line could fall out of the window (screen.md §2.5) [derived].
+func holdLines(cols int) int {
+	return screen.WindowLines(cols) / 4
+}
+
+// room is how much the pty reader may read next, waiting first if it must
+// (screen.md §2.5, Dan 2026-11-16). While the attached client is heard,
+// the program is held back as under ssh: the reader waits while the
+// history lines the client has not acknowledged number holdLines or more,
+// and then reads at most holdLines bytes. While nobody listens (no client,
+// one silent for SilentAfter, or the shell gone and the pty draining), it
+// reads a whole chunk and the window keeps the newest lines, so a program
+// never stalls because the laptop is shut. ok is false once ctx is done.
+func (s *Session) room(ctx context.Context) (size int, ok bool) {
+	for {
+		s.mu.Lock()
+		ep, listening, next, held, cols := s.ep, s.listening, s.histNext, s.histLen, s.cols
+		s.mu.Unlock()
+		select {
+		case <-s.shellExit:
+			listening = false
+		default:
+		}
+		if ep == nil || !listening {
+			return ptyReadChunk, true
+		}
+		hold := holdLines(cols)
+		acked, _ := ep.Acked()
+		if unacknowledged(next, held, acked.History.Next) < uint64(hold) {
+			return hold, true
+		}
+		select {
+		case <-ctx.Done():
+			return 0, false
+		case <-ep.AckedChanged():
+		case <-s.holdWake:
+		case <-s.shellExit:
+		}
+	}
+}
+
+// unacknowledged is how many lines of a window of held lines, the newest
+// numbered next−1, the client lacks when it has acknowledged up to acked.
+// A client new to the session lacks the whole window and no more.
+func unacknowledged(next uint64, held int, acked uint64) uint64 {
+	if acked >= next {
+		return 0
+	}
+	return min(next-acked, uint64(held))
 }
 
 // queueReplies puts the replies that pass the grammar on the bounded queue

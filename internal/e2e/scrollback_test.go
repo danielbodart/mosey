@@ -15,6 +15,7 @@ import (
 
 	"github.com/danielbodart/mosey/internal/netsim"
 	"github.com/danielbodart/mosey/internal/screen"
+	"github.com/danielbodart/mosey/internal/server"
 )
 
 // Scrollback (PLAN §1: Mosh has none, so everyone runs tmux inside it),
@@ -132,38 +133,6 @@ func TestManyWindowsOfLinesReachTheLocalScrollbackInOrderExactlyOnce(t *testing.
 	}
 }
 
-// More lines than the window, scrolled between two frames, are cut even
-// on a healthy link: nothing paces the program's output, and the server
-// keeps only the newest HistoryLines (§2.5). What the user's terminal gets
-// is still honest: every line it shows is in order and shown once, and a
-// marker stands for exactly the lines in each gap.
-func TestABurstLongerThanTheWindowIsCutWithAMarkerForTheGap(t *testing.T) {
-	skipUntilBuilt(t, allPackages...)
-	const total = 5 * screen.HistoryLines
-	for _, p := range netsim.Profiles() {
-		t.Run(p.Name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				s := startSimSession(t, p)
-				s.wait("prompt", func() bool { return strings.Contains(s.clientScreen(), "$") })
-				// From the prompt's own row, so every line that scrolls off
-				// is a numbered one and a marker's count is all numbered.
-				s.prog.flood("\r" + numbered(1, total))
-				last := fmt.Sprintf("line-%04d", total)
-				s.wait(last, func() bool { return strings.Contains(s.clientScreen(), last) })
-				s.converge()
-				got := numbers(transcript(s.user.bytes(), 80, 24))
-				markers, err := accountedFor(got, total)
-				if err != nil {
-					t.Errorf("%s: %v", p.Name, err)
-				} else if markers == 0 {
-					t.Errorf("%s: %d lines and no marker; the burst was %d lines", p.Name, len(got), total)
-				}
-				s.exit()
-			})
-		})
-	}
-}
-
 // accountedFor checks that got is 1..n in order, each line once, but for
 // markers, each standing for exactly the lines missing where it is; it
 // returns how many markers there were.
@@ -216,8 +185,10 @@ func TestAResumingClientReprintsOneScreenfulOfHistory(t *testing.T) {
 }
 
 // A client that falls behind by more than the window, through an outage
-// while a program floods the screen, prints one marker saying how many
-// lines it missed, and carries on with the rest in order (§2.5, §8.7).
+// long enough to count as silent while a program floods the screen,
+// prints one marker saying how many lines it missed, and carries on with
+// the rest in order (§2.5, §8.7). A shorter dead spot holds the program
+// back instead (holdback_test.go).
 func TestAClientThatFallsBehindPastTheWindowPrintsAMarker(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
 	synctest.Test(t, func(t *testing.T) {
@@ -228,7 +199,7 @@ func TestAClientThatFallsBehindPastTheWindowPrintsAMarker(t *testing.T) {
 		a.sees("line-0100")
 		w.cut(true)
 		w.prog.flood(numbered(101, 3000))
-		time.Sleep(5 * time.Second)
+		time.Sleep(server.SilentAfter + 5*time.Second)
 		w.cut(false)
 		a.sees("line-3000")
 		got := numbers(transcript(a.user.bytes(), 80, 24))

@@ -200,13 +200,16 @@ type simSession struct {
 	t       *testing.T
 	profile string
 	user    *userTerminal
-	prog    *shell
-	cc      *netsim.Conn
-	client  <-chan error
-	server  <-chan error
-	quit    context.CancelFunc // the client's: the user quitting
-	cancel  context.CancelFunc // the server's
-	stop    sync.Once
+	// prog is the shell when it is a *shell; term is the shell whatever
+	// it is.
+	prog   *shell
+	term   program
+	cc     *netsim.Conn
+	client <-chan error
+	server <-chan error
+	quit   context.CancelFunc // the client's: the user quitting
+	cancel context.CancelFunc // the server's
+	stop   sync.Once
 }
 
 // simNet is a client's and a server's socket on a netsim network shaped
@@ -337,7 +340,25 @@ func (n *simNet) connectWith(ctx context.Context, user terminal.Terminal, hook f
 	return done
 }
 
+// program is a fake shell on the server's side of a fake pty.
+type program interface {
+	server.Terminal
+	io.Closer
+	// output is what the server has been given to read: the screen it
+	// should have.
+	output() []byte
+}
+
 func startSimSession(t *testing.T, p netsim.Profile) *simSession {
+	sh := newShell()
+	s := startSimSessionWith(t, p, sh, nil)
+	s.prog = sh
+	return s
+}
+
+// startSimSessionWith is startSimSession with prog as the shell and a hook
+// on the server's Session.
+func startSimSessionWith(t *testing.T, p netsim.Profile, prog program, hook func(*server.Session)) *simSession {
 	n := newSimNet(t, p)
 	ctx, cancel := context.WithCancel(context.Background())
 	cctx, quit := context.WithCancel(ctx)
@@ -345,12 +366,12 @@ func startSimSession(t *testing.T, p netsim.Profile) *simSession {
 		t:       t,
 		profile: p.Name,
 		user:    &userTerminal{keys: make(chan []byte), resized: make(chan struct{})},
-		prog:    newShell(),
+		term:    prog,
 		cc:      n.cc,
 		quit:    quit,
 		cancel:  cancel,
 	}
-	s.server = n.serve(t, ctx, s.prog)
+	s.server = n.serveWith(t, ctx, prog, hook)
 	s.client = n.connect(cctx, s.user)
 	// However the test ends, end both sessions and release what they wait
 	// on, so the bubble has nothing left blocked.
@@ -362,7 +383,7 @@ func (s *simSession) end() {
 	s.stop.Do(func() {
 		s.cancel()
 		close(s.user.keys)
-		s.prog.Close()
+		s.term.Close()
 	})
 }
 
@@ -399,7 +420,7 @@ func (s *simSession) clientScreen() string {
 // serverScreen is the screen the shell's output makes, played into a
 // terminal of its own: what the server's emulator holds.
 func (s *simSession) serverScreen() string {
-	return screenOf(s.prog.output(), 80, 24)
+	return screenOf(s.term.output(), 80, 24)
 }
 
 // converge waits until the user sees exactly the screen the server has:
