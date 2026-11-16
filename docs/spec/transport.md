@@ -118,8 +118,11 @@ the open item in `architecture.md` §4 (S1's msg1 measured 1208 with a
   normal and must work: nothing in the handshake or the bootstrap looks
   at a software version (`bootstrap.md` §6.4). Each side's hello carries
   the **one** protocol version it speaks, `handshake.ProtocolVersion`, and the
-  two must be equal (§3.6). This document is **v1**, and is the promise:
-  every release that says 1 speaks exactly this. A change a v1 peer
+  two must be equal (§3.6). This build speaks **protocol 2**, and that is
+  the promise: every release that says 2 speaks exactly this document and
+  the screen diff of `screen.md` §5. Protocol 2 differs from 1 only in the
+  screen diff, which gained CONTAINER and CWD (`screen.md` §5.2), ops a
+  protocol-1 client would refuse. A change a peer of this number
   could not follow is a new number, and two peers of different numbers
   fail the handshake with an error that names both, at once and at both
   ends, never by timing out (§3.6); there is no range and no
@@ -1390,11 +1393,11 @@ Beyond the general rules in `architecture.md` §6:
   byte for byte, and the same for one rekey, so a refactor cannot change
   the wire unnoticed.
 - **Version mismatch** (D8 V1), with peers built from the same code with
-  another number: a client of protocol 2 and this server, and this client
-  and a server of protocol 2, fail at once at both ends with both numbers
-  in the error, and the server never confirms the pending; a hello whose
-  rest does not parse as v1 but whose first byte says 2 still gets the
-  error that names 2.
+  another number: a client of protocol 1 (an older build) and this
+  server, and this client and a server of protocol 1, fail at once at
+  both ends with both numbers in the error, and the server never confirms
+  the pending; a hello whose rest does not parse but whose first byte
+  says another number still gets the error that names it.
 - **Sizes.** msg1 with 1 and 16 channels is 1170 and 1185 bytes; msg2
   1150 to 1165; each INIT part 642; REKEY_RESP 1154; KEEPALIVE 31;
   PATH_CHALLENGE and PATH_RESPONSE 38; a full TERMINAL packet 1232. No
@@ -1459,7 +1462,7 @@ Beyond the general rules in `architecture.md` §6:
 | `transport.Overhead` | 30 B | §4.1 | [derived] 13 + 1 + 16 |
 | `transport.MaxPayload` | 1202 B | §4.1 | [derived] 1232 − 30 |
 | Wire version | `0x01` | §2.3 | [ours] |
-| Protocol versions spoken | `1..1` | §2.3, §3.6 | [D] D8 V1: v1 is this document |
+| Protocol version spoken | `2` | §2.3, §3.6 | [D] D8 V1: 2 is this document and `screen.md` §5 |
 | Hello channel types | ≤ 16 | §3.6 | [ours]: keeps msg1 ≤ 1185 |
 | X-Wing pk / enc | 1216 / 1120 B | §3.2 | [S1] measured from `crypto/hpke` |
 | HPKE suite | KEM `0x647a`, KDF `0x0001`, AEAD `0xFFFF` | §3.2 | [RFC 9180]; draft-ietf-hpke-pq |

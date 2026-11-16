@@ -42,19 +42,32 @@ be skipped [paper §2, §2.3].
 The server runs the terminal emulator. The client receives structured
 cells and draws them with escape sequences it writes itself. **The client
 never parses a remote escape sequence.** It has no VT parser on any path
-that bytes from the network can reach. Only four kinds of remote-chosen
+that bytes from the network can reach. Only six kinds of remote-chosen
 bytes are ever written to the user's real terminal:
 
 1. cell text: grapheme clusters that passed the allow-list (§4.2);
 2. the window title, through the allow-list (§4.1);
 3. OSC 8 link URIs, through the allow-list (§4.3);
 4. OSC 52 clipboard data, which the client base64-encodes itself, so it
-   never reaches the terminal raw (§4.4).
+   never reaches the terminal raw (§4.4);
+5. the container mark's three values (OSC 666 `vte.container.*`), through
+   the allow-list and re-escaped by the client itself (§4.6);
+6. the current directory's `file:` URI (OSC 7), through the allow-list
+   (§4.7).
 
 Every other byte the client writes comes from a fixed table in
-`internal/render` (§8.2), with numbers formatted by the client.
+`internal/render` (§8.2), with numbers formatted by the client. The
+client's own container mark (§8.4) is the user's own input, the host as
+typed on the command line, not remote data, and passes the same
+allow-list before it is written.
 
-Kinds 1 and 2 reach the terminal as UTF-8 only when the local locale's
+Kinds 5 and 6 were added to the list after slice 1 (Dan, 2026-11-16). D9
+says "anything deliberately passed through goes through a strict
+allow-list"; these extend the list in that way and loosen nothing: each
+value is checked in full at both ends, bounded in bytes, and has no C0,
+DEL or C1 code point.
+
+Kinds 1, 2 and 5 reach the terminal as UTF-8 only when the local locale's
 codeset is UTF-8. Otherwise every non-ASCII character is written as `?`
 (§8.3). A terminal that is not in UTF-8 mode can read the continuation
 bytes 0x80–0x9F inside ordinary UTF-8 as C1 controls (`threat-model.md`
@@ -82,6 +95,8 @@ fuzzed decoder protects both boundaries.
 | `EchoAck` | newest input event the program has had for 50 ms [paper §3.2]; prediction's judgement (`prediction.md` §3) | ECHO |
 | `EchoApplied` | how many input events the pty had taken when the screen was taken; prediction's *R* (`prediction.md` §3) | ECHO |
 | `Clipboard` | latest OSC 52 write, `{Seq, Data}` [D27] | CLIP |
+| `Container` | `{Name, Runtime, UID}`: the container mark the program set with OSC 666 (§4.6); all empty is no mark | CONTAINER |
+| `Cwd` | the program's current directory as a `file:` URI from OSC 7 (§4.7); empty is none | CWD |
 | `Bell` | count of bells | BELL |
 | `Rebuilt` (§11 item 1) | `{Seq, Reason}`: the emulator was rebuilt [D23] | REBUILT |
 | `InputConsumed` (§11 item 15) | the index in the client's input stream up to which the server has written events to the pty: input flow control [`ssp.md` §10.1] | CONSUMED |
@@ -128,6 +143,7 @@ item 4).
   - `Shape` is in 0..6 (DECSCUSR [xterm]).
 - **G8, the rest.**
   - `ValidTitle(Title)`.
+  - `ValidContainer(Container)` and `ValidCwd(Cwd)` (§4.6, §4.7).
   - `len(Clipboard.Data) ≤ MaxClipboard`.
   - `Modes` fields are within their enums: `Mouse` 0..3, `MouseEncoding`
     0..1, and `KittyKeyboard` 0..31 (the five progressive-enhancement
@@ -161,7 +177,8 @@ the change.
 
 - **`Equal`** compares everything listed in §2.1:
   - the size and every cell's `Text`, `Width` and `Style`;
-  - `Cursor`, `Title`, `Modes`, `EchoOff`, `EchoAck` and `EchoApplied`;
+  - `Cursor`, `Title`, `Container`, `Cwd`, `Modes`, `EchoOff`, `EchoAck`
+    and `EchoApplied`;
   - `Clipboard.Seq` together with `Clipboard.Data` (byte-equal);
   - `Bell`, `Rebuilt` and `InputConsumed`;
   - `History.Next` and every line of the window, cell by cell.
@@ -343,6 +360,10 @@ as they do for any local program.
 | `MaxLink` | 2048 bytes | [D27] | both ends, §4.3 |
 | `MaxLinks` | 4096 distinct links per grid | [derived]: a full 1000 × 500 screen of `ls --hyperlink` names stays under it; it bounds client memory, which tuios does not (S2 measured link storage growing without limit) | both ends, G5 |
 | `MaxLinkBytes` | 1 MiB of distinct link text per grid | [derived]: matches S2's link-table cap [measured S2]; 4096 × 2048 would be 8 MiB, more than a screen needs | both ends, G5 |
+| `MaxContainerValue` | 256 bytes per container name or runtime | [derived]: it is shown in a header bar, as a title is, so the same cap as `MaxTitle`; flong's whole mark is under 256 bytes [flong `tty.zig` `mark`], and VTE's own cap is 1024 characters a value [flong `DESIGN.md` "OSC 666"] | both ends, §4.6 |
+| `MaxContainerUID` | 10 decimal digits, at most 4294967295 | [derived]: a uid is a 32-bit number on Linux and macOS | both ends, §4.6 |
+| termprop body | 8 KiB of OSC 666 body | [derived]: three values of 256 bytes, each at most doubled by escaping, are 1.5 KiB; the rest is room for termprops not carried. A longer body is ignored whole | emu, §4.6 |
+| `MaxCwd` | 2048 bytes | [derived]: `MaxLink` [D27], since it is checked as a link is; a directory whose URI is longer is not carried | both ends, §4.7 |
 | `MaxClipboard` | 64 KiB of decoded data | [derived]: [D27] asks for a cap and leaves the value to this spec. 64 KiB covers a long yank, and its 87 KiB of base64 is a few dozen datagrams. A larger write is dropped whole, never truncated: a truncated paste is a different paste | emu drops; client: CLIP |
 | `HistoryLines` | 1000 lines | [D]: the most lines that can scroll between two states the client renders while nobody listens (an outage past `SilentAfter`, a detach) before lines are not shown; while a client listens, the program is held to a quarter of it (§2.5). A thousand lines is a screenful of build log many times over, and at 80 columns about 80 KB before compression, so the window a client is sent on attach or resume crosses a slow path in a moment rather than many seconds; D23's 10,000-line emulator scrollback would be ten times that on every resume. Of that window, a fresh client prints only one screenful (§2.5, §8.7) | both ends: the window (§2.5), and a diff carries at most this many lines (§5.6) |
 | hold | `W/4` lines unacknowledged stop the pty reader, which then reads at most `W/4` bytes; `W = min(HistoryLines, HistoryCells / cols)`, so 250 at up to 200 columns | [derived] §2.5: under half the window unacknowledged, half left for the client's printing; Dan, 2026-11-16, for a small queue | proto (`server.Session`, `holdLines`) |
@@ -467,13 +488,112 @@ reaches the client in any form. That includes:
   kitty uploads that name a file are refused);
 - OSC 4/10/11 colour queries, which the emulator answers with the client's
   colours from `emu.Options`;
-- OSC 7, OSC 9, OSC 777 and OSC 133;
+- OSC 9, OSC 777 and OSC 133; and OSC 666 apart from the three
+  `vte.container.*` properties of §4.6;
 - DECCOLM;
 - XTWINOPS resize and report requests;
 - every query whose answer would come from the user's terminal.
 
 The remote side can never resize, query or reconfigure the user's
-terminal, except for the input modes the client chooses to mirror (§8.5).
+terminal, except for the input modes the client chooses to mirror (§8.5)
+and the container mark and directory it shows (§4.6, §4.7).
+
+### 4.6 Container mark (OSC 666 `vte.container.*`)
+
+VTE reads *termprops* from `OSC 666 ; <items> ST`, and a VTE-based
+terminal can show them: Dan's GNOME Console shows `name · ~/path` in its
+header bar and colours it as a container when `vte.container.name` is set.
+flong, Dan's container launcher, sets the mark when it enters a container
+and clears it when it leaves. Without this section the server's emulator
+consumes the mark, and the user's terminal never learns which container
+the remote shell is in (Dan, 2026-11-16).
+
+What VTE does with the sequence is taken from flong's `DESIGN.md` ("OSC
+666") and its `tty.zig` (`mark`, `unmark`), not from VTE's source:
+
+- the items are separated by `;`;
+- in a value, `\\` is a backslash, `\s` a semicolon and `\n` a newline;
+  any other escape is refused, and so is a value over 1024 characters;
+- `vte.container.` names no property and unsets all of them;
+- the BEL-terminated form is refused, so the client always ends it with
+  ST.
+
+**The field.** `Container{Name, Runtime, UID}`, three strings. All three
+empty is no mark. Only these three properties are carried; every other
+termprop, and every other `vte.container.*` property, is consumed by the
+server's emulator (§4.5).
+
+**`ValidContainerValue(s)`** (for `Name` and `Runtime`): empty, or 1 to
+`MaxContainerValue` bytes of valid UTF-8 with no forbidden code point and
+no bidi mark, the same set as a title (§4.1). It refuses rather than
+repairs: a name cut short or with a character dropped names another
+container. `SanitizeContainerValue(s)` is `s` if it is valid and `""`
+otherwise.
+
+**`ValidContainerUID(s)`**: empty, or 1 to 10 ASCII digits with no
+leading zero (except `0` itself) whose value is at most 4294967295.
+`SanitizeContainerUID` is defined from it as above.
+
+**`ValidContainer(c)`** is all three valid.
+
+**The emulator** reads the body tuios passes for any OSC number it does
+not interpret (`vt.Callbacks.PrivateOSC`), so mosey parses no escape
+sequence of its own, only the body's item list. For OSC 666 it:
+
+1. ignores a body over 8 KiB (§3) whole;
+2. splits what follows `666;` at every `;`, and takes the items in order,
+   on a copy of the current mark:
+   - `vte.container.` empties all three fields;
+   - `vte.container.name`, `vte.container.runtime` or `vte.container.uid`
+     with no `=` empties that field [derived: the bare name unsets one
+     property as the prefix unsets all];
+   - one of the three followed by `=` and a value sets that field to the
+     value unescaped (`\\`, `\s`, `\n`); an empty value empties it;
+   - anything else is not carried and is skipped;
+3. if any of the three's values has another escape, a `\` at its end, or
+   fails its `Valid` test once unescaped (a `\n` makes a newline, a C0
+   control, so it always fails), the whole sequence changes nothing:
+   rejected input changes no state;
+4. otherwise the copy becomes the mark.
+
+The terminator does not matter to the emulator: tuios hands over the body
+of a BEL-terminated sequence too, and it is the client that writes ST.
+
+**The client** writes the mark only from these fields, re-escaping it
+itself (§8.4); it never forwards the remote bytes.
+
+### 4.7 Current directory (OSC 7)
+
+`OSC 7 ; file://HOST/PATH ST` is how a shell tells its terminal its
+current directory; a VTE terminal shows it (Dan's header bar shows
+`~/path` from it) and opens new tabs there. The server's emulator used to
+consume it.
+
+**`SanitizeCwd(raw)`** returns the URI to carry, or `""`:
+
+1. if `raw` is longer than `MaxCwd`, `""`;
+2. every byte outside 0x21–0x7E is percent-encoded (`%XX`, upper-case
+   hex), so a shell that writes spaces or UTF-8 raw still gets its
+   directory carried; if that makes it longer than `MaxCwd`, `""`;
+3. the scheme must be `file`, compared ASCII case-insensitively (RFC 3986
+   §3.1), followed by `://` [derived: OSC 7's form always has the
+   authority, even an empty one]; any other scheme gives `""`;
+4. the rest is percent-decoded: every `%` must start a two-hex-digit
+   escape, and the decoded bytes must be valid UTF-8 with no forbidden
+   code point and no bidi mark (§4) — so a control encoded as `%1B`, or
+   a C1 as `%C2%9C`, is refused as surely as a raw one, since the
+   terminal decodes it to show the path;
+5. otherwise the encoded URI.
+
+**`ValidCwd(s)`** is `s == ""` or `SanitizeCwd(s) == s`: printable ASCII
+only, so a valid `Cwd` is already in the form the client writes.
+
+**The emulator** takes the directory from tuios' `WorkingDirectory`
+callback (tuios passes the URI only when the body has exactly one `;`).
+A URI `SanitizeCwd` refuses changes nothing; the last good one stays.
+
+**The client** writes `OSC 7 ; <Cwd> ST` when `Cwd` changes to a
+non-empty value (§8.4), and nothing on `Leave` (§8.6).
 
 ## 5. The diff format (O11)
 
@@ -566,10 +686,13 @@ can't desynchronise anything.
 A diff is a sequence of ops, each starting with an opcode byte. There is
 no header, no trailer and no padding. An empty diff (zero bytes) is the
 identity. The format is versioned by the protocol version the handshake
-agreed (`transport.md` §2.3, D8 V1), not inside the diff: this section is
-v1, and a later version adds ops under a number of its own, so the two
-ends may be different builds and still agree on every op they send. An
-unknown opcode is an error, never skipped.
+agreed (`transport.md` §2.3, D8 V1), not inside the diff: a later version
+adds ops under a number of its own, so the two ends may be different
+builds and still agree on every op they send. An unknown opcode is an
+error, never skipped. This section is **protocol 2**: protocol 1 lacked
+CONTAINER and CWD (§4.6, §4.7), which a protocol-1 client would refuse
+as unknown opcodes, ending the session, so their arrival took the next
+number (`handshake.ProtocolVersion`).
 
 ### 5.3 Decoder state
 
@@ -619,6 +742,8 @@ State during a diff:
 | `0x57` | CLIP | `varint seq`, string (0..`MaxClipboard`) | 2, once |
 | `0x58` | REBUILT | `varint seq`, `byte reason` | 2, once |
 | `0x59` | CONSUMED | `varint index` | 2, once |
+| `0x5A` | CONTAINER | string name (0..`MaxContainerValue`), string runtime (0..`MaxContainerValue`), string uid (0..10) | 2, once |
+| `0x5B` | CWD | string (0..`MaxCwd`) | 2, once |
 | `0x60` | HIST | `varint seq` | starts phase 3, once |
 | `0x61` | HLINE | `varint cols` | 3 |
 | `0x62` | HROW | `varint src` | 3 |
@@ -647,7 +772,7 @@ writes the rows as they stand after it.
 
 Reserved for later slices, and errors until a spec section defines them:
 
-- `0x5A`–`0x5F`: more state;
+- `0x5C`–`0x5F`: more state;
 - `0x63`–`0x6F`: more history ops;
 - `0x4E`–`0x4F`, `0x70`–`0x7F` and `0xC0`–`0xFF`.
 
@@ -859,6 +984,12 @@ limit, 2 emu panic or exit, 3 other). Sets `Rebuilt` (§11 item 1).
 accepted: the client clamps a value above its own stream's length to that
 length [`ssp.md` §10.1], so the decoder needs no bound (§11 item 15).
 
+**CONTAINER `name runtime uid`.** Requires `ValidContainerValue(name)`,
+`ValidContainerValue(runtime)` and `ValidContainerUID(uid)` (§4.6). Sets
+`Container` whole.
+
+**CWD `s`.** Requires `ValidCwd(s)` (§4.7). Sets `Cwd`.
+
 **History ops (phase 3, §2.5).** They append lines to the history; the
 diff states the number of the first one, and the lines follow in order.
 
@@ -916,7 +1047,8 @@ size     = 0x41 varint varint ;
 rowmove  = 0x42 varint varint varint | 0x43 varint ;
 op2      = text | pos | col | next | skip | erase | erased | repeat | copy
          | pen | link | cursor | here | textHere | curstyle | title
-         | modes | echo | bell | clip | rebuilt | consumed ;
+         | modes | echo | bell | clip | rebuilt | consumed | container
+         | cwd ;
 history  = 0x60 varint { hline { lineop } | hrow } ;
 hline    = 0x61 varint ;
 hrow     = 0x62 varint ;
@@ -1040,8 +1172,8 @@ E1–E6, not the exact bytes.
      position, use TEXT+HERE.
    - Otherwise, if it is where the write position stands, use HERE.
    - Otherwise use CURSOR.
-5. **State.** Emit CURSTYLE, TITLE, MODES, ECHO, BELL, CLIP, REBUILT and
-   CONSUMED for each field that differs from `from`.
+5. **State.** Emit CURSTYLE, TITLE, MODES, ECHO, BELL, CLIP, REBUILT,
+   CONSUMED, CONTAINER and CWD for each field that differs from `from`.
 6. **History.** If `g.History` differs from `from.History`, emit HIST
    with `max(from.History.Next, first)`, where `first` is the number of
    `g`'s oldest held line, then each line from there: HROW for a line
@@ -1122,6 +1254,15 @@ All examples are at 80 × 24 unless a size is given. Bytes are in hex.
    | `4C 10 01` | PEN link 1 |
    | `03 64 6F 63 73` | TEXT `docs` |
    | `4C 10 00` | PEN link 0 |
+
+9. **flong's mark, then a directory.**
+
+   | bytes | op |
+   |---|---|
+   | `5A 03` `box` `05` `flong` `04` `1000` | CONTAINER `box`, `flong`, uid 1000 |
+   | `5B 0E` `file://h/home` | CWD, 14 bytes |
+
+   Clearing the mark is `5A 00 00 00`, 4 bytes.
 
 ### 5.12 Size: what it costs, the bound, the gate
 
@@ -1316,6 +1457,8 @@ creates it at the clamped size and sets it up as follows. Each item is
 - **Cursor.** The position is clamped (G7). `Visible` and `Shape` come
   from DECTCEM and DECSCUSR.
 - **Title.** `SanitizeTitle` of the emulator's current title.
+- **Container and Cwd.** emu's own, kept from the last OSC 666 and OSC 7
+  that passed §4.6 and §4.7.
 - **Modes.**
   - DECCKM, DECKPAM, 2004, 1004 and 1049 map directly.
   - Mouse: 1003 gives `MouseAll`, else 1002 gives `MouseDrag`, else 1000
@@ -1518,6 +1661,8 @@ own (§8.5).
 | title | `OSC 2 ; <title> ST`, `CSI 22 ; 2 t` / `CSI 23 ; 2 t` (push / pop) |
 | link | `OSC 8 ; ; <uri> ST`, and `OSC 8 ; ; ST` to end it |
 | clipboard | `OSC 52 ; c ; <base64> ST` |
+| container mark | `OSC 666 ; vte.container. ST` (clear), then `OSC 666 ; <items> ST`, each item `vte.container.name=`, `vte.container.runtime=` or `vte.container.uid=` and its escaped value, joined by `;` (§8.4) |
+| directory | `OSC 7 ; <uri> ST` |
 | bell | `BEL` (0x07) |
 | modes | `CSI ? 1 h/l`, `ESC =` / `ESC >`, `CSI ? 2004 h/l`, `CSI ? 1004 h/l`, `CSI ? 1000 h/l`, `CSI ? 1002 h/l`, `CSI ? 1003 h/l`, `CSI ? 1006 h/l`, and `CSI = n ; 1 u` (kitty flags, only once a later slice enables them) |
 | text | cell `Text` (a blank is one space, 0x20); without `Capabilities.UTF8`, `?` for any non-ASCII text (§8.3) |
@@ -1606,26 +1751,53 @@ this (§10).
 4. **Title.** If `Title` changed, write `OSC 2 ; title ST`. Without
    `Capabilities.UTF8`, each non-ASCII rune of the title is written as
    `?` (§8.3).
-5. **Clipboard.** If `Capabilities.Clipboard` is set and `Clipboard.Seq`
+5. **Container mark.** The mark the terminal should show is `Container`
+   if any of its fields is set, and otherwise the client's own (below).
+   If that differs from the one it last wrote, write `OSC 666 ;
+   vte.container. ST`, which unsets every property, and then, if the
+   mark has any field set, `OSC 666 ; <items> ST` with one item per
+   non-empty field, in the order name, runtime, uid. Clearing first is
+   what removes a property the new mark lacks (a uid), using only the
+   two forms flong uses [flong `tty.zig`]. Each value is written:
+   - only if it passes its `Valid` test again (a field that fails is
+     treated as empty);
+   - with `\` written as `\\` and `;` as `\s`, VTE's escapes (§4.6);
+     the allow-list leaves no newline or other control to escape;
+   - without `Capabilities.UTF8`, with each non-ASCII rune as `?`.
+
+   **The client's own mark.** The client sets
+   `Renderer.SetLabel(host)` from the host as the user typed it on the
+   command line (`client.Session.Destination`, or the server's address
+   if there is none), so every mosey session is labelled, with flong on
+   the far side or not: `Name` the host, after `SanitizeTitle` and then
+   `ValidContainerValue` (empty if it fails), `Runtime` `mosey`, no
+   `UID` (Dan, 2026-11-16). `Enter` writes it (§8.6). A mark from the
+   far side replaces it while one is set; when the far side clears its
+   mark, the client's comes back.
+6. **Directory.** If `Cwd` changed and is not empty, write `OSC 7 ; Cwd
+   ST` after checking it again with `ValidCwd`. A `Cwd` that becomes
+   empty writes nothing: OSC 7 has no form that unsets the directory.
+7. **Clipboard.** If `Capabilities.Clipboard` is set and `Clipboard.Seq`
    is greater than the last one acted on, write `OSC 52 ; c ;
    base64(Data) ST`, using `encoding/base64.StdEncoding`.
    - The first grid a renderer draws only *records* its `Seq`. Attaching
      must not replay an old write into the user's clipboard.
-6. **Bell.** If `Bell` went up, write one `BEL`, however many bells were
+8. **Bell.** If `Bell` went up, write one `BEL`, however many bells were
    missed. The first grid only records the count.
-7. **Modes.** Mirror the input modes that changed (§8.5).
-8. **Cursor.**
+9. **Modes.** Mirror the input modes that changed (§8.5).
+10. **Cursor.**
    - CUP to `Cursor`, clipped to the local size.
    - DECSCUSR if `Shape` changed.
    - Show the cursor if `Visible`.
-9. End the synchronised update.
+11. End the synchronised update.
 
 **Rebuilt.** If `Rebuilt.Seq` went up, the renderer reports it to its
 caller. The client tells the user: "the remote screen was reset (reason)".
 In slice 1 that goes to the log, and to stderr when the session ends; a
 later slice may draw a banner. The first grid only records it.
 
-**Defence in depth.** Before writing a title, link, cluster or clipboard,
+**Defence in depth.** Before writing a title, link, cluster, clipboard,
+container value or directory,
 the renderer checks it again with the `Valid*` functions. It drops
 anything that fails, and never writes it. `Apply` already guarantees
 this, but a Grid can also be built by client code (prediction's overlay,
@@ -1657,7 +1829,8 @@ local input is the user's own, not remote data (§11 item 6).
   3. `CSI ? 25 l`;
   4. a CUP to the local last row, then one LF per local row: what the
      user's terminal showed scrolls into its history, as `clear` does in
-     many terminals, rather than being drawn over.
+     many terminals, rather than being drawn over;
+  5. the client's own container mark, if it has a label (§8.4 item 5).
 
   It then marks everything as needing a draw.
 - **`Leave`** undoes everything it or any `Render` set, then restores the
@@ -1675,7 +1848,19 @@ local input is the user's own, not remote data (§11 item 6).
      row), then `CSI J`, so the user's shell carries on below the last
      screen, as after `ssh`. After the alternate screen, or with nothing
      drawn, it goes to the last row and one LF;
-  9. `CSI 23 ; 2 t` (pop the title).
+  9. `CSI 23 ; 2 t` (pop the title);
+  10. `OSC 666 ; vte.container. ST`, if it wrote any mark, so the local
+      terminal is no longer labelled as the remote host or its
+      container. The client cannot read what mark the terminal had
+      before it, so it restores none: the termprops are unset.
+
+  It writes no OSC 7. There is no form that unsets the directory, and
+  the client does not know which directory the local terminal last
+  heard; the local shell sends its own OSC 7 when it next draws its
+  prompt, which with VTE's shell integration is at once, so the remote
+  directory shows only until then. A shell without that integration
+  never sent one, and its terminal keeps the remote directory as a
+  stale hint.
 
   It is safe to call twice, and the client calls it on every exit path,
   including a signal.
@@ -1749,11 +1934,12 @@ try to undo the local terminal's reflow.
 
    mosey is one binary, so it does contain tuios, but only the server's
    emu role calls it.
-2. **Never write a remote byte to the terminal except the four kinds in
+2. **Never write a remote byte to the terminal except the six kinds in
    §1,** and each only after its allow-list check. Clipboard data only
-   ever goes out base64-encoded. **Never write a byte ≥ 0x80 to a
-   terminal whose locale codeset is not UTF-8**: non-ASCII cell text and
-   title runes become `?` (§8.3).
+   ever goes out base64-encoded, and container values only re-escaped by
+   the client. **Never write a byte ≥ 0x80 to a terminal whose locale
+   codeset is not UTF-8**: non-ASCII cell text, title and container runes
+   become `?` (§8.3).
 3. **Never let the remote side resize, query or reconfigure the user's
    terminal**, beyond the input modes of §8.5. It never forwards DA, DSR,
    OSC 10/11, DECRQM, XTGETTCAP or any other query. The server's emulator
@@ -1792,7 +1978,8 @@ commit message, and for 10 s each in CI (`mise run fuzz-smoke`)
   only makes valid grids, including wide characters, clusters, links,
   every mode and counter, and different sizes. Check E1, E2 and E3 for
   `b.Diff(a)` applied to `a`.
-- **`FuzzSanitize`.** For every `Sanitize*`: the output is `Valid*`,
+- **`FuzzSanitize`.** For every `Sanitize*` (container values, uids and
+  directories among them): the output is `Valid*`,
   `Sanitize*` is idempotent, and `Valid*(s)` is the same as
   `Sanitize*(s) == s`.
 - **Unit tests**, one per rule in §5.6 and per invariant in §2.2. Among
@@ -1837,7 +2024,21 @@ commit message, and for 10 s each in CI (`mise run fuzz-smoke`)
   histories that the next version extends, scrolls into (HROW), and
   overtakes with a gap.
 
+- **Container and directory.** CONTAINER and CWD with each `Valid` test
+  failing (a C1 in a name, a uid with a leading zero or over 2^32 − 1, a
+  `file:` URI with `%1B`, an `http:` one), over their bounds, or twice,
+  are refused; `FuzzApply` has seeds of both, and `FuzzRoundTrip`'s
+  generator sets both.
+
 **`internal/emu`**
+
+- **`FuzzTermprops`.** Any OSC 666 body: the mark it leaves is valid,
+  and one that changed the mark is one the body's own items explain; a
+  body with a bad carried value changes nothing.
+- **Container and directory through the emulator**: OSC 666 set, clear
+  by prefix and by name, escapes round-tripping through the client's
+  writer, and every refusal; OSC 7 accepted, percent-encoded, and
+  refused.
 
 - **`FuzzEmuRoundTrip`.** Program bytes and resizes up to the clamp go
   into `emu.New`. A snapshot is taken and diffed after each half, and the
@@ -1985,6 +2186,14 @@ agreed first).
     raised to 64 MiB (§5.12). emu fills it (§6.3), proto renumbers it
     (§7.2), `render` prints it (§8.7). Owners: screen and server-proc
     (scrollback slice).
+17. **`Grid.Container`** (`screen.Container{Name, Runtime, UID}`) and
+    **`Grid.Cwd`**, opcodes `0x5A` CONTAINER and `0x5B` CWD (§4.6, §4.7,
+    §5.6), taken from the "more state" range, so `0x5C`–`0x5F` stay
+    reserved; `handshake.ProtocolVersion` 2 for them (§5.2). emu fills
+    them from tuios' `PrivateOSC` and `WorkingDirectory` callbacks;
+    `render.Renderer.SetLabel(host)` names the client's own mark, which
+    `client.Session.Run` sets from `Destination`. Owners: screen,
+    handshake and bootstrap-client (container slice).
 
 ## Review notes
 
