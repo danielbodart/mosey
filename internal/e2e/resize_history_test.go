@@ -60,6 +60,10 @@ func TestAResizeLosesOrDoublesAtMostTheRowsItMoves(t *testing.T) {
 		r.Resize(c, rw)
 		draw()
 	}
+	// The renderer draws the empty screen first, as a client that was
+	// already attached would, so its first frame's one screenful (§8.7)
+	// does not cut lines 1–30: every line is then the resize's to lose.
+	draw()
 	e.Write([]byte(numbered(1, 30)))
 	draw()
 	resize(cols, small)

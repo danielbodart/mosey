@@ -10,11 +10,11 @@ import (
 // History keeps at most this many lines and cells, and one diff carries at
 // most as many.
 const (
-	// HistoryLines is the recent history a client prints on attach or
-	// resume, and the most it can fall behind before lines are not shown
-	// [D]: a screenful of build log many times over, and a moment's
-	// reprint over a slow path, where D23's 10,000 lines would take ten
-	// times as long on every resume.
+	// HistoryLines is the most a client can fall behind before lines
+	// are not shown [D]: a screenful of build log many times over, and a
+	// moment's send over a slow path on attach or resume, where D23's
+	// 10,000 lines would take ten times as long. A fresh client prints
+	// only one screenful of it (docs/spec/screen.md §2.5).
 	HistoryLines = 1000
 	// HistoryCells bounds the window's memory and its share of MaxDiff:
 	// HistoryLines lines at 200 columns [derived].

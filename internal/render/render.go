@@ -611,9 +611,10 @@ func mouseCode(m screen.MouseMode) string {
 
 // history prints g's history lines the terminal has not had into its
 // scrollback, above the screen, and makes the frame a full redraw if it
-// printed any (docs/spec/screen.md §8.7): the whole window the first
-// time, which is the recent history on attach or resume; after that each
-// line once, by number; and a marker for lines that were never received.
+// printed any (docs/spec/screen.md §8.7): the first time, one screenful
+// of the newest lines, which is the recent history on attach or resume;
+// after that each line once, by number; and a marker for lines that were
+// never received.
 func (r *Renderer) history(g *screen.Grid) {
 	h := g.History
 	if r.started && h.Next < r.printed {
@@ -621,11 +622,18 @@ func (r *Renderer) history(g *screen.Grid) {
 		r.printed = h.Next
 		return
 	}
+	rows := r.rows
+	if rows == 0 {
+		_, rows = g.Size()
+	}
 	var lines [][]screen.Cell
 	var missed uint64
 	switch first := h.First(); {
 	case !r.started:
-		lines = h.Lines
+		// A fresh client's terminal may already hold these lines from
+		// before the resume, so it reprints only the screenful just
+		// above the screen, not the whole window (§2.5, Dan 2026-11-16).
+		lines = h.Lines[max(0, len(h.Lines)-rows):]
 	case first > r.printed:
 		missed, lines = first-r.printed, h.Lines
 	default:
@@ -643,10 +651,6 @@ func (r *Renderer) history(g *screen.Grid) {
 		for _, piece := range wrap(l, r.cols) {
 			items = append(items, func(y int) { r.historyLine(y, piece) })
 		}
-	}
-	rows := r.rows
-	if rows == 0 {
-		_, rows = g.Size()
 	}
 	// Each chunk is written on the top rows, then scrolled off the top of
 	// the screen into the terminal's history by LFs on its last row.

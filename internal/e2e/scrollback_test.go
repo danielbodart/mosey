@@ -186,23 +186,30 @@ func accountedFor(got []int, n int) (markers int, err error) {
 	return markers, nil
 }
 
-// A client that resumes a session first prints its recent history, then
-// its screen (§2.5): what scrolled off before it attached is in its
-// terminal's scrollback too.
-func TestAResumingClientReprintsTheRecentHistory(t *testing.T) {
+// A client that resumes a session first prints one screenful of its
+// recent history, the lines just above the screen, then its screen
+// (§2.5): its terminal's 24 rows of history, not the whole window. seq
+// 100 on 80 × 24 leaves line-0078 to line-0100 and the prompt on the
+// screen, so the 24 lines above it are line-0054 to line-0077.
+func TestAResumingClientReprintsOneScreenfulOfHistory(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
 	synctest.Test(t, func(t *testing.T) {
 		w := newResumeWorld(t)
 		a := w.first()
 		a.sees("$")
-		a.typeLine("seq 60")
-		a.sees("line-0060")
+		a.typeLine("seq 100")
+		a.sees("line-0100")
 		a.leave()
 		a.ends()
 		b := w.another("laptop", laptopAddr)
-		b.sees("line-0060")
-		if err := exactlyOnce(numbers(transcript(b.user.bytes(), 80, 24)), 60); err != nil {
-			t.Errorf("the resuming client: %v", err)
+		b.sees("line-0100")
+		got := numbers(transcript(b.user.bytes(), 80, 24))
+		var want []int
+		for i := 54; i <= 100; i++ {
+			want = append(want, i)
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("the resuming client shows %v, want %v", got, want)
 		}
 		w.exitShell(b)
 	})

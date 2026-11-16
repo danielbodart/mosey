@@ -117,7 +117,7 @@ func render1(t *testing.T, r *render.Renderer, l *local, g *screen.Grid) {
 	}
 }
 
-// The first frame prints the whole window, the recent history, above the
+// The first frame prints one screenful of the recent history above the
 // screen; after that each line is printed once, in order, however many
 // chunks of the screen's height it takes (docs/spec/screen.md §8.7).
 func TestHistoryEntersTheLocalScrollbackOnceInOrder(t *testing.T) {
@@ -135,7 +135,7 @@ func TestHistoryEntersTheLocalScrollbackOnceInOrder(t *testing.T) {
 	g3 := screenWith(20, 5, "screen three")
 	g3.History = g2.History
 	render1(t, r, l, g3)
-	if got, want := strings.Join(l.scrollback(), "|"), strings.Join(names(0, 14), "|"); got != want {
+	if got, want := strings.Join(l.scrollback(), "|"), strings.Join(names(7, 14), "|"); got != want {
 		t.Errorf("scrollback\n%s\nwant\n%s", got, want)
 	}
 	if l.row(0) != "screen three" {
@@ -144,6 +144,48 @@ func TestHistoryEntersTheLocalScrollbackOnceInOrder(t *testing.T) {
 	// A history line keeps its style.
 	if c := l.t.ScrollbackLine(l.t.ScrollbackLen() - 1)[0]; c.Content != "h" || c.Style.Fg == nil {
 		t.Errorf("the last history line's first cell is %+v", c)
+	}
+}
+
+// A fresh renderer, a client that has just attached or resumed, prints
+// exactly as many of the newest history lines as its terminal has rows,
+// the screenful just above the screen, or all of them if there are fewer,
+// and then the screen; not the whole window, which its terminal may
+// already hold from before (§2.5, §8.7). Later lines all follow.
+func TestAFreshRendererReprintsOneScreenfulOfHistoryThenTheScreen(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		held   int
+		before []string
+	}{
+		{"a full window", screen.HistoryLines, names(screen.HistoryLines-6, screen.HistoryLines)},
+		{"more than a screenful", 10, names(4, 10)},
+		{"exactly a screenful", 6, names(0, 6)},
+		{"fewer than a screenful", 2, names(0, 2)},
+		{"none", 0, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newLocal(20, 6)
+			r := render.New(l, allCaps)
+			r.Resize(20, 6)
+			_ = r.Enter()
+			g := screenWith(20, 6, "$ resumed")
+			g.History = g.History.Add(uint64(tc.held), histLines(0, tc.held, 20))
+			render1(t, r, l, g)
+			if got, want := strings.Join(l.scrollback(), "|"), strings.Join(tc.before, "|"); got != want {
+				t.Errorf("scrollback %q, want %q", got, want)
+			}
+			if l.row(0) != "$ resumed" {
+				t.Errorf("the screen's top row is %q", l.row(0))
+			}
+			next := screenWith(20, 6, "$ later")
+			next.History = g.History.Add(uint64(tc.held)+2, histLines(tc.held, 2, 20))
+			render1(t, r, l, next)
+			want := append(append([]string{}, tc.before...), names(tc.held, tc.held+2)...)
+			if got := l.scrollback(); strings.Join(got, "|") != strings.Join(want, "|") {
+				t.Errorf("after two new lines, scrollback %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -160,7 +202,7 @@ func TestAGapPrintsOneMarkerWithTheCount(t *testing.T) {
 	g2 := g.Clone()
 	g2.History = g.History.Add(5000, histLines(4998, 2, 30))
 	render1(t, r, l, g2)
-	want := append(names(0, 5), "… 4993 lines not shown", "h4998", "h4999")
+	want := append(names(1, 5), "… 4993 lines not shown", "h4998", "h4999")
 	if got := l.scrollback(); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("scrollback %q, want %q", got, want)
 	}
@@ -230,11 +272,11 @@ func TestAReconnectsFreshWindowPrintsOnlyWhatIsNew(t *testing.T) {
 // scrollback too; its trailing blanks make no empty rows, and a wide
 // character at the edge starts the next row whole (§8.7).
 func TestAWideHistoryLineWrapsToTheLocalWidth(t *testing.T) {
-	l := newLocal(10, 3)
+	l := newLocal(10, 5)
 	r := render.New(l, allCaps)
-	r.Resize(10, 3)
+	r.Resize(10, 5)
 	_ = r.Enter()
-	g := screenWith(10, 3, "$")
+	g := screenWith(10, 5, "$")
 	wide := histLine("012345678", 40)
 	wide[9] = screen.Cell{Text: "世", Width: 2}
 	wide[10] = screen.Cell{Width: 0}
@@ -245,13 +287,14 @@ func TestAWideHistoryLineWrapsToTheLocalWidth(t *testing.T) {
 	if got := strings.Join(l.scrollback(), "|"); got != want {
 		t.Errorf("scrollback %q, want %q", got, want)
 	}
-	// As many rows as the same five rows given ready-wrapped: the
-	// trailing blanks made none of their own.
-	l2 := newLocal(10, 3)
+	// As many rows as the same five rows given ready-wrapped, a
+	// screenful on this terminal (§8.7): the trailing blanks made none
+	// of their own.
+	l2 := newLocal(10, 5)
 	r2 := render.New(l2, allCaps)
-	r2.Resize(10, 3)
+	r2.Resize(10, 5)
 	_ = r2.Enter()
-	g2 := screenWith(10, 3, "$")
+	g2 := screenWith(10, 5, "$")
 	g2.History = g2.History.Add(5, [][]screen.Cell{
 		histLine("0123456789", 10), histLine("abcdefghij", 10), histLine("klmnopq", 10),
 		histLine("012345678", 10), histLine("z", 10),
