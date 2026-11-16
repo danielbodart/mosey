@@ -177,7 +177,7 @@ func (s *spawner) greeting() bootstrap.SessionLine {
 		AttachProtocol: bootstrap.AttachProtocol,
 		SessionID:      s.sid, Name: s.name,
 		Started: s.started, State: s.state, Since: s.since, Peer: s.peer,
-		Holder: s.holder, HasHolder: s.hasHolder,
+		Holder: s.holder, HasHolder: s.hasHolder, Command: s.command,
 	}
 	if time.Now().Before(s.holdUntil) {
 		g.State, g.Since, g.Holder, g.HasHolder = bootstrap.SessionAttached, s.holdFrom, s.hold, true

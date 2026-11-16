@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"log/slog"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 )
@@ -93,7 +96,8 @@ func TestTheListIsLaidOutFromLinesThatParse(t *testing.T) {
 			t.Errorf("the table lacks %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "\x1b") || strings.Contains(got, "evil") || strings.Contains(got, "welcome") || strings.Contains(got, "VERSION") {
+	if strings.Contains(got, "\x1b") || strings.Contains(got, "evil") || strings.Contains(got, "welcome") || strings.Contains(got, "VERSION") ||
+		strings.Contains(got, "COMMAND") {
 		t.Errorf("the table shows what it should not:\n%q", got)
 	}
 	if !strings.Contains(errs.String(), "mosey -s NAME far") || !strings.Contains(errs.String(), "1 list lines") {
@@ -103,6 +107,73 @@ func TestTheListIsLaidOutFromLinesThatParse(t *testing.T) {
 	if !strings.Contains(string(argv), "--serve=list") {
 		t.Errorf("ssh ran %q", argv)
 	}
+}
+
+// A session's command is listed in a last column, there only when some
+// session has one, with what is not printable shown as ? and a long one
+// cut (bootstrap.md §9.4, D9).
+func TestTheListShowsEachSessionsCommandAndNothingUnprintableOfIt(t *testing.T) {
+	dir := t.TempDir()
+	ssh := fakeSSH(t, dir, "hostname far\n", 0)
+	server := filepath.Join(dir, "mosey")
+	cmd := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
+	script := "#!/bin/sh\n[ \"$1\" = --serve=list ] || exit 9\n" +
+		"printf 'MOSEY-LIST 1 shell detached 1794651234\\n'\n" +
+		"printf 'MOSEY-LIST 1 ai attached 1794651234 " + cmd("claude --resume") + "\\n'\n" +
+		"printf 'MOSEY-LIST 1 tricky detached 1794651234 " + cmd("ls\tgnp.exe\u202eyes") + "\\n'\n" +
+		"printf 'MOSEY-LIST 1 long detached 1794651234 " + cmd(strings.Repeat("x", 100)) + "\\n'\n" +
+		"printf 'MOSEY-LIST 1 evil detached 1794651234 " + cmd("a\x1b[2J") + "\\n'\n"
+	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	if err := List(context.Background(), ListOptions{
+		SSH:    bootstrap.SSH{Program: ssh, Destination: "far", Server: server},
+		Stdout: &out, Stderr: &errs,
+	}); err != nil {
+		t.Fatalf("%v; stderr %q", err, errs.String())
+	}
+	got := out.String()
+	since := time.Unix(1794651234, 0).Local().Format(takenOverTime)
+	for _, want := range []string{
+		"NAME", "COMMAND",
+		"ai      attached  " + since + "  claude --resume\n",
+		"tricky  detached  " + since + "  ls?gnp.exe?yes\n",
+		"shell   detached  " + since + "\n",
+		"long    detached  " + since + "  " + strings.Repeat("x", 60) + "…\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the table lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\x1b") || strings.Contains(got, "\u202e") || strings.Contains(got, "\t") || strings.Contains(got, "evil") {
+		t.Errorf("the table shows what it should not:\n%q", got)
+	}
+	if !strings.Contains(errs.String(), "1 list lines") {
+		t.Errorf("stderr %q", errs.String())
+	}
+}
+
+func FuzzListCommand(f *testing.F) {
+	f.Add("claude --resume")
+	f.Add("ls\tgnp.exe\u202eyes\u00a0\u200b\x1b[2J\xff")
+	f.Add(strings.Repeat("é", 100))
+	f.Fuzz(func(t *testing.T, s string) {
+		shown := shownCommand(s)
+		n := 0
+		for _, r := range shown {
+			n++
+			if !unicode.IsPrint(r) || r == utf8.RuneError {
+				t.Fatalf("%q shown as %q, with %U", s, shown, r)
+			}
+		}
+		if n > maxShownCommand+1 || n == maxShownCommand+1 && !strings.HasSuffix(shown, "…") {
+			t.Fatalf("%q shown as %d runes: %q", s, n, shown)
+		}
+		if bootstrap.ValidCommand(s) && utf8.RuneCountInString(s) <= maxShownCommand && utf8.RuneCountInString(shown) != utf8.RuneCountInString(s) {
+			t.Fatalf("%q shown as %q, not rune for rune", s, shown)
+		}
+	})
 }
 
 // -kill runs --serve=kill NAME, and says whether there was such a

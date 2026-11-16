@@ -28,20 +28,23 @@ const usage = `mosey -- a remote terminal for bad networks
   mosey [OPTIONS] DESTINATION
         Log in to DESTINATION with ssh, as your ssh config says, and stay
         connected over UDP as the network comes and goes. Resumes your
-        most recently detached session there, or starts a new one; it
-        never takes a session another terminal is using.
+        most recently detached shell session there, or starts a new one;
+        it never takes a session another terminal is using, nor one
+        running a COMMAND.
         DESTINATION localhost is this machine, started without ssh: the
         same sessions as mosey THISHOST would find, so one started here
         can be taken from another device, and back.
 
   mosey [-s NAME | -new] [OPTIONS] DESTINATION COMMAND [ARG...]
-        Start a session running COMMAND in place of your shell, as ssh
-        DESTINATION COMMAND would run it (your shell's -c, with the words
-        joined by spaces); when it exits, so does the session, and mosey.
-        Without -s it is always a new session. With -s NAME, if NAME is
-        running already it is taken as it is, and COMMAND is not run.
-        Words after DESTINATION are all COMMAND's, so its own flags are
-        safe: mosey DESTINATION ls -la.
+        Run COMMAND in place of your shell, as ssh DESTINATION COMMAND
+        would (your shell's -c, with the words joined by spaces); when it
+        exits, so does the session, and mosey. Without -s or -new it
+        resumes your most recently detached session started with exactly
+        this COMMAND, or starts a new one running it; one another
+        terminal is using is never taken, so a second window gets a
+        second one. With -s NAME, if NAME is running already it is taken
+        as it is. Words after DESTINATION are all COMMAND's, so its own
+        flags are safe: mosey DESTINATION ls -la.
 
   mosey -s NAME [OPTIONS] DESTINATION
         Attach to the session called NAME, taking it over from wherever
@@ -53,7 +56,7 @@ const usage = `mosey -- a remote terminal for bad networks
 
   mosey -list [OPTIONS] DESTINATION
         List your sessions there (or here): name, attached or detached,
-        and since when.
+        since when, and the COMMAND it runs, if any.
 
   mosey -kill NAME [OPTIONS] DESTINATION
         End the session called NAME: its shell gets SIGHUP.
@@ -64,7 +67,8 @@ const usage = `mosey -- a remote terminal for bad networks
 
         -dir, -type and a COMMAND apply only when a new session is
         started, and are ignored when an existing one is resumed or
-        taken over; -type and a COMMAND exclude each other.
+        taken over (a COMMAND still picks which detached session a
+        plain resume finds); -type and a COMMAND exclude each other.
         -dir DIR starts its shell in DIR, relative to your home there
         unless absolute; if DIR is not a directory, nothing is started.
         -type TEXT types TEXT into that shell, then Enter, so
@@ -266,9 +270,9 @@ func parseArgs(args []string) (cli, error) {
 
 // setCommand takes the words after DESTINATION as the command (bootstrap.md
 // §2, §9.2.3): joined with single spaces, as ssh joins them, for the
-// user's shell to read with -c. It only starts sessions, so a plain mosey
-// DEST COMMAND is -new: resuming an unrelated detached shell would quietly
-// not run what was asked for.
+// user's shell to read with -c. A plain mosey DEST COMMAND stays auto, with
+// the command: the launcher returns to a detached session started with
+// that same command, or starts one running it (PLAN D8, option C).
 func (c *cli) setCommand(words []string, kill bool) error {
 	switch {
 	case c.list || kill:
@@ -279,9 +283,6 @@ func (c *cli) setCommand(words []string, kill bool) error {
 	c.command = strings.Join(words, " ")
 	if !bootstrap.ValidCommand(c.command) {
 		return &bootstrap.UsageError{Msg: fmt.Sprintf("mosey: the command: at most %d bytes of text with no control character but tab", bootstrap.MaxStartText)}
-	}
-	if c.attach == bootstrap.AttachAuto {
-		c.attach = bootstrap.AttachNew
 	}
 	return nil
 }

@@ -14,10 +14,11 @@ import (
 // later version reads all of it.
 const (
 	sessionMagic = "MOSEY-SESSION"
-	// MaxSessionLine bounds a greeting, LF included: at most 169 bytes
-	// are used (§9.2.1). Frozen, since every launcher reads the greeting
-	// into a buffer this size.
-	MaxSessionLine = 256
+	// MaxSessionLine bounds a greeting, LF included: at most 1536 bytes
+	// are used, 169 without the optional cmd (§9.2.1). It was 256 before
+	// the cmd, and releases from then pass over a session with one; the
+	// greeting of every other is what it was.
+	MaxSessionLine = 2048
 	// AttachProtocol is the one version of the attach protocol
 	// (server.md §2.8) this build speaks. A launcher attaches a session
 	// only if its greeting says the same number (D8 V1); there is no
@@ -78,6 +79,11 @@ type SessionLine struct {
 	// session: the attached connection's, or a pending resume's (§9.2.1).
 	Holder    [CredentialIDSize]byte
 	HasHolder bool
+	// Command is the command the session was started with (a cmdtext,
+	// §9.2.3), or "" if it was started without one, the greeting's
+	// optional last field. A plain `mosey HOST [COMMAND]` resumes only a
+	// session whose Command is its own (PLAN D8, option C).
+	Command string
 }
 
 // MarshalSessionLine is s as one line, LF included.
@@ -100,6 +106,7 @@ func MarshalSessionLine(s SessionLine) []byte {
 	} else {
 		b = appendField(b, "-")
 	}
+	b = appendOptionalText(b, s.Command)
 	return append(b, '\n')
 }
 
@@ -111,11 +118,20 @@ func ParseSessionLine(line []byte) (SessionLine, error) {
 	if len(line) > MaxSessionLine {
 		return SessionLine{}, badLine("session line of %d bytes", len(line))
 	}
-	fields, err := splitFields(line, sessionMagic, 10)
+	n := 10
+	if hasOptionalField(line, n) {
+		n++
+	}
+	fields, err := splitFields(line, sessionMagic, n)
 	if err != nil {
 		return SessionLine{}, err
 	}
 	var s SessionLine
+	if n == 11 {
+		if s.Command, err = parseText(fields[9], ValidCommand, "command"); err != nil {
+			return SessionLine{}, err
+		}
+	}
 	if s.AttachProtocol, err = parseAttachProtocol(fields[1]); err != nil {
 		return SessionLine{}, err
 	}
@@ -214,9 +230,9 @@ const (
 	// listVersion is the list line's own version, frozen in position like
 	// every line's.
 	listVersion = 1
-	// MaxListLine bounds a list line, LF included: at most 68 bytes are
-	// used (§9.4).
-	MaxListLine = 160
+	// MaxListLine bounds a list line, LF included: at most 1435 bytes are
+	// used, 68 without the optional command (§9.4).
+	MaxListLine = 2048
 	// MaxListed is the most list lines the client shows [choice].
 	MaxListed = 1024
 )
@@ -226,6 +242,11 @@ type ListLine struct {
 	Name  string
 	State SessionState
 	Since time.Time
+	// Command is the greeting's (§9.2.1): what the session was started
+	// with, or "" for none. The parser holds it to cmdtext, valid UTF-8
+	// with no control character but tab, but it is still the far side's
+	// words, so the client shows it only through its own filter (D9).
+	Command string
 }
 
 // MarshalListLine is l as one line, LF included.
@@ -236,24 +257,36 @@ func MarshalListLine(l ListLine) []byte {
 	b = appendField(b, l.Name)
 	b = appendField(b, l.State.String())
 	b = appendField(b, strconv.FormatInt(l.Since.Unix(), 10))
+	b = appendOptionalText(b, l.Command)
 	return append(b, '\n')
 }
 
 // ParseListLine reads one list line, LF included, refusing anything not
 // canonical. It parses what a server, possibly a hostile one, wrote, so it
-// is fuzzed; everything it accepts is printable ASCII with no space.
+// is fuzzed; everything it accepts is printable ASCII with no space, but
+// the command, which is a cmdtext.
 func ParseListLine(line []byte) (ListLine, error) {
 	if len(line) > MaxListLine {
 		return ListLine{}, badLine("list line of %d bytes", len(line))
 	}
-	fields, err := splitFields(line, listMagic, 6)
+	n := 6
+	if hasOptionalField(line, n) {
+		n++
+	}
+	fields, err := splitFields(line, listMagic, n)
 	if err != nil {
 		return ListLine{}, err
+	}
+	var command string
+	if n == 7 {
+		if command, err = parseText(fields[5], ValidCommand, "command"); err != nil {
+			return ListLine{}, err
+		}
 	}
 	if string(fields[1]) != strconv.Itoa(listVersion) {
 		return ListLine{}, badLine("list line version %q", fields[1])
 	}
-	var l ListLine
+	l := ListLine{Command: command}
 	if !ValidSessionName(string(fields[2])) {
 		return ListLine{}, badLine("session name %q", fields[2])
 	}

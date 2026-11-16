@@ -101,3 +101,49 @@ func TestResumingASessionIgnoresDirTypeAndCommand(t *testing.T) {
 		t.Errorf("the spawner got %q, not resume:SID with no command", sent)
 	}
 }
+
+// A plain `mosey HOST claude` returns to the detached session started
+// with claude, passing over a detached shell that is newer, and its
+// client is not told the command was not run: it is the one running
+// (PLAN D8, option C, bootstrap.md §9.2.3).
+func TestAPlainCommandReturnsToTheDetachedSessionOfThatCommandAndSaysNothing(t *testing.T) {
+	runtime := runtimeDir(t)
+	base := filepath.Join(runtime, "mosey")
+	if err := makePrivateDir(base); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 2)
+	serve := func(sid [16]byte, name, command string, since int64) {
+		answer := bootstrap.MarshalCredentialLine(bootstrap.CredentialLine{
+			Port: 60001, SessionID: sid, Name: name, Public: oneShotKey(t),
+		})
+		fakeSession(t, base, sid, func(f *os.File) {
+			f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: bootstrap.AttachProtocol, SessionID: sid, Name: name,
+				Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(since, 0), Command: command}))
+			conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
+			if _, err := conn.Recv(); err != nil {
+				return
+			}
+			got <- name
+			conn.Send(ipc.Ready{Line: answer})
+		})
+	}
+	serve([16]byte{0x31}, "ai", "claude", 1794650100)
+	serve([16]byte{0x32}, "shell", "", 1794650200)
+
+	for _, c := range []struct{ command, name string }{{"claude", "ai"}, {"", "shell"}} {
+		cl := bootstrap.ClientLine{Attach: bootstrap.AttachAuto, Command: c.command, Cols: 80, Rows: 24, Public: oneShotKey(t)}
+		var stdout, stderr bytes.Buffer
+		l := &Launcher{Stdin: bytes.NewReader(bootstrap.MarshalClientLine(cl)), Stdout: &stdout, Stderr: &stderr,
+			Env: []string{"HOME=" + t.TempDir(), "XDG_RUNTIME_DIR=" + runtime}}
+		if err := l.Run(t.Context()); err != nil {
+			t.Fatalf("%q: %v, stderr %q", c.command, err, stderr.String())
+		}
+		if taken := <-got; taken != c.name {
+			t.Errorf("%q took %s, not %s", c.command, taken, c.name)
+		}
+		if cred, err := bootstrap.ParseCredentialLine(stdout.Bytes()); err != nil || cred.Existing || cred.Name != c.name {
+			t.Errorf("%q: the client got %q: %+v, %v", c.command, stdout.String(), cred, err)
+		}
+	}
+}

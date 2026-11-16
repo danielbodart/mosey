@@ -50,8 +50,10 @@ type Options struct {
 	Dir, Type string
 	// Command is the command after the host (bootstrap.md §2, §9.2.3), run
 	// in place of the interactive shell of a session this command
-	// creates; "" is none. A session that is taken instead does not run
-	// it, and Run says so on Stderr.
+	// creates; "" is none. With AttachAuto it also picks the detached
+	// session to return to: only one started with this very command (PLAN
+	// D8, option C). A session -s NAME takes that runs something else
+	// does not run it, and Run says so on Stderr.
 	Command string
 
 	// D7's auto-upload (bootstrap.md §4.7), when SSH.Server is "".
@@ -162,8 +164,9 @@ func Run(ctx context.Context, o Options) error {
 	}
 	o.Log.Info("session", "name", line.Name, "existing", line.Existing)
 	if o.Command != "" && line.Existing {
-		// -s NAME found NAME running: it is taken as it is (bootstrap.md
-		// §9.2.3). Said while the terminal is still cooked.
+		// -s NAME found NAME running something else: it is taken as it
+		// is (bootstrap.md §9.2.3). Said while the terminal is still
+		// cooked.
 		fmt.Fprintf(o.Stderr, "mosey: session %s was already running, so the command was not run\n", line.Name)
 	}
 	s := &Session{

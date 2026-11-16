@@ -152,8 +152,12 @@ type spawner struct {
 	// The session's id, from proto's first credential, its name, from the
 	// launcher's line, and its attach socket (server.md §2.6), or nil if
 	// it could not be made.
-	sid     [16]byte
-	name    string
+	sid  [16]byte
+	name string
+	// command is the first line's cmd, "" for none: the greeting carries
+	// it for life, so a plain `mosey HOST COMMAND` can find this session
+	// again and -list can show it (bootstrap.md §9.2.1, §9.2.3).
+	command string
 	started time.Time
 	attach  *attachListener
 	// hangups carries mosey -kill's Hangup from the attach socket to the
@@ -256,7 +260,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 		return err
 	}
 	cl, _ := bootstrap.ParseClientLine(lineMsg.Line)
-	s.name = cl.Name
+	s.name, s.command = cl.Name, cl.Command
 	cols, rows := screen.ClampSize(int(cl.Cols), int(cl.Rows))
 
 	// Pin no mount; outlive the ssh login's hangup; never die of a write

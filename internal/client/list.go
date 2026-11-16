@@ -8,14 +8,47 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"slices"
+	"strings"
 	"text/tabwriter"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 )
 
-// maxList bounds what -list and -kill read from the server: far more than
-// any list of sessions, so a runaway far side cannot fill memory.
-const maxList = 256 << 10
+// maxList bounds what -list and -kill read from the server: MaxListed
+// lines of MaxListLine bytes each (bootstrap.md §9.4), far more than any
+// real list of sessions, so a runaway far side cannot fill memory.
+const maxList = bootstrap.MaxListed * bootstrap.MaxListLine
+
+// maxShownCommand is how many runes of a session's command -list shows
+// (bootstrap.md §9.4) [choice: one terminal line beside the other
+// columns].
+const maxShownCommand = 60
+
+// shownCommand is a session's command as -list shows it: every rune that
+// is not printable (a tab, a format character such as a bidi override, a
+// non-ASCII space) as ?, and cut to maxShownCommand runes with … after.
+// The parser has already held it to cmdtext, with no control character
+// but tab, but it is a far side's words, so the table is only ever given
+// what is safe to print and cannot reorder the line it is on (D9).
+func shownCommand(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if n == maxShownCommand {
+			b.WriteRune('…')
+			break
+		}
+		if r == utf8.RuneError || !unicode.IsPrint(r) {
+			r = '?'
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
+}
 
 // ListOptions is what List needs from cmd/mosey.
 type ListOptions struct {
@@ -54,13 +87,33 @@ func List(ctx context.Context, o ListOptions) error {
 		fmt.Fprintf(o.Stdout, "no sessions on %s\n", where(o.SSH))
 		return nil
 	}
-	tw := tabwriter.NewWriter(o.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tSTATE\tSINCE")
+	// The command is the last column, and there only when some session
+	// has one, so a host of shells lists as it did before commands.
+	commands := slices.ContainsFunc(rows, func(r bootstrap.ListLine) bool { return r.Command != "" })
+	var table bytes.Buffer
+	tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+	if commands {
+		fmt.Fprintln(tw, "NAME\tSTATE\tSINCE\tCOMMAND")
+	} else {
+		fmt.Fprintln(tw, "NAME\tSTATE\tSINCE")
+	}
 	for _, r := range rows {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Name, r.State, r.Since.Local().Format(takenOverTime))
+		since := r.Since.Local().Format(takenOverTime)
+		if commands {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Name, r.State, since, shownCommand(r.Command))
+		} else {
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Name, r.State, since)
+		}
 	}
 	if err := tw.Flush(); err != nil {
 		return err
+	}
+	// A shell's row has an empty last cell, padded by tabwriter: no
+	// trailing spaces on any line.
+	for line := range strings.Lines(table.String()) {
+		if _, err := fmt.Fprintln(o.Stdout, strings.TrimRight(line, " \n")); err != nil {
+			return err
+		}
 	}
 	fmt.Fprintf(o.Stderr, "attach to one with: mosey -s NAME%s\n", again(o.SSH))
 	return nil

@@ -5,7 +5,9 @@ package e2e
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -33,9 +35,12 @@ func TestALocalCommandRunsInPlaceOfTheShellAndItsEndEndsTheClient(t *testing.T) 
 	if err := os.Mkdir(filepath.Join(m.home, "work"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// The directory is printed relative to $HOME, so the line is short
+	// enough never to wrap whatever the temporary directory's name: a
+	// full path under a long TMPDIR wrapped at the screen's 100 columns.
 	words := startLocal(t, "a client running a command with flags", mosey, m, "", []string{"-dir", "work"},
-		"printf", "'%s|%s|%s\\n'", "\"$(pwd)\"", "'a  b'", "-la")
-	words.shows(filepath.Join(m.home, "work") + "|a  b|-la")
+		"printf", "'%s|%s|%s\\n'", "\"in:${PWD#\"$HOME\"/}\"", "'a  b'", "-la")
+	words.shows("in:work|a  b|-la")
 	if st := words.exits(); st != 0 {
 		t.Errorf("the client exited %d, not 0", st)
 	}
@@ -60,6 +65,89 @@ func TestALocalCommandRunsInPlaceOfTheShellAndItsEndEndsTheClient(t *testing.T) 
 	taker.typeLine("exit")
 	if st := taker.exits(); st != 0 {
 		t.Errorf("the taker exited %d, not 0", st)
+	}
+	waitFor(t, "every session's processes to end", func() bool { return len(spawners(mosey)) == 0 })
+}
+
+// mosey localhost COMMAND is R1 keyed by the command (PLAN D8, Dan,
+// 2026-11-16, option C; bootstrap.md §9.2.3), with no sshd:
+//   - closed and run again, the same line returns to the same session,
+//     its state intact, though a shell session was detached since;
+//   - -list shows the command;
+//   - while it is attached, the same line gets a second session;
+//   - a plain mosey localhost never takes the detached command session,
+//     nor mosey localhost COMMAND a detached shell, which a plain mosey
+//     localhost then does take.
+//
+// The command is sh, an interactive shell of its own, so it has state
+// to keep and reads typed lines (CI's /bin/sh is dash).
+func TestALocalCommandIsReturnedToAfterADetachAndNeverMixedWithAShell(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	m := newMachine(t)
+	mosey := buildMosey(t, "e2e")
+
+	first := startLocal(t, "the first sh client", mosey, m, "", nil, "sh")
+	first.shows("$")
+	first.typeLine("M=kept-$((40+2)); echo set-$((1+1))")
+	first.shows("set-2")
+	ai := first.name()
+	first.cmd.Process.Signal(syscall.SIGHUP)
+	if st := first.exits(); st != 0 {
+		t.Fatalf("the first sh client exited %d after SIGHUP, not 0", st)
+	}
+
+	out, st := localCmd(t, mosey, m, "-list")
+	if st != 0 || !regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(ai)+`\s+detached\s+\S+\s+sh$`).MatchString(out) ||
+		!regexp.MustCompile(`(?m)^NAME\s+STATE\s+SINCE\s+COMMAND$`).MatchString(out) {
+		t.Fatalf("mosey -list exited %d, without %s and its command:\n%s", st, ai, out)
+	}
+
+	// A plain client passes over the detached sh and starts a shell,
+	// which is then detached more recently than the sh.
+	plain := startLocal(t, "a plain client", mosey, m, "", nil)
+	plain.shows("$")
+	shell := plain.name()
+	if shell == ai {
+		t.Fatalf("a plain mosey localhost took %s, the detached sh", ai)
+	}
+	plain.cmd.Process.Signal(syscall.SIGHUP)
+	if st := plain.exits(); st != 0 {
+		t.Fatalf("the plain client exited %d after SIGHUP, not 0", st)
+	}
+
+	again := startLocal(t, "the same sh line again", mosey, m, "", nil, "sh")
+	if got := again.name(); got != ai {
+		t.Fatalf("mosey localhost sh went to %s, not back to %s", got, ai)
+	}
+	again.typeLine("echo got-$M")
+	again.shows("got-kept-42")
+	if strings.Contains(again.screen.String(), "was already running") {
+		t.Errorf("returning to its own command said it was not run:\n%s", again.screen.String())
+	}
+
+	// That one attached: a second window gets a second sh, not the
+	// attached one and not the detached shell.
+	second := startLocal(t, "a second sh window", mosey, m, "", nil, "sh")
+	second.shows("$")
+	if got := second.name(); got == ai || got == shell {
+		t.Fatalf("a second mosey localhost sh took %s", got)
+	}
+	second.typeLine("exit")
+	if st := second.exits(); st != 0 {
+		t.Errorf("the second sh client exited %d, not 0", st)
+	}
+	again.typeLine("exit")
+	if st := again.exits(); st != 0 {
+		t.Errorf("the returning sh client exited %d, not 0", st)
+	}
+
+	back := startLocal(t, "a plain client again", mosey, m, "", nil)
+	if got := back.name(); got != shell {
+		t.Fatalf("a plain mosey localhost went to %s, not back to the shell %s", got, shell)
+	}
+	back.typeLine("exit")
+	if st := back.exits(); st != 0 {
+		t.Errorf("the plain client exited %d, not 0", st)
 	}
 	waitFor(t, "every session's processes to end", func() bool { return len(spawners(mosey)) == 0 })
 }

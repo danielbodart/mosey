@@ -55,31 +55,68 @@ func TestTheLongestSessionLineFitsItsBound(t *testing.T) {
 	if _, err := ParseSessionLine(line); err != nil {
 		t.Fatal(err)
 	}
+	// The optional command adds a space and at most 1366 (§9.2.1).
+	s.Command = strings.Repeat("é", MaxStartText/2)
+	line = MarshalSessionLine(s)
+	if len(line) != 1536 || len(line) > MaxSessionLine {
+		t.Fatalf("%d bytes with a command, not the 1536 §9.2.1 derives, or over %d", len(line), MaxSessionLine)
+	}
+	if got, err := ParseSessionLine(line); err != nil || got.Command != s.Command {
+		t.Fatalf("%+v, %v", got, err)
+	}
+}
+
+// A session started with a command says so in its greeting, as an
+// optional last field, so that a plain `mosey HOST COMMAND` can find it
+// again; one started without has the greeting of before commands, byte
+// for byte (§9.2.1).
+func TestAGreetingCarriesTheCommandOnlyWhenTheSessionHasOne(t *testing.T) {
+	s := sampleSessionLine()
+	without := string(MarshalSessionLine(s))
+	if strings.Count(without, " ") != 8 {
+		t.Fatalf("a greeting without a command has %d spaces: %q", strings.Count(without, " "), without)
+	}
+	s.Command = "claude --resume\tü"
+	with := MarshalSessionLine(s)
+	if want := strings.TrimSuffix(without, "\n") + " Y2xhdWRlIC0tcmVzdW1lCcO8\n"; string(with) != want {
+		t.Fatalf("%q, want %q", with, want)
+	}
+	got, err := ParseSessionLine(with)
+	if err != nil || got.Command != s.Command || got.Name != s.Name || got.Holder != s.Holder {
+		t.Fatalf("%+v, %v", got, err)
+	}
 }
 
 func TestASessionLineThatBreaksARuleIsRefused(t *testing.T) {
 	good := string(MarshalSessionLine(sampleSessionLine()))
 	cases := map[string]string{
-		"no LF":            strings.TrimSuffix(good, "\n"),
-		"CR":               strings.Replace(good, "\n", "\r\n", 1),
-		"double space":     strings.Replace(good, " ", "  ", 1),
-		"unknown state":    strings.Replace(good, "detached", "gone", 1),
-		"leading zero":     strings.Replace(good, " 1794650000 ", " 01794650000 ", 1),
-		"13-digit time":    strings.Replace(good, " 1794650000 ", " 1794650000000 ", 1),
-		"zoned peer":       strings.Replace(good, "[2001:db8::7]", "[fe80::1%eth0]", 1),
-		"port 0":           strings.Replace(good, ":50123", ":0", 1),
-		"mapped peer":      strings.Replace(good, "[2001:db8::7]", "[::ffff:192.0.2.1]", 1),
-		"short session id": strings.Replace(good, " DzoBAgM", " DzoB", 1),
-		"another magic":    strings.Replace(good, "MOSEY-SESSION", "MOSEY-SESSIONS", 1),
-		"extra field":      strings.Replace(good, "\n", " x\n", 1),
-		"bad name":         strings.Replace(good, "quiet-heron", "-heron", 1),
-		"short holder":     strings.Replace(good, " AQIDBAUGBwg\n", " AQID\n", 1),
-		"no aproto":        strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION ", 1),
-		"aproto 0":         strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 0 ", 1),
-		"aproto over 255":  strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 256 ", 1),
-		"aproto zero-led":  strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 01 ", 1),
-		"an attach range":  strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 1-1 ", 1),
-		"a swver as well":  strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 0.1.2 1 ", 1),
+		"no LF":                    strings.TrimSuffix(good, "\n"),
+		"CR":                       strings.Replace(good, "\n", "\r\n", 1),
+		"double space":             strings.Replace(good, " ", "  ", 1),
+		"unknown state":            strings.Replace(good, "detached", "gone", 1),
+		"leading zero":             strings.Replace(good, " 1794650000 ", " 01794650000 ", 1),
+		"13-digit time":            strings.Replace(good, " 1794650000 ", " 1794650000000 ", 1),
+		"zoned peer":               strings.Replace(good, "[2001:db8::7]", "[fe80::1%eth0]", 1),
+		"port 0":                   strings.Replace(good, ":50123", ":0", 1),
+		"mapped peer":              strings.Replace(good, "[2001:db8::7]", "[::ffff:192.0.2.1]", 1),
+		"short session id":         strings.Replace(good, " DzoBAgM", " DzoB", 1),
+		"another magic":            strings.Replace(good, "MOSEY-SESSION", "MOSEY-SESSIONS", 1),
+		"extra field":              strings.Replace(good, "\n", " x\n", 1),
+		"bad name":                 strings.Replace(good, "quiet-heron", "-heron", 1),
+		"short holder":             strings.Replace(good, " AQIDBAUGBwg\n", " AQID\n", 1),
+		"no aproto":                strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION ", 1),
+		"aproto 0":                 strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 0 ", 1),
+		"aproto over 255":          strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 256 ", 1),
+		"aproto zero-led":          strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 01 ", 1),
+		"an attach range":          strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 1-1 ", 1),
+		"a swver as well":          strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 0.1.2 1 ", 1),
+		"a dash command":           strings.Replace(good, "\n", " -\n", 1),
+		"a command with a newline": strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("a\nb"))+"\n", 1),
+		"a command with an escape": strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("a\x1b[2J"))+"\n", 1),
+		"a command not utf-8":      strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("a\xff"))+"\n", 1),
+		"a command over 1024":      strings.Replace(good, "\n", " "+b64.EncodeToString(bytes.Repeat([]byte("a"), MaxStartText+1))+"\n", 1),
+		"a padded command":         strings.Replace(good, "\n", " YQ==\n", 1),
+		"two commands":             strings.Replace(good, "\n", " YQ YQ\n", 1),
 	}
 	for name, line := range cases {
 		if _, err := ParseSessionLine([]byte(line)); !errors.Is(err, ErrBadLine) {
@@ -174,6 +211,27 @@ func TestAListLineRoundTripsAndFitsItsBound(t *testing.T) {
 	if got := string(MarshalListLine(sampleListLine())); got != "MOSEY-LIST 1 quiet-heron detached 1794651234\n" {
 		t.Errorf("%q", got)
 	}
+	longest.Command = strings.Repeat("é", MaxStartText/2)
+	line := MarshalListLine(longest)
+	if got, err := ParseListLine(line); err != nil || got.Command != longest.Command {
+		t.Errorf("%+v, %v", got, err)
+	}
+	if n := len(line); n != 1435 || n > MaxListLine {
+		t.Errorf("the longest list line with a command is %d bytes, §9.4 says 1435", n)
+	}
+}
+
+// A session's command is listed as an optional last field, and a session
+// without one is listed exactly as before commands (§9.4).
+func TestAListLineCarriesTheCommandOnlyWhenTheSessionHasOne(t *testing.T) {
+	l := sampleListLine()
+	l.Command = "claude"
+	if got := string(MarshalListLine(l)); got != "MOSEY-LIST 1 quiet-heron detached 1794651234 Y2xhdWRl\n" {
+		t.Errorf("%q", got)
+	}
+	if got, err := ParseListLine(MarshalListLine(l)); err != nil || got != l {
+		t.Errorf("%+v, %v", got, err)
+	}
 }
 
 // A hostile server's list line that would put anything but its grammar
@@ -181,20 +239,27 @@ func TestAListLineRoundTripsAndFitsItsBound(t *testing.T) {
 func TestAListLineThatBreaksARuleIsRefused(t *testing.T) {
 	good := string(MarshalListLine(sampleListLine()))
 	for name, line := range map[string]string{
-		"an escape in the name": strings.Replace(good, "quiet-heron", "quiet\x1b[2Jheron", 1),
-		"a name over 32":        strings.Replace(good, "quiet-heron", strings.Repeat("q", 33), 1),
-		"a bad state":           strings.Replace(good, "detached", "dead", 1),
-		"another version":       strings.Replace(good, "MOSEY-LIST 1", "MOSEY-LIST 2", 1),
-		"a bidi control":        strings.Replace(good, "quiet-heron", "quiet\u202eheron", 1),
-		"a version as well":     strings.Replace(good, "\n", " 0.214.20261114\n", 1),
-		"a long line":           strings.TrimSuffix(good, "\n") + strings.Repeat("9", 200) + "\n",
-		"no LF":                 strings.TrimSuffix(good, "\n"),
-		"a leading zero":        strings.Replace(good, " 1794651234\n", " 01794651234\n", 1),
-		"another magic":         strings.Replace(good, "MOSEY-LIST", "MOSEY-LISTS", 1),
-		"a missing field":       strings.Replace(good, " detached", "", 1),
-		"no name":               strings.Replace(good, "quiet-heron", "-", 1),
-		"no state":              strings.Replace(good, "detached", "-", 1),
-		"no since":              strings.Replace(good, " 1794651234\n", " -\n", 1),
+		"an escape in the name":    strings.Replace(good, "quiet-heron", "quiet\x1b[2Jheron", 1),
+		"a name over 32":           strings.Replace(good, "quiet-heron", strings.Repeat("q", 33), 1),
+		"a bad state":              strings.Replace(good, "detached", "dead", 1),
+		"another version":          strings.Replace(good, "MOSEY-LIST 1", "MOSEY-LIST 2", 1),
+		"a bidi control":           strings.Replace(good, "quiet-heron", "quiet\u202eheron", 1),
+		"a version as well":        strings.Replace(good, "\n", " 0.214.20261114\n", 1),
+		"a long line":              strings.TrimSuffix(good, "\n") + strings.Repeat("9", 200) + "\n",
+		"no LF":                    strings.TrimSuffix(good, "\n"),
+		"a leading zero":           strings.Replace(good, " 1794651234\n", " 01794651234\n", 1),
+		"another magic":            strings.Replace(good, "MOSEY-LIST", "MOSEY-LISTS", 1),
+		"a missing field":          strings.Replace(good, " detached", "", 1),
+		"no name":                  strings.Replace(good, "quiet-heron", "-", 1),
+		"no state":                 strings.Replace(good, "detached", "-", 1),
+		"no since":                 strings.Replace(good, " 1794651234\n", " -\n", 1),
+		"a dash command":           strings.Replace(good, "\n", " -\n", 1),
+		"an escape in the command": strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("claude\x1b]0;pwned\x07"))+"\n", 1),
+		"a C1 in the command":      strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("claude\u009b2J"))+"\n", 1),
+		"a newline in the command": strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("a\rb"))+"\n", 1),
+		"a command not utf-8":      strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("\xc0\xaf"))+"\n", 1),
+		"a command over 1024":      strings.Replace(good, "\n", " "+b64.EncodeToString(bytes.Repeat([]byte("a"), MaxStartText+1))+"\n", 1),
+		"a command, not canonical": strings.Replace(good, "\n", " YR\n", 1),
 	} {
 		if _, err := ParseListLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%s: %q gave %v", name, line, err)
@@ -205,6 +270,9 @@ func TestAListLineThatBreaksARuleIsRefused(t *testing.T) {
 func FuzzParseListLine(f *testing.F) {
 	f.Add(MarshalListLine(sampleListLine()))
 	f.Add([]byte("MOSEY-LIST 1 - - - dev\n"))
+	withCommand := sampleListLine()
+	withCommand.Command = "claude --resume\tü"
+	f.Add(MarshalListLine(withCommand))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		l, err := ParseListLine(line)
 		if err != nil {
@@ -226,6 +294,9 @@ func FuzzParseListLine(f *testing.F) {
 		if !ValidSessionName(l.Name) {
 			t.Fatalf("accepted name %q", l.Name)
 		}
+		if l.Command != "" && !referenceText(l.Command, true) {
+			t.Fatalf("accepted command %q", l.Command)
+		}
 	})
 }
 
@@ -233,6 +304,8 @@ func FuzzParseSessionLine(f *testing.F) {
 	f.Add(MarshalSessionLine(sampleSessionLine()))
 	n := sampleSessionLine()
 	n.State, n.Peer, n.HasHolder = SessionNew, netip.AddrPort{}, false
+	f.Add(MarshalSessionLine(n))
+	n.Command = "sh -c 'echo $((6*7))'\tü"
 	f.Add(MarshalSessionLine(n))
 	f.Add([]byte("MOSEY-SESSION 1.2.3 and more\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
@@ -254,6 +327,9 @@ func FuzzParseSessionLine(f *testing.F) {
 		}
 		if !ValidSessionName(s.Name) {
 			t.Fatalf("accepted name %q", s.Name)
+		}
+		if s.Command != "" && !referenceText(s.Command, true) || len(line) > MaxSessionLine {
+			t.Fatalf("accepted command %q in %d bytes", s.Command, len(line))
 		}
 	})
 }
@@ -278,6 +354,7 @@ func TestReadListKeepsOnlyListLinesThatParse(t *testing.T) {
 func FuzzReadList(f *testing.F) {
 	f.Add(append([]byte("noise\n"), MarshalListLine(sampleListLine())...))
 	f.Add([]byte("MOSEY-LIST 1 a new 1 v\nMOSEY-LIST 1 - - - v"))
+	f.Add([]byte("MOSEY-LIST 1 a new 1 Y2xhdWRl\nMOSEY-LIST 1 b detached 2\n"))
 	f.Fuzz(func(t *testing.T, out []byte) {
 		rows, _ := ReadList(out)
 		if len(rows) > MaxListed {
@@ -285,7 +362,8 @@ func FuzzReadList(f *testing.F) {
 		}
 		for _, r := range rows {
 			if len(r.Name) > MaxSessionName ||
-				r.Name != "" && !ValidSessionName(r.Name) {
+				r.Name != "" && !ValidSessionName(r.Name) ||
+				r.Command != "" && !referenceText(r.Command, true) {
 				t.Fatalf("row %+v", r)
 			}
 			if !bytes.Contains(out, MarshalListLine(r)) {

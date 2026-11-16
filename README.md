@@ -25,8 +25,8 @@ and carry on from your laptop. You need mosey on your machine (see
 **Like Mosh: a remote shell that doesn't die.**
 
 ```sh
-mosey dan-desktop              # log in with your own ssh; resume your last detached session there, or start one
-mosey dan-desktop claude       # run a program instead of a shell; mosey exits when it does
+mosey dan-desktop              # log in with your own ssh; resume your last detached shell there, or start one
+mosey dan-desktop claude       # claude, not a shell: mosey exits with it; run it again to return to a detached one
 ```
 
 Change wifi, close the laptop lid, go through a tunnel: at worst the
@@ -181,14 +181,14 @@ mosey copies itself over the first time if the host has no mosey at all
 (see [Zero install](#zero-install)). Then:
 
 ```sh
-mosey host                 # resume your most recently detached session on host, or start a new one
+mosey host                 # resume your most recently detached shell session on host, or start a new one
 mosey -s NAME host         # attach to the session called NAME, taking it over; create it if missing
 mosey -new host            # always start a fresh session, with a generated name
-mosey -list host           # your sessions on host: name, attached or detached, since when
+mosey -list host           # your sessions on host: name, attached or detached, since when, and any command
 mosey -kill NAME host      # end the session called NAME (its shell gets SIGHUP)
 mosey -s work -dir src/app -type 'claude' host
                            # create session work in ~/src/app running claude; later, just go back to it
-mosey host claude          # a new session running claude instead of a shell; it and mosey end when claude does
+mosey host claude          # back to your detached claude on host, or a new session running it; mosey exits when claude does
 mosey -s work -- -p 2222 host claude
                            # ssh's own options go after --, before the host
 ```
@@ -197,12 +197,18 @@ mosey -s work -- -p 2222 host claude
 command` would: the words are joined with spaces and run by your shell's
 `-c`, so `mosey host ls -la` passes `-la` to `ls`, and quoting is your
 shell's. When the command exits, the session ends and mosey exits (with
-status 0: the command's own status is not passed back). It only ever
-starts a session: plain `mosey host COMMAND` always starts a new one, and
-`mosey -s NAME host COMMAND` runs it only if NAME isn't running already;
-if it is, mosey says so and takes NAME over as it is. The session is an
-ordinary one while it runs: you can detach, list, take over and kill it.
-`-dir` sets where it runs; `-type` and a command exclude each other.
+status 0: the command's own status is not passed back). Close the window
+instead and the command runs on, detached: plain `mosey host COMMAND`
+returns to your most recently detached session started with exactly that
+command, and starts a new one only if there is none. It never takes one
+that's attached, so a second window gets a second instance. Plain `mosey
+host` works the same way for shells: it returns only to a detached shell,
+never to a detached program. `-dir` sets where a new one runs, and is
+not part of the match: to keep two of one program apart, name them with
+`-s`. `mosey -s NAME host COMMAND` starts NAME running the command, or
+takes NAME over as it is (saying so if NAME runs something else).
+`mosey -list host` shows each session's command. `-type` and a command
+exclude each other.
 
 **`localhost` is this machine**, with no ssh at all: `mosey localhost`,
 `mosey -s work localhost`, `mosey -new localhost`, `mosey -list

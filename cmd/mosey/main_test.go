@@ -270,8 +270,9 @@ func TestNoDestinationIsTheUsageOrAMistake(t *testing.T) {
 // The words after DESTINATION are a command, as ssh takes one
 // (bootstrap.md §2, §9.2.3): joined with spaces, never read as mosey's or
 // ssh's flags, with ssh's options before the destination after --. A
-// plain mosey DEST COMMAND starts a new session rather than resume an
-// unrelated one; -s and -new keep their meaning.
+// plain mosey DEST COMMAND is auto with the command, so the launcher can
+// return to a detached session of that command (PLAN D8, option C); -s
+// and -new keep their meaning.
 func TestTheWordsAfterTheDestinationAreACommand(t *testing.T) {
 	for _, c := range []struct {
 		args    []string
@@ -282,14 +283,14 @@ func TestTheWordsAfterTheDestinationAreACommand(t *testing.T) {
 		name    string
 		dir     string
 	}{
-		{args: []string{"far", "claude"}, dest: "far", command: "claude", attach: bootstrap.AttachNew},
-		{args: []string{"far", "ls", "-la", "--", "-s", "x"}, dest: "far", command: "ls -la -- -s x", attach: bootstrap.AttachNew},
-		{args: []string{"far", "sh", "-c", "echo $((6*7)); exit 3"}, dest: "far", command: "sh -c echo $((6*7)); exit 3", attach: bootstrap.AttachNew},
+		{args: []string{"far", "claude"}, dest: "far", command: "claude", attach: bootstrap.AttachAuto},
+		{args: []string{"far", "ls", "-la", "--", "-s", "x"}, dest: "far", command: "ls -la -- -s x", attach: bootstrap.AttachAuto},
+		{args: []string{"far", "sh", "-c", "echo $((6*7)); exit 3"}, dest: "far", command: "sh -c echo $((6*7)); exit 3", attach: bootstrap.AttachAuto},
 		{args: []string{"-s", "work", "-dir", "src", "far", "claude"}, dest: "far", command: "claude", attach: bootstrap.AttachName, name: "work", dir: "src"},
 		{args: []string{"-new", "far", "htop"}, dest: "far", command: "htop", attach: bootstrap.AttachNew},
-		{args: []string{"--", "-p", "2222", "-v", "far", "top", "-d", "1"}, dest: "far", ssh: []string{"-p", "2222", "-v"}, command: "top -d 1", attach: bootstrap.AttachNew},
+		{args: []string{"--", "-p", "2222", "-v", "far", "top", "-d", "1"}, dest: "far", ssh: []string{"-p", "2222", "-v"}, command: "top -d 1", attach: bootstrap.AttachAuto},
 		{args: []string{"-s", "work", "--", "-oUser=me", "far", "claude"}, dest: "far", ssh: []string{"-o", "User=me"}, command: "claude", attach: bootstrap.AttachName, name: "work"},
-		{args: []string{"localhost", "htop"}, dest: "localhost", command: "htop", attach: bootstrap.AttachNew},
+		{args: []string{"localhost", "htop"}, dest: "localhost", command: "htop", attach: bootstrap.AttachAuto},
 		{args: []string{"far"}, dest: "far", attach: bootstrap.AttachAuto},
 	} {
 		got, err := parseArgs(c.args)

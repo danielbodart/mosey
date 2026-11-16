@@ -301,7 +301,7 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 	other := [16]byte{0xef}
 	fakeSession(t, base, other, func(f *os.File) {
 		// Started after s-ab's, so it is listed second (oldest first).
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 1, SessionID: other, Name: "s-ef", Started: time.Unix(1794650050, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650100, 0)}))
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 1, SessionID: other, Name: "s-ef", Started: time.Unix(1794650050, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650100, 0), Command: "claude"}))
 	})
 	broken := [16]byte{0x01}
 	fakeSession(t, base, broken, func(f *os.File) { f.Write([]byte("MOSEY-SESSION v9 not a greeting\n")) })
@@ -309,7 +309,8 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 	if err := List(&out, getenv); err != nil {
 		t.Fatal(err)
 	}
-	want := "MOSEY-LIST 1 s-ab detached 1794650100\nMOSEY-LIST 1 s-ef detached 1794650100\n"
+	// s-ef was started with a command, which is listed (§9.4).
+	want := "MOSEY-LIST 1 s-ab detached 1794650100\nMOSEY-LIST 1 s-ef detached 1794650100 Y2xhdWRl\n"
 	if out.String() != want {
 		t.Errorf("the list is\n%s\nnot\n%s", out.String(), want)
 	}

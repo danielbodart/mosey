@@ -17,6 +17,16 @@ type choice struct {
 	err   *LaunchError
 }
 
+// notRun says whether taking session s in answer to cl leaves cl's command
+// not run, so the credential line gets existing and the client says so
+// (bootstrap.md §6.3, §9.2.3): the line has a command, and s was not
+// started with that very one. auto only takes a session of its own
+// command, so only -s NAME finding NAME running something else ever says
+// it.
+func notRun(cl bootstrap.ClientLine, s bootstrap.SessionLine) bool {
+	return cl.Command != "" && s.Command != cl.Command
+}
+
 // choose is §9.2's table, a pure function so every row is tested without
 // processes: sessions are the greetings of the user's sessions that
 // answered, and generate makes a name none of them has.
@@ -39,8 +49,13 @@ func choose(cl bootstrap.ClientLine, sessions []bootstrap.SessionLine, generate 
 	switch cl.Attach {
 	case bootstrap.AttachAuto:
 		// R1: the most recently detached session, never an attached one,
-		// so a second terminal gets a session of its own.
-		if i := newest(sessions, func(s bootstrap.SessionLine) bool { return s.State == bootstrap.SessionDetached && attachable(s) }); i >= 0 {
+		// so a second terminal gets a session of its own. Keyed by the
+		// command (PLAN D8, option C, bootstrap.md §9.2.3): `mosey HOST
+		// claude` goes back to a detached claude, and a plain `mosey HOST`
+		// only to a detached shell, never to a program.
+		if i := newest(sessions, func(s bootstrap.SessionLine) bool {
+			return s.State == bootstrap.SessionDetached && attachable(s) && s.Command == cl.Command
+		}); i >= 0 {
 			return choice{take: i}
 		}
 		return fresh()

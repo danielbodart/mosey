@@ -254,10 +254,26 @@ func MarshalClientLine(c ClientLine) []byte {
 	b = appendText(b, c.Dir)
 	b = appendText(b, c.Type)
 	b = appendField(b, b64.EncodeToString(c.Public))
-	if c.Command != "" {
-		b = b64.AppendEncode(append(b, ' '), []byte(c.Command))
-	}
+	b = appendOptionalText(b, c.Command)
 	return append(b, '\n')
+}
+
+// appendOptionalText appends a line's optional last field, a command in
+// base64url (§6.2, §9.2.1, §9.4), or nothing at all for "", so a line
+// without one is byte for byte the line of before commands.
+func appendOptionalText(b []byte, t string) []byte {
+	if t == "" {
+		return b
+	}
+	return b64.AppendEncode(append(b, ' '), []byte(t))
+}
+
+// hasOptionalField says whether line, of a grammar of n-1 fields and an
+// optional last one, has the extra space that field brings. It only picks
+// the shape to parse: every field is still checked, and the whole line
+// re-marshalled, so a line it misjudges is refused, never misread.
+func hasOptionalField(line []byte, n int) bool {
+	return bytes.Count(line, []byte(" ")) == n-1
 }
 
 // ParseClientLine reads a ClientLine, LF included, refusing anything not
@@ -268,7 +284,7 @@ func ParseClientLine(line []byte) (ClientLine, error) {
 	// with one has one more space. The count only picks the shape; every
 	// field is still checked, and the whole re-marshalled.
 	n := 11
-	if bytes.Count(line, []byte(" ")) == n-1 {
+	if hasOptionalField(line, n) {
 		n++
 	}
 	fields, err := splitLine(line, MaxClientLine, clientMagic, n)

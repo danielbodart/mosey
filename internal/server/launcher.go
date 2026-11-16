@@ -147,7 +147,7 @@ func (l *Launcher) run(ctx context.Context) error {
 	to := cl
 	to.Attach, to.SessionID, to.Name = bootstrap.AttachResume, sessions[c.take].SessionID, ""
 	to.Dir, to.Type, to.Command = "", "", ""
-	return l.resume(ctx, taken.f, taken.greeting, bootstrap.MarshalClientLine(to), cl)
+	return l.resume(ctx, taken.f, bootstrap.MarshalClientLine(to), cl, notRun(cl, sessions[c.take]))
 }
 
 // start is a new session: the spawner, started in a session of its own,
@@ -236,9 +236,11 @@ func attachMismatch(g bootstrap.SessionLine) *LaunchError {
 
 // resume is the launcher's part of taking a session (bootstrap.md §9.2
 // steps 2 and 5): hand the session's spawner the line (resume:SID), and
-// print the credential line it answers with. The session may be of any
-// mosey version that speaks this attach protocol (D8 V1).
-func (l *Launcher) resume(ctx context.Context, f *os.File, greeting, line []byte, cl bootstrap.ClientLine) error {
+// print the credential line it answers with, marked existing when
+// notRun (the client's command is not the one the session runs). The
+// session may be of any mosey version that speaks this attach protocol
+// (D8 V1).
+func (l *Launcher) resume(ctx context.Context, f *os.File, line []byte, cl bootstrap.ClientLine, notRun bool) error {
 	conn, err := ipc.NewConn(f, ipc.Launcher, ipc.Spawner)
 	if err != nil {
 		return err
@@ -255,7 +257,7 @@ func (l *Launcher) resume(ctx context.Context, f *os.File, greeting, line []byte
 	case ipc.Ready:
 		l.trigger(ctx, cl)
 		line := m.Line
-		if cl.Command != "" {
+		if notRun {
 			// The command was not run, and the client says so; only a
 			// client that sent one is told, so no older one sees the word
 			// (bootstrap.md §6.3, §9.2.3).

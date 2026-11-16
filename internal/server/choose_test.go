@@ -53,6 +53,101 @@ func TestAPlainClientTakesTheNewestDetachedSessionAndNeverAnAttachedOne(t *testi
 	}
 }
 
+// running is s as started with command.
+func running(command string, s bootstrap.SessionLine) bootstrap.SessionLine {
+	s.Command = command
+	return s
+}
+
+// commandLine is a plain `mosey DEST COMMAND`'s line: auto, with the
+// command.
+func commandLine(command string) bootstrap.ClientLine {
+	l := line(bootstrap.AttachAuto, "")
+	l.Command = command
+	return l
+}
+
+// A plain `mosey DEST COMMAND` takes the most recently detached session
+// started with exactly that command, never one attached, one running
+// another command or a shell; a plain `mosey DEST` takes only a detached
+// shell, never a detached program (PLAN D8, option C, bootstrap.md
+// §9.2.3).
+func TestAutoTakesOnlyADetachedSessionStartedWithTheSameCommand(t *testing.T) {
+	sessions := []bootstrap.SessionLine{
+		running("claude", session("old-claude", 1, bootstrap.SessionDetached, 100)),
+		held(running("claude", session("busy-claude", 2, bootstrap.SessionAttached, 900)), 7),
+		running("claude", session("new-claude", 3, bootstrap.SessionDetached, 500)),
+		running("claude --resume", session("other-args", 4, bootstrap.SessionDetached, 800)),
+		running("htop", session("htop", 5, bootstrap.SessionDetached, 850)),
+		session("shell", 6, bootstrap.SessionDetached, 700),
+		session("newest-shell", 7, bootstrap.SessionDetached, 990),
+		running("vi", session("vi", 8, bootstrap.SessionDetached, 999)),
+	}
+	for _, c := range []struct {
+		command string
+		take    int
+	}{
+		{"claude", 2},
+		{"claude --resume", 3},
+		{"htop", 4},
+		{"", 6},
+		{"vi", 7},
+	} {
+		got := choose(commandLine(c.command), sessions, fixedName)
+		if got.start || got.err != nil || got.take != c.take {
+			t.Errorf("%q took %+v, not %s", c.command, got, sessions[c.take].Name)
+		}
+		if notRun(commandLine(c.command), sessions[got.take]) {
+			t.Errorf("%q: the session it took is said not to run it", c.command)
+		}
+	}
+	for _, command := range []string{"claude ", "Claude", "top", "claude  --resume"} {
+		// Byte for byte: no trimming, folding or word splitting.
+		if got := choose(commandLine(command), sessions, fixedName); !got.start || got.name != "made-up" {
+			t.Errorf("%q matched %+v, not a new session", command, got)
+		}
+	}
+	// Only the attached claude left: a second window gets its own.
+	if got := choose(commandLine("claude"), sessions[1:2], fixedName); !got.start {
+		t.Errorf("an attached claude was taken: %+v", got)
+	}
+	// Only programs detached: a plain mosey DEST starts a shell.
+	if got := choose(commandLine(""), []bootstrap.SessionLine{sessions[0], sessions[4]}, fixedName); !got.start {
+		t.Errorf("a plain client took a detached program: %+v", got)
+	}
+	// Only shells detached: a command starts its own.
+	if got := choose(commandLine("claude"), sessions[5:7], fixedName); !got.start {
+		t.Errorf("a command took a detached shell: %+v", got)
+	}
+}
+
+// -s NAME with a command keeps its meaning: NAME whatever it runs, the
+// client told the command was not run only if NAME was not started with
+// that very one (bootstrap.md §9.2.3).
+func TestNameTakesTheSessionWhateverItRunsAndSaysWhenTheCommandWasNotRun(t *testing.T) {
+	shell := session("work", 1, bootstrap.SessionAttached, 100)
+	ai := running("claude", session("ai", 2, bootstrap.SessionDetached, 200))
+	sessions := []bootstrap.SessionLine{shell, ai}
+	for _, c := range []struct {
+		name, command string
+		take          int
+		notRun        bool
+	}{
+		{"work", "claude", 0, true},
+		{"ai", "claude", 1, false},
+		{"ai", "htop", 1, true},
+		{"ai", "", 1, false},
+		{"work", "", 0, false},
+	} {
+		l := line(bootstrap.AttachName, c.name)
+		l.Command = c.command
+		got := choose(l, sessions, fixedName)
+		if got.start || got.err != nil || got.take != c.take || notRun(l, sessions[got.take]) != c.notRun {
+			t.Errorf("-s %s %q: %+v, not run %v", c.name, c.command, got, notRun(l, sessions[got.take]))
+		}
+	}
+}
+
 // A session whose spawner speaks another attach protocol (D8 V1,
 // bootstrap.md §9.2 step 5) is never taken by a plain mosey HOST, which
 // takes an attachable one or starts its own; -s NAME and R3's resume
