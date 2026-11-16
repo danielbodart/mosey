@@ -1,6 +1,7 @@
 package screen_test
 
 import (
+	"bytes"
 	"runtime"
 	"testing"
 
@@ -21,7 +22,10 @@ func fuzzBases() []*screen.Grid {
 	big := screen.NewGrid(screen.MaxCols, screen.MaxRows)
 	ascii(big, 990, 499, "corner", screen.Style{})
 	big.Cursor = screen.Cursor{X: 999, Y: 499}
-	return []*screen.Grid{screen.NewGrid(0, 0), frame, big}
+	// A frame with a history most of a window long (§2.5).
+	scrolled := frame.Clone()
+	scrolled.History = scrolled.History.Add(900, lines(0, 899, 80))
+	return []*screen.Grid{screen.NewGrid(0, 0), frame, big, scrolled}
 }
 
 // FuzzApply feeds arbitrary bytes to Apply. A refused diff leaves the grid
@@ -39,8 +43,15 @@ func FuzzApply(f *testing.F) {
 		cat([]byte{0x4b}, uv(0), uv(3), uv(^uint64(0)-2)), cat([]byte{0x42}, uv(3), uv(0), uv(^uint64(0)-2)),
 		cat([]byte{0x53}, uv(10), []byte("a\u009d0;evil\u009cb")[:10]),
 		{0x49, 0x49, 0x49, 0x49, 0x49},
+		// History (§5.6): a scrolled line, new lines, a gap, and the
+		// bounds' edges.
+		{0x43, 0x01, 0x60, 0x00, 0x62, 0x00},
+		cat([]byte{0x60}, uv(900), []byte{0x61, 0x05, 0x02, 'h', 'i', 0x48, 0x00, 0x61, 0x50, 0x4c, 0x09, 0x01, 0x02, 0x01, 0x4a, 0x05}),
+		cat([]byte{0x60}, uv(1<<40), []byte{0x62, 0x03, 0x61, 0x02, 0x03, 0x02, 0xe6, 0xbc, 0xa2}),
+		cat([]byte{0x60}, uv(^uint64(0)-screen.HistoryLines), bytes.Repeat([]byte{0x61, 0x01}, screen.HistoryLines)),
+		cat([]byte{0x60, 0x00}, bytes.Repeat(cat([]byte{0x61}, uv(screen.MaxCols), []byte{0x00, 'x', 0x48, 0x00}), screen.HistoryCells/screen.MaxCols)),
 	} {
-		for base := range uint8(3) {
+		for base := range uint8(4) {
 			f.Add(base, d)
 		}
 	}

@@ -26,6 +26,7 @@ func (g *Grid) Diff(from *Grid) []byte {
 	e.cells()
 	e.cursor()
 	e.state()
+	e.history()
 	return e.out
 }
 
@@ -702,6 +703,57 @@ func (e *encoder) state() {
 		e.out = append(e.out, opConsumed)
 		e.out = binary.AppendUvarint(e.out, to.InputConsumed)
 	}
+}
+
+// history writes the lines of the target's history that the receiver does
+// not have (§5.10 step 6, E7): from the base's next line on, or from the
+// oldest the target still holds if that is later, each as HROW when a
+// base row is the same line, else HLINE and its cells written as a row is,
+// from blank. The target must be a later version of the base, as SSP's
+// always is; a history that does not extend the base's sends nothing.
+func (e *encoder) history() {
+	from, to := e.from.History, e.to.History
+	if to.Next <= from.Next {
+		return
+	}
+	start := max(from.Next, to.First())
+	e.flush()
+	e.out = append(e.out, opHist)
+	e.out = binary.AppendUvarint(e.out, start)
+	// HIST starts the line ops afresh (§5.6), and the cursor is stated.
+	e.pen, e.w, e.needHere = Style{}, 1, false
+	var byHash map[uint64][]int
+	seed := maphash.MakeSeed()
+	for _, l := range to.Since(start) {
+		if byHash == nil {
+			byHash = map[uint64][]int{}
+			for j, bl := range e.from.lines {
+				if !hasLink(bl.cells) {
+					h := hashRow(seed, bl.cells)
+					byHash[h] = append(byHash[h], j)
+				}
+			}
+		}
+		if j := matchRow(byHash[hashRow(seed, l)], e.from.lines, l); j >= 0 {
+			e.op(opHRow, uint64(j))
+			continue
+		}
+		e.op(opHLine, uint64(len(l)))
+		e.c, e.x, e.y = len(l), 0, 0
+		e.row(0, blankCells(len(l)), l)
+	}
+	e.flush()
+}
+
+// matchRow is the first of the candidate base rows that is exactly l, or
+// −1.
+func matchRow(candidates []int, rows []*line, l []Cell) int {
+	for _, j := range candidates {
+		if slices.Equal(rows[j].cells, l) {
+			return j
+		}
+	}
+	return -1
 }
 
 func uvarintLen(v uint64) int {

@@ -126,6 +126,7 @@ func sameScreen(got, want *screen.Grid) error {
 	}
 	got.Bell, want.Bell = 0, 0
 	got.Clipboard, want.Clipboard = screen.Clipboard{}, screen.Clipboard{}
+	got.History, want.History = screen.History{}, screen.History{}
 	if got.Equal(want) {
 		return nil
 	}

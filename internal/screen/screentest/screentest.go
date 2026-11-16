@@ -7,6 +7,7 @@ package screentest
 
 import (
 	"math/rand/v2"
+	"slices"
 	"strings"
 
 	"github.com/danielbodart/mosey/internal/screen"
@@ -178,7 +179,53 @@ func (s *Source) Grid(maxCols, maxRows int) *screen.Grid {
 		}
 	}
 	s.State(g)
+	if s.N(3) == 0 {
+		var lines [][]screen.Cell
+		for range s.N(8) {
+			lines = append(lines, s.Line(maxCols))
+		}
+		g.History = g.History.Add(uint64(len(lines)+s.N(50)), lines)
+	}
 	return g
+}
+
+// Line is a random valid history line, at most maxCols wide, with no
+// links (G9).
+func (s *Source) Line(maxCols int) []screen.Cell {
+	g := screen.NewGrid(1+s.N(maxCols), 1)
+	cols, _ := g.Size()
+	for x := 0; x < cols; {
+		if s.Empty() || s.N(3) == 0 {
+			x++
+			continue
+		}
+		x += s.Cell(g, x, 0)
+	}
+	return Unlinked(g.Row(0))
+}
+
+// Unlinked is a copy of a row with its links dropped, as a history line
+// holds it.
+func Unlinked(row []screen.Cell) []screen.Cell {
+	row = slices.Clone(row)
+	for i := range row {
+		row[i].Style.Link = ""
+	}
+	return row
+}
+
+// ScrollIntoHistory scrolls g up by k, as Scroll does, with the k rows
+// that leave the top appended to its history, as a terminal's own
+// scrollback takes them.
+func ScrollIntoHistory(g *screen.Grid, k int) {
+	_, rows := g.Size()
+	k = min(k, rows)
+	lines := make([][]screen.Cell, k)
+	for y := range k {
+		lines[y] = Unlinked(g.Row(y))
+	}
+	g.History = g.History.Add(g.History.Next+uint64(k), lines)
+	Scroll(g, k)
 }
 
 // State sets every field but the cells at random.
@@ -222,7 +269,7 @@ func (s *Source) Next(g *screen.Grid, maxCols, maxRows int) *screen.Grid {
 		return s.Grid(maxCols, maxRows)
 	}
 	for range 1 + s.N(4) {
-		switch s.N(6) {
+		switch s.N(9) {
 		case 0:
 			n.Resize(1+s.N(maxCols), 1+s.N(maxRows))
 			cols, rows = n.Size()
@@ -246,6 +293,18 @@ func (s *Source) Next(g *screen.Grid, maxCols, maxRows int) *screen.Grid {
 			for x := range cols {
 				n.SetCell(x, y, screen.Cell{Width: 1})
 			}
+		case 6:
+			ScrollIntoHistory(n, 1+s.N(rows))
+		case 7:
+			var lines [][]screen.Cell
+			for range 1 + s.N(4) {
+				lines = append(lines, s.Line(maxCols))
+			}
+			n.History = n.History.Add(n.History.Next+uint64(len(lines)), lines)
+		case 8:
+			// More lines than were sent: a client that fell behind.
+			gap := uint64(1 + s.N(screen.HistoryLines*2))
+			n.History = n.History.Add(n.History.Next+gap, [][]screen.Cell{s.Line(maxCols)})
 		}
 	}
 	if !s.Bool() {

@@ -37,9 +37,10 @@ const (
 	// write is dropped whole: a truncated paste is a different paste.
 	MaxClipboard = 64 << 10
 	// MaxDiff is the longest diff: the worst valid diff at the clamp is
-	// about 44 MB (docs/spec/screen.md §5.12). It is SSP's MaxRemoteBytes
-	// for the screen and the bound on one IPC Update.
-	MaxDiff = 48 << 20
+	// about 44 MB of screen and 17 MB of history window, 61 MB in all
+	// (docs/spec/screen.md §5.12). It is SSP's MaxRemoteBytes for the
+	// screen and the bound on one IPC Update.
+	MaxDiff = 64 << 20
 )
 
 // forbidden are the code points no cell or title may carry (§4): C0, DEL

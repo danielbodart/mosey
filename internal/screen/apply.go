@@ -48,6 +48,10 @@ const (
 	opClip     = 0x57
 	opRebuilt  = 0x58
 	opConsumed = 0x59
+	// The history ops of phase 3 (§2.5, §5.6).
+	opHist  = 0x60
+	opHLine = 0x61
+	opHRow  = 0x62
 	// opTextHere is the first TEXT+HERE opcode: 0x80 + n − 1 carries n
 	// stream bytes, as 0x00 + n − 1 does for TEXT.
 	opTextHere = 0x80
@@ -138,6 +142,17 @@ type decoder struct {
 	once      uint16
 	written   int
 	budget    int
+
+	// Phase 3, the history (§5.6): the number of the first line, the
+	// lines so far and their cells, the line being written (nil after an
+	// HROW or before any HLINE), and the screen's size, which C and the
+	// write position stop meaning once they serve the line.
+	hseq   uint64
+	hlines [][]Cell
+	hwrote []bool // whether each of hlines was written by line ops
+	hcells int
+	cur    []Cell
+	sc, sr int
 }
 
 type rowMove struct{ dst, src, n int }
@@ -180,6 +195,9 @@ func (d *decoder) run() error {
 }
 
 func (d *decoder) step(code byte) error {
+	if d.phase == 3 {
+		return d.historyStep(code)
+	}
 	switch code {
 	case opSize:
 		return d.size()
@@ -275,8 +293,121 @@ func (d *decoder) step(code byte) error {
 		n, err := d.varint("CONSUMED", ^uint64(0))
 		d.out.InputConsumed = n
 		return err
+	case opHist:
+		return d.hist()
 	}
 	return d.fail("unknown opcode %#02x", code)
+}
+
+// hist is HIST: the start of phase 3, once (§5.6).
+func (d *decoder) hist() error {
+	seq, err := d.varint("HIST seq", ^uint64(0)-HistoryLines)
+	if err != nil {
+		return err
+	}
+	if seq < d.base.History.Next {
+		return d.fail("HIST %d below the history's next line %d", seq, d.base.History.Next)
+	}
+	d.phase = 3
+	d.hseq = seq
+	d.sc, d.sr = d.c, d.r
+	d.pen, d.w, d.hasLast = Style{}, 1, false
+	d.written, d.budget = 0, 2*HistoryCells
+	d.c, d.x = 0, 0
+	return nil
+}
+
+// historyStep is one op of phase 3: a new line, or a line op on the
+// current one, and nothing else.
+func (d *decoder) historyStep(code byte) error {
+	switch {
+	case code < opTextLong:
+		return d.text(int(code) + 1)
+	case code == opTextLong:
+		n, err := d.varint("TEXT length", uint64(len(d.b)-d.pos))
+		if err != nil {
+			return err
+		}
+		if n < 1 {
+			return d.fail("TEXT of length 0")
+		}
+		return d.text(int(n))
+	}
+	switch code {
+	case opHLine:
+		cols, err := d.varint("HLINE cols", MaxCols)
+		if err != nil {
+			return err
+		}
+		if cols < 1 {
+			return d.fail("HLINE of 0 columns")
+		}
+		if err := d.historyRoom(int(cols)); err != nil {
+			return err
+		}
+		d.cur = blankLine(nil, int(cols)).cells
+		d.hlines = append(d.hlines, d.cur)
+		d.hwrote = append(d.hwrote, true)
+		d.hcells += int(cols)
+		d.c, d.x = int(cols), 0
+		return nil
+	case opHRow:
+		src, err := d.varint("HROW src", uint64(d.base.rows))
+		if err != nil {
+			return err
+		}
+		if src >= uint64(d.base.rows) {
+			return d.fail("HROW %d of %d base rows", src, d.base.rows)
+		}
+		row := d.base.lines[src].cells
+		if err := d.historyRoom(len(row)); err != nil {
+			return err
+		}
+		if hasLink(row) {
+			return d.fail("HROW %d has a link", src)
+		}
+		d.hlines = append(d.hlines, slices.Clone(row))
+		d.hwrote = append(d.hwrote, false)
+		d.hcells += len(row)
+		d.cur, d.c, d.x = nil, 0, 0
+		return nil
+	case opCol:
+		x, err := d.varint("COL x", uint64(max(d.c-1, 0)))
+		if err != nil || d.c == 0 {
+			return d.orFail(err, "COL with no history line")
+		}
+		d.x = int(x)
+		return nil
+	case opSkip:
+		n, err := d.varint("SKIP", uint64(d.c-d.x))
+		if err != nil {
+			return err
+		}
+		if n < 1 {
+			return d.fail("SKIP 0")
+		}
+		d.x += int(n)
+		return nil
+	case opErase:
+		return d.erase()
+	case opRepeat:
+		return d.repeat()
+	case opPen:
+		return d.penOp()
+	}
+	return d.fail("opcode %#02x after HIST", code)
+}
+
+// historyRoom checks that one more line of cols cells fits the diff's
+// share of the window (§5.6), as differences of state already in order.
+func (d *decoder) historyRoom(cols int) error {
+	if len(d.hlines) >= HistoryLines {
+		return d.fail("more than %d history lines", HistoryLines)
+	}
+	if cols > HistoryCells-d.hcells {
+		return d.fail("history lines over %d cells", HistoryCells)
+	}
+	return nil
 }
 
 func (d *decoder) orFail(err error, reason string) error {
@@ -440,6 +571,12 @@ func (d *decoder) room(k uint64, what string) error {
 }
 
 func (d *decoder) put(c Cell) {
+	if d.phase == 3 {
+		d.cur[d.x] = c
+		d.x++
+		d.written++
+		return
+	}
 	d.out.own(d.y).cells[d.x] = c
 	d.touched[d.y] = true
 	d.x++
@@ -689,6 +826,9 @@ func (d *decoder) penOp() error {
 		pen.Attrs = Attrs(a)
 	}
 	if flags&penLink != 0 {
+		if d.phase == 3 {
+			return d.fail("PEN sets a link in the history")
+		}
 		i, err := d.varint("PEN link", uint64(len(d.links)))
 		if err != nil {
 			return err
@@ -887,13 +1027,26 @@ func (d *decoder) finish() error {
 			}
 		}
 	}
+	c, r := d.c, d.r
+	if d.phase == 3 {
+		c, r = d.sc, d.sr
+		for i, l := range d.hlines {
+			if !d.hwrote[i] {
+				continue // a base row, valid as it was
+			}
+			if err := validRow(l); err != nil {
+				return d.fail("history line %d: %v", i, err)
+			}
+		}
+		d.out.History = d.base.History.Add(d.hseq+uint64(len(d.hlines)), d.hlines)
+	}
 	cur := d.out.Cursor
-	if d.c == 0 {
+	if c == 0 {
 		if cur.X != 0 || cur.Y != 0 {
 			return d.fail("cursor away from (0, 0) on an empty grid")
 		}
-	} else if cur.X >= d.c || cur.Y >= d.r {
-		return d.fail("cursor (%d, %d) outside %d x %d", cur.X, cur.Y, d.c, d.r)
+	} else if cur.X >= c || cur.Y >= r {
+		return d.fail("cursor (%d, %d) outside %d x %d", cur.X, cur.Y, c, r)
 	}
 	// Rows the diff left shared with the base keep the base's owner, which
 	// is no longer the grid's; the next write to them copies them, so the

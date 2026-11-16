@@ -51,6 +51,10 @@ type Grid struct {
 	// Rebuilt says the server's emulator was rebuilt (D23): Seq rises with
 	// each rebuild, so the client tells the user once.
 	Rebuilt Rebuilt
+	// History is the lines that scrolled off the top of the primary
+	// screen, a bounded numbered window the client prints into its own
+	// terminal's scrollback (docs/spec/screen.md §2.5).
+	History History
 }
 
 // line is one row of cells. Once a second grid refers to it, it is never
@@ -178,6 +182,7 @@ func (g *Grid) Clone() *Grid {
 	c.owner = new(owner)
 	c.lines = slices.Clone(g.lines)
 	c.Clipboard.Data = slices.Clone(g.Clipboard.Data)
+	c.History = g.History.clone()
 	return &c
 }
 
@@ -189,7 +194,7 @@ func (g *Grid) Equal(other *Grid) bool {
 		g.EchoOff != other.EchoOff || g.EchoAck != other.EchoAck || g.EchoApplied != other.EchoApplied ||
 		g.InputConsumed != other.InputConsumed || g.Bell != other.Bell ||
 		g.Rebuilt != other.Rebuilt || g.Clipboard.Seq != other.Clipboard.Seq ||
-		!bytes.Equal(g.Clipboard.Data, other.Clipboard.Data) {
+		!bytes.Equal(g.Clipboard.Data, other.Clipboard.Data) || !g.History.Equal(other.History) {
 		return false
 	}
 	for y := range g.lines {
@@ -251,7 +256,7 @@ func (g *Grid) Valid() error {
 	if g.Rebuilt.Reason > RebuiltOther {
 		return fmt.Errorf("G8: rebuilt reason %d", g.Rebuilt.Reason)
 	}
-	return nil
+	return g.History.valid()
 }
 
 // validRow checks G2, G3, G4 and G6 on one row.
