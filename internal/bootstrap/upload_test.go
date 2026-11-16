@@ -395,6 +395,34 @@ func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 	}
 }
 
+// The probe tells ~/.local/bin/mosey on PATH from any other PATH mosey by
+// comparing the path command -v printed with "$HOME/.local/bin/mosey" as
+// strings (§4.7.2), so a HOME spelled with a trailing slash makes the
+// installed copy look like one PATH chose elsewhere: it is exec'd as it
+// is, and one of another protocol is reported with both numbers rather
+// than replaced. This pins that limitation (a HOME with a trailing slash
+// is rare, and the user can fix it), so a change to it is deliberate.
+func TestAHomeWithATrailingSlashHidesTheInstalledCopyOnPath(t *testing.T) {
+	needTools(t, remotePath(), "uname", "cat", "ls")
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	home := t.TempDir()
+	local := filepath.Join(home, ".local", "bin")
+	writeMosey(t, filepath.Join(local, "mosey"), "1 2", "installed")
+	cmd := exec.Command("/bin/sh", "-c", SSH{Protocol: "1 1"}.RemoteCommand())
+	cmd.Env = []string{"HOME=" + home + "/", "PATH=" + remotePath(local)}
+	cmd.Dir = home
+	cmd.Stdin = strings.NewReader("THE-LINE\n")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "installed read THE-LINE\n" {
+		t.Errorf("got %q, want the installed copy exec'd as a PATH mosey", out)
+	}
+}
+
 // keepsPath says whether shell -c leaves a PATH starting with bin alone.
 func keepsPath(shell, bin string) bool {
 	cmd := exec.Command(shell, "-c", "/bin/sh -c 'echo $PATH'")

@@ -639,7 +639,11 @@ exec /bin/sh -c 'b="$HOME/.local/bin"; f="$b/mosey"; p=$(command -v mosey 2>/dev
   numbers (§6.4, `transport.md` §3.6); it never replaces a file it did
   not install. "Other than" is the path `command -v` printed compared,
   as a string, with `$HOME/.local/bin/mosey`: what `PATH` resolved to,
-  not what a link points at.
+  not what a link points at. A spelling that differs (a `HOME` with a
+  trailing slash, or `PATH` naming the directory with one) therefore
+  makes `~/.local/bin/mosey` count as another `PATH` mosey: exec'd as it
+  is, and one of another protocol is reported, not replaced. That is
+  accepted for its simplicity, and pinned by a test.
 - **Otherwise `~/.local/bin/mosey`**, whether `PATH` found it or not
   (Dan, 2026-11-16: the file mosey installs is the one it may replace),
   under the installer's rules (§4.7.7): neither `~/.local/bin` nor the
