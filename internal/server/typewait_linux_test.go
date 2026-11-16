@@ -84,11 +84,26 @@ func TestACancelledSessionTypesNothing(t *testing.T) {
 	})
 }
 
-// No text, no wait: a session without -type never waits for its shell.
-func TestNoTextMeansNoWait(t *testing.T) {
+// No text, no wait: a session without -type never waits for its shell,
+// whose silence would otherwise hold its Ready for TypeWait, and types
+// nothing, not even Enter.
+func TestNoTextMeansNoWaitAndNothingTyped(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		s := &spawner{log: discardLog()}
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Close()
+		s := &spawner{master: w, spoke: make(chan struct{}), log: discardLog()}
+		start := time.Now()
 		s.typeInto(t.Context(), "")
+		if waited := time.Since(start); waited != 0 {
+			t.Errorf("waited %v with no text to type", waited)
+		}
+		w.Close()
+		if b, _ := io.ReadAll(r); len(b) != 0 {
+			t.Errorf("typed %q with no text to type", b)
+		}
 	})
 }
 
