@@ -124,6 +124,33 @@ func TestAnAckGoesWithinTheAckDelayOfNewState(t *testing.T) {
 	})
 }
 
+// AckedChanged wakes whoever waits on the peer's acknowledgement, as
+// proto does to hold a program's output back (docs/spec/screen.md §2.5),
+// when the ack arrives and not before.
+func TestAckedChangedSignalsWhenThePeerAcknowledgesANewerVersion(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c, s := symmetric(30 * time.Millisecond)
+		p := start(t, c, s)
+		time.Sleep(10 * time.Second)
+		select {
+		case <-p.server.AckedChanged():
+			t.Fatal("signalled with nothing new to acknowledge")
+		default:
+		}
+		set := time.Now()
+		p.server.Set(newBoard("x"))
+		<-p.server.AckedChanged()
+		// The screen waits out the collection interval, crosses, and the
+		// client acks it after its delay; the ack crosses back.
+		if got, want := time.Since(set), serverCollection+30*time.Millisecond+ackDelay+30*time.Millisecond; got != want {
+			t.Errorf("signalled %v after the change, want %v", got, want)
+		}
+		if _, v := p.server.Acked(); v != 1 {
+			t.Errorf("acked version %d, want 1", v)
+		}
+	})
+}
+
 func TestAnAckRidesOnDataSentSooner(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c, s := symmetric(30 * time.Millisecond)

@@ -11,8 +11,8 @@ import (
 // receiver of the peer's object R, which share datagrams because acks and
 // timestamps ride on whatever goes next.
 //
-// Run does the work. Set, Remote, Acked, RemoteChanged and Stats may be
-// called from any goroutine.
+// Run does the work. Set, Remote, Acked, RemoteChanged, AckedChanged and
+// Stats may be called from any goroutine.
 type Endpoint[L State[L], R State[R]] struct {
 	d   Datagrams
 	cfg Config
@@ -23,8 +23,9 @@ type Endpoint[L State[L], R State[R]] struct {
 	collection time.Duration
 	// wake tells Run that Set changed something.
 	wake chan struct{}
-	// changed is RemoteChanged's.
-	changed chan struct{}
+	// changed is RemoteChanged's, ackedChanged AckedChanged's.
+	changed      chan struct{}
+	ackedChanged chan struct{}
 
 	mu sync.Mutex
 
@@ -134,6 +135,8 @@ func NewEndpoint[L State[L], R State[R]](d Datagrams, cfg Config, local L, remot
 		held:      map[uint64]R{0: remote.Clone()},
 		lastAny:   now,
 		lastHeard: now,
+
+		ackedChanged: make(chan struct{}, 1),
 	}
 	e.sent[0] = e.pending
 	e.re.limits = e.lim
@@ -309,6 +312,13 @@ func (e *Endpoint[L, R]) RemoteChanged() <-chan struct{} {
 	return e.changed
 }
 
+// AckedChanged is signalled, without blocking, whenever the peer
+// acknowledges a newer local version. One signal may stand for several.
+// proto holds the program's output back on it (docs/spec/screen.md §2.5).
+func (e *Endpoint[L, R]) AckedChanged() <-chan struct{} {
+	return e.ackedChanged
+}
+
 // Stats is what the endpoint knows about the path, for the client's
 // "last contact" warning and for tests.
 func (e *Endpoint[L, R]) Stats() Stats {
@@ -359,6 +369,10 @@ func (e *Endpoint[L, R]) receive(p []byte, now time.Time) error {
 			}
 		}
 		e.acked, e.backoff = d.ack, 0
+		select {
+		case e.ackedChanged <- struct{}{}:
+		default:
+		}
 		if e.tx.active && e.instr.to <= e.acked {
 			// The peer has it already; the rest of the transmission would
 			// only be thrown away.
