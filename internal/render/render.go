@@ -42,9 +42,14 @@ type Renderer struct {
 	// bell (docs/spec/screen.md §8.4).
 	drawn bool
 
-	pen     string // the SGR parameters in force, "" for unknown
-	link    string // the OSC 8 link open, if any
-	title   string
+	pen   string // the SGR parameters in force, "" for unknown
+	link  string // the OSC 8 link open, if any
+	title string
+	// mark is the container mark last written to the terminal, the far
+	// side's: the client never marks the terminal itself
+	// (docs/spec/screen.md §8.4). cwd is the directory last written.
+	mark    screen.Container
+	cwd     string
 	modes   screen.Modes
 	shape   screen.CursorShape
 	clipSeq uint64
@@ -164,6 +169,15 @@ func (r *Renderer) Leave() error {
 		r.bottom(rows)
 	}
 	r.csi("23;2t")
+	// A detach or exit must not leave the terminal labelled as the remote
+	// container. What mark it had before cannot be read, so none is
+	// restored. No OSC 7 is written: there is no form that unsets the
+	// directory, and the local shell sends its own at its next prompt
+	// (§8.6). Forgetting both means a later Enter writes them again.
+	if r.mark.Set() {
+		r.buf = append(r.buf, clearMark...)
+	}
+	r.mark, r.cwd = screen.Container{}, ""
 	r.modes, r.shape, r.pen = screen.Modes{}, 0, ""
 	return r.flush()
 }
@@ -542,6 +556,17 @@ func (r *Renderer) state(g *screen.Grid) {
 			r.buf = append(r.buf, "\x1b\\"...)
 		}
 	}
+	r.container(g.Container)
+	if g.Cwd != r.cwd {
+		r.cwd = g.Cwd
+		if g.Cwd != "" && screen.ValidCwd(g.Cwd) {
+			// ASCII by the allow-list, so it is the same bytes with or
+			// without UTF-8 (§4.7).
+			r.buf = append(r.buf, "\x1b]7;"...)
+			r.buf = append(r.buf, g.Cwd...)
+			r.buf = append(r.buf, "\x1b\\"...)
+		}
+	}
 	if g.Clipboard.Seq != r.clipSeq {
 		if r.drawn && g.Clipboard.Seq > r.clipSeq && r.caps.Clipboard && len(g.Clipboard.Data) <= screen.MaxClipboard {
 			r.buf = append(r.buf, "\x1b]52;c;"...)
@@ -564,6 +589,66 @@ func (r *Renderer) state(g *screen.Grid) {
 		r.rebuilt = g.Rebuilt
 	}
 	r.mirror(g.Modes)
+}
+
+// clearMark unsets every vte.container termprop: the prefix names no
+// property, so VTE unsets all of them, as flong's unmark does
+// (docs/spec/screen.md §4.6).
+const clearMark = "\x1b]666;vte.container.\x1b\\"
+
+// container writes the far side's container mark if it changed (§8.4 item
+// 5): a clear, which removes a property the new mark lacks, then the
+// values set, each checked again and escaped by the client itself. VTE
+// refuses the BEL-terminated form, so it is ended with ST.
+func (r *Renderer) container(c screen.Container) {
+	if !screen.ValidContainerValue(c.Name) {
+		c.Name = ""
+	}
+	if !screen.ValidContainerValue(c.Runtime) {
+		c.Runtime = ""
+	}
+	if !screen.ValidContainerUID(c.UID) {
+		c.UID = ""
+	}
+	if c == r.mark {
+		return
+	}
+	r.buf = append(r.buf, clearMark...)
+	r.mark = c
+	if !c.Set() {
+		return
+	}
+	r.buf = append(r.buf, "\x1b]666"...)
+	for _, p := range []struct{ key, value string }{
+		{"name", c.Name}, {"runtime", c.Runtime}, {"uid", c.UID},
+	} {
+		if p.value == "" {
+			continue
+		}
+		r.buf = append(r.buf, ";vte.container."...)
+		r.buf = append(r.buf, p.key...)
+		r.buf = append(r.buf, '=')
+		r.termpropValue(p.value)
+	}
+	r.buf = append(r.buf, "\x1b\\"...)
+}
+
+// termpropValue writes a value with VTE's escapes for the two bytes that
+// would end or split it, \\ and \s; the allow-list has left no newline or
+// other control. Without UTF-8, a non-ASCII rune is a '?' (§8.3).
+func (r *Renderer) termpropValue(v string) {
+	for _, ch := range v {
+		switch {
+		case ch == '\\':
+			r.buf = append(r.buf, `\\`...)
+		case ch == ';':
+			r.buf = append(r.buf, `\s`...)
+		case ch >= 0x80 && !r.caps.UTF8:
+			r.buf = append(r.buf, '?')
+		default:
+			r.buf = utf8.AppendRune(r.buf, ch)
+		}
+	}
 }
 
 // mirror sets the local terminal into the input modes the remote program

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/danielbodart/mosey/internal/screen"
@@ -75,7 +76,11 @@ var csiForms = []*regexp.Regexp{
 // oscForm is an OSC up to its ST. The body may hold anything but a C0 or
 // DEL (an invalid UTF-8 byte reads as U+FFFD here); what it may hold is
 // then checked against the allow-list for its kind.
-var oscForm = regexp.MustCompile(`^\x1b\](2|8;;|52;c;)([^\x00-\x1f\x7f]*)\x1b\\`)
+var oscForm = regexp.MustCompile(`^\x1b\](2|8;;|52;c;|7;|666;)([^\x00-\x1f\x7f]*)\x1b\\`)
+
+// termpropItem is one item of the client's OSC 666: a carried property and
+// its value, with no ';' or '\' except in VTE's \\ and \s escapes.
+var termpropItem = regexp.MustCompile(`^vte\.container\.(name|runtime|uid)=((?:[^\\;]|\\\\|\\s)+)$`)
 
 // escape recognizes one sequence at the start of b and says how long it
 // is.
@@ -101,6 +106,28 @@ func escape(b []byte) (int, error) {
 	case "8;;":
 		if body != "" && !screen.ValidLink(body) {
 			return 0, fmt.Errorf("a link outside the allow-list: %q", body)
+		}
+	case "7;":
+		if body == "" || !screen.ValidCwd(body) {
+			return 0, fmt.Errorf("a directory outside the allow-list: %q", body)
+		}
+	case "666;":
+		if body == "vte.container." {
+			break
+		}
+		for _, item := range strings.Split(body, ";") {
+			m := termpropItem.FindStringSubmatch(item)
+			if m == nil {
+				return 0, fmt.Errorf("a termprop outside the alphabet: %q", item)
+			}
+			v := strings.NewReplacer(`\\`, `\`, `\s`, ";").Replace(m[2])
+			valid := screen.ValidContainerValue
+			if m[1] == "uid" {
+				valid = screen.ValidContainerUID
+			}
+			if !valid(v) {
+				return 0, fmt.Errorf("a container value outside the allow-list: %q", v)
+			}
 		}
 	case "52;c;":
 		if _, err := base64.StdEncoding.DecodeString(body); err != nil {

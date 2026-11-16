@@ -127,10 +127,11 @@ func sameScreen(got, want *screen.Grid) error {
 	got.Bell, want.Bell = 0, 0
 	got.Clipboard, want.Clipboard = screen.Clipboard{}, screen.Clipboard{}
 	got.History, want.History = screen.History{}, screen.History{}
-	// The container mark and the directory are not drawn until the
-	// renderer writes them.
-	got.Container, want.Container = screen.Container{}, screen.Container{}
-	got.Cwd, want.Cwd = "", ""
+	// A directory that becomes empty is not written: OSC 7 cannot unset
+	// one, so the terminal keeps the last (§8.4).
+	if want.Cwd == "" {
+		got.Cwd = ""
+	}
 	if got.Equal(want) {
 		return nil
 	}
@@ -146,8 +147,8 @@ func sameScreen(got, want *screen.Grid) error {
 			}
 		}
 	}
-	return fmt.Errorf("state: cursor %+v want %+v, title %q want %q, modes %+v want %+v",
-		got.Cursor, want.Cursor, got.Title, want.Title, got.Modes, want.Modes)
+	return fmt.Errorf("state: cursor %+v want %+v, title %q want %q, modes %+v want %+v, container %+v want %+v, cwd %q want %q",
+		got.Cursor, want.Cursor, got.Title, want.Title, got.Modes, want.Modes, got.Container, want.Container, got.Cwd, want.Cwd)
 }
 
 // renderSequence draws each grid in turn on a fresh terminal of the
