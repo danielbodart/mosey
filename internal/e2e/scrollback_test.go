@@ -68,7 +68,9 @@ func contents(t vt.Terminal) []string {
 }
 
 var (
-	numberedLine = regexp.MustCompile(`^line-(\d+)$`)
+	// A numbered line may carry noise after a space, as a wide seq's
+	// does (holdback_test.go).
+	numberedLine = regexp.MustCompile(`^line-(\d+)(?: [!-~]+)?$`)
 	notShown     = regexp.MustCompile(`^… (\d+) lines not shown$`)
 )
 

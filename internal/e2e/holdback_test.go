@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/danielbodart/mosey/internal/netsim"
+	"github.com/danielbodart/mosey/internal/screen"
 	"github.com/danielbodart/mosey/internal/server"
 )
 
@@ -53,6 +55,9 @@ type ttyShell struct {
 	// read, which is what its emulator saw.
 	written int
 	read    bytes.Buffer
+	// wide makes each line seq writes fill 79 columns, the number and
+	// then noise that flate can barely shrink, as a dense log does.
+	wide bool
 }
 
 func newTTYShell() *ttyShell {
@@ -146,7 +151,7 @@ func (s *ttyShell) seq(n int) {
 		if s.interrupted || s.closed {
 			break
 		}
-		s.out(fmt.Sprintf("line-%04d\r\n", i))
+		s.out(seqLine(i, s.wide) + "\r\n")
 		s.written++
 	}
 	if s.interrupted {
@@ -155,6 +160,23 @@ func (s *ttyShell) seq(n int) {
 	s.out("$ ")
 	s.running = false
 	s.finished++
+}
+
+// seqLine is line i of a seq: line-NNNN, and for a wide one a space and
+// 69 characters of noise, drawn from 64 symbols by a generator seeded
+// with i, so flate finds little to repeat.
+func seqLine(i int, wide bool) string {
+	l := fmt.Sprintf("line-%04d", i)
+	if !wide {
+		return l
+	}
+	const symbols = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	r := rand.New(rand.NewPCG(uint64(i), 0x5eed))
+	b := []byte(l + " ")
+	for len(b) < 79 {
+		b = append(b, symbols[r.IntN(len(symbols))])
+	}
+	return string(b)
 }
 
 // done is how many seqs have ended, and how many lines they wrote.
@@ -434,21 +456,33 @@ func slowLink(t *testing.T) netsim.Profile {
 // acknowledged, at most half the window, and those ttyKept bytes. The
 // bound is the time an ordinary command takes to answer on the same
 // link, plus two hold cycles of a round trip, the 100 ms delayed ack and
-// a frame interval each (docs/spec/screen.md §2.5). On the slow link an
-// answer takes 450 ms and the prompt is back 900-950 ms after ^C, inside
-// the bound of 1550 ms [measured here].
+// a frame interval each, plus that queue's bytes at the link's rate,
+// counted as if flate could not shrink them (docs/spec/screen.md §2.5).
+// The slow link runs it with seq's short lines and with lines that fill
+// 79 columns with noise, the queue then about 44 KB; the LTE trace's rate
+// varies, and its lines are short, so its bound has no bytes term.
 func TestCtrlCDuringAFloodGivesThePromptBackPromptly(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
-	profiles := []netsim.Profile{slowLink(t)}
+	type run struct {
+		p    netsim.Profile
+		wide bool
+	}
+	runs := []run{{p: slowLink(t)}, {p: slowLink(t), wide: true}}
 	for _, p := range netsim.Profiles() {
 		if p.Name == "train" || p.Name == "lte-driving" {
-			profiles = append(profiles, p)
+			runs = append(runs, run{p: p})
 		}
 	}
-	for _, p := range profiles {
-		t.Run(p.Name, func(t *testing.T) {
+	for _, r := range runs {
+		p := r.p
+		name := p.Name
+		if r.wide {
+			name += "-wide"
+		}
+		t.Run(name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				prog := newTTYShell()
+				prog.wide = r.wide
 				s := startTTYSession(t, p, prog, nil)
 				typed := time.Now()
 				s.typeLine("echo ping")
@@ -477,18 +511,26 @@ func TestCtrlCDuringAFloodGivesThePromptBackPromptly(t *testing.T) {
 					srtt = answer
 				}
 				cycle := srtt + 100*time.Millisecond + srtt/2
+				bound := answer + 2*cycle
+				if p.Name == "slow" {
+					// The queue: half the window of lines, each with its
+					// CR LF, and what the kernel kept, at 1500 bytes
+					// every 12 ms.
+					queued := screen.WindowLines(80)/2*(len(seqLine(1, r.wide))+2) + ttyKept
+					bound += time.Duration(queued) * 12 * time.Millisecond / 1500
+				}
 				// The train's fades and delay spikes, random per run, can
 				// hold up any packet for seconds, ^C's as much as an
 				// ordinary key's; there the run is logged, not bounded.
-				if bound := answer + 2*cycle; p.Name != "train" && back > bound {
-					t.Errorf("%s: the prompt came back %v after ^C; an answer takes %v, the bound is %v", p.Name, back, answer, bound)
+				if p.Name != "train" && back > bound {
+					t.Errorf("%s: the prompt came back %v after ^C; an answer takes %v, the bound is %v", name, back, answer, bound)
 				}
-				t.Logf("%s: an answer took %v, the prompt after ^C %v, at line %d", p.Name, answer.Round(time.Millisecond), back.Round(time.Millisecond), written)
+				t.Logf("%s: an answer took %v, the prompt after ^C %v (bound %v), at line %d", name, answer.Round(time.Millisecond), back.Round(time.Millisecond), bound.Round(time.Millisecond), written)
 				s.converge()
 				again := time.Now()
 				s.typeLine("echo pong")
 				s.wait("answer", func() bool { return strings.Contains(s.clientScreen(), "PONG") })
-				t.Logf("%s: an answer after it took %v", p.Name, time.Since(again).Round(time.Millisecond))
+				t.Logf("%s: an answer after it took %v", name, time.Since(again).Round(time.Millisecond))
 				if got := numbers(transcript(s.user.bytes(), 80, 24)); len(got) > 0 {
 					if _, err := accountedFor(got, got[len(got)-1]); err != nil || hasMarker(got) {
 						t.Errorf("%s: the lines before ^C are not whole: %v", p.Name, err)

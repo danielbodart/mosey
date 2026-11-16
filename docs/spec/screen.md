@@ -261,10 +261,16 @@ as they do for any local program.
     for the master's line-discipline buffer, 4095 bytes [measured here,
     the same test], so after Ctrl-C at most `W/2` lines and 4 KiB are
     still to cross: the prompt comes back within the time an ordinary
-    command takes to answer plus two hold cycles (a round trip, the
-    100 ms delayed ack and a frame interval each) [measured here: on a
-    300 ms, 1 Mbit/s link an answer takes 450 ms and the prompt is back
-    900–950 ms after Ctrl-C, inside the 1550 ms bound,
+    command takes to answer, plus two hold cycles (a round trip, the
+    100 ms delayed ack and a frame interval each), plus those bytes at
+    the link's rate, at most `W/2 × (cols + 2)` and 4 KiB, about 45 KB at
+    80 columns before compression, 360 ms at 1 Mbit/s and 1.4 s at
+    256 kbit/s [derived]. That is the worst case: a read of `W/4` bytes
+    adds only a few wide lines, so with wide lines the queue stays near
+    `W/4` lines, half that [measured here: on a 300 ms,
+    1 Mbit/s link an answer takes 450 ms and the prompt is back 900 ms
+    after Ctrl-C with seq's short lines and 650 ms with lines of 79
+    columns of noise, against bounds of 1.6 s and 1.9 s,
     `TestCtrlCDuringAFloodGivesThePromptBackPromptly`]. Keystrokes go to
     the pty whatever the hold (`server.md` §4.3), so the program gets
     its SIGINT at once, even while blocked in `write`.
