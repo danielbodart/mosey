@@ -17,7 +17,6 @@ type SpawnerConfig struct {
 	BindAddr            netip.Addr
 	Environ             []string
 	LogDir              string
-	Passwd              string
 }
 
 // RunSpawner: the server runs on Linux only for now (server.md §10).

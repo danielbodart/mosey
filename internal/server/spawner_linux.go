@@ -63,9 +63,6 @@ type SpawnerConfig struct {
 	Environ []string
 	// LogDir overrides where the session log goes.
 	LogDir string
-	// Passwd is read for the user's shell when $SHELL is unusable; empty
-	// is /etc/passwd.
-	Passwd string
 	// IdleTimeout is how long a detached session lives before its shell is
 	// hung up; zero is the package's IdleTimeout (D8 R4). Not a user
 	// option (PLAN O14): tests set it.
@@ -105,9 +102,6 @@ func RunSpawner(ctx context.Context, ipcFD *os.File, cfg SpawnerConfig) error {
 	}
 	if cfg.prlimit == nil {
 		cfg.prlimit = limitData
-	}
-	if cfg.Passwd == "" {
-		cfg.Passwd = "/etc/passwd"
 	}
 	if cfg.FirstPort == 0 && cfg.LastPort == 0 {
 		cfg.FirstPort, cfg.LastPort = FirstPort, LastPort
@@ -609,7 +603,9 @@ func oomKilled(cgroup string) bool {
 }
 
 func (s *spawner) startShell(cl bootstrap.ClientLine, agentSock string, slave *os.File) error {
-	path, home := shellAndHome(s.getenv, s.cfg.Passwd)
+	// The same passwd file as the launcher's -dir check, so both resolve
+	// a relative -dir against the same home.
+	path, home := shellAndHome(s.getenv, passwdFile)
 	// The launcher checked -dir already; should it have gone since, the
 	// session fails rather than start somewhere the user did not ask.
 	dir, err := startDir(home, cl.Dir)
