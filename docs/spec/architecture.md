@@ -194,6 +194,12 @@ to collect output, then sends the diff from the client's acknowledged grid
 to now, skipping intermediate screens) → transport → UDP → client endpoint
 `Grid.Apply` (validated) → `RemoteChanged` → `render.Renderer.Render`
 draws what changed. Replies that pass `ValidReply` go to the pty.
+Lines that scroll off the top of the primary screen ride in the same
+Grid as `History`, a bounded numbered window (`screen.md` §2.5): emu
+takes them from tuios' scrollback, proto renumbers them for the session,
+and the renderer prints each once above its screen, into the local
+terminal's own scrollback (`screen.md` §8.7), so mosey needs no tmux and
+no scroll mode for history.
 
 ### 3.4 Roaming (D21)
 
@@ -373,8 +379,9 @@ throttles on (`ssp.md` §10.1).
 **screen.** `*Grid` is an `ssp.State[*Grid]`: cells (`Cell`: cluster,
 width, `Style`), `Cursor`, `Title`, `Modes`, and prediction's `EchoOff`
 (D12), `EchoAck` and `EchoApplied` (`prediction.md` §3), `Clipboard` (OSC 52 write, D27) and `Bell`,
-plus `InputConsumed` (the client's input flow control, `ssp.md` §10.1)
-and `Rebuilt` (D23's rebuild notice). `allow.go` is the allow-list and the
+plus `InputConsumed` (the client's input flow control, `ssp.md` §10.1),
+`Rebuilt` (D23's rebuild notice) and `History` (the scrollback window,
+`screen.md` §2.5). `allow.go` is the allow-list and the
 bounds. `render.Renderer` (`Render`, `Invalidate`, `Enter`, `Leave`,
 `Resize` for the local size it clips to) draws a Grid, with the
 `Capabilities` from `render.FromEnv`, the locale's UTF-8 among them.

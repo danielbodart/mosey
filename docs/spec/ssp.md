@@ -1163,6 +1163,16 @@ What SSP needs from it:
   does not have this field yet and must add it to the object, its diff
   and its bounds; the client must treat a value above its own stream's
   `Len()` as that `Len()`.
+- **History** (`Grid.History`, the scrollback slice, `screen.md` §2.5):
+  the lines that scrolled off the top of the remote screen, as a
+  bounded, numbered append log inside the object, not a stream beside
+  it. SSP needs nothing new for it. Its acknowledgement is the object's:
+  a diff from the acknowledged version carries exactly the lines the
+  client does not have, and each version holds at most the window
+  (`HistoryLines`, `HistoryCells`), so a retransmission resends at most
+  that, and a client that falls behind further than the window is told
+  how many lines it missed rather than being waited for. This keeps
+  "latest state only": the window is part of the latest state.
 - **Echo-off bit** (`Grid.EchoOff`, D12): `!ECHO && ICANON` on the pty,
   read with `pty.EchoOff`. It is part of the screen, so it is sent like
   any other change, in the same instruction as the screen it belongs to.

@@ -423,7 +423,7 @@ from a hostile server (T5) exactly as proto is from a hostile client.
   resend the same oversize diff from the acked state for ever: a T4 that
   fills the clamped screen with 64-byte random clusters would freeze the
   session. So **requirement on `screen.md` and `ssp.md`:** `screen.md`
-  derives `MaxDiff` (48 MiB, `screen.md` §5.12) as the largest diff its
+  derives `MaxDiff` (64 MiB, `screen.md` §5.12) as the largest diff its
   encoder can emit at the D23 clamp (`MaxCols × MaxRows` cells of
   `MaxCluster` bytes plus style, link and op overhead; 500,000 × 64 B is
   32 MB of text alone [derived]); the server's encoder must never emit a
@@ -434,8 +434,8 @@ from a hostile server (T5) exactly as proto is from a hostile client.
   `MaxDiffBytes` (128 KiB), because input diffs are small by
   construction.
 - **Fragments and reassembly** (`ssp.md` §5): at most `MaxFragments` =
-  `ceil(MaxInstruction / Chunk)` fragments per instruction (about 44,000
-  at 48 MiB, under the 65,535 the field allows), at most 4 instructions
+  `ceil(MaxInstruction / Chunk)` fragments per instruction (about 57,200
+  at 64 MiB, under the 65,535 the field allows), at most 4 instructions
   under reassembly and `MaxPartialBytes = 2 × MaxFragments × Chunk`
   bytes held in total (at least `2 × MaxInstruction`), charged chunk by
   chunk as each is stored and never set aside from a claimed count, the
@@ -443,7 +443,7 @@ from a hostile server (T5) exactly as proto is from a hostile client.
   inconsistent with earlier fragments of the same instruction, is a
   protocol error. S5's 512 fragments and 1 MiB were for a fixed-size toy
   screen [S5 ssp-spec §2.3] and are not ours. The cost is that a hostile
-  server (T5) can make the client hold about 96 MiB of partial
+  server (T5) can make the client hold about 128 MiB of partial
   instructions; that is bounded, and the client has nothing better to do
   with its memory for that session.
 - **Decompression is bounded and fails closed** (D24). An unbounded flate
@@ -459,6 +459,23 @@ from a hostile server (T5) exactly as proto is from a hostile client.
 - **No state before authentication** (§4.2): RTT samples, acks,
   timestamps and the high-water mark come only from authentic datagrams.
 - **Compression leaks length** (R1). See §5.
+- **The history is a window, not a queue** (`screen.md` §2.5). A hostile
+  or merely flooding server (T4, T5) cannot make the client hold more
+  history than `HistoryLines` lines and `HistoryCells` cells: `Apply`
+  refuses a diff that carries more than the window (before it allocates
+  a line past it), and after every diff the client drops its oldest lines
+  until both bounds hold. Nothing on either end waits for the client to
+  catch up: the server keeps the same window whatever the client has
+  acknowledged, so a client that is gone or slow costs the server no
+  more than the window, and a client that falls behind past it prints
+  one "lines not shown" marker. A flood costs bandwidth that Mosh's
+  latest-state-only rule skipped (each frame carries up to the window of
+  new lines, about 80 KB at 80 columns before compression); that is
+  bounded by the window and by SSP's frame rate, and keystrokes go the
+  other way unaffected. What the client prints of history passes the
+  same allow-list as the screen and is drawn by the renderer from cells
+  (D9); the only new byte it writes is LF, at its own cursor on the last
+  row (`screen.md` §8.7).
 
 ### 4.7 The client never parses remote escape sequences (D9, D27) — T4, T5, A4, A5
 
@@ -737,7 +754,7 @@ execution (R4).
 | Forged data packets | one datagram each | lookup, window check, one failed AEAD open | µs; no state change; 2^36 per key (§4.2) |
 | Re-sourced genuine packets (T3) | sniffing | path challenges | ≤ 3x what the attacker sent, to the victim [M S5 §6] |
 | Hostile program output (T4) | a program on the server | emu CPU and memory | the session's own; memory ≤ 512 MiB (cgroup) or 1 GiB (`RLIMIT_DATA`), never unbounded; §4.8 |
-| A screen-sized diff at the clamp (T4) | a program on the server | up to `MaxDiff` (48 MiB) sent once, compressed | delivered, not dropped: the receiver's limits are derived from it (§4.6) |
+| A screen-sized diff at the clamp (T4) | a program on the server | up to `MaxDiff` (64 MiB) sent once, compressed | delivered, not dropped: the receiver's limits are derived from it (§4.6) |
 | On-path drop | being on path | the session stalls | unbounded (R8) |
 | Log flooding via evictions | leaked PSK | log lines | **Requirement:** eviction and rejection logs are rate-limited per session |
 | A far program opening agent connections | being the user on the server | one stream each | ≤ 16 live per connection; more are closed at once (`agent.md` §4.2) |
@@ -1034,7 +1051,8 @@ Y = can, . = cannot, given the mechanisms above.
 | Anti-amplification factor | 3 | [RFC 9000 §8.1; D21] |
 | Path challenge token | 8 B random | [RFC 9000 §19.17] |
 | Path challenge re-send | ≤ once per RTO | [S5 ssp-spec §2.1, D21] |
-| Largest screen diff (`MaxDiff`, the client's `MaxRemoteBytes` and decompression limit) | 48 MiB | [`screen.md` §5.12, derived from the clamp] |
+| Largest screen diff (`MaxDiff`, the client's `MaxRemoteBytes` and decompression limit) | 64 MiB | [`screen.md` §5.12, derived from the clamp and the history window] |
+| History window (`HistoryLines`, `HistoryCells`) | 1000 lines, 200,000 cells, at both ends and in any one diff | [D], [derived], `screen.md` §2.5, §3 |
 | Largest input diff (the server's `MaxRemoteBytes`) | 128 KiB | [`ssp.md` §10.1] |
 | Fragments per instruction / instructions in reassembly / bytes held | `ceil(MaxInstruction / Chunk)` (≤ 65535) / 4 / `MaxPartialBytes = 2 × MaxFragments × Chunk` | [`ssp.md` §5, derived] |
 | Compression | always attempted; sent stored when DEFLATE is not shorter (in practice every frame under 32 B) | [`ssp.md` §4.1, M S5 §8] |

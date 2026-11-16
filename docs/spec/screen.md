@@ -7,6 +7,8 @@ written from it.
 This document covers:
 
 - the screen model (`screen.Grid`) and its invariants;
+- the history: lines that scrolled off the top, for the local terminal's
+  own scrollback (§2.5, added by the scrollback slice);
 - the cell-diff wire format (O11);
 - the D9/D27 allow-list and the D23 bounds;
 - what the server's emulator must do to fill a Grid;
@@ -83,6 +85,7 @@ fuzzed decoder protects both boundaries.
 | `Bell` | count of bells | BELL |
 | `Rebuilt` (§11 item 1) | `{Seq, Reason}`: the emulator was rebuilt [D23] | REBUILT |
 | `InputConsumed` (§11 item 15) | the index in the client's input stream up to which the server has written events to the pty: input flow control [`ssp.md` §10.1] | CONSUMED |
+| `History` (§2.5) | `{Next, Lines}`: the newest lines to scroll off the top of the primary screen, a bounded window numbered by `Next` | HIST, HLINE, HROW |
 
 `Style` is `{Fg, Bg, Underline Color; Attrs; Link string}`. `Color` is
 `DefaultColor` (0), `Palette(i)` (`1<<24 | i`) or `RGB(r,g,b)`
@@ -132,6 +135,12 @@ item 4).
   - `Rebuilt.Reason` is in 0..3.
   - `EchoAck ≤ EchoApplied` (the ECHO op can't encode anything else,
     §5.6).
+- **G9, history.**
+  - `len(Lines) ≤ HistoryLines`, the widths of the lines sum to at most
+    `HistoryCells`, and `len(Lines) ≤ Next`.
+  - Each line is 1 to `MaxCols` cells wide and keeps G2, G3, G4 and G6
+    as a row does.
+  - No history cell has a link (§2.5).
 
 ### 2.3 Version 0
 
@@ -154,7 +163,8 @@ the change.
   - the size and every cell's `Text`, `Width` and `Style`;
   - `Cursor`, `Title`, `Modes`, `EchoOff`, `EchoAck` and `EchoApplied`;
   - `Clipboard.Seq` together with `Clipboard.Data` (byte-equal);
-  - `Bell`, `Rebuilt` and `InputConsumed`.
+  - `Bell`, `Rebuilt` and `InputConsumed`;
+  - `History.Next` and every line of the window, cell by cell.
 
   Equal grids draw the same and drive input the same. `Diff(g, g)` is
   always empty, and an empty diff is valid and changes nothing.
@@ -162,7 +172,8 @@ the change.
   not normative, but it matters. SSP clones every version it keeps, and a
   full copy at the clamp is 500,000 cells, about 28 MB at 56 bytes per
   `Cell` (a Go-struct estimate [derived]). Sharing immutable row slices
-  makes a clone cost one slice of row pointers.
+  makes a clone cost one slice of row pointers. History lines are never
+  written once they are in a grid, so a clone shares them too.
 - **Fitting a row to width `C`** (used by `Resize`, SIZE, ROWS and SCROLL):
   1. Keep cells `0..min(len, C)−1`.
   2. If cell `C−1` now has `Width` 2, replace it with a blank of the same
@@ -175,6 +186,52 @@ the change.
 
   It never reflows. The emulator decides what a resize does to the content
   (`grid.go`), and the next diff carries the outcome.
+
+### 2.5 History (the scrollback slice)
+
+PLAN §1 lists Mosh's "no scrollback, so everyone runs tmux inside it".
+mosey uses the user's own terminal's scrollback instead, with no scroll
+mode of its own (Dan, 2026-11-15): lines that scroll off the top of the
+remote screen are printed above the client's screen, so they enter the
+local terminal's history, and the mouse wheel, search and selection work
+as they do for any local program.
+
+- **What becomes history.** A line enters history when the server's
+  emulator puts it in its own scrollback: when it scrolls off the top of
+  the primary screen. That is the emulator's rule, as on a real terminal
+  [xterm]: tuios applies it to a scroll region whose top is the screen's
+  top, and to SU, and to the top rows a shrinking resize pushes out
+  [measured here, a probe of tuios v0.3.2]. The alternate screen never
+  makes history, nor does a scroll region that starts below the top row,
+  nor ED 2 [measured here]. mosey adds no rule of its own (§6.3).
+- **It is state, not a stream.** SSP synchronises objects [paper §2],
+  so history is a field of the screen: a bounded, numbered append log.
+  `History.Next` is the number of lines that have ever entered it, and
+  `Lines` are the newest of them, oldest first, the line numbered
+  `Next − len(Lines) + i` at index `i`. Each line keeps the width the
+  screen had when it scrolled off.
+- **The window.** Whoever holds a `History` keeps at most `HistoryLines`
+  lines and `HistoryCells` cells (§3): after every append, the oldest
+  lines are dropped until both hold. Dropping is the only way a line
+  leaves, so both ends, applying the same rule to the same lines, hold
+  the same window, and `Equal` can compare it.
+- **The acknowledgement is SSP's.** The server diffs from the version the
+  client acknowledged [paper §2.3], so a diff carries exactly the lines
+  numbered from the acknowledged `Next` on. The client prints each line
+  once, by number (§8.7). A client that fell behind by more than the
+  window, through a long outage while a program flooded the screen,
+  gets a diff that starts after a gap; it prints one line saying how many
+  lines are not shown, and carries on. Nothing waits for the client: the
+  window is the bound on what the server holds for it, in memory and in
+  each diff (§3, `threat-model.md` §4.6).
+- **No links in history.** A history cell's `Style.Link` is always
+  empty: G5's link budget is per screen, and a window of 200,000 cells,
+  each with a distinct 2 KiB link, would hold 400 MB. The text and its
+  style stay; the link is dropped by the emulator (§6.2).
+- **Numbering belongs to proto.** emu numbers its own history from 0 in
+  each generation; proto keeps the session's numbering across emu
+  rebuilds and client attaches, as it keeps the counters (§7.2). A
+  client that resumes, R1 or R3, sees the same numbers.
 
 ## 3. Bounds
 
@@ -190,7 +247,9 @@ the change.
 | `MaxLinks` | 4096 distinct links per grid | [derived]: a full 1000 × 500 screen of `ls --hyperlink` names stays under it; it bounds client memory, which tuios does not (S2 measured link storage growing without limit) | both ends, G5 |
 | `MaxLinkBytes` | 1 MiB of distinct link text per grid | [derived]: matches S2's link-table cap [measured S2]; 4096 × 2048 would be 8 MiB, more than a screen needs | both ends, G5 |
 | `MaxClipboard` | 64 KiB of decoded data | [derived]: [D27] asks for a cap and leaves the value to this spec. 64 KiB covers a long yank, and its 87 KiB of base64 is a few dozen datagrams. A larger write is dropped whole, never truncated: a truncated paste is a different paste | emu drops; client: CLIP |
-| `MaxDiff` | 48 MiB | [derived] §5.12 | `Apply` (a longer diff is refused unread), `ssp.Config.MaxRemoteBytes`, the IPC `Update` |
+| `HistoryLines` | 1000 lines | [D]: the recent history a client prints on attach or resume, and the most a client can fall behind before lines are not shown. A thousand lines is a screenful of build log many times over, and at 80 columns about 80 KB before compression, so a resume over a slow path reprints it in a moment rather than many seconds; D23's 10,000-line emulator scrollback would be ten times that on every resume | both ends: the window (§2.5), and a diff carries at most this many lines (§5.6) |
+| `HistoryCells` | 200,000 cells | [derived]: `HistoryLines` lines at 200 columns, so the window is 1000 lines at any usual width and 200 at the D23 clamp's 1000; it bounds the window's memory (about 11 MB at 56 B a `Cell`) and its share of `MaxDiff` | both ends, as `HistoryLines` |
+| `MaxDiff` | 64 MiB | [derived] §5.12 | `Apply` (a longer diff is refused unread), `ssp.Config.MaxRemoteBytes`, the IPC `Update` |
 | cells written per diff | `2 × cols × rows` | [derived]: an encoder writes each cell at most once, plus one erase pass; this bounds the decoder's work, not only the diff's length | `Apply`, §5.8 |
 | reply queue | 64 KiB, drop and count | [measured S2]: the naive design deadlocked in 0.2 s; a 64 KiB bounded queue completed | emu / proto (`server.md`) |
 | `SyncHold` | 200 ms | [derived]: longer than any well-behaved synchronised frame, short enough that a program that never closes mode 2026 freezes its screen only briefly | emu holds its snapshot; proto's timer asks for it again (§6.3) |
@@ -456,6 +515,9 @@ State during a diff:
 | `0x57` | CLIP | `varint seq`, string (0..`MaxClipboard`) | 2, once |
 | `0x58` | REBUILT | `varint seq`, `byte reason` | 2, once |
 | `0x59` | CONSUMED | `varint index` | 2, once |
+| `0x60` | HIST | `varint seq` | starts phase 3, once |
+| `0x61` | HLINE | `varint cols` | 3 |
+| `0x62` | HROW | `varint src` | 3 |
 | `0x80`–`0xBF` | TEXT+HERE (short) | stream of `opcode − 0x7F` bytes (1–64), then as HERE | 2, once* |
 | anything else | | | error |
 
@@ -470,6 +532,11 @@ at most once per diff.
   and SCROLL are allowed here, and only here.
 - **Phase 2** begins at the first op that is not SIZE, ROWS or SCROLL.
   From then on, SIZE, ROWS or SCROLL is an error.
+- **Phase 3** begins at HIST, which may follow any phase. It carries
+  the history lines (§5.6, history ops) and nothing else: after HIST the
+  only ops allowed are HLINE, HROW, and the line ops TEXT (short and
+  long), COL, SKIP, ERASE, REPEAT and PEN, which write the current
+  history line instead of the screen. Every other op is an error.
 
 When phase 1 ends, the row map (§5.6) is fixed. Every later op reads and
 writes the rows as they stand after it.
@@ -477,7 +544,7 @@ writes the rows as they stand after it.
 Reserved for later slices, and errors until a spec section defines them:
 
 - `0x5A`–`0x5F`: more state;
-- `0x60`–`0x6F`: scrollback, for the later lazy-scrollback work;
+- `0x63`–`0x6F`: more history ops;
 - `0x4E`–`0x4F`, `0x70`–`0x7F` and `0xC0`–`0xFF`.
 
 ### 5.5 The text stream
@@ -688,17 +755,68 @@ limit, 2 emu panic or exit, 3 other). Sets `Rebuilt` (§11 item 1).
 accepted: the client clamps a value above its own stream's length to that
 length [`ssp.md` §10.1], so the decoder needs no bound (§11 item 15).
 
+**History ops (phase 3, §2.5).** They append lines to the history; the
+diff states the number of the first one, and the lines follow in order.
+
+- **HIST `seq`.**
+  - Allowed once. Ends phase 1 if it is still open (the row map is fixed
+    as at any phase-2 op), and begins phase 3.
+  - Requires `seq ≥ base.History.Next` (history only grows) and
+    `seq ≤ 2^64 − 1 − HistoryLines`, so no count below can wrap.
+  - Resets the pen to `Style{}`, `w` to 1, and the last character to
+    none; sets the cells-written count to 0 against a history budget of
+    `2 × HistoryCells`. There is no current line until an HLINE.
+  - `seq > base.History.Next` means the lines between were never sent:
+    the client fell behind by more than the window. The base's lines are
+    all older than any the server still holds, so the result keeps none
+    of them.
+- **HLINE `cols`.**
+  - Requires `1 ≤ cols ≤ MaxCols`, that fewer than `HistoryLines` lines
+    came before it in this diff, and `cols ≤ HistoryCells − c`, where `c`
+    is the widths of this diff's lines so far.
+  - Appends a line of `cols` default blanks and makes it the current
+    line, with the write position at its column 0. The line ops then
+    write it exactly as they write a screen row (§5.5, §5.6), with `C`
+    the line's width and the history budget in place of the screen's.
+  - PEN may not set a link in phase 3 (flag bit 4 is an error there).
+- **HROW `src`.**
+  - Requires `src < R₀` and the same line and cell counts as HLINE, with
+    `C₀` as the width.
+  - Appends a copy of **base** row `src`, as it was before this diff, at
+    its own width `C₀`. It is the cheap way to send the usual history
+    line, which the receiver already holds as the top row of the screen
+    it acknowledged: SCROLL 1 then HROW 0 is a line of output that
+    scrolled, in 4 bytes, rather than its text a second time.
+  - It leaves no current line: a line op after HROW, before an HLINE, is
+    an error.
+  - Requires that the base row has no links (G9). A base row with a link
+    is sent with HLINE and its text, the link dropped.
+- **At the end of the diff** (§5.8), with `n` lines in it: each HLINE
+  line passes G2, G3, G4 and G6; then, if `seq > base.History.Next`, the
+  history becomes the `n` lines alone, and otherwise the base's lines
+  followed by them; `Next = seq + n`; and the oldest lines are dropped
+  until G9's bounds hold (§2.5). Since the diff's own lines fit the
+  bounds, only base lines are dropped.
+
+A HIST with no lines is valid: `seq > base.History.Next` with nothing
+after it says the window the server holds is empty, which a proto whose
+emu fell behind its own window can have (§7.2).
+
 ### 5.7 Ordering, summed up
 
 The grammar, in EBNF:
 
 ```
-diff     = [ size ] { rowmove } { op2 } ;
+diff     = [ size ] { rowmove } { op2 } [ history ] ;
 size     = 0x41 varint varint ;
 rowmove  = 0x42 varint varint varint | 0x43 varint ;
 op2      = text | pos | col | next | skip | erase | erased | repeat | copy
          | pen | link | cursor | here | textHere | curstyle | title
          | modes | echo | bell | clip | rebuilt | consumed ;
+history  = 0x60 varint { hline { lineop } | hrow } ;
+hline    = 0x61 varint ;
+hrow     = 0x62 varint ;
+lineop   = text | col | skip | erase | repeat | pen ;
 ```
 
 Along with the once-only rule in §5.4, the destination order of `rowmove`,
@@ -715,6 +833,8 @@ After the last op, the decoder checks the scratch grid:
   count per link in the Grid, so this costs O(links changed), not
   O(cells).
 - **G7**, the cursor in range.
+- **G9** on the history lines this diff wrote, then the window (the
+  history ops above).
 
 The cells-written budget is not an end-of-diff check. It is enforced
 before each write op runs (§5.5, §5.6). A decoder that counted only at
@@ -727,8 +847,10 @@ it, any diff longer than `MaxDiff`.
 The work is bounded:
 
 - every op consumes at least one byte;
-- the cell work is at most the budget;
-- the row work is at most `R` row copies.
+- the cell work is at most the budget, and in phase 3 at most the
+  history budget;
+- the row work is at most `R` row copies, plus at most `HistoryLines`
+  history lines of at most `HistoryCells` cells.
 
 ### 5.9 Errors
 
@@ -766,6 +888,12 @@ Normative requirements on `g.Diff(from)`:
   span never starts on a width-0 cell, and never ends between a width-2
   cell and its continuation. With E1 this means G2 holds in the result
   without the decoder having to repair anything.
+- **E7.** E1 for history assumes what SSP guarantees: `g` is a later
+  version of `from`, so `g.History` extends `from.History` (its `Next`
+  is at least `from`'s, and the lines both windows number are the same).
+  The diff carries exactly the lines of `g`'s window numbered from
+  `from.History.Next` on, each as HROW when a base row of `from` equals
+  it and as HLINE and its cells otherwise.
 
 The reference algorithm below is recommended, not normative. Tests check
 E1–E6, not the exact bytes.
@@ -810,6 +938,11 @@ E1–E6, not the exact bytes.
    - Otherwise use CURSOR.
 5. **State.** Emit CURSTYLE, TITLE, MODES, ECHO, BELL, CLIP, REBUILT and
    CONSUMED for each field that differs from `from`.
+6. **History.** If `g.History` differs from `from.History`, emit HIST
+   with `max(from.History.Next, first)`, where `first` is the number of
+   `g`'s oldest held line, then each line from there: HROW for a line
+   equal to a base row, else HLINE and the line written as a row is in
+   step 3, from blank.
 
 Snapshotting and diffing read every cell. tuios has no damage tracking
 [measured S2: about 50 ns per cell]. That is about 0.1 ms at 80 × 24, and
@@ -916,7 +1049,7 @@ encoder uses COPY. Both are small. Every datagram already carries
 transport's 30 bytes (`architecture.md` §4) plus SSP's own header, so
 the 1-byte echo floor changes wire bytes by a few percent at most.
 
-**`MaxDiff` = 48 MiB** [derived].
+**`MaxDiff` = 64 MiB** [derived].
 
 - The worst valid diff writes every cell of a 1000 × 500 screen with its
   own pen and its own 64-byte cluster.
@@ -926,8 +1059,12 @@ the 1-byte echo floor changes wire bytes by a few percent at most.
 - That is 86 B × 500,000 = 43.0 MB. Add up to 1.02 MiB of LINK ops,
   64 KiB of CLIP, and under 1 KiB for the other state ops: about
   44.2 MB.
-- 48 MiB (50.3 MB) leaves room above that and is the bound SSP uses for
-  `MaxRemoteBytes` [D24].
+- The history (§2.5) adds a full window written the same way, with no
+  links: PEN 16 B and TEXT 68 B a cell, 84 B × `HistoryCells` = 16.8 MB,
+  plus HIST and at most `HistoryLines` HLINEs of 3 bytes each: about
+  16.8 MB, so 61.0 MB in all.
+- 64 MiB (67.1 MB) leaves room above that and is the bound SSP uses for
+  `MaxRemoteBytes` [D24]. It was 48 MiB before the history.
 
 A legitimate diff at 80 × 24 is at most about 166 KB plus links. Typical
 frames are tens to a few thousand bytes.
@@ -1065,6 +1202,9 @@ creates it at the clamped size and sets it up as follows. Each item is
   (§4.4). proto renumbers them (§7.3).
 - **Left zero.** `EchoOff`, `EchoAck`, `EchoApplied`, `Rebuilt` and `InputConsumed` are
   always zero in emu's grid. They are proto's.
+- **History.** emu's own window (§2.5), numbered from 0 in each
+  generation. A held snapshot (§6.3) carries the history as it stands,
+  not as it stood when the hold began, so `Next` never goes backwards.
 
 ### 6.3 Behaviour
 
@@ -1106,6 +1246,26 @@ creates it at the clamped size and sets it up as follows. Each item is
   production: the process dies [D23]. When emu hits its `MemoryMax`, the
   kernel kills it. Either way, the spawner starts a new emu at the
   current size and proto tells the client (§7.3).
+- **History (§2.5).** tuios keeps its own scrollback ring, which decides
+  what scrolled off. emu empties it into its history after every chunk of
+  output it parses (4 KiB, the same chunk it drains replies by) and after
+  every `Resize`, and then clears the ring:
+  - each line is converted as a snapshot converts a row (clusters
+    sanitised, `" "` to `""`, wide characters and their continuations,
+    colours and attributes), with its link dropped;
+  - only the newest lines that fit the window are converted; the rest
+    are only counted in `Next`;
+  - a chunk that scrolls more lines than tuios' ring holds
+    (`min(10000, ScrollbackCells / cols)`, at least 1000 at the clamp)
+    loses the count of the excess, which only a program scrolling
+    thousands of lines in 4 KiB (SU with a large count) can do; those
+    lines were past the window anyway.
+
+  Because the ring is empty whenever tuios resizes, its reflow never
+  pulls history back onto a screen that grows, or rewraps lines already
+  sent: the history is what scrolled off, at the width it scrolled off
+  at. D23's scrollback budget still sizes the ring, and so bounds what
+  one chunk can push into it.
 
 ## 7. proto and the screen (summary; `server.md` owns the details)
 
@@ -1151,6 +1311,16 @@ generation:
   (§7.3), and proto takes nothing from that `Update`. A real emulator's
   counters never fall, so only a broken or hostile emu trips this.
 
+- **History.** proto numbers the session's history itself. When an
+  `Update` raises the mirror's `History.Next` by `d`, proto's own `Next`
+  rises by `d`, and the mirror's lines numbered from its old `Next` on
+  are appended to proto's window (with a gap, if emu's window lost
+  some, exactly as HIST's `seq` does). A rebuild starts the mirror's
+  numbering again from 0 and is never a change, so the client's numbers
+  carry on across it. emu's history can't go backwards: HIST refuses a
+  `seq` below the base's `Next`. A `d` that would wrap proto's `Next`
+  past 2^64 − 1 is a violation.
+
 ### 7.3 Rebuilds and a hostile emu
 
 proto treats emu as hostile.
@@ -1195,10 +1365,16 @@ proto treats emu as hostile.
 ### 8.1 Its job
 
 `Renderer.Render(g)` makes the user's terminal show `g`, writing only what
-differs from what it drew last. It keeps its own copy of the last Grid it
+differs from what it drew last, and prints `g`'s new history lines into the
+terminal's own scrollback (§8.7). It keeps its own copy of the last Grid it
 drew. It is the only code in the client that writes to the terminal while
 a session runs. Each `Render` builds the frame in a buffer and writes it
 with a single `Write`, so a frame isn't interleaved with anything else.
+
+The client draws on the local terminal's **primary** screen, so that what
+it prints above the screen lands in the terminal's history (§2.5). It
+switches to the alternate screen only while the remote program is on its
+own (§8.5).
 
 ### 8.2 The output alphabet
 
@@ -1210,7 +1386,8 @@ with a single `Write`, so a frame isn't interleaved with anything else.
 |---|---|
 | move | `CSI r ; c H` (1-based) |
 | style | `CSI 0 ; … m`, with parameters from §8.3 |
-| erase | `CSI K` (EL 0), `CSI n X` (ECH), `CSI 2 J`, used only as §8.3 allows |
+| erase | `CSI K` (EL 0), `CSI n X` (ECH), used only as §8.3 allows; `CSI J` (ED 0) only in `Leave` |
+| history | `LF` (0x0A), only with the cursor on the local terminal's last row, to scroll lines into its history (§8.7) |
 | cursor | `CSI ? 25 h` / `l`, `CSI n SP q` (DECSCUSR, n 0–6) |
 | frame | `CSI ? 2026 h` / `l`, only if `Capabilities.SyncUpdates` |
 | screen | `CSI ? 1049 h` / `l`, `CSI ? 7 h` / `l` (DECAWM) |
@@ -1221,8 +1398,9 @@ with a single `Write`, so a frame isn't interleaved with anything else.
 | modes | `CSI ? 1 h/l`, `ESC =` / `ESC >`, `CSI ? 2004 h/l`, `CSI ? 1004 h/l`, `CSI ? 1000 h/l`, `CSI ? 1002 h/l`, `CSI ? 1003 h/l`, `CSI ? 1006 h/l`, and `CSI = n ; 1 u` (kitty flags, only once a later slice enables them) |
 | text | cell `Text` (a blank is one space, 0x20); without `Capabilities.UTF8`, `?` for any non-ASCII text (§8.3) |
 
-There is no LF, CR, BS, HT or any other C0 apart from ESC and BEL. Line
-changes are always CUP. A test checks this (§10).
+There is no CR, BS, HT or any other C0 apart from ESC, BEL and LF, and LF
+appears only as §8.7 writes it. Line changes are always CUP. A test checks
+this (§10).
 
 ### 8.3 Drawing cells
 
@@ -1284,7 +1462,12 @@ changes are always CUP. A test checks this (§10).
   completely default style (default fg and bg, no attributes, no link).
   That avoids depending on the local terminal's background-colour-erase
   behaviour. Other blanks are written as spaces.
-- **Invalidation.** A full redraw starts with `CSI 2 J`.
+- **Invalidation.** A full redraw clears each local row with `CUP` and
+  `CSI K` in the default style, then draws every cell that is not a
+  default blank. It never uses ED 2: on the primary screen some terminals
+  keep what ED 2 erases in their history [derived: a caution, not
+  measured here], which would put a stale copy of the screen there on
+  every redraw. EL erases the same cells and is not a scroll.
 
 ### 8.4 Everything else, once per frame, in this order
 
@@ -1340,16 +1523,17 @@ local input is the user's own, not remote data (§11 item 6).
 | `Mouse` | reset the old mode (`CSI ? 1000/1002/1003 l`), then set the new one (`h`) unless it is `MouseOff` |
 | `MouseEncoding` | `CSI ? 1006 h` / `l` |
 | `KittyKeyboard` | not written in slice 1 (§6.1) |
-| `AltScreen` | not mirrored. The client is always on its own alternate screen |
+| `AltScreen` | `CSI ? 1049 h` / `l`, then a full redraw. The local terminal is on its alternate screen exactly while the remote program is on its own, so a full-screen program's screen never mixes into the local history, and the wheel does there what it does for a local full-screen program (scrollback slice; before it, the client was always on its own alternate screen) |
 
 ### 8.6 `Enter`, `Leave`, `Invalidate`
 
 - **`Enter`** writes, in order:
   1. `CSI 22 ; 2 t` (push the title);
-  2. `CSI ? 1049 h`;
-  3. `CSI ? 7 l`;
-  4. `CSI ? 25 l`;
-  5. `CSI 2 J`.
+  2. `CSI ? 7 l`;
+  3. `CSI ? 25 l`;
+  4. a CUP to the local last row, then one LF per local row: what the
+     user's terminal showed scrolls into its history, as `clear` does in
+     many terminals, rather than being drawn over.
 
   It then marks everything as needing a draw.
 - **`Leave`** undoes everything it or any `Render` set, then restores the
@@ -1361,14 +1545,56 @@ local input is the user's own, not remote data (§11 item 6).
   4. `CSI 0 SP q`;
   5. `CSI ? 25 h`;
   6. `CSI ? 7 h`;
-  7. `CSI ? 1049 l`;
-  8. `CSI 23 ; 2 t` (pop the title).
+  7. `CSI ? 1049 l`, if the remote program had the alternate screen;
+  8. the cursor to the start of the remote cursor's row, or of the row
+     after it if the cursor was not in column 0 (one LF on the last
+     row), then `CSI J`, so the user's shell carries on below the last
+     screen, as after `ssh`. After the alternate screen, or with nothing
+     drawn, it goes to the last row and one LF;
+  9. `CSI 23 ; 2 t` (pop the title).
 
   It is safe to call twice, and the client calls it on every exit path,
   including a signal.
 - **`Invalidate`** forgets what is on the terminal. Call it after a local
-  resize or a SIGCONT. The next `Render` starts with `CSI 2 J` and draws
-  everything.
+  resize or a SIGCONT. The next `Render` redraws everything (§8.3). It
+  does not forget which history lines were printed.
+
+### 8.7 History into the local scrollback (§2.5)
+
+The renderer keeps `printed`, the number of the next history line to
+print, and whether it has printed any. On each `Render(g)`, unless
+`g.Modes.AltScreen` (history waits until the remote program leaves the
+alternate screen; an honest server sends none meanwhile):
+
+1. With `first` the number of `g`'s oldest held line:
+   - the first time, it prints the whole window: on attach or resume the
+     recent history comes first (§2.5);
+   - if `first > printed`, it prints a **marker**, a line of its own
+     reading `… N lines not shown` (`...` without `Capabilities.UTF8`),
+     `N = first − printed`, then the whole window;
+   - otherwise the lines numbered from `printed` on;
+   - a `Next` below `printed` (no honest server sends one) resets
+     `printed` and prints nothing.
+
+   Then `printed = Next`. A reconnect (R3) keeps the renderer, so it
+   prints only what it has not, and a marker for what it missed.
+2. To print `k` lines with the local terminal `L` rows high, in chunks
+   of at most `L`: write each line of the chunk on rows 0, 1, … with a
+   CUP, `CSI 0 m`, `CSI K` and its cells (§8.3's rules, clipped to the
+   local width), close any link and reset the pen, CUP to the local last
+   row, and write one LF per line. The terminal scrolls the chunk off its
+   top, into its history, in order [ECMA-48 LF; xterm: lines scrolled
+   off the top of a full-screen region are saved].
+3. Then the frame is a full redraw (§8.3), since the rows have moved.
+
+Prediction (D12) needs nothing: the overlay is a Grid like any other,
+its history is the frame's, and the full redraw draws its underlined
+guesses again. A local resize redraws in full as before; the local
+terminal's own reflow of its history on a resize is its own, and can
+pull a few lines back over the screen (when it grows) or push a few of
+the screen's rows into history (when it shrinks), so the lines at the
+seam may be lost or doubled. The client does not try to undo the local
+terminal's reflow.
 
 ## 9. What the client must never do
 
@@ -1395,7 +1621,8 @@ local input is the user's own, not remote data (§11 item 6).
 4. **Never read the local clipboard for the server**, and never pass an
    OSC 52 read.
 5. **Never use the local terminal's idea of width to place cells.** It
-   places them with explicit moves, as §8.3 says.
+   places them with explicit moves, as §8.3 says. History lines too: each
+   is drawn by §8.3's rules before it is scrolled away (§8.7).
 6. **Never apply part of a diff.** A diff is all or nothing, and an error
    leaves the Grid as it was.
 7. **Never trust a size, index or length from the wire** before it is
@@ -1458,6 +1685,18 @@ commit message, and for 10 s each in CI (`mise run fuzz-smoke`)
   - the budget enforced before the op: a diff whose ERASED, ERASE or
     REPEAT would pass the budget is refused before it writes.
 
+- **History.** Unit tests for HIST, HLINE and HROW: a `seq` below the
+  base's `Next`, past `2^64 − 1 − HistoryLines`, or twice; a line op
+  before any HLINE or after HROW; a screen op after HIST; PEN with a link
+  in phase 3; HLINE of 0 or `MaxCols + 1` columns; one line more than
+  `HistoryLines`, one cell more than `HistoryCells`; HROW past the base;
+  HROW of a row with a link. A gap keeps none of the base's lines. A run
+  of diffs from a hostile server never leaves the client holding more
+  than the window. `FuzzApply`'s bases include a grid with a history,
+  and its seeds every history op; `FuzzRoundTrip`'s generator makes
+  histories that the next version extends, scrolls into (HROW), and
+  overtakes with a gap.
+
 **`internal/emu`**
 
 - **`FuzzEmuRoundTrip`.** Program bytes and resizes up to the clamp go
@@ -1481,6 +1720,11 @@ commit message, and for 10 s each in CI (`mise run fuzz-smoke`)
   with `file:`, an OSC 52 write over the cap (dropped whole), an OSC 52
   read (never in the Grid), DECCOLM (no size change), and a wide
   character written at the margin.
+- **History**: lines scrolled off the primary screen are its history, in
+  order, numbered, with their styles and without links; the alternate
+  screen and a region below the top make none; a held snapshot's
+  history does not go backwards; a flood keeps the window and counts the
+  rest; a shrinking resize's pushed rows are history.
 
 **`internal/render`**
 
@@ -1497,6 +1741,12 @@ commit message, and for 10 s each in CI (`mise run fuzz-smoke`)
 - **Behaviour**: clipping when the local size is smaller or larger, no
   clipboard write or bell on the first grid, a single BEL for several
   bells, and `Leave` restoring every mode it set.
+- **History** (§8.7), through a reference terminal with a scrollback
+  (tuios, in the test): the window is printed on the first frame, each
+  line exactly once after that, in order, above the screen; a gap prints
+  one marker with the right count; nothing is printed while the remote
+  program has the alternate screen, which is mirrored; a reconnect's
+  fresh window prints only what is new.
 - **Non-UTF-8 locale.** With `Capabilities.UTF8` false, random valid
   grids (with non-ASCII clusters, wide characters and non-ASCII titles)
   render to output with no byte ≥ 0x80, and the cursor and every ASCII
@@ -1590,6 +1840,11 @@ agreed first).
     the "more state" range, so `0x5A`–`0x5F` stay reserved. emu leaves it
     zero and proto sets it, like `EchoAck` (§6.2, §7.3). Owners: screen,
     ssp and server-proc.
+16. **`Grid.History`** (`screen.History{Next, Lines}`), `HistoryLines`,
+    `HistoryCells`, opcodes `0x60`–`0x62` (§2.5, §5.6), and `MaxDiff`
+    raised to 64 MiB (§5.12). emu fills it (§6.3), proto renumbers it
+    (§7.2), `render` prints it (§8.7). Owners: screen and server-proc
+    (scrollback slice).
 
 ## Review notes
 

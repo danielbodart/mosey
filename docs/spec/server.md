@@ -609,7 +609,7 @@ screen (`screen.md` §6.3). Its allowance is 0.
 A diff is the concatenation of a run of fragments ending in one with
 MORE clear. Proto refuses the run as soon as its total passes
 `screen.MaxDiff`, 48 MiB (`screen.md` §5.12), so proto's reassembly
-buffer for one diff is at most 48 MiB, and decodes the whole diff with
+buffer for one diff is at most 64 MiB, and decodes the whole diff with
 `Grid.Apply` only once it is complete. The diff is in the client's own
 format (`screen.md`), relative to the grid after the previous complete
 `Update` on this E, the first on each E (the answer to `Init`) being
@@ -752,7 +752,10 @@ end-to-end tests run the whole server on netsim without forking.
   guards both the client against the server and proto against emu.
 - `Write(p)`: split `p` into `Output` requests of at most `MaxOutput`
   and run each to completion. `Resize(c, r)`: one `Resize` request.
-  `Snapshot(g)`: copy the mirror into `g`. `TakeReplies()`: the replies
+  `Snapshot(g)`: copy the mirror into `g`, with proto's own counters and
+  proto's own history (`screen.md` §7.2: emu's history lines, renumbered
+  into the session's numbering, which a rebuild does not restart).
+  `TakeReplies()`: the replies
   that passed §4, concatenated, and forget them. `Close()`: close E.
 - Its methods return no error (the interface has none). While emu is
   down (between a violation, death or `KillEmu` and the next
@@ -1395,7 +1398,7 @@ is its threads of control and the ordering rules the IPC imposes:
 | `MaxReplies` | 4096 B | ipc | [derived from S2] |
 | `MaxReplyToken` | 256 B | server | [derived] |
 | `MaxReplyTokens`: reply allowance per request | introducers in this `Output` and the one before, at most 8 | server | [derived; `TestReplyAllowanceCoversRealPrograms`, not yet written] |
-| `screen.MaxDiff`: one `Update` run, reassembled | 48 MiB | proto | [`screen.md` §5.12] |
+| `screen.MaxDiff`: one `Update` run, reassembled | 64 MiB | proto | [`screen.md` §5.12] |
 | `ReplyQueue` | 64 KiB, drop when full | server | [S2, reply flood] |
 | `MaxClientLine` | 8192 B | ipc, bootstrap | [`bootstrap.md` §6.2] |
 | `MaxCredentialLine` | 2048 B | ipc, bootstrap | [`bootstrap.md` §6.3] |
@@ -1550,9 +1553,9 @@ and record in `architecture.md`:
    also gains `TestReleaseAction` (§6.1) and, for the live battery only,
    a test-only way to enter seccomp without Landlock (§12), not
    reachable from the binary.
-5. **screen** (screen owner): nothing new. `screen.MaxDiff` is 48 MiB
+5. **screen** (screen owner): nothing new. `screen.MaxDiff` is 64 MiB (48 MiB before the scrollback slice)
    (`screen.md` §5.12), and proto uses it as is to bound `Update`
-   reassembly, so proto's buffer for one diff is up to 48 MiB (§3.3);
+   reassembly, so proto's buffer for one diff is up to 64 MiB (§3.3);
    `Grid.Rebuilt` (`screen.md` §11, item 1) is what §3.6 sets.
 6. **bootstrap** (bootstrap-client): the `ClientLine` should carry the
    client terminal's foreground, background and 16-colour palette, so
@@ -1882,7 +1885,7 @@ the same defect twice and share an answer.
     by proto through its filtered `TIOCSWINSZ`. The spawner's bare
     `kill(-pgrp, SIGWINCH)` is gone, and with it `TIOCGPGRP` (§5.2,
     §10). §11 item 5 is replaced: `MaxDiff` is screen.md's 48 MiB, and
-    proto's reassembly buffer is up to 48 MiB.
+    proto's reassembly buffer is up to 64 MiB.
 11. **Missing no-memory-bound rule, and OOM detection on the last
     line** (major). *Fixed, slightly differently from the suggested
     fix.* `RLIMIT_DATA` is now set by the spawner with `prlimit64` on
