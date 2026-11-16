@@ -165,8 +165,9 @@ ssh ──stdin──► launcher                       spawner                p
       session goes on, not resumable or without an agent.
    9. Start the login shell on the pty's slave (§2.5), then close the
       slave. The shell starts this late so a failure earlier leaves no
-      shell behind, and so its start-up overlaps the client's handshake.
-      If the line has a `type`, wait for proto's `FirstOutput`, or
+      shell behind, and so its start-up overlaps the client's handshake
+      (except with a `type`, whose `Ready` waits for the shell's first
+      output, below). If the line has a `type`, wait for proto's `FirstOutput`, or
       `TypeWait` (2 s), whichever comes first, then write its text and
       one CR to the pty master, in one write (`bootstrap.md` §9.2.3); a
       failure is logged and the session goes on.
