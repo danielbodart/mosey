@@ -249,10 +249,10 @@ generation.
 
 | trigger | who sees it | what happens |
 |---|---|---|
-| the shell exits | spawner (`wait4`) | the spawner closes the agent and attach sockets at once, as the teardown does, so the session is no longer listed and a plain `mosey DEST` cannot pick an ending session to resume; then `ShellExit{status}` to proto, which drains the pty until EIO or T5, lets SSP deliver the final screen (until the client acks it, or T6), tells the client the session is over with `Conn.End(EndShellExited)` (`transport.md` §8.4) and sends `Exit{ShellExited}` |
+| the shell exits | spawner (`wait4`) | the spawner closes the agent and attach sockets at once, as the teardown does, so the session is no longer listed and a plain `mosey DEST` cannot pick an ending session to resume; then `ShellExit{status}` to proto, which drains the pty until EIO or T5, at full speed (the hold of `screen.md` §2.5 ends with the shell, so D8 R4's "any exit of the shell ends the session" holds; a flood the shell's last program left unread may then be cut with a marker), lets SSP deliver the final screen (until the client acks it, or T6), tells the client the session is over with `Conn.End(EndShellExited)` (`transport.md` §8.4) and sends `Exit{ShellExited}` |
 | no client ever confirms a credential | proto | once every credential it minted has expired unconfirmed (`handshake.CredentialTTL`, 30 s [D20], from the last one minted) with no client ever attached, nothing can connect, so `Exit{NoClient}` |
 | the client detaches | proto (`transport.Ended`, or its connection failing) | **the session does not end** (D8, `bootstrap.md` §9.3): proto closes that connection, tells the spawner (`Detached`) and waits for a resume |
-| the client falls silent | proto (nothing authentic from it for `SilentAfter`, 15 s, `bootstrap.md` §9.2) | **the session does not end**: proto keeps the connection, since the client may be in a dead spot, and tells the spawner `Detached`, so a plain `mosey DEST` may take it (D8 R1); when the client is heard again proto says `Attached` again |
+| the client falls silent | proto (nothing authentic from it for `SilentAfter`, 15 s, `bootstrap.md` §9.2) | **the session does not end**: proto keeps the connection, since the client may be in a dead spot, stops holding the program back (`screen.md` §2.5), and tells the spawner `Detached`, so a plain `mosey DEST` may take it (D8 R1); when the client is heard again proto says `Attached` again |
 | detached for `IdleTimeout` (7 days, D8 R4) | spawner (a timer from the last `Detached`, stopped by each `Attached`) | the spawner hangs the shell up: SIGHUP to the shell's pid and to the pty's foreground process group (`TIOCGPGRP` on its master), as a hangup does; the shell's exit is then the first row. If the shell has not exited `HangupGrace` (10 s) later, the teardown below |
 | `mosey -kill NAME` | spawner (`Hangup` on the attach socket, §2.6) | as the idle timeout |
 | another client attaches | proto (`Listener.Accept`) | **the session does not end**: the listener revokes the old connection (D26, `transport.md` §8.3) and proto serves the new one |
@@ -1394,6 +1394,20 @@ is its threads of control and the ordering rules the IPC imposes:
   `Emulator.Snapshot` plus the echo-off bit to SSP. It never writes the
   pty (§4.3). EIO on the read means every slave fd has closed. After its
   first read that returns bytes it sends the spawner `FirstOutput`.
+  **It is where the program is held back** (`screen.md` §2.5, Dan
+  2026-11-16): proto alone reads the master, and proto alone sees SSP's
+  acknowledgement, so neither emu nor the spawner takes part. While a
+  client is attached and heard (attached, not silent for `SilentAfter`,
+  and the shell not yet exited), before each read it compares the
+  history of the screen it last published with the acknowledged one
+  (`Endpoint.Acked`); while a quarter of the window or more is
+  unacknowledged it waits for `Endpoint.AckedChanged`, a change of
+  listener or the end, and then reads at most a quarter of the window
+  in bytes. Otherwise it reads whole chunks. The writer is never held,
+  so keystrokes, Ctrl-C among them, and resizes reach the pty while the
+  reader waits; the screen meanwhile is the last state read, which SSP
+  keeps sending, and an emu rebuild is unaffected (it renumbers
+  nothing, §5.2).
 - **pty writer**: keystrokes first, then replies (§4.3). It keeps the
   echo ack's write log, reads the echo-off bit before each key event and
   publishes if it changed, and arms the 50 ms echo-ack publish
@@ -1727,6 +1741,15 @@ it lands, with the duration and exec count in the commit message.
   killed and the session ends.
 - `FuzzLogLine`: the stderr line sanitiser never emits a byte outside
   0x20–0x7E or more than `MaxLogLine`.
+- The hold (`screen.md` §2.5): it is a quarter of the window at the
+  screen's width, and a client new to the session lacks the window and
+  no more. End to end over netsim (`internal/e2e/holdback_test.go`):
+  `seq 5000` and `seq 20000` while the client listens reach the local
+  scrollback whole on every profile; a client silent past `SilentAfter`
+  releases the program and prints one marker for exactly the gap; a
+  client that leaves mid-flood releases it at once; Ctrl-C during a flood
+  gives the prompt back within an answer's time plus two hold cycles on
+  a slow link.
 
 **sandbox**
 - `Compile` for amd64 and arm64, run through a BPF interpreter in the
@@ -1783,6 +1806,9 @@ it lands, with the duration and exec count in the commit message.
   slave, read it through the master), and is false in raw mode.
 - A login shell starts with the pty as its controlling terminal, as a
   session leader, with `argv[0]` starting with `-`.
+- An interrupt typed on a fresh pty (ISIG without NOFLSH) discards the
+  output not yet read but for at most 4 KiB, and a writer blocks once a
+  bounded amount waits (`screen.md` §2.5 rests on both).
 
 **The roles, together** (Linux; `internal/server` or `internal/e2e`)
 - `TestServeBootstrap`: run `mosey --serve` from a built binary, write

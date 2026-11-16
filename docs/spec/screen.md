@@ -221,29 +221,79 @@ as they do for any local program.
   once, by number (§8.7), from its own copy of the state, keeping the
   number of the next line to print itself. The brief asked for the
   client to acknowledge the highest line it has *printed*; SSP's
-  acknowledgement says *received*. The difference would matter only if
-  the server held lines until they were printed, and it does not:
-  nothing waits for the client, and the window is the bound on what the
-  server holds for it, in memory and in each diff (§3,
-  `threat-model.md` §4.6). Whatever the client acknowledges, the server
-  keeps the newest `HistoryLines` and no more, so an acknowledgement of
-  printed lines would change nothing it sends.
-- **More than the window between two looks is cut.** Nothing paces the
-  program's output: the emulator keeps the newest `HistoryLines` of what
-  scrolled, and a line older than that is gone before any diff can carry
-  it. So the client misses lines whenever more than the window scroll
-  past between two states it renders: through a long outage while a
-  program floods the screen, but also on a healthy link, when a flood
-  (`cat` of a large file, a fast build log) scrolls more than
-  `HistoryLines` between two frames (the frame interval is
-  `clamp(SRTT/2, 20 ms, 250 ms)`, `ssp.md` §6.2). The client then gets a window
-  that starts after a gap; it prints one line saying how many lines are
-  not shown, and carries on, so what it does print is in order and never
-  doubled [measured here: 5000 lines at once over each netsim profile
-  print one marker and only the newest thousand or so,
-  `TestABurstLongerThanTheWindowIsCutWithAMarkerForTheGap`]. Holding the
-  program back instead, until the client has the lines, is open
-  (a question for Dan).
+  acknowledgement says *received*. The client prints what it receives on
+  the frame that brings it, so the two differ by at most the lines of
+  one frame, and the hold below leaves the window room for that: an
+  acknowledgement of printed lines would change nothing the server
+  sends. Whatever the client acknowledges, the server keeps the newest
+  `HistoryLines` and no more (§3, `threat-model.md` §4.6).
+- **While a client listens, the program waits for it** (Dan,
+  2026-11-16: "Hold back while attached. While a client is connected,
+  the server stops reading the program's output until the client has
+  the lines, as ssh does: `cat bigfile` runs at link speed and nothing
+  is lost."). proto, which reads the pty, holds the program back on
+  SSP's acknowledgement (`server.md` §7). With `W` the window in lines
+  at the screen's width, `min(HistoryLines, HistoryCells / cols)`, and
+  `U` the lines of the window the client has not acknowledged (the
+  published `Next` less the acknowledged one, at most the lines held, so
+  a client new to the session lacks the window and no more), proto reads
+  the pty only while `U < W/4`, and then at most `W/4` bytes at a time.
+  The program, its output unread, fills the kernel's buffer (20–22 KB
+  [measured here, `internal/pty`'s
+  `TestAnInterruptDiscardsTheOutputNotYetRead`]) and blocks in `write`,
+  as it would under ssh; a flood runs at the pace the client
+  acknowledges, and every line reaches the local scrollback once, in
+  order, with no marker [measured here: `seq 5000` and `seq 20000` over
+  every netsim profile, `TestAFloodWhileTheClientListensReachesTheScrollbackWhole`].
+  - **Why a quarter** [derived]: one byte scrolls at most one line of
+    what `cat`, `seq` or a build log write (a line feed, or a wrap after
+    at least one character), so after any read `U < W/4 + W/4 = W/2`;
+    the client, which prints each frame as it arrives, may be as far
+    again behind in printing what it acknowledged, and no line it lacks
+    can fall out of the window. At 80 columns `W/4` is 250 lines, about
+    20 KB of dense text and much less compressed (flate's 0.35x [M S5
+    §8]): one frame's burst of 16 datagrams (`ssp.md` §5) carries it.
+  - **Why small** (Dan, 2026-11-16, the small queue rather than "Ctrl-C
+    drops the queue", so there is no special key and nothing is lost):
+    what has been read and not acknowledged must cross before anything
+    newer, the shell's prompt after Ctrl-C included. An interrupt from
+    the keyboard makes the kernel discard the output not yet read but
+    for the master's line-discipline buffer, 4095 bytes [measured here,
+    the same test], so after Ctrl-C at most `W/2` lines and 4 KiB are
+    still to cross: the prompt comes back within the time an ordinary
+    command takes to answer plus two hold cycles (a round trip, the
+    100 ms delayed ack and a frame interval each) [measured here: on a
+    300 ms, 1 Mbit/s link an answer takes 450 ms and the prompt is back
+    900–950 ms after Ctrl-C, inside the 1550 ms bound,
+    `TestCtrlCDuringAFloodGivesThePromptBackPromptly`]. Keystrokes go to
+    the pty whatever the hold (`server.md` §4.3), so the program gets
+    its SIGINT at once, even while blocked in `write`.
+  - **What it costs**: a flood moves about `W/4` lines per hold cycle,
+    which on a quiet link is mostly the client's 100 ms delayed ack
+    (D11): 3,000–6,000 lines a second on the LAN profile, 600–1,200 on
+    the hotel, train and HSR profiles, 1,600–2,400 on the LTE trace
+    [measured here, the same test].
+  - **What can still be cut while it listens**: output that scrolls
+    more lines than it has bytes (SU with a large count, ED tricks), the
+    rows a shrinking resize pushes into history, and a window the client
+    falls behind on while it is not listening (below). Each prints one
+    marker for exactly the gap.
+- **While nobody listens, the program never waits** (Dan, 2026-11-16:
+  "While detached or in a dead spot, the program keeps running and the
+  oldest lines are cut, so a build never stalls because your laptop is
+  shut."). With no client attached, with the attached one silent for
+  `SilentAfter` (15 s, when the session counts as detached,
+  `bootstrap.md` §9.2), and once the shell has exited and proto drains
+  the pty (T5, `server.md` §2.4), proto reads at full speed and the
+  emulator keeps the newest `HistoryLines` of what scrolled. A dead spot
+  shorter than `SilentAfter` holds the program, since the client may be
+  back in a moment. When the client is heard again the hold resumes from
+  what it has acknowledged, and if more than the window scrolled
+  meanwhile it gets a window that starts after a gap: it prints one line
+  saying how many lines are not shown, and carries on, so what it does
+  print is in order and never doubled [measured here:
+  `TestAFloodWhileTheClientIsSilentRunsOnAndAMarkerCountsTheGap`,
+  `TestAClientLeavingMidFloodReleasesTheProgram`].
 - **No links in history.** A history cell's `Style.Link` is always
   empty: G5's link budget is per screen, and a window of 200,000 cells,
   each with a distinct 2 KiB link, would hold 400 MB. The text and its
@@ -282,7 +332,8 @@ as they do for any local program.
 | `MaxLinks` | 4096 distinct links per grid | [derived]: a full 1000 × 500 screen of `ls --hyperlink` names stays under it; it bounds client memory, which tuios does not (S2 measured link storage growing without limit) | both ends, G5 |
 | `MaxLinkBytes` | 1 MiB of distinct link text per grid | [derived]: matches S2's link-table cap [measured S2]; 4096 × 2048 would be 8 MiB, more than a screen needs | both ends, G5 |
 | `MaxClipboard` | 64 KiB of decoded data | [derived]: [D27] asks for a cap and leaves the value to this spec. 64 KiB covers a long yank, and its 87 KiB of base64 is a few dozen datagrams. A larger write is dropped whole, never truncated: a truncated paste is a different paste | emu drops; client: CLIP |
-| `HistoryLines` | 1000 lines | [D]: the most lines that can scroll between two states the client renders, through an outage or a flood, before lines are not shown (§2.5). A thousand lines is a screenful of build log many times over, and at 80 columns about 80 KB before compression, so the window a client is sent on attach or resume crosses a slow path in a moment rather than many seconds; D23's 10,000-line emulator scrollback would be ten times that on every resume. Of that window, a fresh client prints only one screenful (§2.5, §8.7) | both ends: the window (§2.5), and a diff carries at most this many lines (§5.6) |
+| `HistoryLines` | 1000 lines | [D]: the most lines that can scroll between two states the client renders while nobody listens (an outage past `SilentAfter`, a detach) before lines are not shown; while a client listens, the program is held to a quarter of it (§2.5). A thousand lines is a screenful of build log many times over, and at 80 columns about 80 KB before compression, so the window a client is sent on attach or resume crosses a slow path in a moment rather than many seconds; D23's 10,000-line emulator scrollback would be ten times that on every resume. Of that window, a fresh client prints only one screenful (§2.5, §8.7) | both ends: the window (§2.5), and a diff carries at most this many lines (§5.6) |
+| hold | `W/4` lines unacknowledged stop the pty reader, which then reads at most `W/4` bytes; `W = min(HistoryLines, HistoryCells / cols)`, so 250 at up to 200 columns | [derived] §2.5: under half the window unacknowledged, half left for the client's printing; Dan, 2026-11-16, for a small queue | proto (`server.Session`, `holdLines`) |
 | `HistoryCells` | 200,000 cells | [derived]: `HistoryLines` lines at 200 columns, so the window is 1000 lines at any usual width and 200 at the D23 clamp's 1000; it bounds the window's memory (about 11 MB at 56 B a `Cell`) and its share of `MaxDiff` | both ends, as `HistoryLines` |
 | `MaxDiff` | 64 MiB | [derived] §5.12 | `Apply` (a longer diff is refused unread), `ssp.Config.MaxRemoteBytes`, the IPC `Update` |
 | cells written per diff | `2 × cols × rows` | [derived]: an encoder writes each cell at most once, plus one erase pass; this bounds the decoder's work, not only the diff's length | `Apply`, §5.8 |

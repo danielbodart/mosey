@@ -464,11 +464,25 @@ from a hostile server (T5) exactly as proto is from a hostile client.
   history than `HistoryLines` lines and `HistoryCells` cells: `Apply`
   refuses a diff that carries more than the window (before it allocates
   a line past it), and after every diff the client drops its oldest lines
-  until both bounds hold. Nothing on either end waits for the client to
-  catch up: the server keeps the same window whatever the client has
-  acknowledged, so a client that is gone or slow costs the server no
-  more than the window, and a client that falls behind past it prints
-  one "lines not shown" marker. A flood costs bandwidth that Mosh's
+  until both bounds hold. The server keeps the same window whatever the
+  client has acknowledged, so a client that is gone or slow costs the
+  server no more than the window, and a client that falls behind past it
+  prints one "lines not shown" marker.
+- **A listening client paces the program** (`screen.md` §2.5, Dan
+  2026-11-16). While the attached client is heard, proto stops reading
+  the pty once a quarter of the window is unacknowledged, so the program
+  blocks in `write` until the client acknowledges, as it would under
+  ssh's channel window. A hostile or broken client that keeps sending
+  but never acknowledges can therefore stall the program for as long as
+  it stays attached. That is accepted: the client holds the session's
+  keys, which come over the user's own SSH login, so it is the user's
+  own client, and it can already type anything into the shell, which is
+  far worse; an ssh client can stall its programs the same way. Nobody
+  else can stall it: an on-path attacker who drops packets makes the
+  client silent, and after `SilentAfter` (15 s) the hold lifts and the
+  program runs on (R8 is the denial of service it already had). The hold
+  never holds keystrokes: they go to the pty whatever it is, so Ctrl-C
+  reaches the program. A flood costs bandwidth that Mosh's
   latest-state-only rule skipped (each frame carries up to the window of
   new lines, about 80 KB at 80 columns before compression); that is
   bounded by the window and by SSP's frame rate, and keystrokes go the

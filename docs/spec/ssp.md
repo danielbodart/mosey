@@ -1170,9 +1170,15 @@ What SSP needs from it:
   a diff from the acknowledged version carries exactly the lines the
   client does not have, and each version holds at most the window
   (`HistoryLines`, `HistoryCells`), so a retransmission resends at most
-  that, and a client that falls behind further than the window is told
-  how many lines it missed rather than being waited for. This keeps
-  "latest state only": the window is part of the latest state.
+  that. While the client is heard, proto holds the program's output
+  back on this acknowledgement so the client never falls behind by more
+  than half the window (`screen.md` §2.5, Dan 2026-11-16); it watches
+  for it with `Endpoint.AckedChanged`, signalled whenever the peer
+  acknowledges a newer local version. SSP's timing, frames and acks are
+  unchanged. A client that falls behind further than the window while it
+  is not heard is told how many lines it missed rather than being waited
+  for. This keeps "latest state only": the window is part of the latest
+  state.
 - **Echo-off bit** (`Grid.EchoOff`, D12): `!ECHO && ICANON` on the pty,
   read with `pty.EchoOff`. It is part of the screen, so it is sent like
   any other change, in the same instruction as the screen it belongs to.

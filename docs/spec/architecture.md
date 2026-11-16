@@ -199,7 +199,11 @@ Grid as `History`, a bounded numbered window (`screen.md` §2.5): emu
 takes them from tuios' scrollback, proto renumbers them for the session,
 and the renderer prints each once above its screen, into the local
 terminal's own scrollback (`screen.md` §8.7), so mosey needs no tmux and
-no scroll mode for history.
+no scroll mode for history. While a client is attached and heard, proto's
+pty reader holds the program back on SSP's acknowledgement
+(`Endpoint.AckedChanged`), so a flood waits for the client as under ssh
+and no line is cut; while nobody listens, the window keeps the newest
+lines (`screen.md` §2.5).
 
 ### 3.4 Roaming (D21)
 
@@ -356,7 +360,9 @@ netsim socket. `NewEndpoint[L, R](d, Config, local, remote)`, then `Run`
 (which ends with an error wrapping `ErrProtocol` when the peer breaks the
 protocol), `Set(local)`, `Remote()`, `Acked()` (the acknowledged local
 version, for the client's input flow control, `ssp.md` §10.1),
-`RemoteChanged()`, `Stats()`.
+`RemoteChanged()`, `AckedChanged()` (signalled when the peer acknowledges
+a newer local version, which proto's hold waits on, `screen.md` §2.5),
+`Stats()`.
 
 **channel.** `NewMux(d, Config{Role, Accept, Log})` over a `Datagrams`
 (`SendChannel`, `RecvChannel`, which `*transport.Conn` satisfies), then
