@@ -83,6 +83,9 @@ type tuios struct {
 
 	bell uint64
 	clip screen.Clipboard
+	// hist is the history window, the lines tuios scrolled into its ring,
+	// numbered from 0 in this emulator (docs/spec/screen.md §6.3).
+	hist screen.History
 
 	replies []byte
 	stats   Stats
@@ -117,7 +120,40 @@ func (e *tuios) Write(p []byte) {
 		p = p[n:]
 		e.queue(e.t.TakeResponses())
 		e.syncCheck()
+		e.drain()
 	}
+}
+
+// drain takes the lines tuios has scrolled into its ring as history and
+// empties the ring (docs/spec/screen.md §6.3). tuios decides what scrolled
+// off: the primary screen only, as a real terminal does. Only the newest
+// lines that fit the window are converted; the rest are counted. Emptying
+// the ring after each chunk also means tuios' reflow never pulls history
+// back onto a screen that grows, or rewraps lines already taken.
+func (e *tuios) drain() {
+	n := e.t.ScrollbackLen()
+	if n == 0 {
+		return
+	}
+	from := max(0, n-screen.HistoryLines)
+	lines := make([][]screen.Cell, 0, n-from)
+	e.t.ScrollbackRows(from, n, func(_ int, l uv.Line) bool {
+		w := min(len(l), screen.MaxCols)
+		if w == 0 {
+			w = 1
+		}
+		cells := make([]screen.Cell, w)
+		e.convertRow(w, func(x int) *uv.Cell {
+			if x < len(l) {
+				return &l[x]
+			}
+			return nil
+		}, nil, func(x int, c screen.Cell) { cells[x] = c })
+		lines = append(lines, cells)
+		return true
+	})
+	e.t.ClearScrollback()
+	e.hist = e.hist.Add(e.hist.Next+uint64(n), lines)
 }
 
 // syncCheck starts a hold if the output just written opened a new
@@ -161,6 +197,9 @@ func (e *tuios) Resize(cols, rows int) {
 	// size of the last Resize.
 	e.held = nil
 	e.queue(e.t.TakeResponses())
+	// Rows a shrinking resize pushed off the top are history, as on a
+	// real terminal.
+	e.drain()
 }
 
 func (e *tuios) Close() error { return e.t.Close() }
@@ -171,6 +210,8 @@ func (e *tuios) Snapshot(g *screen.Grid) {
 		open, serial := e.t.SyncUpdate()
 		if open && serial == e.heldSerial && time.Since(e.heldAt) < SyncHold {
 			*g = *e.held.Clone()
+			// The history as it stands, so it never goes backwards.
+			g.History = e.hist
 			e.lastHeld = true
 			return
 		}
@@ -196,43 +237,12 @@ func (e *tuios) fill(g *screen.Grid) {
 	tw, th := e.t.Width(), e.t.Height()
 	var links linkBudget
 	for y := range e.rows {
-		for x := 0; x < e.cols; x++ {
-			var src *uv.Cell
+		e.convertRow(e.cols, func(x int) *uv.Cell {
 			if x < tw && y < th {
-				src = e.t.CellAt(x, y)
+				return e.t.CellAt(x, y)
 			}
-			if src == nil || src.Width == 0 {
-				// A continuation is written with its wide character below;
-				// one on its own is a blank.
-				g.SetCell(x, y, screen.Cell{Width: 1, Style: e.style(src, &links)})
-				continue
-			}
-			st := e.style(src, &links)
-			text := src.Content
-			if text == " " {
-				text = ""
-			}
-			if src.Width >= 2 {
-				// A wide character has a continuation in the next column, or
-				// it does not fit and becomes a blank (G2). A single ASCII
-				// byte has no wide form on the wire, nor does a blank.
-				if x+1 >= e.cols || text == "" {
-					g.SetCell(x, y, screen.Cell{Width: 1, Style: st})
-					continue
-				}
-				if len(text) == 1 {
-					text = "�"
-				}
-				g.SetCell(x, y, screen.Cell{Text: screen.SanitizeCluster(text), Width: 2, Style: st})
-				g.SetCell(x+1, y, screen.Cell{Width: 0, Style: st})
-				x++
-				continue
-			}
-			if text != "" {
-				text = screen.SanitizeCluster(text)
-			}
-			g.SetCell(x, y, screen.Cell{Text: text, Width: 1, Style: st})
-		}
+			return nil
+		}, &links, func(x int, c screen.Cell) { g.SetCell(x, y, c) })
 	}
 	pos := e.t.CursorPosition()
 	shape, steady := e.t.CursorStyle()
@@ -248,6 +258,49 @@ func (e *tuios) fill(g *screen.Grid) {
 	g.Clipboard = screen.Clipboard{Seq: e.clip.Seq, Data: e.clip.Data}
 	// proto's fields: always zero from emu (docs/spec/screen.md §6.2).
 	g.EchoOff, g.EchoAck, g.InputConsumed, g.Rebuilt = false, 0, 0, screen.Rebuilt{}
+	g.History = e.hist
+}
+
+// convertRow converts cols cells of one row of tuios', from src, writing
+// each with set: clusters sanitised, " " a blank, wide characters with
+// their continuations, or a blank where one does not fit (G2), styles
+// mapped, and links admitted to links, or dropped if it is nil (a history
+// line, G9).
+func (e *tuios) convertRow(cols int, src func(x int) *uv.Cell, links *linkBudget, set func(x int, c screen.Cell)) {
+	for x := 0; x < cols; x++ {
+		c := src(x)
+		if c == nil || c.Width == 0 {
+			// A continuation is written with its wide character below;
+			// one on its own is a blank.
+			set(x, screen.Cell{Width: 1, Style: e.style(c, links)})
+			continue
+		}
+		st := e.style(c, links)
+		text := c.Content
+		if text == " " {
+			text = ""
+		}
+		if c.Width >= 2 {
+			// A wide character has a continuation in the next column, or
+			// it does not fit and becomes a blank (G2). A single ASCII
+			// byte has no wide form on the wire, nor does a blank.
+			if x+1 >= cols || text == "" {
+				set(x, screen.Cell{Width: 1, Style: st})
+				continue
+			}
+			if len(text) == 1 {
+				text = "�"
+			}
+			set(x, screen.Cell{Text: screen.SanitizeCluster(text), Width: 2, Style: st})
+			set(x+1, screen.Cell{Width: 0, Style: st})
+			x++
+			continue
+		}
+		if text != "" {
+			text = screen.SanitizeCluster(text)
+		}
+		set(x, screen.Cell{Text: text, Width: 1, Style: st})
+	}
 }
 
 // cursorShape maps tuios' shape onto DECSCUSR's numbers. tuios starts at a
@@ -352,7 +405,7 @@ func (e *tuios) style(c *uv.Cell, links *linkBudget) screen.Style {
 	default:
 		out.Attrs |= screen.Underlined
 	}
-	if c.Link.URL != "" {
+	if c.Link.URL != "" && links != nil {
 		out.Link = links.admit(c.Link.URL)
 	}
 	return out

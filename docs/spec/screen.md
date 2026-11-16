@@ -1122,6 +1122,26 @@ is under its raw size before compression. `unicode`, the torture file, is
 3% over, which is the cost of a cluster prefix per cell on a file made
 of nothing else.
 
+**With history** (the scrollback slice, [measured here], the same test):
+every line that scrolls off now travels a second time, as history.
+Where the client already held it as a base row it costs an HROW of 2
+bytes; where it scrolled off between two frames without ever being sent
+it costs its text.
+
+| stream | diff bytes | diff / pty | flate / pty |
+|---|---|---|---|
+| S5 flood | 15,627 | 0.08 | 0.02 |
+| S5 less / vim | 53,497 / 27,032 | 0.75 / 0.55 | 0.38 / 0.31 (alternate screen: no history) |
+| S5 shell | 4,774 | 1.00 | 0.54 |
+| S2 fish / zsh | 855 / 25,165 | 0.32 / 1.08 | 0.23 / 0.44 |
+| S2 unicode (not gated alone) | 1,238 | 1.15 | 0.89 |
+| S2 together | 39,633 | 0.78 | |
+
+The gate still passes, with S5's shell at its edge: a shell's output is
+what scrolls, and its history is that output sent once more. zsh is over
+1 alone because S2's frames, one per KiB, let lines scroll off unseen,
+which then go as text.
+
 **If the gate fails, the implementer stops and reports the numbers to the
 screen owner. The format is then amended here before the code lands.** The
 gate is set on *uncompressed* bytes on purpose: the format must beat raw

@@ -16,13 +16,18 @@ type Emulator interface {
 	Write(p []byte)
 	// Resize changes the window size, after the server's clamp (D23). It
 	// also resets the scrollback budget, which is counted in cells:
-	// min(10000, ScrollbackCells/cols) lines.
+	// min(10000, ScrollbackCells/cols) lines. That budget sizes tuios'
+	// own ring, which the emulator empties into its history after each
+	// chunk of output it parses.
 	Resize(cols, rows int)
 	// Snapshot copies the current state into g, resizing g to match, with
 	// the allow-list applied (titles, links, cell text). While the program
 	// holds a synchronised update open (mode 2026), for at most SyncHold,
 	// it gives the screen as it was before the update began; an emulator
 	// that does this is a Holder and says so (docs/spec/screen.md §6.3).
+	// g.History is the emulator's history window: the lines that scrolled
+	// off the top of the primary screen, numbered from 0 by this emulator,
+	// as they stand now even while the screen is held (§2.5, §6.3).
 	Snapshot(g *screen.Grid)
 	// TakeReplies returns, and forgets, what the emulator wants to answer
 	// the program (device attributes, colour queries, cursor reports). The
