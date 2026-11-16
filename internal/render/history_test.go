@@ -48,6 +48,9 @@ func (l *local) scrollback() []string {
 			if c := ln[x].Content; c != "" {
 				return c
 			}
+			if ln[x].Width == 0 {
+				return "" // a wide character's continuation
+			}
 			return " "
 		}, len(ln))
 		if s != "" {
@@ -222,17 +225,39 @@ func TestAReconnectsFreshWindowPrintsOnlyWhatIsNew(t *testing.T) {
 	}
 }
 
-// A history line wider than the local terminal is clipped to it, as a
-// screen row is (§8.3).
-func TestAWideHistoryLineIsClippedToTheLocalWidth(t *testing.T) {
+// A history line wider than the local terminal wraps onto as many rows as
+// it needs, as the terminal itself would wrap it, so its tail reaches the
+// scrollback too; its trailing blanks make no empty rows, and a wide
+// character at the edge starts the next row whole (§8.7).
+func TestAWideHistoryLineWrapsToTheLocalWidth(t *testing.T) {
 	l := newLocal(10, 3)
 	r := render.New(l, allCaps)
 	r.Resize(10, 3)
 	_ = r.Enter()
 	g := screenWith(10, 3, "$")
-	g.History = g.History.Add(1, [][]screen.Cell{histLine("0123456789abcdef", 40)})
+	wide := histLine("012345678", 40)
+	wide[9] = screen.Cell{Text: "世", Width: 2}
+	wide[10] = screen.Cell{Width: 0}
+	wide[11] = screen.Cell{Text: "z", Width: 1}
+	g.History = g.History.Add(2, [][]screen.Cell{histLine("0123456789abcdefghijklmnopq", 40), wide})
 	render1(t, r, l, g)
-	if got := strings.Join(l.scrollback(), "|"); got != "0123456789" {
-		t.Errorf("scrollback %q", got)
+	want := "0123456789|abcdefghij|klmnopq|012345678|世z"
+	if got := strings.Join(l.scrollback(), "|"); got != want {
+		t.Errorf("scrollback %q, want %q", got, want)
+	}
+	// As many rows as the same five rows given ready-wrapped: the
+	// trailing blanks made none of their own.
+	l2 := newLocal(10, 3)
+	r2 := render.New(l2, allCaps)
+	r2.Resize(10, 3)
+	_ = r2.Enter()
+	g2 := screenWith(10, 3, "$")
+	g2.History = g2.History.Add(5, [][]screen.Cell{
+		histLine("0123456789", 10), histLine("abcdefghij", 10), histLine("klmnopq", 10),
+		histLine("012345678", 10), histLine("z", 10),
+	})
+	render1(t, r2, l2, g2)
+	if n, want := l.t.ScrollbackLen(), l2.t.ScrollbackLen(); n != want {
+		t.Errorf("%d rows in the scrollback, want %d: empty rows from trailing blanks", n, want)
 	}
 }

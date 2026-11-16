@@ -647,7 +647,9 @@ func TestCapabilitiesFromTheEnvironment(t *testing.T) {
 
 // FuzzRender draws grids built from fuzz bytes, with fuzzed capabilities,
 // over a previous frame: every byte written is in the alphabet, and with
-// every capability the terminal ends up showing the grid.
+// every capability the terminal ends up showing the grid. The top two bits
+// of capBits give the alphabet check's renderer a local width (none, the
+// grid's, or narrower), so history lines are also wrapped (§8.7).
 func FuzzRender(f *testing.F) {
 	f.Add([]byte("seed"), uint8(0xff))
 	f.Add([]byte("\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a"), uint8(0))
@@ -662,6 +664,9 @@ func FuzzRender(f *testing.F) {
 		}
 		var out bytes.Buffer
 		r := render.New(&out, caps)
+		if w := [4]int{0, 30, 13, 1}[capBits>>6]; w > 0 {
+			r.Resize(w, 8)
+		}
 		_ = r.Enter()
 		_ = r.Render(a)
 		_ = r.Render(b)

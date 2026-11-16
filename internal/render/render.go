@@ -640,7 +640,9 @@ func (r *Renderer) history(g *screen.Grid) {
 		items = append(items, func(int) { r.marker(missed) })
 	}
 	for _, l := range lines {
-		items = append(items, func(y int) { r.historyLine(y, l) })
+		for _, piece := range wrap(l, r.cols) {
+			items = append(items, func(y int) { r.historyLine(y, piece) })
+		}
 	}
 	rows := r.rows
 	if rows == 0 {
@@ -669,12 +671,35 @@ func (r *Renderer) history(g *screen.Grid) {
 	r.last = nil
 }
 
-// historyLine draws one history line on row y, clipped to the local width,
-// by the same rules as a screen row (§8.3).
-func (r *Renderer) historyLine(y int, l []screen.Cell) {
-	if r.cols > 0 && len(l) > r.cols {
-		l = l[:r.cols]
+// wrap cuts a history line into rows of at most cols cells, as a terminal
+// wraps a line too long for it, so a line that scrolled off a wider remote
+// screen reaches the local scrollback whole rather than clipped (§8.7).
+// Default blanks at its end are dropped first: they are the remote
+// screen's width, not text, and would only wrap into empty rows. A wide
+// character that would straddle the edge starts the next row, as on a
+// terminal, so each row keeps G2. cols 0 (no size yet) leaves it whole.
+func wrap(l []screen.Cell, cols int) [][]screen.Cell {
+	if cols <= 0 || len(l) <= cols {
+		return [][]screen.Cell{l}
 	}
+	for len(l) > 0 && l[len(l)-1] == defaultBlank {
+		l = l[:len(l)-1]
+	}
+	var out [][]screen.Cell
+	for len(l) > cols {
+		n := cols
+		if cols > 1 && l[n-1].Width == 2 {
+			n--
+		}
+		out = append(out, l[:n])
+		l = l[n:]
+	}
+	return append(out, l)
+}
+
+// historyLine draws one row of a history line on row y, by the same rules
+// as a screen row (§8.3).
+func (r *Renderer) historyLine(y int, l []screen.Cell) {
 	changed := make([]bool, len(l))
 	for x := range l {
 		changed[x] = l[x] != defaultBlank

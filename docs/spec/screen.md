@@ -1620,11 +1620,17 @@ alternate screen; an honest server sends none meanwhile):
    prints only what it has not, and a marker for what it missed.
 2. To print `k` lines with the local terminal `L` rows high, in chunks
    of at most `L`: write each line of the chunk on rows 0, 1, … with a
-   CUP, `CSI 0 m`, `CSI K` and its cells (§8.3's rules, clipped to the
-   local width), close any link and reset the pen, CUP to the local last
+   CUP, `CSI 0 m`, `CSI K` and its cells (§8.3's rules), close any link and reset the pen, CUP to the local last
    row, and write one LF per line. The terminal scrolls the chunk off its
    top, into its history, in order [ECMA-48 LF; xterm: lines scrolled
    off the top of a full-screen region are saved].
+   A line wider than the local terminal (it scrolled off a wider remote
+   screen, before a local shrink or on a resume from a smaller device)
+   is first wrapped into rows of the local width, as the terminal would
+   wrap it, so its tail is not lost: its trailing default blanks are
+   dropped, since they are the remote width and not text, and a wide
+   character that would straddle the edge starts the next row. Each row
+   is one of the `k` lines to print.
 3. Then the frame is a full redraw (§8.3), since the rows have moved.
 
 Prediction (D12) needs nothing: the overlay is a Grid like any other,
