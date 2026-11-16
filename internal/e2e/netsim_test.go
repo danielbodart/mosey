@@ -39,6 +39,8 @@ type shell struct {
 	printed bytes.Buffer
 	exited  bool
 	resize  [2]int
+	// rest is output a read had no room for; only the reader touches it.
+	rest []byte
 }
 
 func newShell() *shell {
@@ -54,11 +56,17 @@ func (s *shell) print(b string) {
 }
 
 func (s *shell) Read(p []byte) (int, error) {
-	b, ok := <-s.out
-	if !ok {
-		return 0, io.EOF // the slave closed: what a pty says once the shell is gone
+	b := s.rest
+	if len(b) == 0 {
+		var ok bool
+		if b, ok = <-s.out; !ok {
+			return 0, io.EOF // the slave closed: what a pty says once the shell is gone
+		}
 	}
-	return copy(p, b), nil
+	// What does not fit is the next read's, as a pty keeps it.
+	n := copy(p, b)
+	s.rest = b[n:]
+	return n, nil
 }
 
 // Write is the program reading its input: it echoes, and on Enter runs
@@ -85,10 +93,38 @@ func (s *shell) Write(p []byte) (int, error) {
 		if words, ok := bytes.CutPrefix(s.line, []byte("echo ")); ok {
 			reply += strings.ToUpper(string(words)) + "\r\n"
 		}
+		if n, ok := bytes.CutPrefix(s.line, []byte("seq ")); ok {
+			reply += numbered(1, atoi(string(n)))
+		}
 		s.print(reply + "$ ")
 		s.line = s.line[:0]
 	}
 	return len(p), nil
+}
+
+// numbered is the lines line-FROM to line-TO, as seq would print them
+// with a prefix, each ended by CR LF.
+func numbered(from, to int) string {
+	var b strings.Builder
+	for i := from; i <= to; i++ {
+		fmt.Fprintf(&b, "line-%04d\r\n", i)
+	}
+	return b.String()
+}
+
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// flood prints text as if a program the shell runs had, unasked.
+func (s *shell) flood(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.print(text)
 }
 
 // Close is the server closing the pty's master: the shell is hung up.
@@ -396,7 +432,7 @@ func (s *simSession) exit() time.Duration {
 	// The last screen the user saw, before the client put the terminal
 	// back, is the one the shell left: "exit" echoed included.
 	drawn := s.user.bytes()
-	if i := bytes.LastIndex(drawn, []byte("\x1b[?1049l")); i >= 0 {
+	if i := bytes.LastIndex(drawn, []byte("\x1b[?25h\x1b[?7h")); i >= 0 {
 		drawn = drawn[:i]
 	}
 	if got, want := screenOf(drawn, 80, 24), s.serverScreen(); got != want {

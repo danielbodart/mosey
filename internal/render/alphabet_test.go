@@ -33,6 +33,13 @@ func checkAlphabet(out []byte, utf8Locale bool) error {
 			i += n
 		case b == 0x07:
 			i++
+		case b == '\n':
+			// LF only scrolls history off the last row (§8.7): straight
+			// after a CUP or another LF, never inside text.
+			if i == 0 || (out[i-1] != 'H' && out[i-1] != '\n') {
+				return fmt.Errorf("at byte %d: LF not after a CUP", i)
+			}
+			i++
 		case b >= 0x20 && b < 0x7f:
 			i++
 		case b >= 0x80:
@@ -58,7 +65,7 @@ func checkAlphabet(out []byte, utf8Locale bool) error {
 var csiForms = []*regexp.Regexp{
 	regexp.MustCompile(`^\x1b\[[1-9][0-9]*;[1-9][0-9]*H`), // CUP
 	regexp.MustCompile(`^\x1b\[0(;[0-9]+)*m`),             // SGR, always from a reset
-	regexp.MustCompile(`^\x1b\[(K|2J|[1-9][0-9]*X)`),      // EL, ED 2, ECH
+	regexp.MustCompile(`^\x1b\[(K|J|[1-9][0-9]*X)`),       // EL, ED 0 (Leave only), ECH
 	regexp.MustCompile(`^\x1b\[\?(25|2026|1049|7|1|2004|1004|1000|1002|1003|1006)[hl]`),
 	regexp.MustCompile(`^\x1b\[[0-6] q`),  // DECSCUSR
 	regexp.MustCompile(`^\x1b\[2[23];2t`), // title push and pop

@@ -126,7 +126,7 @@ func TestTheClientFindsTheServerAtANonLoopbackAddress(t *testing.T) {
 				cmd.Process.Signal(syscall.SIGTERM)
 				<-exited
 			}()
-			waitFor(t, "the session's screen", func() bool { return strings.Contains(screen.String(), "\x1b[?1049h") })
+			waitFor(t, "the session's screen", func() bool { return strings.Contains(screen.String(), "\x1b[22;2t\x1b[?7l") })
 			log := readFile(filepath.Join(state, "mosey", "client.log"))
 			if !strings.Contains(log, "msg=dialling server="+addr.String()+":") {
 				t.Errorf("the client did not dial %s; log:\n%s", addr, log)

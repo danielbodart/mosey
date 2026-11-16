@@ -36,8 +36,9 @@ much of this in 2012:
 - it syncs the *screen* rather than a byte stream;
 - it echoes your typing locally, so it feels instant even on a slow link.
 
-But Mosh's last release was in 2022, its crypto dates from 2012, and a
-session can't be picked up again from another device without tmux.
+But Mosh's last release was in 2022, its crypto dates from 2012, it has
+no scrollback, and a session can't be picked up again from another
+device without tmux.
 
 mosey is inspired by Mosh, written from scratch in Go from the Mosh paper
 and public specifications. It starts over your normal `ssh`, with your own
@@ -67,6 +68,15 @@ config, keys and agent, exactly as Mosh does. It aims to be:
   syntax highlighting, fish): replaying recorded sessions, about 72% of
   keystrokes appear instantly at a 100 ms round trip and 0.1% are wrong,
   and no password key was ever shown.
+- **Scrollback in your own terminal, so no tmux needed for it.** Lines
+  that scroll off the remote screen are printed into your terminal's own
+  scrollback, so the mouse wheel, search and selection work as they do
+  locally, with no scroll mode to learn. When you attach or resume, the
+  last 1000 lines come first; full-screen programs (vim, less) use your
+  terminal's alternate screen and leave no history, as they would
+  locally. If the client falls more than 1000 lines behind (a long
+  outage while something floods the screen), it prints one
+  `… N lines not shown` line and carries on.
 - **Zero install.** `mosey host` copies its own static binary across when
   the host doesn't have it. One binary is both client and server, so you can
   hop onwards from there.

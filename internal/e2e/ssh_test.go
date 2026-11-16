@@ -237,7 +237,7 @@ func TestARealSessionOverLoopbackThroughSSH(t *testing.T) {
 	// A session that shows a screen has done the bootstrap, the handshake
 	// and the first SSP round. 6*7 is worked out by the far shell, so the
 	// answer cannot be the echo of what was typed.
-	waitFor(t, "the session's screen", func() bool { return strings.Contains(screen.String(), "\x1b[?1049h") })
+	waitFor(t, "the session's screen", func() bool { return strings.Contains(screen.String(), "\x1b[22;2t\x1b[?7l") })
 	if _, err := master.Write([]byte("echo hello mosey-$((6*7)) h\u00e9llo\r")); err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestARealSessionOverLoopbackThroughSSH(t *testing.T) {
 		t.Errorf("mosey exited %v; log:\n%s", err, readFile(filepath.Join(state, "mosey", "client.log")))
 	}
 	// The terminal is back as it was: the alternate screen left.
-	waitFor(t, "the terminal to be restored", func() bool { return strings.Contains(screen.String(), "\x1b[?1049l") })
+	waitFor(t, "the terminal to be restored", func() bool { return strings.Contains(screen.String(), "\x1b[?25h\x1b[?7h") })
 	waitFor(t, "the session's processes to end", func() bool { return !running(spawner) })
 }
 

@@ -92,7 +92,8 @@ func contains(list []string, s string) bool {
 
 // shown is what a terminal with every capability shows for g, as emu
 // reads it back: underline styles and colours drawn as plain underline
-// (§8.3), the alternate screen on (the client's own), proto's fields and
+// (§8.3), the alternate screen as the remote program has it (mirrored,
+// §8.5), proto's fields and
 // and the counters left out.
 func shown(g *screen.Grid) *screen.Grid {
 	w := g.Clone()
@@ -107,7 +108,6 @@ func shown(g *screen.Grid) *screen.Grid {
 			w.SetCell(x, y, c)
 		}
 	}
-	w.Modes.AltScreen = true
 	w.Modes.KittyKeyboard = 0
 	w.EchoOff, w.EchoAck, w.EchoApplied, w.InputConsumed, w.Rebuilt = false, 0, 0, 0, screen.Rebuilt{}
 	return w
@@ -473,7 +473,6 @@ func TestModesAreMirroredAndLeaveRestoresEverything(t *testing.T) {
 	_ = r.Render(g)
 	got := tm.screen(t)
 	want := g.Modes
-	want.AltScreen = true
 	if got.Modes != want || got.Title != "remote" || got.Cursor.Shape != 5 {
 		t.Fatalf("modes %+v title %q shape %d", got.Modes, got.Title, got.Cursor.Shape)
 	}
@@ -501,15 +500,50 @@ func TestModesAreMirroredAndLeaveRestoresEverything(t *testing.T) {
 func TestEnterAndLeaveWriteTheSpecsSequences(t *testing.T) {
 	var out bytes.Buffer
 	r := render.New(&out, allCaps)
+	r.Resize(10, 3)
 	_ = r.Enter()
-	if want := "\x1b[22;2t\x1b[?1049h\x1b[?7l\x1b[?25l\x1b[2J"; out.String() != want {
+	// What the terminal showed scrolls into its history: a LF a row from
+	// the last row (§8.6).
+	if want := "\x1b[22;2t\x1b[?7l\x1b[?25l\x1b[3;1H\n\n\n"; out.String() != want {
 		t.Fatalf("Enter wrote %q, want %q", out.String(), want)
 	}
 	out.Reset()
 	_ = r.Leave()
-	want := "\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b>\x1b[?1l\x1b[0 q\x1b[?25h\x1b[?7h\x1b[?1049l\x1b[23;2t"
+	// Nothing drawn: the user's shell goes below everything.
+	want := "\x1b[0m\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b>\x1b[?1l\x1b[0 q\x1b[?25h\x1b[?7h\x1b[3;1H\n\x1b[23;2t"
 	if out.String() != want {
 		t.Fatalf("Leave wrote %q, want %q", out.String(), want)
+	}
+}
+
+// Leave puts the user's shell where it carries on from the last screen:
+// on the cursor's row at its start, the next row otherwise, and below
+// everything after a full-screen program (§8.6).
+func TestLeaveCarriesOnBelowTheLastScreen(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		cursor screen.Cursor
+		alt    bool
+		tail   string
+	}{
+		{"at the start of a row", screen.Cursor{X: 0, Y: 1}, false, "\x1b[2;1H\x1b[J"},
+		{"mid-row", screen.Cursor{X: 4, Y: 1}, false, "\x1b[2;1H\x1b[3;1H\x1b[J"},
+		{"mid-row on the last row", screen.Cursor{X: 4, Y: 2}, false, "\x1b[3;1H\n\x1b[J"},
+		{"after a full-screen program", screen.Cursor{X: 4, Y: 1}, true, "\x1b[?1049l\x1b[3;1H\n"},
+	} {
+		var out bytes.Buffer
+		r := render.New(&out, allCaps)
+		r.Resize(10, 3)
+		_ = r.Enter()
+		g := screen.NewGrid(10, 3)
+		g.Cursor = c.cursor
+		g.Modes.AltScreen = c.alt
+		_ = r.Render(g)
+		out.Reset()
+		_ = r.Leave()
+		if want := c.tail + "\x1b[23;2t"; !strings.HasSuffix(out.String(), want) {
+			t.Errorf("%s: Leave wrote %q, want it to end %q", c.name, out.String(), want)
+		}
 	}
 }
 
@@ -522,7 +556,8 @@ func TestInvalidateRedrawsEverythingFromAClear(t *testing.T) {
 	out.Reset()
 	r.Invalidate()
 	_ = r.Render(g)
-	if !strings.Contains(out.String(), "\x1b[2J") || !strings.Contains(out.String(), "a") {
+	// Row by row with EL, never ED 2 (§8.3).
+	if strings.Contains(out.String(), "\x1b[2J") || !strings.Contains(out.String(), "\x1b[1;1H\x1b[K") || !strings.Contains(out.String(), "a") {
 		t.Fatalf("no full redraw after Invalidate: %q", out.String())
 	}
 }

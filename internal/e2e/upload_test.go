@@ -80,7 +80,7 @@ func (c *clientRun) wait(t *testing.T) int {
 // up waits for the session's screen and the far shell's answer to a sum.
 func (c *clientRun) up(t *testing.T) {
 	t.Helper()
-	waitFor(t, "the session's screen", func() bool { return strings.Contains(c.screen.String(), "\x1b[?1049h") })
+	waitFor(t, "the session's screen", func() bool { return strings.Contains(c.screen.String(), "\x1b[22;2t\x1b[?7l") })
 	c.answers(t, "echo copied-$((6*7))", "copied-42")
 }
 

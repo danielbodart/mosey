@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"io"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/danielbodart/mosey/internal/screen"
 )
@@ -50,6 +52,18 @@ type Renderer struct {
 	rebuilt screen.Rebuilt
 	notice  *screen.Rebuilt
 	entered bool
+
+	// alt is whether the local terminal is on its alternate screen, which
+	// it is exactly while the remote program is on its own
+	// (docs/spec/screen.md §8.5).
+	alt bool
+	// lastCursor is where the last frame left the cursor, for Leave.
+	lastCursor screen.Cursor
+	// printed is the number of the next history line to print, once
+	// started is set (docs/spec/screen.md §8.7). Neither is forgotten by
+	// Invalidate: a reconnect prints only what it has not.
+	printed uint64
+	started bool
 }
 
 // New is a renderer that writes to w, which is the terminal in raw mode.
@@ -80,16 +94,23 @@ func (r *Renderer) Rebuilt() (screen.Rebuilt, bool) {
 	return *r.notice, true
 }
 
-// Enter sets the terminal up for a session: the title saved, the
-// alternate screen, autowrap off so the last column never scrolls, the
-// cursor hidden until the first frame places it.
+// Enter sets the terminal up for a session: the title saved, autowrap off
+// so the last column never scrolls, the cursor hidden until the first
+// frame places it, and what the terminal showed scrolled into its own
+// history rather than drawn over. The session is drawn on the primary
+// screen, so the history the renderer prints above it lands in the
+// terminal's scrollback (docs/spec/screen.md §8.6, §8.7).
 func (r *Renderer) Enter() error {
 	r.buf = r.buf[:0]
 	r.csi("22;2t")
-	r.csi("?1049h")
 	r.csi("?7l")
 	r.csi("?25l")
-	r.csi("2J")
+	if rows := r.rows; rows > 0 {
+		r.cup(0, rows-1)
+		for range rows {
+			r.buf = append(r.buf, '\n')
+		}
+	}
 	r.entered = true
 	r.Invalidate()
 	return r.flush()
@@ -115,10 +136,44 @@ func (r *Renderer) Leave() error {
 	r.csi("0 q")
 	r.csi("?25h")
 	r.csi("?7h")
-	r.csi("?1049l")
+	// The user's shell carries on below the last screen, as after ssh:
+	// on the remote cursor's row if it is at the start of one, else on
+	// the next; after a full-screen program, or with nothing drawn, below
+	// everything.
+	rows := r.rows
+	if rows == 0 && r.last != nil {
+		_, rows = r.last.Size()
+	}
+	switch {
+	case r.alt:
+		r.csi("?1049l")
+		r.alt = false
+		r.bottom(rows)
+	case r.drawn && rows > 0:
+		y := min(r.lastCursor.Y, rows-1)
+		r.cup(0, y)
+		if r.lastCursor.X > 0 {
+			if y == rows-1 {
+				r.buf = append(r.buf, '\n')
+			} else {
+				r.cup(0, y+1)
+			}
+		}
+		r.csi("J")
+	default:
+		r.bottom(rows)
+	}
 	r.csi("23;2t")
 	r.modes, r.shape, r.pen = screen.Modes{}, 0, ""
 	return r.flush()
+}
+
+// bottom puts the cursor at the start of a fresh line below everything.
+func (r *Renderer) bottom(rows int) {
+	if rows > 0 {
+		r.cup(0, rows-1)
+		r.buf = append(r.buf, '\n')
+	}
 }
 
 // Render draws g, writing only what differs from what it drew last, as one
@@ -133,6 +188,22 @@ func (r *Renderer) Render(g *screen.Grid) error {
 		r.csi("?2026h")
 	}
 	r.csi("?25l")
+	if g.Modes.AltScreen != r.alt {
+		// The local terminal follows the remote program onto its alternate
+		// screen and back (§8.5). 1049 saves and restores the cursor and
+		// its rendition, so the pen is unknown, and the screen switched
+		// to is drawn in full.
+		r.alt = g.Modes.AltScreen
+		if r.alt {
+			r.csi("?1049h")
+		} else {
+			r.csi("?1049l")
+		}
+		r.last, r.pen = nil, ""
+	}
+	if !r.alt {
+		r.history(g)
+	}
 	r.cells(g)
 	if r.link != "" {
 		r.closeLink()
@@ -191,9 +262,20 @@ func (r *Renderer) cells(g *screen.Grid) {
 	}
 	if full {
 		// Clear in the default style, so every local cell outside g is a
-		// default blank, drawn once.
+		// default blank, drawn once. Row by row with EL, never ED 2: on
+		// the primary screen some terminals keep what ED 2 erases in their
+		// history, which would put a stale copy of the screen there on
+		// every redraw (§8.3).
+		r.linkTo("")
 		r.setPen("0")
-		r.csi("2J")
+		rows := r.rows
+		if rows == 0 {
+			_, rows = g.Size()
+		}
+		for y := range rows {
+			r.cup(0, y)
+			r.csi("K")
+		}
 	}
 	cols, rows := r.size(g)
 	changed := make([]bool, cols)
@@ -527,6 +609,102 @@ func mouseCode(m screen.MouseMode) string {
 	return ""
 }
 
+// history prints g's history lines the terminal has not had into its
+// scrollback, above the screen, and makes the frame a full redraw if it
+// printed any (docs/spec/screen.md §8.7): the whole window the first
+// time, which is the recent history on attach or resume; after that each
+// line once, by number; and a marker for lines that were never received.
+func (r *Renderer) history(g *screen.Grid) {
+	h := g.History
+	if r.started && h.Next < r.printed {
+		// No honest server numbers backwards; start again from here.
+		r.printed = h.Next
+		return
+	}
+	var lines [][]screen.Cell
+	var missed uint64
+	switch first := h.First(); {
+	case !r.started:
+		lines = h.Lines
+	case first > r.printed:
+		missed, lines = first-r.printed, h.Lines
+	default:
+		lines = h.Since(r.printed)
+	}
+	r.started, r.printed = true, h.Next
+	if missed == 0 && len(lines) == 0 {
+		return
+	}
+	var items []func(y int)
+	if missed > 0 {
+		items = append(items, func(int) { r.marker(missed) })
+	}
+	for _, l := range lines {
+		items = append(items, func(y int) { r.historyLine(y, l) })
+	}
+	rows := r.rows
+	if rows == 0 {
+		_, rows = g.Size()
+	}
+	// Each chunk is written on the top rows, then scrolled off the top of
+	// the screen into the terminal's history by LFs on its last row.
+	for len(items) > 0 {
+		chunk := items[:min(len(items), rows)]
+		items = items[len(chunk):]
+		for y, draw := range chunk {
+			r.cup(0, y)
+			r.linkTo("")
+			r.setPen("0")
+			r.csi("K")
+			draw(y)
+		}
+		r.linkTo("")
+		r.setPen("0")
+		r.cup(0, rows-1)
+		for range chunk {
+			r.buf = append(r.buf, '\n')
+		}
+	}
+	// The rows have moved: the screen is drawn again in full.
+	r.last = nil
+}
+
+// historyLine draws one history line on row y, clipped to the local width,
+// by the same rules as a screen row (§8.3).
+func (r *Renderer) historyLine(y int, l []screen.Cell) {
+	if r.cols > 0 && len(l) > r.cols {
+		l = l[:r.cols]
+	}
+	changed := make([]bool, len(l))
+	for x := range l {
+		changed[x] = l[x] != defaultBlank
+	}
+	for x := range l {
+		if changed[x] && l[x].Width == 0 && x > 0 {
+			changed[x-1] = true
+		}
+	}
+	r.row(y, l, changed)
+}
+
+// marker is the line that says how many lines were never received: the
+// client fell behind by more than the window (§2.5). The caller has put
+// the cursor at the start of a cleared row.
+func (r *Renderer) marker(missed uint64) {
+	dots := "…"
+	if !r.caps.UTF8 {
+		dots = "..."
+	}
+	text := dots + " " + strconv.FormatUint(missed, 10) + " lines not shown"
+	if r.cols > 0 && len(text) > r.cols {
+		text = text[:r.cols]
+		if !utf8.ValidString(text) {
+			text = strings.ToValidUTF8(text, "")
+		}
+	}
+	r.buf = append(r.buf, text...)
+}
+
 // cursor places the cursor, clipped to the local size, sets its shape and
 // shows it if it is visible (§8.4 item 8).
 func (r *Renderer) cursor(g *screen.Grid) {
@@ -534,6 +712,7 @@ func (r *Renderer) cursor(g *screen.Grid) {
 	if cols == 0 || rows == 0 {
 		return
 	}
+	r.lastCursor = g.Cursor
 	r.cup(min(g.Cursor.X, cols-1), min(g.Cursor.Y, rows-1))
 	if g.Cursor.Shape != r.shape && g.Cursor.Shape <= 6 {
 		r.buf = append(r.buf, "\x1b["...)
