@@ -650,8 +650,8 @@ func (s *spawner) startShell(cl bootstrap.ClientLine, agentSock string, slave *o
 
 // typeInto types -type's text into the new shell, then Enter
 // (bootstrap.md §9.2.3), as tmux send-keys TEXT Enter does, once the
-// shell has written its first output, its prompt as a rule, or TypeWait
-// has passed. Typed before the prompt, the tty would echo it at once and
+// shell has written its first output, its prompt as a rule, and its tty
+// has stopped echoing, or TypeWait has passed. Typed before the prompt, the tty would echo it at once and
 // the line editor again after the prompt, so it would show twice; typed
 // after, it shows once, as a person who waited would type it. Only proto
 // reads the master, so proto says when (ipc.FirstOutput): the spawner
@@ -667,6 +667,18 @@ func (s *spawner) typeInto(ctx context.Context, text string) {
 	defer wait.Stop()
 	select {
 	case <-s.spoke:
+		// The first output need not be the prompt: a login shell's
+		// profile can write (a window title, say) before the line editor
+		// starts, and readline turns the tty's echo off only just before
+		// it draws the prompt ([M] strace of bash 5.3, 2026-11-16), so
+		// text typed while the tty still echoes shows twice, as CI's
+		// Ubuntu runner once showed it. So wait too, within
+		// the same TypeWait, for the echo to go off. A shell with no line
+		// editor leaves it on and gets its text when TypeWait passes; the
+		// tty's echo is then its only one.
+		if !s.waitEchoOff(ctx, wait.C) {
+			return
+		}
 	case <-wait.C:
 		s.log.Info("the shell wrote nothing in time; typing -type's text anyway", "after", TypeWait)
 	case <-ctx.Done():
@@ -678,6 +690,31 @@ func (s *spawner) typeInto(ctx context.Context, text string) {
 		return
 	}
 	s.log.Info("typed -type's text into the shell", "bytes", len(text))
+}
+
+// echoPoll is how often typeInto looks at the tty's echo bit while it
+// waits for the line editor [choice: a small fraction of TypeWait, and
+// below what a person notices].
+const echoPoll = 10 * time.Millisecond
+
+// waitEchoOff waits until the pty no longer echoes what is typed, or
+// until expired fires, and says false only if ctx ended first. A master
+// whose termios cannot be read is taken as not echoing: there is nothing
+// to wait for.
+func (s *spawner) waitEchoOff(ctx context.Context, expired <-chan time.Time) bool {
+	for {
+		if on, err := pty.Echoes(s.master); err != nil || !on {
+			return true
+		}
+		select {
+		case <-time.After(echoPoll):
+		case <-expired:
+			s.log.Info("the shell's tty still echoes; typing -type's text anyway", "after", TypeWait)
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 }
 
 // violation is proto breaking §3.4: the spawner is unsandboxed, so it

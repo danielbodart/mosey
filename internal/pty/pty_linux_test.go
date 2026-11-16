@@ -83,6 +83,31 @@ func TestEchoOffFollowsTheSlavesTermios(t *testing.T) {
 	check(false)
 }
 
+func TestEchoesFollowsTheSlavesEchoBitInAnyMode(t *testing.T) {
+	m, s := openPTY(t, Size{80, 24})
+	for _, c := range []struct {
+		lflag uint32
+		want  bool
+	}{
+		{unix.ECHO | unix.ICANON, true}, // a fresh tty: the shell not yet reading
+		{unix.ICANON, false},            // a password prompt
+		{0, false},                      // readline at its prompt, or raw mode
+		{unix.ECHO, true},
+	} {
+		tio, err := unix.IoctlGetTermios(int(s.Fd()), unix.TCGETS)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tio.Lflag = tio.Lflag&^(unix.ECHO|unix.ICANON) | c.lflag
+		if err := unix.IoctlSetTermios(int(s.Fd()), unix.TCSETS, tio); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := Echoes(m); err != nil || got != c.want {
+			t.Errorf("lflag %#x: Echoes = %v, %v; want %v", c.lflag, got, err, c.want)
+		}
+	}
+}
+
 // TestMain lets the test binary be the "shell": started by Shell.Start
 // with MOSEY_PTY_SHELL set, it reports what a login shell would see.
 func TestMain(m *testing.M) {

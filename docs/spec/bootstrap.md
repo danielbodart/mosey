@@ -1834,7 +1834,8 @@ attached with: a tmux user's `tmux new-session -c DIR` followed by
   prompt would type it (Dan, 2026-11-16). Proto reads the master, so it
   is proto that sees the first output: its pty reader sends the spawner
   `FirstOutput` (`server.md` §3.3) after its first read that returns
-  bytes, and the spawner waits for that, for at most `TypeWait` = 2 s
+  bytes, and the spawner waits for that and then for the tty to stop
+  echoing (below), for at most `TypeWait` = 2 s in all
   [choice: far longer than an ordinary shell takes to draw its first
   prompt, short enough that a shell which prints nothing, or rc files
   that take longer, only delay the text, never lose it]. When `TypeWait`
@@ -1844,7 +1845,17 @@ attached with: a tmux user's `tmux new-session -c DIR` followed by
   before the prompt and once after it. Waiting fixes exactly that: typed
   ahead, bash 5 (NixOS, through the e2e test's throwaway sshd,
   2026-11-16) showed `echo hi`, then `PROMPT$ echo hi`, then `hi`
-  [shells]; typed after the prompt it shows `PROMPT$ echo hi` once. The
+  [shells]; typed after the prompt it shows `PROMPT$ echo hi` once.
+  The first output is not always the prompt: a login shell's profile
+  can write first (a window title, say), and readline turns the tty's
+  `ECHO` off only just before it draws the prompt ([M] strace of bash
+  5.3, 2026-11-16). Typed in between, the text showed twice on CI's
+  Ubuntu runner. So after `FirstOutput` the spawner also waits until the
+  slave's termios, read through the master, has `ECHO` off, looking
+  every 10 ms [choice]; a line editor (readline, zle, fish) turns it off
+  to read keys itself. A shell with no line editor (dash) leaves it on
+  for good and gets the text when `TypeWait` passes, which costs it up
+  to 2 s and no second echo: the tty's is its only one. The
   tty's `ICRNL` turns the CR into the newline that ends the line. This
   is what `tmux send-keys TEXT Enter` sends: the keys, as if typed. A
   prompt is not proof the shell is reading, so a program the rc files

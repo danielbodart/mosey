@@ -39,6 +39,15 @@ func EchoOff(master *os.File) (bool, error) {
 	return echoOff(master)
 }
 
+// Echoes reads the slave's termios through the master and says whether
+// the line discipline echoes what is typed (ECHO). A line editor such as
+// readline turns it off just before it draws its prompt and reads keys
+// itself, so text typed while it is still on would show twice
+// (bootstrap.md §9.2.3).
+func Echoes(master *os.File) (bool, error) {
+	return echoes(master)
+}
+
 // Shell is how to start the user's login shell (D14, server.md §2.5).
 type Shell struct {
 	// Path is the shell to run; LoginShell finds the user's.

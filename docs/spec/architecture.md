@@ -250,7 +250,8 @@ A line that creates a session may carry `-dir` and `-type`
 anything starts (`CodeDir` if it is not one), and the spawner starts the
 shell there (`startDir`) and types the text into the pty, followed
 by Enter (`typeInto`), once proto says the shell has written its first
-output (`ipc.FirstOutput`) or `TypeWait` has passed. A resume drops both, so the same command goes back to
+output (`ipc.FirstOutput`) and the tty has stopped echoing (`pty.Echoes`),
+or `TypeWait` has passed. A resume drops both, so the same command goes back to
 the session.
 The session runs on until its shell exits, `mosey -kill` (`ipc.Hangup`)
 or 7 days detached (`IdleTimeout`), the last two a SIGHUP from the

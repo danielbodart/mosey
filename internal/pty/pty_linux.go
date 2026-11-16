@@ -96,6 +96,19 @@ func echoOff(master *os.File) (bool, error) {
 	return off, err
 }
 
+func echoes(master *os.File) (bool, error) {
+	var on bool
+	err := control(master, func(fd int) error {
+		t, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+		if err != nil {
+			return err
+		}
+		on = t.Lflag&unix.ECHO != 0
+		return nil
+	})
+	return on, err
+}
+
 func sessionLeader() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 }

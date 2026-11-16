@@ -20,4 +20,6 @@ func getSize(*os.File) (Size, error) { return Size{}, errors.ErrUnsupported }
 
 func echoOff(*os.File) (bool, error) { return false, errors.ErrUnsupported }
 
+func echoes(*os.File) (bool, error) { return false, errors.ErrUnsupported }
+
 func sessionLeader() *syscall.SysProcAttr { return &syscall.SysProcAttr{Setsid: true, Setctty: true} }

@@ -167,8 +167,9 @@ ssh ──stdin──► launcher                       spawner                p
       slave. The shell starts this late so a failure earlier leaves no
       shell behind, and so its start-up overlaps the client's handshake
       (except with a `type`, whose `Ready` waits for the shell's first
-      output, below). If the line has a `type`, wait for proto's `FirstOutput`, or
-      `TypeWait` (2 s), whichever comes first, then write its text and
+      output, below). If the line has a `type`, wait for proto's `FirstOutput`
+      and then for the pty to stop echoing, or `TypeWait` (2 s), whichever
+      comes first, then write its text and
       one CR to the pty master, in one write (`bootstrap.md` §9.2.3); a
       failure is logged and the session goes on.
    10. Send `Ready{line}` to the launcher and close B. From here on the
@@ -1454,7 +1455,8 @@ is its threads of control and the ordering rules the IPC imposes:
 | `SilentAfter`: a silent client counts as detached | 15 s | proto | [D] `bootstrap.md` §9.2: five 3 s heartbeats (D11) |
 | `IdleTimeout`: a detached session is hung up | 7 days | spawner | [D] Dan, D8 R4 |
 | `HangupGrace`: SIGHUP, then the teardown | 10 s | spawner | [choice] `bootstrap.md` §9.3 |
-| `TypeWait`: the most a `type` waits for the shell's first output | 2 s | spawner | [choice] `bootstrap.md` §9.2.3 |
+| `TypeWait`: the most a `type` waits for the shell's first output and its tty to stop echoing | 2 s | spawner | [choice] `bootstrap.md` §9.2.3 |
+| `echoPoll`: how often that wait looks at the tty's echo bit | 10 ms | spawner | [choice] `bootstrap.md` §9.2.3 |
 | a resume's hold on the greeting | `handshake.CredentialTTL`, 30 s | spawner | [derived] `bootstrap.md` §9.2 |
 | emu restart backoff | 50 ms, ×2, ≤ 5 s; reset after 60 s alive | spawner | [S4 §3.8] |
 | emu restart budget | 10 per 60 s | spawner | [S4 §3.8] |
