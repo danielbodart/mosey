@@ -19,7 +19,7 @@ const maxList = 256 << 10
 // ListOptions is what List needs from cmd/mosey.
 type ListOptions struct {
 	// SSH is how to reach the host: with no -remote, the probe runs the
-	// host's mosey, PATH's or the cached copy (bootstrap.md §4.7.2), so
+	// host's mosey, PATH's or ~/.local/bin/mosey (bootstrap.md §4.7.2), so
 	// -list finds the copy D7 put there.
 	SSH bootstrap.SSH
 	// Stdout gets the table; Stderr ssh's own words, through the stderr

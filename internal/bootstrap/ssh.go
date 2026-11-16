@@ -28,10 +28,10 @@ type SSH struct {
 	Options SSHOptions
 	// Server is the remote mosey binary, run as `Server --serve`: -remote's
 	// path. Empty is D7's probe (§4.7.2), which runs mosey on the remote
-	// PATH, of whatever version, or else ~/.cache/mosey/mosey if it
+	// PATH, of whatever version, or else ~/.local/bin/mosey if it
 	// answers Protocol, and otherwise says what the host is.
 	Server string
-	// Protocol is what the probe needs the cached copy's --serve=protocol
+	// Protocol is what the probe needs ~/.local/bin/mosey's --serve=protocol
 	// to say: ProtocolAnswer, this client's protocol numbers. Only the
 	// probe uses it.
 	Protocol string
@@ -100,7 +100,7 @@ func (s SSH) Check() error {
 //
 // Nothing in it needs quoting in any login shell or in /bin/sh, so the
 // remote command can be written without quoting it, and a leading ~/ is
-// left for the remote /bin/sh to expand, as D7's ~/.cache/mosey/mosey needs.
+// left for the remote /bin/sh to expand, as D7's ~/.local/bin/mosey needs.
 func ValidServer(path string) bool {
 	if len(path) > maxServer {
 		return false
@@ -216,47 +216,55 @@ func wrap(script string) string {
 
 // probeCommand is §4.7.2's probe. protocol is this client's
 // ProtocolAnswer, digits and one space, so it needs no quoting; anything
-// else is never put in the script, and no cached copy is run.
+// else is never put in the script, and no ~/.local/bin/mosey is run
+// unless PATH chose it.
 //
 // mosey on the remote PATH comes first and is exec'd as it is, whatever
 // its version (Dan, 2026-11-15: whatever mosey the host has): if it
 // speaks another protocol, the bootstrap line or the handshake says so.
-// Otherwise the cached copy, ~/.cache/mosey/mosey, is a candidate only if
-// neither ~/.cache/mosey nor the file is a symlink, both and ~/.cache are
+// The exception is ~/.local/bin/mosey, the file D7 installs and so may
+// replace (Dan, 2026-11-16), found on PATH or asked by its path, since a
+// non-login ssh may not have ~/.local/bin on PATH. It is asked only if
+// neither ~/.local/bin nor the file is a symlink, both and ~/.local are
 // the user's, and neither they nor the home may be written by its group
 // or others (ls -ld's mode string, the one portable way /bin/sh has to
 // read a mode; one ls cannot read counts as writable): the installer's
-// own rules (§4.7.7), so the probe never
-// runs a file from a place it would refuse to write, and nobody else can
-// swap the file between the checks and the exec. It is
-// asked --serve=protocol with stdin on /dev/null (the ClientLine waiting
-// there is the launcher's) and stderr dropped, and exec'd as flag (the
-// launcher's --serve, or a role's) only if it says exactly protocol.
-// Otherwise one MOSEY-PROBE line saying what the host is, and exit 0, so
-// 126 and 127 keep their slice-1 meaning. (The script may hold no !, so
-// "not a symlink" is the empty then-branch.)
+// own rules (§4.7.7), so the probe never runs a file from a place it
+// would refuse to write unless PATH chose it, and nobody else can swap
+// the file between the checks and the exec. It is asked --serve=protocol
+// with stdin on /dev/null (the ClientLine waiting there is the
+// launcher's) and stderr dropped, and exec'd as flag (the launcher's
+// --serve, or a role's) only if it says exactly protocol; otherwise the
+// MOSEY-PROBE line makes the client offer to replace it. One on PATH
+// that fails the rules (a symlink the user made) is exec'd as any PATH
+// mosey is: the installer would refuse to replace it anyway. With
+// nothing to run, one MOSEY-PROBE line saying what the host is, and exit
+// 0, so 126 and 127 keep their slice-1 meaning. (The script may hold no
+// !, so "not a symlink" is the empty then-branch.)
 func probeCommand(protocol, flag string) string {
 	if !validProtocolAnswer(protocol) {
 		protocol = "-"
 	}
-	return wrap(`if command -v mosey >/dev/null 2>&1; then exec mosey ` + flag + `; fi; ` +
-		`c="$HOME/.cache/mosey"; f="$c/mosey"; w=; ` +
-		`for d in "$HOME/" "$HOME/.cache/" "$c/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; ` +
-		`if test -h "$c" || test -h "$f" || test -n "$w"; then :; ` +
-		`elif test -O "$HOME/.cache" && test -O "$c" && test -O "$f" && ` +
-		`[ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "` + protocol + `" ]; then exec "$f" ` + flag + `; fi; ` +
+	return wrap(`b="$HOME/.local/bin"; f="$b/mosey"; p=$(command -v mosey 2>/dev/null); ` +
+		`case $p in "$f"|"") ;; *) exec mosey ` + flag + `;; esac; ` +
+		`w=; for d in "$HOME/" "$HOME/.local/" "$b/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; ` +
+		`if test -h "$b" || test -h "$f" || test -n "$w"; then :; ` +
+		`elif test -O "$HOME/.local" && test -O "$b" && test -O "$f"; then ` +
+		`if [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "` + protocol + `" ]; then exec "$f" ` + flag + `; fi; p=; fi; ` +
+		`if [ -n "$p" ]; then exec "$f" ` + flag + `; fi; ` +
 		`s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); ` +
 		`echo "` + probeMagic + ` ` + strconv.Itoa(Version) + ` ${s:-unknown} ${a:-unknown}"`)
 }
 
 // uploadCommand is §4.7.6's: the binary arrives on stdin, goes to a
-// mktemp file in ~/.cache/mosey (not /tmp, which is often noexec, and on
+// mktemp file in ~/.local/bin (not /tmp, which is often noexec, and on
 // the filesystem it is renamed within), and then runs as
 // --serve=install, which checks it and moves it into place as
-// ~/.cache/mosey/mosey (§4.7.7). The temporary name is removed whatever
-// happened; after a success it is already gone.
+// ~/.local/bin/mosey (§4.7.7). mkdir -p under umask 077 makes a missing
+// ~/.local and ~/.local/bin the user's alone. The temporary name is
+// removed whatever happened; after a success it is already gone.
 func uploadCommand(hash [32]byte, size int64) string {
-	return wrap(`umask 077; d="$HOME/.cache/mosey"; mkdir -p "$d" || exit 1; ` +
+	return wrap(`umask 077; d="$HOME/.local/bin"; mkdir -p "$d" || exit 1; ` +
 		`t=$(mktemp "$d/.upload.XXXXXXXX") || exit 1; ` +
 		`cat >"$t" && chmod 700 "$t" && "$t" --serve=install ` + hex.EncodeToString(hash[:]) + " " + strconv.FormatInt(size, 10) + ` "$t"; ` +
 		`s=$?; rm -f "$t"; exit $s`)
@@ -276,7 +284,7 @@ func (s SSH) Command(ctx context.Context, c Config) *exec.Cmd {
 // UploadCommand is §4.7.6's ssh: the bootstrap's own options, so nothing
 // is forwarded and the user's config cannot undo them, running the upload
 // script, which reads a binary of size bytes and SHA-256 hash on stdin
-// and installs it as ~/.cache/mosey/mosey.
+// and installs it as ~/.local/bin/mosey.
 func (s SSH) UploadCommand(ctx context.Context, c Config, hash [32]byte, size int64) *exec.Cmd {
 	return s.command(ctx, c, uploadCommand(hash, size))
 }

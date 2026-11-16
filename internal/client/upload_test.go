@@ -50,7 +50,7 @@ HOME='` + h.home + `' exec /bin/sh -c "$last"
 // the real one would, so the test sees exactly the bytes that were sent.
 const installer = `#!/bin/sh
 [ "$1" = --serve=install ] || exit 9
-mkdir -p "$HOME/.cache/mosey" && cp "$4" "$HOME/.cache/mosey/mosey"
+mkdir -p "$HOME/.local/bin" && cp "$4" "$HOME/.local/bin/mosey"
 `
 
 func (h *uploadHost) copier(mode UploadMode, self string) *copier {
@@ -80,7 +80,7 @@ func (h *uploadHost) copier(mode UploadMode, self string) *copier {
 }
 
 func (h *uploadHost) installed() ([]byte, error) {
-	return os.ReadFile(filepath.Join(h.home, ".cache", "mosey", "mosey"))
+	return os.ReadFile(filepath.Join(h.home, ".local", "bin", "mosey"))
 }
 
 func (h *uploadHost) sshRan() bool {
@@ -122,7 +122,7 @@ func TestTheFirstCopyIsAskedForAndRemembered(t *testing.T) {
 	if got, err := h.installed(); err != nil || string(got) != installer {
 		t.Fatalf("installed %q %v", got, err)
 	}
-	if len(h.asked) != 1 || h.asked[0] != "mosey: far has no mosey this one can use. Copy this one (linux/amd64, 0.0 MB) to ~/.cache/mosey/ there? [y/N] " {
+	if len(h.asked) != 1 || h.asked[0] != "mosey: far has no mosey this one can use. Copy this one (linux/amd64, 0.0 MB) to ~/.local/bin/ there? [y/N] " {
 		t.Errorf("asked %q", h.asked)
 	}
 	hosts, _ := os.ReadFile(filepath.Join(h.state, "mosey", "upload-hosts"))
@@ -136,27 +136,27 @@ func TestTheFirstCopyIsAskedForAndRemembered(t *testing.T) {
 	}
 }
 
-// A cached copy the probe could not use is replaced under the one
+// A ~/.local/bin/mosey the probe could not use is replaced under the one
 // question, which covers a host with none too; for another platform it
 // names the release instead (bootstrap.md §4.7.5).
-func TestACachedCopyThatCannotServeIsReplacedUnderTheOneQuestion(t *testing.T) {
+func TestAnInstalledCopyThatCannotServeIsReplacedUnderTheOneQuestion(t *testing.T) {
 	h := newUploadHost(t)
-	if err := os.MkdirAll(filepath.Join(h.home, ".cache", "mosey"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(h.home, ".local", "bin"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(h.home, ".cache", "mosey", "mosey"), []byte("a build of another protocol"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(h.home, ".local", "bin", "mosey"), []byte("a build of another protocol"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.copier(UploadAsk, installer).copy(context.Background(), linux); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.asked) != 1 || h.asked[0] != "mosey: far has no mosey this one can use. Copy this one (linux/amd64, 0.0 MB) to ~/.cache/mosey/ there? [y/N] " {
+	if len(h.asked) != 1 || h.asked[0] != "mosey: far has no mosey this one can use. Copy this one (linux/amd64, 0.0 MB) to ~/.local/bin/ there? [y/N] " {
 		t.Errorf("asked %q", h.asked)
 	}
 	if got, err := h.installed(); err != nil || string(got) != installer {
 		t.Errorf("installed %q %v", got, err)
 	}
-	if q := question("far", "0.4.2", "linux/arm64", nil, false); q != "mosey: far has no mosey this one can use. Download mosey 0.4.2 for linux/arm64 from GitHub and copy it to ~/.cache/mosey/ there? [y/N] " {
+	if q := question("far", "0.4.2", "linux/arm64", nil, false); q != "mosey: far has no mosey this one can use. Download mosey 0.4.2 for linux/arm64 from GitHub and copy it to ~/.local/bin/ there? [y/N] " {
 		t.Errorf("for another platform: %q", q)
 	}
 }
@@ -225,7 +225,7 @@ func TestAHostWithNoServerBuildIsToldSo(t *testing.T) {
 
 func TestTheInstallersRefusalReachesTheUser(t *testing.T) {
 	h := newUploadHost(t)
-	c := h.copier(UploadYes, "#!/bin/sh\necho 'mosey --serve=install: ~/.cache/mosey is a symbolic link' >&2\nexit 1\n")
+	c := h.copier(UploadYes, "#!/bin/sh\necho 'mosey --serve=install: ~/.local/bin is a symbolic link' >&2\nexit 1\n")
 	err := c.copy(context.Background(), linux)
 	if err == nil || !strings.Contains(err.Error(), "copying mosey to far failed (exit 1") {
 		t.Fatalf("got %v", err)
@@ -429,7 +429,7 @@ HOME='` + h.home + `' PATH='` + toolsOnly(t, "uname", "mkdir", "mktemp", "cat", 
 		os.WriteFile(h.ssh, []byte(script), 0o755)
 		self := `#!/bin/sh
 case "$1" in
---serve=install) mkdir -p "$HOME/.cache/mosey" && cp "$4" "$HOME/.cache/mosey/mosey";;
+--serve=install) mkdir -p "$HOME/.local/bin" && cp "$4" "$HOME/.local/bin/mosey";;
 --serve=protocol) echo '` + c.says + `';;
 --serve) cat >/dev/null; echo "MOSEY-ERROR 1 internal -";;
 esac

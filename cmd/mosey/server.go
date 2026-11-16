@@ -133,13 +133,13 @@ func runServer(role string) {
 func runOneShot(role string) {
 	switch role {
 	case "protocol":
-		// The probe's question of the cached copy: does it speak the
+		// The probe's question of ~/.local/bin/mosey: does it speak the
 		// client's protocol? Its version does not matter (D8 V1,
 		// bootstrap.md §4.7.2).
 		fmt.Println(bootstrap.ProtocolAnswer(handshake.ProtocolVersion))
 	case "install":
 		// Run from the copy the client just uploaded, which puts itself
-		// at ~/.cache/mosey/mosey (bootstrap.md §4.7.7).
+		// at ~/.local/bin/mosey (bootstrap.md §4.7.7).
 		if err := install.Run(os.Args[2:], os.Getenv, os.Getuid()); err != nil {
 			fmt.Fprintln(os.Stderr, "mosey --serve=install:", err)
 			os.Exit(1)

@@ -27,13 +27,13 @@ const ReleaseBase = "https://github.com/danielbodart/mosey/releases/download"
 // SumsName is the checksums asset of every release (§4.6).
 const SumsName = "SHA256SUMS"
 
-// CachePath is the one file D7 installs on the far host (§4.7), as the
+// InstallPath is the one file D7 installs on the far host (§4.7), as the
 // remote /bin/sh expands it.
-const CachePath = "~/.cache/mosey/mosey"
+const InstallPath = "~/.local/bin/mosey"
 
 // ProtocolAnswer is what `mosey --serve=protocol` prints, LF excluded
 // (§4.7.2): this build's bootstrap line version and its handshake
-// protocol, which the probe compares with the cached copy's answer. The
+// protocol, which the probe compares with ~/.local/bin/mosey's answer. The
 // handshake's number is passed in, since this package does not import
 // handshake (architecture §1).
 func ProtocolAnswer(handshakeProtocol int) string {

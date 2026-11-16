@@ -162,7 +162,7 @@ func listHost(t *testing.T) (ssh, home, ran string) {
 	dir, home := t.TempDir(), t.TempDir()
 	ssh = filepath.Join(dir, "ssh")
 	ran = filepath.Join(dir, "ran")
-	// The probe reads the cache's modes with ls (§4.7.2).
+	// The probe reads ~/.local/bin's modes with ls (§4.7.2).
 	script := `#!/bin/sh
 if [ "$1" = -G ]; then printf 'hostname far.example\nuser me\nport 22\n'; exit 0; fi
 echo ran >> '` + ran + `'
@@ -175,16 +175,16 @@ HOME='` + home + `' PATH='` + toolsOnly(t, "uname", "ls") + `' exec /bin/sh -c "
 	return ssh, home, ran
 }
 
-// -list with no -remote finds the copy D7 installed in ~/.cache/mosey,
+// -list with no -remote finds the copy D7 installed in ~/.local/bin,
 // which is the only mosey on most hosts (bootstrap.md §9.4).
-func TestTheListFindsTheCachedCopy(t *testing.T) {
+func TestTheListFindsTheInstalledCopy(t *testing.T) {
 	ssh, home, _ := listHost(t)
-	cached := filepath.Join(home, ".cache", "mosey", "mosey")
-	if err := os.MkdirAll(filepath.Dir(cached), 0o700); err != nil {
+	installed := filepath.Join(home, ".local", "bin", "mosey")
+	if err := os.MkdirAll(filepath.Dir(installed), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	script := "#!/bin/sh\ncase \"$1\" in\n--serve=protocol) echo '" + probeProtocol + "';;\n--serve=list) echo 'MOSEY-LIST 1 abcd detached 1';;\n*) exit 9;;\nesac\n"
-	if err := os.WriteFile(cached, []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(installed, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
@@ -216,7 +216,7 @@ func TestTheListCopiesNothingToAHostWithoutMosey(t *testing.T) {
 	if n, _ := os.ReadFile(ran); strings.Count(string(n), "ran") != 1 {
 		t.Errorf("ssh ran %d times, want 1", strings.Count(string(n), "ran"))
 	}
-	if _, err := os.Stat(filepath.Join(home, ".cache")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("something was written to the cache: %v", err)
+	if _, err := os.Stat(filepath.Join(home, ".local")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("something was written to ~/.local: %v", err)
 	}
 }

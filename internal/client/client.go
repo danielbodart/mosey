@@ -68,7 +68,7 @@ type Options struct {
 	Predict predict.Mode
 }
 
-// probeProtocol is what D7's probe needs a cached copy's --serve=protocol
+// probeProtocol is what D7's probe needs ~/.local/bin/mosey's --serve=protocol
 // to say: this build's bootstrap line version and handshake protocol
 // (bootstrap.md §4.7.2).
 var probeProtocol = bootstrap.ProtocolAnswer(handshake.ProtocolVersion)
@@ -85,7 +85,7 @@ func Run(ctx context.Context, o Options) error {
 	if o.Getenv == nil {
 		o.Getenv = os.Getenv
 	}
-	// The probe asks a cached copy for this build's protocol numbers
+	// The probe asks ~/.local/bin/mosey for this build's protocol numbers
 	// (bootstrap.md §4.7.2); its version does not matter.
 	o.SSH.Protocol = probeProtocol
 	if err := o.SSH.Check(); err != nil {

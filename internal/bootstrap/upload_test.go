@@ -107,12 +107,12 @@ func TestOnlyACIVersionIsARelease(t *testing.T) {
 	}
 }
 
-// The one cached file is a path -remote could name too, and the probe's
+// The one installed file is a path -remote could name too, and the probe's
 // protocol answer is two small decimals and nothing a script could
 // misread (§4.7.2).
-func TestTheCachePathAndTheProtocolAnswerAreSafeInAScript(t *testing.T) {
-	if !ValidServer(CachePath) {
-		t.Errorf("%q", CachePath)
+func TestTheInstallPathAndTheProtocolAnswerAreSafeInAScript(t *testing.T) {
+	if !ValidServer(InstallPath) {
+		t.Errorf("%q", InstallPath)
 	}
 	if got := ProtocolAnswer(1); got != "2 1" || !validProtocolAnswer(got) {
 		t.Errorf("%q", got)
@@ -170,15 +170,15 @@ func TestWithoutRemoteTheBootstrapProbes(t *testing.T) {
 	}
 }
 
-// -list's role goes through the probe too, so a lister in the cache is
+// -list's role goes through the probe too, so a lister in ~/.local/bin is
 // found (§4.7.2, §9.4), and through slice 1's and -remote's commands.
 func TestTheProbeRunsTheRolesFlag(t *testing.T) {
 	for _, c := range []struct {
 		s    SSH
 		want string
 	}{
-		{SSH{Destination: "far", Protocol: "1 1", Role: RoleList}, `then exec mosey --serve=list; fi`},
-		{SSH{Destination: "far", Protocol: "1 1", Role: RoleList}, `then exec "$f" --serve=list; fi`},
+		{SSH{Destination: "far", Protocol: "1 1", Role: RoleList}, `*) exec mosey --serve=list;; esac`},
+		{SSH{Destination: "far", Protocol: "1 1", Role: RoleList}, `if [ -n "$p" ]; then exec "$f" --serve=list; fi`},
 		{SSH{Destination: "far", Server: "/opt/mosey", Role: RoleList}, "exec /bin/sh -c 'exec /opt/mosey --serve=list'"},
 	} {
 		if err := c.s.Check(); err != nil {
@@ -263,68 +263,87 @@ func writeMosey(t *testing.T, path, answer, name string) {
 	}
 }
 
-// The probe, as each login shell would run it (§4.7.2): mosey on PATH
-// first, whatever it answers; else the cached copy if it answers this
-// client's protocol and the installer would have written it; else a
-// ProbeLine that parses, exit 0.
+// The probe, as each login shell would run it (§4.7.2): a mosey elsewhere
+// on PATH first, whatever it answers; else ~/.local/bin/mosey, on PATH
+// or not, if it answers this client's protocol and the installer would
+// have written it; else a ProbeLine that parses, exit 0, so the client
+// offers to copy (and so replace a ~/.local/bin/mosey of another
+// protocol, Dan 2026-11-16). A ~/.local/bin/mosey on PATH that the
+// installer would refuse to replace is run as it is.
 func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 	const ours = "1 1"
 	needTools(t, remotePath(), "uname", "cat", "ls")
 	for _, shell := range shells(t) {
 		for _, c := range []struct {
-			name   string
-			cache  string // the cached copy's answer; "-" for none
-			path   string // the PATH mosey's answer; "-" for none
+			name      string
+			installed string // ~/.local/bin/mosey's answer; "-" for none
+			path      string // the answer of a mosey elsewhere on PATH; "-" for none
+			// onPath: where ~/.local/bin is on PATH: "" not at all,
+			// "first" before the other mosey's directory, "last" after.
+			onPath string
 			served string // which ran, or "" for a probe line
-			// link: "dir", ~/.cache/mosey is a symlink; "file", the file
-			// is; or a directory ("", ".cache", ".cache/mosey") and the
+			// link: "dir", ~/.local/bin is a symlink; "file", the file
+			// is; or a directory ("", ".local", ".local/bin") and the
 			// mode it is given after the copy is written.
 			link string
 			mode os.FileMode
 		}{
-			{"PATH", "-", ours, "path", "", 0},
+			{"PATH", "-", ours, "", "path", "", 0},
 			// Dan, 2026-11-15: whatever mosey the host has. PATH's is not
 			// asked anything: a mismatch is the bootstrap's to report.
-			{"PATH of another protocol", "-", "2 2", "path", "", 0},
-			{"PATH first", ours, ours, "path", "", 0},
-			{"cache", ours, "-", "cache", "", 0},
-			{"cache of another protocol", "1 2", "-", "", "", 0},
-			{"cache that answers nothing", "", "-", "", "", 0},
-			// The installer's rules hold for the probe too: a cache it
-			// would refuse to write is not run from.
-			{"symlinked cache directory", ours, "-", "", "dir", 0},
-			{"symlinked cache directory, PATH", ours, ours, "path", "dir", 0},
-			{"symlinked cached file", ours, "-", "", "file", 0},
+			{"PATH of another protocol", "-", "2 2", "", "path", "", 0},
+			{"PATH first", ours, ours, "", "path", "", 0},
+			{"PATH ahead of ~/.local/bin", "1 2", ours, "last", "path", "", 0},
+			{"installed, off PATH", ours, "-", "", "installed", "", 0},
+			{"installed, on PATH", ours, "-", "first", "installed", "", 0},
+			{"installed, on PATH ahead of another", ours, "2 2", "first", "installed", "", 0},
+			// Dan, 2026-11-16: the file mosey installs is the one it may
+			// replace, however it was found.
+			{"installed of another protocol, off PATH", "1 2", "-", "", "", "", 0},
+			{"installed of another protocol, on PATH", "1 2", "-", "first", "", "", 0},
+			{"installed of another protocol, ahead of another", "1 2", ours, "first", "", "", 0},
+			{"installed that answers nothing", "", "-", "", "", "", 0},
+			{"installed that answers nothing, on PATH", "", "-", "first", "", "", 0},
+			// The installer's rules hold for the probe too: a place it
+			// would refuse to write is not run from unless PATH chose it,
+			// and then as any PATH mosey is, since it cannot be replaced.
+			{"symlinked ~/.local/bin", ours, "-", "", "", "dir", 0},
+			{"symlinked ~/.local/bin, PATH", ours, ours, "", "path", "dir", 0},
+			{"symlinked ~/.local/bin, on PATH", "1 2", "-", "first", "installed", "dir", 0},
+			{"symlinked installed file", ours, "-", "", "", "file", 0},
+			{"symlinked installed file, on PATH", "1 2", "-", "first", "installed", "file", 0},
 			// Nor is a directory on the way that others may write, which
 			// the installer refuses too (bootstrap.md §4.7.7).
-			{"cache directory others may write", ours, "-", "", ".cache/mosey", 0o707},
-			{"cache directory its group may write", ours, "-", "", ".cache/mosey", 0o770},
-			{"~/.cache its group may write", ours, "-", "", ".cache", 0o770},
-			{"home its group may write", ours, "-", "", "", 0o770},
-			{"cache directory others may read", ours, "-", "cache", ".cache/mosey", 0o755},
-			{"nothing", "-", "-", "", "", 0},
+			{"~/.local/bin others may write", ours, "-", "", "", ".local/bin", 0o707},
+			{"~/.local/bin its group may write", ours, "-", "", "", ".local/bin", 0o770},
+			{"~/.local its group may write", ours, "-", "", "", ".local", 0o770},
+			{"home its group may write", ours, "-", "", "", "", 0o770},
+			{"~/.local/bin others may read", ours, "-", "", "installed", ".local/bin", 0o755},
+			{"nothing", "-", "-", "", "", "", 0},
+			{"nothing, ~/.local/bin on PATH", "-", "-", "first", "", "", 0},
 		} {
 			home, bin := t.TempDir(), t.TempDir()
-			if c.cache != "-" {
+			local := filepath.Join(home, ".local", "bin")
+			if c.installed != "-" {
 				switch c.link {
 				case "dir":
 					// A copy that would pass, in a directory elsewhere
-					// that ~/.cache/mosey points at.
+					// that ~/.local/bin points at.
 					elsewhere := t.TempDir()
-					writeMosey(t, filepath.Join(elsewhere, "mosey"), c.cache, "cache")
-					os.MkdirAll(filepath.Join(home, ".cache"), 0o700)
-					if err := os.Symlink(elsewhere, filepath.Join(home, ".cache", "mosey")); err != nil {
+					writeMosey(t, filepath.Join(elsewhere, "mosey"), c.installed, "installed")
+					os.MkdirAll(filepath.Join(home, ".local"), 0o700)
+					if err := os.Symlink(elsewhere, local); err != nil {
 						t.Fatal(err)
 					}
 				case "file":
 					real := filepath.Join(t.TempDir(), "mosey")
-					writeMosey(t, real, c.cache, "cache")
-					os.MkdirAll(filepath.Join(home, ".cache", "mosey"), 0o700)
-					if err := os.Symlink(real, filepath.Join(home, ".cache", "mosey", "mosey")); err != nil {
+					writeMosey(t, real, c.installed, "installed")
+					os.MkdirAll(local, 0o700)
+					if err := os.Symlink(real, filepath.Join(local, "mosey")); err != nil {
 						t.Fatal(err)
 					}
 				default:
-					writeMosey(t, filepath.Join(home, ".cache", "mosey", "mosey"), c.cache, "cache")
+					writeMosey(t, filepath.Join(local, "mosey"), c.installed, "installed")
 					if c.mode != 0 {
 						if err := os.Chmod(filepath.Join(home, c.link), c.mode); err != nil {
 							t.Fatal(err)
@@ -335,14 +354,21 @@ func TestTheProbeUsesWhateverMoseyTheHostHasOrSaysWhatTheHostIs(t *testing.T) {
 			if c.path != "-" {
 				writeMosey(t, filepath.Join(bin, "mosey"), c.path, "path")
 			}
-			if c.path != "-" && !keepsPath(shell, bin) {
+			dirs := []string{bin}
+			switch c.onPath {
+			case "first":
+				dirs = []string{local, bin}
+			case "last":
+				dirs = []string{bin, local}
+			}
+			if (c.path != "-" || c.onPath != "") && !keepsPath(shell, bin) {
 				// NixOS's /etc/zshenv, which zsh reads even with -f, sets
 				// PATH afresh and hides the test's mosey; the cases that
 				// need no PATH still test this shell's quoting.
 				continue
 			}
 			cmd := exec.Command(shell, "-c", SSH{Protocol: ours}.RemoteCommand())
-			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath(bin)}
+			cmd.Env = []string{"HOME=" + home, "PATH=" + remotePath(dirs...)}
 			cmd.Dir = home
 			cmd.Stdin = strings.NewReader("THE-LINE\n")
 			out, err := cmd.Output()
@@ -377,7 +403,8 @@ func keepsPath(shell, bin string) bool {
 	return err == nil && strings.HasPrefix(string(out), bin+":")
 }
 
-// The upload script puts stdin in a mktemp file in ~/.cache/mosey, runs it
+// The upload script puts stdin in a mktemp file in ~/.local/bin, which it
+// makes 0700 with ~/.local when they are missing, runs it
 // as the installer with the hash, size and its own path, passes
 // on its status, and removes the temporary file whatever happened
 // (§4.7.6).
@@ -400,16 +427,18 @@ func TestTheUploadScriptRunsTheCopyAsItsInstaller(t *testing.T) {
 			args, _ := os.ReadFile(filepath.Join(home, "args"))
 			f := strings.Fields(string(args))
 			if len(f) != 4 || f[0] != "--serve=install" || f[1] != hexOf(sum) || f[2] != strconv.Itoa(len(copy)) ||
-				!strings.HasPrefix(f[3], home+"/.cache/mosey/.upload.") {
+				!strings.HasPrefix(f[3], home+"/.local/bin/.upload.") {
 				t.Errorf("%s: installer ran with %q", filepath.Base(shell), args)
 			}
-			if entries, _ := os.ReadDir(filepath.Join(home, ".cache", "mosey")); len(entries) != 0 {
+			if entries, _ := os.ReadDir(filepath.Join(home, ".local", "bin")); len(entries) != 0 {
 				t.Errorf("%s: left %v", filepath.Base(shell), entries)
 			}
-			if st, err := os.Stat(filepath.Join(home, ".cache", "mosey")); err != nil {
-				t.Errorf("%s: ~/.cache/mosey: %v", filepath.Base(shell), err)
-			} else if st.Mode().Perm() != 0o700 {
-				t.Errorf("%s: ~/.cache/mosey is %v", filepath.Base(shell), st.Mode())
+			for _, d := range []string{".local", ".local/bin"} {
+				if st, err := os.Stat(filepath.Join(home, d)); err != nil {
+					t.Errorf("%s: ~/%s: %v", filepath.Base(shell), d, err)
+				} else if st.Mode().Perm() != 0o700 {
+					t.Errorf("%s: ~/%s is %v", filepath.Base(shell), d, st.Mode())
+				}
 			}
 		}
 	}

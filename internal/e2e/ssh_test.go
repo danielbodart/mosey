@@ -26,7 +26,7 @@ type sshd struct {
 	config string // the client's ssh_config, for ssh -F
 	host   string // its Host alias
 	// home is $HOME for whoever logs in: a directory of the test's, so
-	// nothing a session does (D7's ~/.cache/mosey, a shell's history)
+	// nothing a session does (D7's ~/.local/bin/mosey, a shell's history)
 	// lands in the user's real home.
 	home string
 	// runtime is the XDG_RUNTIME_DIR sshd gives its sessions, so the
@@ -60,6 +60,11 @@ type sshdOptions struct {
 	// shell, if set, is the SHELL sshd gives its sessions, which the
 	// spawner starts as the session's login shell (server.md §2.5).
 	shell string
+	// home, if set, is the HOME sshd gives its sessions, so a test can
+	// name directories under it in path; otherwise a fresh t.TempDir.
+	home string
+	// env is more NAME=value words for sshd's SetEnv, none with a space.
+	env []string
 }
 
 func startSSHD(t *testing.T) *sshd { return startSSHDWith(t, sshdOptions{}) }
@@ -82,7 +87,10 @@ func startSSHDWith(t *testing.T, o sshdOptions) *sshd {
 	if err != nil {
 		t.Skip(err)
 	}
-	s := &sshd{dir: t.TempDir(), host: "mosey-e2e", home: t.TempDir(), runtime: runtimeDir(t)}
+	s := &sshd{dir: t.TempDir(), host: "mosey-e2e", home: o.home, runtime: runtimeDir(t)}
+	if s.home == "" {
+		s.home = t.TempDir()
+	}
 	for _, k := range []string{"host", "user"} {
 		if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "mosey-e2e", "-f", filepath.Join(s.dir, k)).CombinedOutput(); err != nil {
 			t.Fatalf("ssh-keygen: %v %s", err, out)
@@ -107,6 +115,9 @@ func startSSHDWith(t *testing.T, o sshdOptions) *sshd {
 		o.identityAgent = "none"
 	}
 	setEnv := fmt.Sprintf("HOME=%s XDG_RUNTIME_DIR=%s", s.home, s.runtime)
+	for _, kv := range o.env {
+		setEnv += " " + kv
+	}
 	if o.path != "" {
 		setEnv += " PATH=" + o.path
 	}

@@ -97,26 +97,27 @@ func shellEnv(base []string, from map[string]string, agentSock, hop string, log 
 }
 
 // hopDir is the directory to put first on the session shell's PATH, or ""
-// (D7, bootstrap.md §4.7.9, server.md §2.5): ~/.cache/mosey when this
-// server is the cached copy D7 installed, the same file as exe (the
-// running binary: /proc/self/exe), and env's PATH has no mosey of its own,
-// so `mosey otherhost` in the session finds the copy. A server Nix, a
-// package or -remote put anywhere else, or a host whose PATH already has a
-// mosey, changes nothing. A login profile that assigns PATH outright, as
-// Debian's and NixOS's do for bash, undoes it by the first prompt: there
-// hopping does not work (bootstrap.md §14 question G, open for Dan).
+// (D7, bootstrap.md §4.7.9, server.md §2.5): ~/.local/bin when this
+// server is the ~/.local/bin/mosey D7 installs, the same file as exe (the
+// running binary: /proc/self/exe), and env's PATH has no mosey of its own
+// (so lacks ~/.local/bin), so `mosey otherhost` in the session finds it.
+// A server Nix, a package or -remote put anywhere else, or a host whose
+// PATH already has a mosey, changes nothing. A login profile that assigns
+// PATH outright undoes it; the stock Debian, Ubuntu and Fedora profiles
+// then put ~/.local/bin back themselves, and NixOS needs mosey from Nix
+// (Dan, 2026-11-16).
 func hopDir(env []string, exe string) string {
 	home, path := lookup(env, "HOME"), lookup(env, "PATH")
 	if !filepath.IsAbs(home) {
 		return ""
 	}
-	dir := filepath.Join(home, ".cache", "mosey")
-	cached, err := os.Stat(filepath.Join(dir, "mosey"))
+	dir := filepath.Join(home, ".local", "bin")
+	installed, err := os.Stat(filepath.Join(dir, "mosey"))
 	if err != nil {
 		return ""
 	}
 	self, err := os.Stat(exe)
-	if err != nil || !os.SameFile(self, cached) {
+	if err != nil || !os.SameFile(self, installed) {
 		return ""
 	}
 	for _, d := range filepath.SplitList(path) {

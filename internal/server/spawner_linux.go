@@ -617,7 +617,7 @@ func (s *spawner) startShell(cl bootstrap.ClientLine, agentSock string, slave *o
 	}
 	hop := hopDir(s.cfg.Environ, "/proc/self/exe")
 	if hop != "" {
-		s.log.Info("the server is the cached copy: putting it on the shell's PATH", "dir", hop)
+		s.log.Info("the server is ~/.local/bin/mosey: putting ~/.local/bin on the shell's PATH", "dir", hop)
 	}
 	proc, err := pty.Shell{Path: path, Dir: dir, Env: shellEnv(s.cfg.Environ, cl.Env, agentSock, hop, s.log)}.Start(slave)
 	if err != nil {

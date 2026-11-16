@@ -1,16 +1,18 @@
 // Package install is `mosey --serve=install`: the one piece of code that
-// writes D7's cache, the one file ~/.cache/mosey/mosey, on the far host
-// (bootstrap.md §4.7.7).
+// writes D7's install, the one file ~/.local/bin/mosey, on the far host
+// (bootstrap.md §4.7.7). ~/.local/bin is where the stock login profiles
+// look for the user's own commands, so a session there can hop on with
+// no rc file edited (Dan, 2026-11-16).
 //
 // The client copies a build over ssh's stdin into a mktemp file in
-// ~/.cache/mosey and runs that very file as the installer, so the checks
+// ~/.local/bin and runs that very file as the installer, so the checks
 // are Go's rather than whatever sha256sum or shasum the host happens to
 // have, and running it proves it runs there. The installer checks the
 // upload's length and SHA-256 through the descriptor it then renames into
 // place, so a cut-short or altered copy is never installed.
 //
 // It is shaped around never being steered into writing somewhere else:
-// below ~/.cache every directory is opened relative to its parent with
+// below ~/.local every directory is opened relative to its parent with
 // O_NOFOLLOW, so a planted symlink is refused rather than followed; every
 // directory must be the user's and writable by nobody else; and a file
 // already at the destination is replaced only if it is the user's own

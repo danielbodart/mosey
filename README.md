@@ -239,11 +239,11 @@ or mosey session, where only chaff hides your typing rhythm.
 
 The server is the same `mosey` binary. On each connection `mosey HOST`
 uses whatever mosey the host has, of any version: `mosey` on its `PATH`,
-or else `~/.cache/mosey/mosey`, found in the same ssh login that starts
+or else `~/.local/bin/mosey`, found in the same ssh login that starts
 the session. Only if there is neither does it ask, once per host:
 
 ```
-mosey: HOST has no mosey. Copy this one (linux/amd64, 9.8 MB) to ~/.cache/mosey/ there? [y/N]
+mosey: HOST has no mosey. Copy this one (linux/amd64, 9.8 MB) to ~/.local/bin/ there? [y/N]
 ```
 
 and copies its own file over ssh. If the host is another platform (a Mac
@@ -254,12 +254,14 @@ platform from GitHub instead, and checks it against the release's
 `gh attestation verify`, by hand, as in [Installing](#installing).) On
 the host the copy installs itself: it
 checks its own length and SHA-256, refuses to follow a symlink below
-`~/.cache` or to replace a file that isn't yours, and renames itself into
+`~/.local` or to replace a file that isn't yours, and renames itself into
 place. Then the session starts, and in it `mosey otherhost` finds that
-same copy, so you can hop on. The client never upgrades a host's mosey:
-it replaces only its own `~/.cache/mosey/mosey`, and only if that speaks
-another protocol (asking as before). A `mosey` on `PATH`, or one given
-with `-remote`, is used as it is.
+same copy, so you can hop on: `~/.local/bin` is on `PATH` wherever the
+login profile puts it there (Debian, Ubuntu, Fedora), with no rc file
+edited. On NixOS, install mosey with Nix to hop on. The client never
+upgrades a host's mosey: it replaces only `~/.local/bin/mosey`, and only
+if that speaks another protocol (asking as before). A `mosey` elsewhere
+on `PATH`, or one given with `-remote`, is used as it is.
 
 - `-upload=yes` copies without asking; `-upload=no` never copies.
 - `-remote PATH` runs that binary on the host instead, and copies nothing.

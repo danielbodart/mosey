@@ -23,7 +23,7 @@ var owner = func(path string, st *unix.Stat_t) int { return int(st.Uid) }
 // swap the upload's name for another file, as the same user could.
 var beforeRename = func() {}
 
-// Install puts r's upload at ~/.cache/mosey/mosey, or refuses
+// Install puts r's upload at ~/.local/bin/mosey, or refuses
 // (bootstrap.md §4.7.7). Every step works through the descriptor of the
 // step before, so no path is looked up twice.
 func Install(r Request) error {
@@ -37,20 +37,22 @@ func Install(r Request) error {
 	if err := checkDir(home, r.Home, r.UID, true); err != nil {
 		return err
 	}
-	// ~/.cache may be a symlink: one to another disk is common, and is
-	// the user's own doing. What it resolves to is checked like the rest.
-	cache, err := openDir(home, ".cache", "~/.cache", true, r.UID)
+	// ~/.local may be a symlink, to another disk say: the user's own
+	// doing. What it resolves to is checked like the rest. Each is made
+	// 0700 if it is missing; the profile puts a new ~/.local/bin on PATH
+	// at the next login (§4.7.9).
+	local, err := openDir(home, ".local", "~/.local", true, r.UID)
 	if err != nil {
 		return err
 	}
-	defer unix.Close(cache)
-	mosey, err := openDir(cache, "mosey", "~/.cache/mosey", false, r.UID)
+	defer unix.Close(local)
+	bin, err := openDir(local, "bin", "~/.local/bin", false, r.UID)
 	if err != nil {
 		return err
 	}
-	defer unix.Close(mosey)
+	defer unix.Close(bin)
 
-	upload, err := checkUpload(mosey, r)
+	upload, err := checkUpload(bin, r)
 	if err != nil {
 		return err
 	}
@@ -59,9 +61,9 @@ func Install(r Request) error {
 	// What is there now: the user's own regular file is replaced (one of
 	// another protocol, §4.7.2); anything else is left as it is (D7: never
 	// replace a file someone else owns).
-	const dest = bootstrap.CachePath
+	const dest = bootstrap.InstallPath
 	var st unix.Stat_t
-	switch err := unix.Fstatat(mosey, "mosey", &st, unix.AT_SYMLINK_NOFOLLOW); {
+	switch err := unix.Fstatat(bin, "mosey", &st, unix.AT_SYMLINK_NOFOLLOW); {
 	case errors.Is(err, unix.ENOENT):
 	case err != nil:
 		return fmt.Errorf("looking at %s: %w", dest, err)
@@ -91,20 +93,20 @@ func Install(r Request) error {
 	// holds for what is installed, not only for what was read. A session
 	// running from the file this replaces keeps the old one: its roles
 	// re-exec /proc/self/exe (server.md §2.3).
-	if err := unix.Renameat(mosey, r.Temp, mosey, "mosey"); err != nil {
+	if err := unix.Renameat(bin, r.Temp, bin, "mosey"); err != nil {
 		return fmt.Errorf("moving the upload to %s: %w", dest, err)
 	}
 	var moved unix.Stat_t
-	if err := unix.Fstatat(mosey, "mosey", &moved, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		unix.Unlinkat(mosey, "mosey", 0)
+	if err := unix.Fstatat(bin, "mosey", &moved, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		unix.Unlinkat(bin, "mosey", 0)
 		return fmt.Errorf("looking at %s: %w", dest, err)
 	}
 	if moved.Dev != checked.Dev || moved.Ino != checked.Ino {
-		unix.Unlinkat(mosey, "mosey", 0)
+		unix.Unlinkat(bin, "mosey", 0)
 		return refuse("%s is not the file that was checked: it was replaced during the install, and is removed", dest)
 	}
-	if err := unix.Fsync(mosey); err != nil {
-		return fmt.Errorf("syncing ~/.cache/mosey: %w", err)
+	if err := unix.Fsync(bin); err != nil {
+		return fmt.Errorf("syncing ~/.local/bin: %w", err)
 	}
 	return nil
 }
@@ -162,9 +164,9 @@ func checkDir(fd int, label string, uid int, rootToo bool) error {
 // one descriptor, that it is the user's regular file with one link, of
 // r.Size bytes and SHA-256 r.Hash. A file that is not what the client sent
 // is removed and refused.
-func checkUpload(mosey int, r Request) (*os.File, error) {
-	label := "~/.cache/mosey/" + r.Temp
-	fd, err := unix.Openat(mosey, r.Temp, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+func checkUpload(bin int, r Request) (*os.File, error) {
+	label := "~/.local/bin/" + r.Temp
+	fd, err := unix.Openat(bin, r.Temp, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		if errors.Is(err, unix.ELOOP) {
 			return nil, refuse("%s is a symbolic link", label)
@@ -198,7 +200,7 @@ func checkUpload(mosey int, r Request) (*os.File, error) {
 	h.Sum(sum[:0])
 	if n != r.Size || st.Size != r.Size || sum != r.Hash {
 		f.Close()
-		unix.Unlinkat(mosey, r.Temp, 0)
+		unix.Unlinkat(bin, r.Temp, 0)
 		if n != r.Size {
 			return nil, refuse("the upload is %d bytes, not %d: cut short or not what was sent", n, r.Size)
 		}

@@ -20,7 +20,7 @@ type Request struct {
 	// this.
 	Hash [32]byte
 	Size int64
-	// Temp is the upload's base name in ~/.cache/mosey.
+	// Temp is the upload's base name in ~/.local/bin.
 	Temp string
 	// UID is the user every directory and file must belong to: the
 	// process's own, except in tests that play another user.
@@ -51,11 +51,11 @@ func Parse(args []string, home string, uid int) (Request, error) {
 		return Request{}, fmt.Errorf("size %q is not 1 to %d", args[1], bootstrap.MaxBinary)
 	}
 	r.Size = size
-	// The very string the script built: "$HOME/.cache/mosey" then
+	// The very string the script built: "$HOME/.local/bin" then
 	// mktemp's name, so it is compared before any cleaning.
-	base, ok := strings.CutPrefix(args[2], home+"/.cache/mosey/")
+	base, ok := strings.CutPrefix(args[2], home+"/.local/bin/")
 	if !ok || !validTemp(base) {
-		return Request{}, fmt.Errorf("%q is not an upload in %s/.cache/mosey", args[2], home)
+		return Request{}, fmt.Errorf("%q is not an upload in %s/.local/bin", args[2], home)
 	}
 	r.Temp = base
 	return r, nil

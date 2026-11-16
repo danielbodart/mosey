@@ -112,9 +112,9 @@ func (c *clientRun) end(t *testing.T, state string) {
 	}
 }
 
-// cached is D7's one file on the far host (bootstrap.md §4.7).
-func (s *sshd) cached() string {
-	return filepath.Join(s.home, ".cache", "mosey", "mosey")
+// installed is D7's one file on the far host (bootstrap.md §4.7).
+func (s *sshd) installed() string {
+	return filepath.Join(s.home, ".local", "bin", "mosey")
 }
 
 func sameFile(t *testing.T, a, b string) bool {
@@ -176,6 +176,11 @@ func noMoseyOnFarPath(t *testing.T, s *sshd) {
 func farPathDir(t *testing.T, s *sshd, bin string) string {
 	t.Helper()
 	for _, dir := range farPath(t, s) {
+		if dir == filepath.Dir(s.installed()) {
+			// D7's own directory: a mosey there is one D7 may replace,
+			// not one PATH gave the host (bootstrap.md §4.7.2).
+			continue
+		}
 		if dir == bin || strings.HasPrefix(dir, s.home+"/") {
 			if err := os.MkdirAll(dir, 0o700); err != nil {
 				t.Fatal(err)
@@ -188,12 +193,11 @@ func farPathDir(t *testing.T, s *sshd, bin string) string {
 }
 
 // plainShell is a session shell that keeps the PATH it is given: an
-// interactive /bin/sh, which reads no profile. So hopping is proven here
-// only for a shell whose profile does not reset PATH. A bash login shell
-// on Debian or NixOS, whose profile assigns PATH outright, loses what the
-// spawner put there by the first prompt, and `mosey otherhost` is not
-// found: a known limitation, open for Dan (bootstrap.md §4.7.9, §14
-// question G), which this test does not hide.
+// interactive /bin/sh, which reads no profile, so what the test sees is
+// the spawner's own doing. On a host whose profile puts ~/.local/bin on
+// PATH (Debian, Ubuntu, Fedora), the profile finds the copy as well
+// (bootstrap.md §4.7.9); the throwaway host's profile is this machine's,
+// so the test does not lean on it.
 func plainShell(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "plainsh")
@@ -217,22 +221,22 @@ func replaceWith(t *testing.T, path string, content []byte) {
 }
 
 // D7 end to end through a real sshd (bootstrap.md §4.7, §12), on a host
-// whose PATH has no mosey: it asks, copies the client's own file to
-// ~/.cache/mosey/mosey, and the session runs from it and can hop on with
-// it; a client of another version then uses that copy as it is; a cached
-// copy of another protocol is replaced; -list finds it, and -list and
-// -kill copy nothing; and a symlinked cached file or cache directory is
-// refused with nothing written through it. The remote HOME is the
-// throwaway sshd's, never the user's.
+// whose PATH has no mosey, nor ~/.local/bin: it asks, copies the client's
+// own file to ~/.local/bin/mosey, and the session runs from it and can
+// hop on with it; a client of another version then uses that copy as it
+// is; a copy of another protocol is replaced; -list finds it, and -list
+// and -kill copy nothing; and a symlinked ~/.local/bin/mosey or
+// ~/.local/bin is refused with nothing written through it. The remote
+// HOME is the throwaway sshd's, never the user's.
 func TestAutoUploadThroughSSH(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
 	s := startSSHDWith(t, sshdOptions{path: tools(t), shell: plainShell(t)})
 	noMoseyOnFarPath(t, s)
 	a := buildMosey(t, "0-e2e-upload-a")
 	b := buildMosey(t, "0-e2e-upload-b")
-	// The far side's processes run from the cache, not from the build:
+	// The far side's processes run from the copy, not from the build:
 	// end them too when the test is done.
-	t.Cleanup(func() { killExe(s.cached()) })
+	t.Cleanup(func() { killExe(s.installed()) })
 	state := t.TempDir()
 
 	t.Run("a host with no mosey asks, copies, and the session hops on from the copy", func(t *testing.T) {
@@ -244,18 +248,18 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 		c.master.Write([]byte("y\r"))
 		c.up(t)
 		// D7: the session's shell finds the copy first on its PATH, so
-		// `mosey otherhost` works in it (bootstrap.md §4.7.9), for a shell
-		// whose profile does not reset PATH (plainShell; §14 question G).
-		c.answers(t, `[ "$(command -v mosey)" = "$HOME/.cache/mosey/mosey" ] && echo hop-$((40+2))`, "hop-42")
+		// `mosey otherhost` works in it (bootstrap.md §4.7.9): the
+		// spawner put ~/.local/bin there, since sshd's PATH lacked it.
+		c.answers(t, `[ "$(command -v mosey)" = "$HOME/.local/bin/mosey" ] && echo hop-$((40+2))`, "hop-42")
 		c.end(t, state)
-		if !sameFile(t, s.cached(), a) {
-			t.Fatal("the cache does not hold the client's own file")
+		if !sameFile(t, s.installed(), a) {
+			t.Fatal("~/.local/bin/mosey is not the client's own file")
 		}
-		if st, err := os.Stat(s.cached()); err != nil || st.Mode().Perm() != 0o700 {
+		if st, err := os.Stat(s.installed()); err != nil || st.Mode().Perm() != 0o700 {
 			t.Errorf("the copy's mode: %v %v", st.Mode(), err)
 		}
-		if entries, _ := os.ReadDir(filepath.Dir(s.cached())); len(entries) != 1 {
-			t.Errorf("~/.cache/mosey holds %v, not the one file", entries)
+		if entries, _ := os.ReadDir(filepath.Dir(s.installed())); len(entries) != 1 {
+			t.Errorf("~/.local/bin holds %v, not the one file", entries)
 		}
 	})
 
@@ -265,14 +269,14 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 		if out := c.screen.String(); strings.Contains(out, "[y/N]") || strings.Contains(out, "copying mosey") {
 			t.Errorf("copied again: %q", out)
 		}
-		if !sameFile(t, s.cached(), a) {
+		if !sameFile(t, s.installed(), a) {
 			t.Error("the copy of another version was replaced")
 		}
 	})
 
 	t.Run("-list finds the copy", func(t *testing.T) {
 		// Nothing on the remote PATH: only the probe's look in
-		// ~/.cache/mosey finds a lister (bootstrap.md §9.4). The last
+		// ~/.local/bin finds a lister (bootstrap.md §9.4). The last
 		// session may still be on its way out, so it may be listed.
 		cmd := exec.Command(b, "-list", "--", "-F", s.config, s.host)
 		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state)
@@ -282,14 +286,14 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 		}
 	})
 
-	t.Run("a cached copy of another protocol is replaced", func(t *testing.T) {
+	t.Run("a copy of another protocol is replaced", func(t *testing.T) {
 		// A copy left by a client of another protocol: the probe asks it,
 		// hears another answer, and b is copied over it. The host is
 		// remembered, so nothing is asked.
-		replaceWith(t, s.cached(), []byte("#!/bin/sh\n[ \"$1\" = --serve=protocol ] && echo 9 9\nexit 1\n"))
+		replaceWith(t, s.installed(), []byte("#!/bin/sh\n[ \"$1\" = --serve=protocol ] && echo 9 9\nexit 1\n"))
 		c := startUploadClient(t, s, b, state)
 		c.session(t, state)
-		if !sameFile(t, s.cached(), b) {
+		if !sameFile(t, s.installed(), b) {
 			t.Error("the copy of another protocol was kept")
 		}
 		if strings.Contains(c.screen.String(), "[y/N]") {
@@ -298,7 +302,7 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 	})
 
 	t.Run("-list and -kill copy nothing to a host without mosey", func(t *testing.T) {
-		if err := os.RemoveAll(filepath.Dir(s.cached())); err != nil {
+		if err := os.RemoveAll(filepath.Dir(s.installed())); err != nil {
 			t.Fatal(err)
 		}
 		cmd := exec.Command(b, "-list", "--", "-F", s.config, s.host)
@@ -314,20 +318,20 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 		if !strings.Contains(c.screen.String(), "no mosey on mosey-e2e") {
 			t.Errorf("mosey -kill said %q", c.screen.String())
 		}
-		if _, err := os.Lstat(filepath.Dir(s.cached())); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(filepath.Dir(s.installed())); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("something was copied: %v", err)
 		}
 	})
 
-	t.Run("a symlinked cached file is refused", func(t *testing.T) {
-		if err := os.MkdirAll(filepath.Dir(s.cached()), 0o700); err != nil {
+	t.Run("a symlinked ~/.local/bin/mosey is refused", func(t *testing.T) {
+		if err := os.MkdirAll(filepath.Dir(s.installed()), 0o700); err != nil {
 			t.Fatal(err)
 		}
 		victim := filepath.Join(t.TempDir(), "victim")
 		if err := os.WriteFile(victim, []byte("precious"), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(victim, s.cached()); err != nil {
+		if err := os.Symlink(victim, s.installed()); err != nil {
 			t.Fatal(err)
 		}
 		c := startUploadClient(t, s, b, state, "-upload=yes")
@@ -335,25 +339,25 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 			t.Errorf("exit %d", status)
 		}
 		out := c.screen.String()
-		if !strings.Contains(out, "~/.cache/mosey/mosey is a symbolic link: not replacing it") || !strings.Contains(out, "copying mosey to mosey-e2e failed") {
+		if !strings.Contains(out, "~/.local/bin/mosey is a symbolic link: not replacing it") || !strings.Contains(out, "copying mosey to mosey-e2e failed") {
 			t.Errorf("said %q", out)
 		}
 		if got, _ := os.ReadFile(victim); string(got) != "precious" {
 			t.Errorf("written through the link: %q", got)
 		}
-		if l, err := os.Readlink(s.cached()); err != nil || l != victim {
+		if l, err := os.Readlink(s.installed()); err != nil || l != victim {
 			t.Errorf("the link was replaced: %q %v", l, err)
 		}
-		os.Remove(s.cached())
+		os.Remove(s.installed())
 	})
 
-	t.Run("a symlinked cache is refused", func(t *testing.T) {
-		cache := filepath.Dir(s.cached())
-		elsewhere := filepath.Join(t.TempDir(), "mosey")
-		if err := os.Rename(cache, elsewhere); err != nil {
+	t.Run("a symlinked ~/.local/bin is refused", func(t *testing.T) {
+		dir := filepath.Dir(s.installed())
+		elsewhere := filepath.Join(t.TempDir(), "bin")
+		if err := os.Rename(dir, elsewhere); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(elsewhere, cache); err != nil {
+		if err := os.Symlink(elsewhere, dir); err != nil {
 			t.Fatal(err)
 		}
 		c := startUploadClient(t, s, b, state, "-upload=yes")
@@ -361,13 +365,59 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 			t.Errorf("exit %d", status)
 		}
 		out := c.screen.String()
-		if !strings.Contains(out, "~/.cache/mosey is a symbolic link") || !strings.Contains(out, "copying mosey to mosey-e2e failed") {
+		if !strings.Contains(out, "~/.local/bin is a symbolic link") || !strings.Contains(out, "copying mosey to mosey-e2e failed") {
 			t.Errorf("said %q", out)
 		}
 		if _, err := os.Lstat(filepath.Join(elsewhere, "mosey")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("written through the link: %v", err)
 		}
 	})
+}
+
+// Where the far host's PATH names ~/.local/bin, as a login profile does
+// on Debian, Ubuntu and Fedora, the mosey PATH finds there is still the
+// one D7 installs: one of another protocol is replaced after the question
+// rather than refused (Dan, 2026-11-16; bootstrap.md §4.7.2), and the
+// session then runs from the new copy.
+func TestAnInstalledCopyOnThePathOfAnotherProtocolIsReplaced(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	home := t.TempDir()
+	local := filepath.Join(home, ".local", "bin")
+	// NixOS's /etc/profile, which its bash reads for an ssh command,
+	// sets PATH afresh unless told it already has; this is how to keep
+	// ~/.local/bin first there. Elsewhere the variable means nothing.
+	s := startSSHDWith(t, sshdOptions{home: home, path: local + ":" + tools(t), shell: plainShell(t),
+		env: []string{"__NIXOS_SET_ENVIRONMENT_DONE=1"}})
+	if err := os.MkdirAll(local, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := farPath(t, s); len(got) == 0 || got[0] != local {
+		t.Skipf("the far host's PATH does not start with ~/.local/bin: %q", got)
+	}
+	client := buildMosey(t, "0-e2e-localbin")
+	t.Cleanup(func() { killExe(s.installed()) })
+	state := t.TempDir()
+	// A copy left by a client of another protocol, found on PATH.
+	replaceWith(t, s.installed(), []byte("#!/bin/sh\n[ \"$1\" = --serve=protocol ] && echo 9 9\nexit 1\n"))
+
+	c := startUploadClient(t, s, client, state)
+	waitFor(t, "the question", func() bool { return strings.Contains(c.screen.String(), "[y/N]") })
+	if !strings.Contains(c.screen.String(), "Copy this one (linux/") || !strings.Contains(c.screen.String(), "to ~/.local/bin/ there?") {
+		t.Errorf("asked %q", c.screen.String())
+	}
+	c.master.Write([]byte("y\r"))
+	c.up(t)
+	if !spawnerOf(s.installed()) {
+		t.Error("the session's spawner is not ~/.local/bin/mosey")
+	}
+	c.answers(t, `[ "$(command -v mosey)" = "$HOME/.local/bin/mosey" ] && echo hop-$((40+2))`, "hop-42")
+	c.end(t, state)
+	if !sameFile(t, s.installed(), client) {
+		t.Error("the copy of another protocol was kept")
+	}
+	if strings.Contains(c.screen.String(), "speaks protocol") {
+		t.Errorf("refused as a PATH mosey: %q", c.screen.String())
+	}
 }
 
 // spawnerOf says whether a process of this user runs path as a session's
@@ -413,7 +463,7 @@ func TestAMoseyOnThePathIsUsedAsItIs(t *testing.T) {
 		if out := c.screen.String(); strings.Contains(out, "[y/N]") || strings.Contains(out, "copying mosey") {
 			t.Errorf("asked or copied: %q", out)
 		}
-		if _, err := os.Lstat(filepath.Join(s.home, ".cache", "mosey")); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(filepath.Join(s.home, ".local", "bin", "mosey")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("something was copied: %v", err)
 		}
 	})
@@ -429,7 +479,7 @@ func TestAMoseyOnThePathIsUsedAsItIs(t *testing.T) {
 		if out := c.screen.String(); !strings.Contains(out, "mosey-e2e's mosey speaks protocol 3; this mosey speaks 2") {
 			t.Errorf("said %q", out)
 		}
-		if _, err := os.Lstat(filepath.Join(s.home, ".cache", "mosey")); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(filepath.Join(s.home, ".local", "bin", "mosey")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("something was copied: %v", err)
 		}
 	})

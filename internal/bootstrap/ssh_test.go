@@ -16,7 +16,7 @@ func TestTheBootstrapSSHCommandLineIsExact(t *testing.T) {
 		Program:     "/usr/bin/ssh",
 		Destination: "me@far",
 		Options:     SSHOptions{Args: []string{"-p", "2222", "-v"}, Agent: 'A'},
-		Server:      "~/.cache/mosey/dev/mosey",
+		Server:      "~/.local/bin/dev/mosey",
 	}
 	base := []string{
 		"/usr/bin/ssh", "-T",
@@ -26,7 +26,7 @@ func TestTheBootstrapSSHCommandLineIsExact(t *testing.T) {
 		"-o", "PermitLocalCommand=no", "-o", "EscapeChar=none",
 		"-o", "RemoteCommand=none",
 	}
-	tail := []string{"-p", "2222", "-v", "--", "me@far", "exec /bin/sh -c 'exec ~/.cache/mosey/dev/mosey --serve'"}
+	tail := []string{"-p", "2222", "-v", "--", "me@far", "exec /bin/sh -c 'exec ~/.local/bin/dev/mosey --serve'"}
 
 	old := s.Command(context.Background(), Config{"hostname": {"far"}})
 	if want := slices.Concat(base, tail); !slices.Equal(old.Args, want) {
@@ -63,7 +63,7 @@ func TestDestinationAndRemoteAreChecked(t *testing.T) {
 			t.Errorf("destination %q: %v", d, err)
 		}
 	}
-	for _, r := range []string{"mosey", "/usr/local/bin/mosey", "~/.cache/mosey/0.1+x/mosey", "bin/mosey-1.0_rc"} {
+	for _, r := range []string{"mosey", "/usr/local/bin/mosey", "~/.local/bin/0.1+x/mosey", "bin/mosey-1.0_rc"} {
 		if !ValidServer(r) {
 			t.Errorf("%q refused", r)
 		}

@@ -17,7 +17,7 @@ import (
 )
 
 // fixture is a home directory under t.TempDir with an upload waiting in
-// ~/.cache/mosey, as the upload script leaves it.
+// ~/.local/bin, as the upload script leaves it.
 type fixture struct {
 	home, temp string
 	content    []byte
@@ -26,7 +26,7 @@ type fixture struct {
 func newFixture(t *testing.T, content string) *fixture {
 	t.Helper()
 	f := &fixture{home: t.TempDir(), content: []byte(content)}
-	dir := filepath.Join(f.home, ".cache", "mosey")
+	dir := filepath.Join(f.home, ".local", "bin")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -53,9 +53,9 @@ func (f *fixture) install(t *testing.T) error {
 	return Install(r)
 }
 
-// installed is where D7 installs: the one file ~/.cache/mosey/mosey.
+// installed is where D7 installs: the one file ~/.local/bin/mosey.
 func (f *fixture) installed() string {
-	return filepath.Join(f.home, ".cache", "mosey", "mosey")
+	return filepath.Join(f.home, ".local", "bin", "mosey")
 }
 
 func mustRefuse(t *testing.T, err error, says string) {
@@ -65,7 +65,7 @@ func mustRefuse(t *testing.T, err error, says string) {
 	}
 }
 
-func TestAnUploadIsInstalledAsTheOneCachedFile(t *testing.T) {
+func TestAnUploadIsInstalledAsTheOneFileInLocalBin(t *testing.T) {
 	f := newFixture(t, "#!/bin/sh\necho mosey 1.2.3\n")
 	if err := f.install(t); err != nil {
 		t.Fatal(err)
@@ -79,34 +79,34 @@ func TestAnUploadIsInstalledAsTheOneCachedFile(t *testing.T) {
 		t.Errorf("installed mode %v, %v", st.Mode(), err)
 	}
 	if entries, _ := os.ReadDir(filepath.Dir(f.installed())); len(entries) != 1 {
-		t.Errorf("~/.cache/mosey holds %v, not the one file", entries)
+		t.Errorf("~/.local/bin holds %v, not the one file", entries)
 	}
 	if _, err := os.Stat(f.temp); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the upload is still at its temporary name: %v", err)
 	}
 }
 
-func TestTheCacheIsMadeWhenTheHomeHasNone(t *testing.T) {
+func TestALocalBinTheUploadScriptMadeIsAccepted(t *testing.T) {
 	home := t.TempDir()
-	// The upload script makes ~/.cache/mosey; the installer must still
-	// check each level.
+	// The upload script makes ~/.local/bin under umask 077; the installer
+	// must still check each level.
 	f := &fixture{home: home, content: []byte("x")}
-	if err := os.MkdirAll(filepath.Join(home, ".cache", "mosey"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".local", "bin"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(filepath.Join(home, ".cache"), 0o700); err != nil {
+	if err := os.Chmod(filepath.Join(home, ".local"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	f.temp = filepath.Join(home, ".cache", "mosey", ".upload.x")
+	f.temp = filepath.Join(home, ".local", "bin", ".upload.x")
 	os.WriteFile(f.temp, f.content, 0o600)
 	if err := f.install(t); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// The user's own cached copy is replaced in place: one of another
+// The user's own ~/.local/bin/mosey is replaced in place: one of another
 // protocol, which the probe could not use (bootstrap.md §4.7.2).
-func TestTheUsersOwnCachedCopyIsReplaced(t *testing.T) {
+func TestTheUsersOwnInstalledCopyIsReplaced(t *testing.T) {
 	f := newFixture(t, "new build")
 	dest := f.installed()
 	if err := os.WriteFile(dest, []byte("a build of another protocol"), 0o700); err != nil {
@@ -120,18 +120,18 @@ func TestTheUsersOwnCachedCopyIsReplaced(t *testing.T) {
 	}
 }
 
-func TestASymlinkedMoseyCacheIsRefusedAndNothingIsWrittenThroughIt(t *testing.T) {
+func TestASymlinkedLocalBinIsRefusedAndNothingIsWrittenThroughIt(t *testing.T) {
 	f := newFixture(t, "build")
 	elsewhere := t.TempDir()
-	cache := filepath.Join(f.home, ".cache", "mosey")
+	bin := filepath.Join(f.home, ".local", "bin")
 	// The upload sits in the link's target, as mkdir -p and mktemp would
 	// have left it through the link.
-	os.Rename(cache, filepath.Join(elsewhere, "mosey"))
-	if err := os.Symlink(filepath.Join(elsewhere, "mosey"), cache); err != nil {
+	os.Rename(bin, filepath.Join(elsewhere, "bin"))
+	if err := os.Symlink(filepath.Join(elsewhere, "bin"), bin); err != nil {
 		t.Fatal(err)
 	}
 	mustRefuse(t, f.install(t), "symbolic link")
-	if _, err := os.Lstat(filepath.Join(elsewhere, "mosey", "mosey")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(elsewhere, "bin", "mosey")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("installed through the link: %v", err)
 	}
 }
@@ -168,7 +168,7 @@ func TestSomeoneElsesFileIsNeverReplaced(t *testing.T) {
 	saved := owner
 	t.Cleanup(func() { owner = saved })
 	owner = func(path string, st *unix.Stat_t) int {
-		if path == "~/.cache/mosey/mosey" {
+		if path == "~/.local/bin/mosey" {
 			return int(st.Uid) + 1
 		}
 		return int(st.Uid)
@@ -191,10 +191,10 @@ func TestAHomeOfAnotherUserIsRefused(t *testing.T) {
 // Each directory below the home is checked for its owner on its own: one
 // that is another user's is refused by name, and nothing is installed.
 func TestEachDirectoryOfAnotherUserIsRefused(t *testing.T) {
-	for _, dir := range []string{"~/.cache", "~/.cache/mosey"} {
+	for _, dir := range []string{"~/.local", "~/.local/bin"} {
 		t.Run(dir, func(t *testing.T) {
 			f := newFixture(t, "build")
-			os.Chmod(filepath.Join(f.home, ".cache"), 0o700)
+			os.Chmod(filepath.Join(f.home, ".local"), 0o700)
 			// An unprivileged test cannot chown, so the installer is told
 			// this one directory belongs to another uid.
 			saved := owner
@@ -236,12 +236,41 @@ func TestAnUploadSwappedAfterItsCheckIsNotInstalled(t *testing.T) {
 }
 
 func TestADirectoryOthersMayWriteIsRefused(t *testing.T) {
+	for _, d := range []string{".local", ".local/bin"} {
+		for _, mode := range []os.FileMode{0o770, 0o707} {
+			f := newFixture(t, "build")
+			if err := os.Chmod(filepath.Join(f.home, d), mode); err != nil {
+				t.Fatal(err)
+			}
+			mustRefuse(t, f.install(t), "writable by others")
+			if _, err := os.Lstat(f.installed()); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("~/%s %v: something is installed: %v", d, mode, err)
+			}
+		}
+	}
+}
+
+// ~/.local/bin is a directory the user shares with other programs, often
+// 0755: that is fine, and nothing else in it is touched.
+func TestAnEverydayLocalBinIsUsedAndItsOtherFilesAreLeftAlone(t *testing.T) {
 	f := newFixture(t, "build")
-	dir := filepath.Join(f.home, ".cache", "mosey")
-	if err := os.Chmod(dir, 0o770); err != nil {
+	bin := filepath.Dir(f.installed())
+	if err := os.Chmod(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mustRefuse(t, f.install(t), "writable by others")
+	other := filepath.Join(bin, "pip")
+	if err := os.WriteFile(other, []byte("someone else's tool"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.install(t); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(other); err != nil || string(got) != "someone else's tool" {
+		t.Errorf("the other file: %q %v", got, err)
+	}
+	if got, _ := os.ReadFile(f.installed()); string(got) != "build" {
+		t.Errorf("installed %q", got)
+	}
 }
 
 func TestAnUploadThatIsNotWhatWasSentIsRefusedAndRemoved(t *testing.T) {
@@ -304,8 +333,9 @@ func TestTheArgumentsAreCheckedBeforeAnythingIsTouched(t *testing.T) {
 		{"leading zero", []string{good[0], "05", good[2]}, f.home},
 		{"huge", []string{good[0], "999999999999", good[2]}, f.home},
 		{"temp elsewhere", []string{good[0], good[1], "/tmp/.upload.x"}, f.home},
-		{"temp not ours", []string{good[0], good[1], f.home + "/.cache/mosey/mosey"}, f.home},
-		{"temp in a subdirectory", []string{good[0], good[1], f.home + "/.cache/mosey/.upload.a/b"}, f.home},
+		{"temp not ours", []string{good[0], good[1], f.home + "/.local/bin/mosey"}, f.home},
+		{"temp in a subdirectory", []string{good[0], good[1], f.home + "/.local/bin/.upload.a/b"}, f.home},
+		{"temp beside ~/.local/bin", []string{good[0], good[1], f.home + "/.local/.upload.x"}, f.home},
 	} {
 		if _, err := Parse(c.args, c.home, os.Getuid()); err == nil {
 			t.Errorf("%s: accepted", c.name)

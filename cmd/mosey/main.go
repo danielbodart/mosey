@@ -61,8 +61,9 @@ const usage = `mosey -- a remote terminal for bad networks
         (but tab, in -type).
 
         The server is whatever mosey DESTINATION has, of any version:
-        mosey on its PATH, or else ~/.cache/mosey/mosey. If it has none,
-        mosey copies itself there (or, for another platform, its own
+        mosey on its PATH, or else ~/.local/bin/mosey. If it has none,
+        or ~/.local/bin/mosey speaks another protocol, mosey copies
+        itself there (or, for another platform, its own
         version's release from GitHub), asking the first time for each
         host; -upload=yes copies without asking, -upload=no never copies.
         A host's mosey is upgraded with Nix or by replacing the binary,
@@ -121,7 +122,7 @@ func parseArgs(args []string) (cli, error) {
 	flags := flag.NewFlagSet("mosey", flag.ContinueOnError)
 	flags.SetOutput(io.Discard) // runClient prints the error and usage once
 	flags.Usage = func() {}
-	// No -remote is D7: whatever mosey the host has, PATH's or the cached
+	// No -remote is D7: whatever mosey the host has, PATH's or the installed
 	// copy, and a copy over only if it has none (bootstrap.md §4.7).
 	flags.StringVar(&c.ssh.Server, "remote", "", "the remote mosey `binary`, run as PATH --serve")
 	upload := flags.String("upload", string(client.UploadAsk), "copy mosey to a host without it: ask, yes or no")

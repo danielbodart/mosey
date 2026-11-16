@@ -295,18 +295,19 @@ func TestTheShellsAgentIsMoseysSocketWhenTheAgentIsForwarded(t *testing.T) {
 	}
 }
 
-// A session served from D7's cached copy, on a host with no mosey on
-// PATH, gets ~/.cache/mosey first on its shell's PATH, so `mosey
+// A session served from D7's ~/.local/bin/mosey, on a host with no mosey
+// on PATH, gets ~/.local/bin first on its shell's PATH, so `mosey
 // otherhost` in it finds the copy (bootstrap.md §4.7.9, server.md §2.5);
-// any other server, or a PATH with a mosey of its own, leaves PATH alone.
-func TestTheCachedCopyGoesFirstOnTheShellsPathOnlyWhenNeeded(t *testing.T) {
+// any other server, or a PATH with a mosey of its own (~/.local/bin
+// itself, say), leaves PATH alone.
+func TestLocalBinGoesFirstOnTheShellsPathOnlyWhenNeeded(t *testing.T) {
 	home := t.TempDir()
-	dir := filepath.Join(home, ".cache", "mosey")
-	cached := filepath.Join(dir, "mosey")
+	dir := filepath.Join(home, ".local", "bin")
+	installed := filepath.Join(dir, "mosey")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cached, []byte("#!/bin/sh\n"), 0o700); err != nil {
+	if err := os.WriteFile(installed, []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	elsewhere := filepath.Join(t.TempDir(), "mosey")
@@ -316,16 +317,19 @@ func TestTheCachedCopyGoesFirstOnTheShellsPathOnlyWhenNeeded(t *testing.T) {
 	bare, withMosey := t.TempDir(), filepath.Dir(elsewhere)
 	env := func(path string) []string { return []string{"HOME=" + home, "PATH=" + path} }
 
-	if got := hopDir(env(bare+":/nonexistent"), cached); got != dir {
-		t.Errorf("the cached copy on a bare PATH: %q, want %q", got, dir)
+	if got := hopDir(env(bare+":/nonexistent"), installed); got != dir {
+		t.Errorf("~/.local/bin/mosey on a bare PATH: %q, want %q", got, dir)
 	}
-	if got := hopDir(env(withMosey+":"+bare), cached); got != "" {
+	if got := hopDir(env(bare+":"+dir), installed); got != "" {
+		t.Errorf("a PATH that has ~/.local/bin already: %q", got)
+	}
+	if got := hopDir(env(withMosey+":"+bare), installed); got != "" {
 		t.Errorf("a PATH with a mosey of its own: %q", got)
 	}
 	if got := hopDir(env(bare), elsewhere); got != "" {
-		t.Errorf("a server that is not the cached copy: %q", got)
+		t.Errorf("a server that is not ~/.local/bin/mosey: %q", got)
 	}
-	if got := hopDir([]string{"PATH=" + bare}, cached); got != "" {
+	if got := hopDir([]string{"PATH=" + bare}, installed); got != "" {
 		t.Errorf("no HOME: %q", got)
 	}
 

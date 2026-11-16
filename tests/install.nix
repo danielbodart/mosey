@@ -8,12 +8,13 @@
 #   in it reaches server's shell.
 # - bare has no mosey at all (D7, bootstrap.md §4.7). The client's probe
 #   says so, the client asks the first time, alice answers yes, and the
-#   client copies its own file to ~/.cache/mosey/mosey on bare,
-#   where the installer checks its hash; the session then runs from that
-#   copy. A second run finds it and asks nothing. Hopping on from that
-#   copy (`mosey otherhost` inside the session) is not checked: NixOS's
-#   bash profile assigns PATH, so it does not work here (bootstrap.md
-#   §4.7.9, §14 question G, open).
+#   client copies its own file to ~/.local/bin/mosey on bare, making
+#   ~/.local/bin, where the installer checks its hash; the session then
+#   runs from that copy. A second run finds it and asks nothing. Hopping
+#   on from that copy (`mosey otherhost` inside the session) is not
+#   checked: no stock NixOS profile puts ~/.local/bin on PATH, so NixOS
+#   needs mosey from Nix to hop on (Dan, 2026-11-16; bootstrap.md
+#   §4.7.9).
 #
 # Throwaway keys, made in the store for this test alone; nothing here reads
 # a real key, agent or known_hosts.
@@ -22,9 +23,9 @@
 
 let
   pkgs = hostPkgs;
-  # Where D7 installs this build on a host that has none: the one cached
-  # file, whatever its version (bootstrap.md §4.7).
-  cached = "/home/alice/.cache/mosey/mosey";
+  # Where D7 installs this build on a host that has none: the one file,
+  # whatever its version (bootstrap.md §4.7).
+  installed = "/home/alice/.local/bin/mosey";
 
   keys = pkgs.runCommand "mosey-install-test-keys" { nativeBuildInputs = [ pkgs.openssh ]; } ''
     mkdir $out
@@ -127,13 +128,14 @@ in
         client.wait_until_succeeds(alice("tmux capture-pane -p -t b | grep -q 'alice@bare'"), timeout=60)
         # The very file the client runs, owned by alice and hers alone.
         want = client.succeed("sha256sum ${mosey}/bin/mosey").split()[0]
-        got = bare.succeed("sha256sum ${cached}").split()[0]
+        got = bare.succeed("sha256sum ${installed}").split()[0]
         assert got == want, f"the copy on bare is {got}, the client is {want}"
-        bare.succeed("test \"$(stat -c '%U %a' ${cached})\" = 'alice 700'")
-        bare.succeed("test \"$(stat -c '%a' /home/alice/.cache/mosey)\" = 700")
+        bare.succeed("test \"$(stat -c '%U %a' ${installed})\" = 'alice 700'")
+        # The upload made ~/.local and ~/.local/bin, hers alone.
+        bare.succeed("test \"$(stat -c '%U %a' /home/alice/.local /home/alice/.local/bin | sort -u)\" = 'alice 700'")
         # The spawner runs from the copy (a pattern without the version,
         # whose + pgrep would read as a regular expression).
-        bare.succeed("pgrep -u alice -f -- '/home/alice/[.]cache/mosey/mosey --serve=spawner'")
+        bare.succeed("pgrep -u alice -f -- '/home/alice/[.]local/bin/mosey --serve=spawner'")
         client.succeed(alice("tmux send-keys -t b 'touch /tmp/through-the-copy' Enter"))
         bare.wait_for_file("/tmp/through-the-copy")
         client.succeed(alice("tmux send-keys -t b exit Enter"))
