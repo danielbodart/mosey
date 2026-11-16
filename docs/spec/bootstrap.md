@@ -625,7 +625,7 @@ round trip to ask, and D7 names this one.
 
 The remote command (one argument, as §4.1; `B H` is the client's
 `--serve=protocol` answer, `bootstrap.Version` and `handshake.ProtocolVersion`,
-now `2 2`):
+now `2 1`):
 
 ```
 exec /bin/sh -c 'b="$HOME/.local/bin"; f="$b/mosey"; p=$(command -v mosey 2>/dev/null); case $p in "$f"|"") ;; *) exec mosey FLAG;; esac; w=; for d in "$HOME/" "$HOME/.local/" "$b/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; if test -h "$b" || test -h "$f" || test -n "$w"; then :; elif test -O "$HOME/.local" && test -O "$b" && test -O "$f"; then if [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; p=; fi; if [ -n "$p" ]; then exec "$f" FLAG; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'

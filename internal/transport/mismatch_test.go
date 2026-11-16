@@ -31,7 +31,7 @@ func TestBothEndsRunTheirOneProtocol(t *testing.T) {
 		if client.Protocol() != handshake.ProtocolVersion || server.Protocol() != handshake.ProtocolVersion {
 			t.Errorf("the client runs v%d and the server v%d", client.Protocol(), server.Protocol())
 		}
-		exchange(t, client, server, "hello at this protocol")
+		exchange(t, client, server, "hello at v1")
 	})
 }
 
@@ -44,8 +44,8 @@ func TestAProtocolMismatchFailsDialAtOnceAndConnectsNothing(t *testing.T) {
 		client, server uint8
 		say            string
 	}{
-		{"a client of protocol 1", 1, 2, "the server speaks protocol 2; this client speaks 1"},
-		{"a server of protocol 1", 2, 1, "the server speaks protocol 1; this client speaks 2"},
+		{"a client of protocol 2", 2, 1, "the server speaks protocol 1; this client speaks 2"},
+		{"a server of protocol 2", 1, 2, "the server speaks protocol 2; this client speaks 1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			withProtocols(t, c.client, c.server)

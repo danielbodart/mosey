@@ -686,10 +686,7 @@ identity. The format is versioned by the protocol version the handshake
 agreed (`transport.md` §2.3, D8 V1), not inside the diff: a later version
 adds ops under a number of its own, so the two ends may be different
 builds and still agree on every op they send. An unknown opcode is an
-error, never skipped. This section is **protocol 2**: protocol 1 lacked
-CONTAINER and CWD (§4.6, §4.7), which a protocol-1 client would refuse
-as unknown opcodes, ending the session, so their arrival took the next
-number (`handshake.ProtocolVersion`).
+error, never skipped.
 
 ### 5.3 Decoder state
 
@@ -2183,7 +2180,8 @@ agreed first).
 17. **`Grid.Container`** (`screen.Container{Name, Runtime, UID}`) and
     **`Grid.Cwd`**, opcodes `0x5A` CONTAINER and `0x5B` CWD (§4.6, §4.7,
     §5.6), taken from the "more state" range, so `0x5C`–`0x5F` stay
-    reserved; `handshake.ProtocolVersion` 2 for them (§5.2). emu fills
+    reserved. No protocol number change: there are no users yet, and a
+    number change is Dan's to approve. emu fills
     them from tuios' `PrivateOSC` and `WorkingDirectory` callbacks, and
     `render` writes them (§8.4). Owners: screen and handshake (container
     slice).
