@@ -287,8 +287,14 @@ as they do for any local program.
   the pty (T5, `server.md` §2.4), proto reads at full speed and the
   emulator keeps the newest `HistoryLines` of what scrolled. A dead spot
   shorter than `SilentAfter` holds the program, since the client may be
-  back in a moment. When the client is heard again the hold resumes from
-  what it has acknowledged, and if more than the window scrolled
+  back in a moment. A dead spot in one direction counts too: if only the
+  server's datagrams are lost, the client's heartbeats (`ssp.md` §6.2)
+  keep it heard, but its acknowledgement stops, so a hold that has gone
+  `SilentAfter` without the acknowledgement advancing lifts the same way
+  until it moves again [measured here:
+  `TestAFloodWhileOnlyTheServersDatagramsAreLostRunsOn`]. When the
+  client is heard again, or its acknowledgement moves, the hold resumes
+  from what it has acknowledged, and if more than the window scrolled
   meanwhile it gets a window that starts after a gap: it prints one line
   saying how many lines are not shown, and carries on, so what it does
   print is in order and never doubled [measured here:

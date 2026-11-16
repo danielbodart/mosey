@@ -478,9 +478,12 @@ from a hostile server (T5) exactly as proto is from a hostile client.
   keys, which come over the user's own SSH login, so it is the user's
   own client, and it can already type anything into the shell, which is
   far worse; an ssh client can stall its programs the same way. Nobody
-  else can stall it: an on-path attacker who drops packets makes the
-  client silent, and after `SilentAfter` (15 s) the hold lifts and the
-  program runs on (R8 is the denial of service it already had). The hold
+  else can stall it for long: an on-path attacker who drops packets
+  either makes the client silent or, dropping only the server's, stops
+  its acknowledgement while its heartbeats still arrive; either way,
+  after `SilentAfter` (15 s) without the acknowledgement advancing the
+  hold lifts and the program runs on (R8 is the denial of service it
+  already had). The hold
   never holds keystrokes: they go to the pty whatever it is, so Ctrl-C
   reaches the program. A flood costs bandwidth that Mosh's
   latest-state-only rule skipped (each frame carries up to the window of

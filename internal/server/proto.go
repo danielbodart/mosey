@@ -180,6 +180,14 @@ type Session struct {
 // is kept: the client may only be in a dead spot.
 const SilentAfter = 15 * time.Second
 
+// silentAfter is s.SilentAfter, or the package's when it is zero.
+func (s *Session) silentAfter() time.Duration {
+	if s.SilentAfter != 0 {
+		return s.SilentAfter
+	}
+	return SilentAfter
+}
+
 // silencePoll is how often proto looks for a silent client's return once
 // it has said it is detached [choice: well inside a heartbeat].
 const silencePoll = time.Second
@@ -381,10 +389,7 @@ func (s *Session) Run(ctx context.Context) error {
 	var gone <-chan error
 	// The attached client's silence (bootstrap.md §9.2): check fires when
 	// it may have gone silent, or, once it has, to look for its return.
-	silentAfter := s.SilentAfter
-	if silentAfter == 0 {
-		silentAfter = SilentAfter
-	}
+	silentAfter := s.silentAfter()
 	var check <-chan time.Time
 	silent := false
 	var silentSince time.Time
@@ -768,8 +773,9 @@ func (s *Session) release() {
 func (s *Session) readPTY(ctx context.Context) error {
 	buf := make([]byte, ptyReadChunk)
 	first := s.FirstOutput
+	var st stall
 	for {
-		size, ok := s.room(ctx)
+		size, ok := s.room(ctx, &st)
 		if !ok {
 			return nil
 		}
@@ -813,6 +819,15 @@ func holdLines(cols int) int {
 	return screen.WindowLines(cols) / 4
 }
 
+// stall is the pty reader's view of the client's acknowledgement while
+// it is held: the endpoint and acknowledged history it last saw, and
+// since when the hold has gone without that advancing.
+type stall struct {
+	ep    *ssp.Endpoint[*screen.Grid, *userinput.Stream]
+	acked uint64
+	since time.Time
+}
+
 // room is how much the pty reader may read next, waiting first if it must
 // (screen.md §2.5, Dan 2026-11-16). While the attached client is heard,
 // the program is held back as under ssh: the reader waits while the
@@ -820,8 +835,15 @@ func holdLines(cols int) int {
 // and then reads at most holdLines bytes. While nobody listens (no client,
 // one silent for SilentAfter, or the shell gone and the pty draining), it
 // reads a whole chunk and the window keeps the newest lines, so a program
-// never stalls because the laptop is shut. ok is false once ctx is done.
-func (s *Session) room(ctx context.Context) (size int, ok bool) {
+// never stalls because the laptop is shut.
+//
+// A dead spot in one direction is a dead spot too: if only the server's
+// datagrams are lost, the client's heartbeats keep it heard, but its
+// acknowledgement never moves. So a hold that has gone SilentAfter
+// without the acknowledgement advancing lifts as silence does, until the
+// acknowledgement moves again (screen.md §2.5, threat-model.md §4.6).
+// ok is false once ctx is done.
+func (s *Session) room(ctx context.Context, st *stall) (size int, ok bool) {
 	for {
 		s.mu.Lock()
 		ep, listening, next, held, cols := s.ep, s.listening, s.histNext, s.histLen, s.cols
@@ -832,20 +854,35 @@ func (s *Session) room(ctx context.Context) (size int, ok bool) {
 		default:
 		}
 		if ep == nil || !listening {
+			*st = stall{}
 			return ptyReadChunk, true
 		}
 		hold := holdLines(cols)
-		acked, _ := ep.Acked()
-		if unacknowledged(next, held, acked.History.Next) < uint64(hold) {
+		v, _ := ep.Acked()
+		acked := v.History.Next
+		now := time.Now()
+		if unacknowledged(next, held, acked) < uint64(hold) {
+			*st = stall{ep: ep, acked: acked, since: now}
 			return hold, true
 		}
+		if st.ep != ep || st.acked != acked || st.since.IsZero() {
+			*st = stall{ep: ep, acked: acked, since: now}
+		}
+		left := st.since.Add(s.silentAfter()).Sub(now)
+		if left <= 0 {
+			return ptyReadChunk, true
+		}
+		timer := time.NewTimer(left)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return 0, false
 		case <-ep.AckedChanged():
 		case <-s.holdWake:
 		case <-s.shellExit:
+		case <-timer.C:
 		}
+		timer.Stop()
 	}
 }
 

@@ -1403,7 +1403,9 @@ is its threads of control and the ordering rules the IPC imposes:
   (`Endpoint.Acked`); while a quarter of the window or more is
   unacknowledged it waits for `Endpoint.AckedChanged`, a change of
   listener or the end, and then reads at most a quarter of the window
-  in bytes. Otherwise it reads whole chunks. The writer is never held,
+  in bytes. A hold that has gone `SilentAfter` without the
+  acknowledgement advancing lifts until it does, since a client whose
+  heartbeats arrive but which hears nothing is in a dead spot too. Otherwise it reads whole chunks. The writer is never held,
   so keystrokes, Ctrl-C among them, and resizes reach the pty while the
   reader waits; the screen meanwhile is the last state read, which SSP
   keeps sending, and an emu rebuild is unaffected (it renumbers
@@ -1746,7 +1748,8 @@ it lands, with the duration and exec count in the commit message.
   no more. End to end over netsim (`internal/e2e/holdback_test.go`):
   `seq 5000` and `seq 20000` while the client listens reach the local
   scrollback whole on every profile; a client silent past `SilentAfter`
-  releases the program and prints one marker for exactly the gap; a
+  releases the program and prints one marker for exactly the gap, and so
+  does a client that only the server's datagrams fail to reach; a
   client that leaves mid-flood releases it at once; Ctrl-C during a flood
   gives the prompt back within an answer's time plus two hold cycles on
   a slow link.

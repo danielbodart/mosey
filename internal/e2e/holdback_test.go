@@ -226,12 +226,22 @@ func (c *cuttable) profile() netsim.Profile {
 }
 
 func (c *cuttable) cut(lost bool) {
+	c.up.SetParams(c.params(lost))
+	c.down.SetParams(c.params(lost))
+}
+
+// cutDown cuts, or mends, only the server's link to the client: a dead
+// spot in one direction, through which the client's heartbeats still go.
+func (c *cuttable) cutDown(lost bool) {
+	c.down.SetParams(c.params(lost))
+}
+
+func (c *cuttable) params(lost bool) netsim.LinkParams {
 	l := netsim.LinkParams{Delay: 250 * time.Microsecond, MTU: netsim.ProfileMTU}
 	if lost {
 		l.Loss = 1
 	}
-	c.up.SetParams(l)
-	c.down.SetParams(l)
+	return l
 }
 
 // waitFinished sleeps in virtual time until prog's seqs have ended n
@@ -320,6 +330,50 @@ func TestAFloodWhileTheClientIsSilentRunsOnAndAMarkerCountsTheGap(t *testing.T) 
 		s.converge()
 		got := numbers(transcript(s.user.bytes(), 80, 24))
 		markers, err := accountedFor(got, total)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if markers != 1 {
+			t.Errorf("%d markers, want 1", markers)
+		}
+		s.exit()
+	})
+}
+
+// A dead spot in one direction holds the program no longer than one in
+// both: with only the server's datagrams lost, the client's heartbeats
+// keep it heard, so it never counts as silent, but its acknowledgement
+// stops; once that has not moved for SilentAfter the hold lifts and the
+// program runs to its end. When the link mends, the client prints one
+// marker for exactly the lines it missed, and the rest in order.
+func TestAFloodWhileOnlyTheServersDatagramsAreLostRunsOn(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	synctest.Test(t, func(t *testing.T) {
+		var link cuttable
+		prog := newTTYShell()
+		var quiet silences
+		s := startTTYSession(t, link.profile(), prog, quiet.hook)
+		const total = 20000
+		s.typeLine(fmt.Sprintf("seq %d", total))
+		s.wait("a flood under way", func() bool { _, w := prog.done(); return w >= 2000 })
+		link.cutDown(true)
+		cut := time.Now()
+		time.Sleep(server.SilentAfter / 2)
+		if f, w := prog.done(); f > 0 {
+			t.Fatalf("the program finished, %d lines, while the client was only in a dead spot", w)
+		}
+		finished := waitFinished(t, prog, 1, time.Minute)
+		if took := finished.Sub(cut); took > server.SilentAfter+2*time.Second {
+			t.Errorf("the program finished %v after the server's datagrams were cut; it should wait only SilentAfter (%v)", took, server.SilentAfter)
+		}
+		if n := quiet.count(); n != 0 {
+			t.Errorf("the client counted as silent %d times; its heartbeats should have kept it heard", n)
+		}
+		link.cutDown(false)
+		last := fmt.Sprintf("line-%04d", total)
+		s.wait(last, func() bool { return strings.Contains(s.clientScreen(), last) })
+		s.converge()
+		markers, err := accountedFor(numbers(transcript(s.user.bytes(), 80, 24)), total)
 		if err != nil {
 			t.Fatal(err)
 		}
