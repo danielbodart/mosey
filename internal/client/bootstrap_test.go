@@ -144,15 +144,15 @@ func TestAMissingServerIsReportedAsSuch(t *testing.T) {
 
 func TestTheServersRefusalIsExplained(t *testing.T) {
 	for line, want := range map[string]string{
-		"MOSEY-ERROR 2 version -\n":          "far's mosey speaks protocol 2; this mosey speaks 1",
+		"MOSEY-ERROR 3 version -\n":          "far's mosey speaks protocol 3; this mosey speaks 2",
 		"MOSEY-ERROR 1 attach 2-1\n":         "the session on far speaks attach protocol 2; far's mosey speaks 1",
 		"MOSEY-ERROR 1 attach 2\n":           "the session on far speaks attach protocol 2, which far's mosey cannot attach",
 		"MOSEY-ERROR 1 line -\n":             "the server could not read this client's request: a bug, please report it",
 		"MOSEY-ERROR 1 unsupported attach\n": "the remote mosey can't do attach yet",
 		"MOSEY-ERROR 1 internal -\n":         "the server failed to start (see above)",
 		"MOSEY-ERROR 1 overloaded -\n":       "the server refused: overloaded (see above)",
-		"MOSEY-CONNECT 1 nope\n":             "far sent a malformed mosey line",
-		"MOSEY-CONNECT 9 later\n":            "far's mosey speaks protocol 9; this mosey speaks 1",
+		"MOSEY-CONNECT 2 nope\n":             "far sent a malformed mosey line",
+		"MOSEY-CONNECT 9 later\n":            "far's mosey speaks protocol 9; this mosey speaks 2",
 	} {
 		r := bootstrapWith(t, "hostname far\n", 0, "", []byte(line), nil, "1")
 		var f *Failure

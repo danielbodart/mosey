@@ -8,18 +8,21 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
+	"unicode"
+	"unicode/utf8"
 )
 
 // The three lines of bootstrap.md §6. Their sizes are fixed so that every
 // reader can bound what it reads before it knows what it has.
 const (
 	// Version is the bootstrap protocol's version: the second field of
-	// every line, frozen in position forever (§6.1).
-	Version = 1
+	// every line, frozen in position forever (§6.1). 2 added the
+	// ClientLine's dir and type (§6.2, §9.2.3).
+	Version = 2
 	// MaxClientLine bounds the stdin line, LF included. The longest legal
-	// line is 3039 bytes (§6.2); this is the next power of two, so the
+	// line is 5708 bytes (§6.2); this is the next power of two, so the
 	// launcher's read bound is fixed and generous.
-	MaxClientLine = 4096
+	MaxClientLine = 8192
 	// MaxCredentialLine bounds the stdout line, LF included: at most 1862
 	// bytes are used (§6.3).
 	MaxCredentialLine = 2048
@@ -42,6 +45,11 @@ const (
 
 	maxWord     = 64
 	maxEnvValue = 64
+	// MaxStartText bounds -dir and -type, in bytes (§6.2): macOS's
+	// PATH_MAX, and a quarter of the 4096-byte line termios(3) says the
+	// tty's canonical mode holds, so typed text and its Enter are always
+	// one line the shell can read.
+	MaxStartText = 1024
 )
 
 const (
@@ -129,6 +137,10 @@ type ClientLine struct {
 	Cols, Rows uint16
 	// Env holds allow-listed names only (EnvNames); Marshal sorts them.
 	Env map[string]string
+	// Dir and Type are -dir and -type (§9.2.3): where a session this line
+	// creates starts its shell, and what is typed into it. "" is none.
+	// Only a new session uses them; a resume ignores them.
+	Dir, Type string
 	// Public is the client's one-shot X-Wing public key (D20).
 	Public []byte
 }
@@ -171,6 +183,9 @@ const (
 	CodeUnsupported = "unsupported"
 	CodeSession     = "session"
 	CodeInternal    = "internal"
+	// CodeDir answers a line that would create a session whose dir is
+	// not a directory; nothing was started (§9.2.3).
+	CodeDir = "dir"
 	// CodeTaken answers R3's reconnect when another credential holds its
 	// session; its detail is when that client attached, in unix seconds
 	// (§9.2.2).
@@ -223,6 +238,8 @@ func MarshalClientLine(c ClientLine) []byte {
 	b = appendField(b, strconv.Itoa(int(c.Rows)))
 	b = append(b, ' ')
 	b = appendEnv(b, c.Env)
+	b = appendText(b, c.Dir)
+	b = appendText(b, c.Type)
 	b = appendField(b, b64.EncodeToString(c.Public))
 	return append(b, '\n')
 }
@@ -231,7 +248,7 @@ func MarshalClientLine(c ClientLine) []byte {
 // canonical (§6.1, §6.2). Its input comes from ssh's stdin, to the
 // unsandboxed spawner, so it is fuzzed.
 func ParseClientLine(line []byte) (ClientLine, error) {
-	fields, err := splitLine(line, MaxClientLine, clientMagic, 9)
+	fields, err := splitLine(line, MaxClientLine, clientMagic, 11)
 	if err != nil {
 		return ClientLine{}, err
 	}
@@ -251,10 +268,16 @@ func ParseClientLine(line []byte) (ClientLine, error) {
 	if c.Env, err = parseEnv(fields[6]); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Public, err = decodeLen(fields[7], PublicKeySize, "public key"); err != nil {
+	if c.Dir, err = parseText(fields[7], ValidDir, "dir"); err != nil {
 		return ClientLine{}, err
 	}
-	// fields[8] is the empty remainder after the LF, checked by splitLine.
+	if c.Type, err = parseText(fields[8], ValidType, "type"); err != nil {
+		return ClientLine{}, err
+	}
+	if c.Public, err = decodeLen(fields[9], PublicKeySize, "public key"); err != nil {
+		return ClientLine{}, err
+	}
+	// fields[10] is the empty remainder after the LF, checked by splitLine.
 	if !bytes.Equal(MarshalClientLine(c), line) {
 		return ClientLine{}, badLine("client line is not canonical")
 	}
@@ -602,6 +625,55 @@ func decodeFixed(dst []byte, f []byte, what string) error {
 	copy(dst, b)
 	clear(b) // it may be the PSK
 	return nil
+}
+
+// ValidDir says whether d may be a -dir (§6.2's dirtext): 1 to
+// MaxStartText bytes of UTF-8 with no control character, so a path can
+// carry no NUL, newline or escape sequence.
+func ValidDir(d string) bool { return validText(d, false) }
+
+// ValidType says whether t may be a -type (§6.2's typetext): as ValidDir,
+// but a tab is allowed. No CR or LF means the text is one line, and the
+// one Enter after it is the server's; no ESC or Ctrl-C means it can only
+// be typed, never drive the line editor.
+func ValidType(t string) bool { return validText(t, true) }
+
+func validText(s string, tab bool) bool {
+	if len(s) < 1 || len(s) > MaxStartText || !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) && !(tab && r == '\t') {
+			return false
+		}
+	}
+	return true
+}
+
+// appendText appends a dir or type field: "-" for none, else the text in
+// base64url, since a path or a command holds spaces (§6.2). An invalid
+// text is written as it is encoded, and the parser refuses it.
+func appendText(b []byte, t string) []byte {
+	if t == "" {
+		return appendField(b, "-")
+	}
+	return b64.AppendEncode(append(b, ' '), []byte(t))
+}
+
+// parseText reads a dir or type field. The encoded length is bounded
+// before anything is decoded.
+func parseText(f []byte, valid func(string) bool, what string) (string, error) {
+	if string(f) == "-" {
+		return "", nil
+	}
+	if len(f) > b64.EncodedLen(MaxStartText) {
+		return "", badLine("%s of %d characters", what, len(f))
+	}
+	t, err := b64.DecodeString(string(f))
+	if err != nil || !valid(string(t)) {
+		return "", badLine("%s is not base64url of a %s text", what, what)
+	}
+	return string(t), nil
 }
 
 // ValidEnvValue says whether v may travel as an env value (§6.2): 1 to 64

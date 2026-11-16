@@ -19,10 +19,11 @@ const (
 	// into a buffer this size.
 	MaxSessionLine = 256
 	// AttachProtocol is the one version of the attach protocol
-	// (server.md §2.8) this build speaks: v1 is server.md as it stands. A
-	// launcher attaches a session only if its greeting says the same
-	// number (D8 V1); there is no range.
-	AttachProtocol = 1
+	// (server.md §2.8) this build speaks. A launcher attaches a session
+	// only if its greeting says the same number (D8 V1); there is no
+	// range. 2 since the ClientLine its 0x40 carries went to version 2
+	// (§9.2.1).
+	AttachProtocol = 2
 	// maxAttachProtocol bounds a greeting's aproto (§9.2.1).
 	maxAttachProtocol = 255
 	// maxUnixDigits bounds the time fields: 12 digits reach the year

@@ -206,10 +206,10 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	if sent := <-got; !bytes.Equal(sent, want) {
 		t.Errorf("the spawner got %q, not the line as resume:SID", sent)
 	}
-	// A session of attach protocol 2 is passed over by auto: a plain
+	// A session of attach protocol 1 is passed over by auto: a plain
 	// client starts its own (here there is no spawner to start, Self
 	// being empty).
-	aproto.Store(2)
+	aproto.Store(1)
 	out, _, err = run(auto)
 	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeInternal ||
 		!strings.Contains(err.Error(), "starting the spawner") {
@@ -223,8 +223,8 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	for name, line := range map[string][]byte{"-s work": byName, "R3's resume": byID} {
 		out, errs, err = run(line)
 		e, perr := bootstrap.ParseErrorLine([]byte(out))
-		if err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "2-1" ||
-			!strings.Contains(errs, "session work speaks attach protocol 2; this mosey speaks 1") {
+		if err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "1-2" ||
+			!strings.Contains(errs, "session work speaks attach protocol 1; this mosey speaks 2") {
 			t.Errorf("%s of an attach-2 session: %v, stdout %q, stderr %q", name, err, out, errs)
 		}
 	}
@@ -301,7 +301,7 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 	other := [16]byte{0xef}
 	fakeSession(t, base, other, func(f *os.File) {
 		// Started after s-ab's, so it is listed second (oldest first).
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 2, SessionID: other, Name: "s-ef", Started: time.Unix(1794650050, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650100, 0)}))
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 1, SessionID: other, Name: "s-ef", Started: time.Unix(1794650050, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650100, 0)}))
 	})
 	broken := [16]byte{0x01}
 	fakeSession(t, base, broken, func(f *os.File) { f.Write([]byte("MOSEY-SESSION v9 not a greeting\n")) })
@@ -345,7 +345,7 @@ func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
 	// attach protocol message: -kill says so with both numbers.
 	elder := [16]byte{0x44}
 	fakeSession(t, base, elder, func(f *os.File) {
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 2, SessionID: elder, Name: "elder",
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 1, SessionID: elder, Name: "elder",
 			Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650000, 0)}))
 		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
 		if m, err := conn.Recv(); err == nil {
@@ -358,7 +358,7 @@ func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
 	// spawner hands Hangup on. This one records which session got it.
 	killed := [16]byte{0x33}
 	fakeSession(t, base, killed, func(f *os.File) {
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 1, SessionID: killed, Name: "doomed",
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: bootstrap.AttachProtocol, SessionID: killed, Name: "doomed",
 			Started: time.Unix(1794650000, 0), State: bootstrap.SessionAttached, Since: time.Unix(1794650000, 0)}))
 		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
 		if m, err := conn.Recv(); err == nil {
@@ -388,8 +388,8 @@ func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
 	}
 	out.Reset()
 	err := Kill(&out, getenv, "elder")
-	if e, perr := bootstrap.ParseErrorLine(out.Bytes()); err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "2-1" ||
-		!strings.Contains(err.Error(), "session elder speaks attach protocol 2; this mosey speaks 1") {
+	if e, perr := bootstrap.ParseErrorLine(out.Bytes()); err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "1-2" ||
+		!strings.Contains(err.Error(), "session elder speaks attach protocol 1; this mosey speaks 2") {
 		t.Errorf("kill of an attach-2 session: %v, %q", err, out.String())
 	}
 	select {

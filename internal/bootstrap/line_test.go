@@ -41,6 +41,8 @@ func TestAClientLineSurvivesARoundTrip(t *testing.T) {
 		Cols:      65535,
 		Rows:      65535,
 		Env:       map[string]string{},
+		Dir:       strings.Repeat("d", MaxStartText),
+		Type:      strings.Repeat("t", MaxStartText),
 		Public:    key(0xee),
 	}
 	for _, n := range EnvNames {
@@ -60,8 +62,8 @@ func TestAClientLineSurvivesARoundTrip(t *testing.T) {
 		}
 	}
 	// The longest legal line is the size §6.2 derives.
-	if n := len(MarshalClientLine(max)); n != 2974 {
-		t.Errorf("longest client line is %d bytes, §6.2 says 2974", n)
+	if n := len(MarshalClientLine(max)); n != 5708 {
+		t.Errorf("longest client line is %d bytes, §6.2 says 5708", n)
 	}
 }
 
@@ -121,7 +123,7 @@ func TestABadAttachIsRefused(t *testing.T) {
 
 func TestTheClientLineIsWhatTheSpecShows(t *testing.T) {
 	line := string(MarshalClientLine(sampleClientLine()))
-	want := "MOSEY-CLIENT 1 new no 211 58 COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256color "
+	want := "MOSEY-CLIENT 2 new no 211 58 COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256color - - "
 	if !strings.HasPrefix(line, want) || !strings.HasSuffix(line, "\n") {
 		t.Errorf("got %q", line[:len(want)])
 	}
@@ -156,7 +158,7 @@ func TestEveryRuleOfAClientLineIsEnforced(t *testing.T) {
 	good := string(MarshalClientLine(sampleClientLine()))
 	pub := string(MarshalClientLine(sampleClientLine()))
 	pub = pub[strings.LastIndexByte(pub, ' ')+1 : len(pub)-1]
-	head := "MOSEY-CLIENT 1 new no 80 24 "
+	head := "MOSEY-CLIENT 2 new no 80 24 "
 	for name, line := range map[string]string{
 		"CR before LF":         strings.TrimSuffix(good, "\n") + "\r\n",
 		"no LF":                strings.TrimSuffix(good, "\n"),
@@ -164,31 +166,31 @@ func TestEveryRuleOfAClientLineIsEnforced(t *testing.T) {
 		"trailing space":       strings.TrimSuffix(good, "\n") + " \n",
 		"leading space":        " " + good,
 		"tab":                  strings.Replace(good, " new", "\tnew", 1),
-		"padding":              head + "- " + pub + "==\n",
-		"short key":            head + "- " + pub[1:] + "\n",
-		"trailing bits":        head + "- " + pub[:len(pub)-1] + "B\n",
-		"not base64url":        head + "- " + strings.Replace(pub, pub[:1], "+", 1) + "\n",
-		"leading zero cols":    "MOSEY-CLIENT 1 new no 080 24 - " + pub + "\n",
-		"zero cols":            "MOSEY-CLIENT 1 new no 0 24 - " + pub + "\n",
-		"cols 65536":           "MOSEY-CLIENT 1 new no 65536 24 - " + pub + "\n",
-		"negative rows":        "MOSEY-CLIENT 1 new no 80 -24 - " + pub + "\n",
-		"unknown env name":     head + "HOME=x " + pub + "\n",
-		"unsorted env":         head + "TERM=x,LANG=y " + pub + "\n",
-		"repeated env":         head + "LANG=x,LANG=y " + pub + "\n",
-		"empty env value":      head + "LANG= " + pub + "\n",
-		"env value with ;":     head + "LANG=a;b " + pub + "\n",
-		"env with no =":        head + "LANG " + pub + "\n",
-		"long env value":       head + "LANG=" + strings.Repeat("x", 65) + " " + pub + "\n",
-		"attach other":         "MOSEY-CLIENT 1 old no 80 24 - " + pub + "\n",
-		"short session id":     "MOSEY-CLIENT 1 resume:AAAA no 80 24 - " + pub + "\n",
-		"agent maybe":          "MOSEY-CLIENT 1 new maybe 80 24 - " + pub + "\n",
-		"a swver as well":      "MOSEY-CLIENT 1 dev new no 80 24 - " + pub + "\n",
-		"missing field":        "MOSEY-CLIENT 1 new no 80 24 " + pub + "\n",
-		"extra field":          head + "- " + pub + " x\n",
+		"padding":              head + "- - - " + pub + "==\n",
+		"short key":            head + "- - - " + pub[1:] + "\n",
+		"trailing bits":        head + "- - - " + pub[:len(pub)-1] + "B\n",
+		"not base64url":        head + "- - - " + strings.Replace(pub, pub[:1], "+", 1) + "\n",
+		"leading zero cols":    "MOSEY-CLIENT 2 new no 080 24 - - - " + pub + "\n",
+		"zero cols":            "MOSEY-CLIENT 2 new no 0 24 - - - " + pub + "\n",
+		"cols 65536":           "MOSEY-CLIENT 2 new no 65536 24 - - - " + pub + "\n",
+		"negative rows":        "MOSEY-CLIENT 2 new no 80 -24 - - - " + pub + "\n",
+		"unknown env name":     head + "HOME=x - - " + pub + "\n",
+		"unsorted env":         head + "TERM=x,LANG=y - - " + pub + "\n",
+		"repeated env":         head + "LANG=x,LANG=y - - " + pub + "\n",
+		"empty env value":      head + "LANG= - - " + pub + "\n",
+		"env value with ;":     head + "LANG=a;b - - " + pub + "\n",
+		"env with no =":        head + "LANG - - " + pub + "\n",
+		"long env value":       head + "LANG=" + strings.Repeat("x", 65) + " - - " + pub + "\n",
+		"attach other":         "MOSEY-CLIENT 2 old no 80 24 - - - " + pub + "\n",
+		"short session id":     "MOSEY-CLIENT 2 resume:AAAA no 80 24 - - - " + pub + "\n",
+		"agent maybe":          "MOSEY-CLIENT 2 new maybe 80 24 - - - " + pub + "\n",
+		"a swver as well":      "MOSEY-CLIENT 2 dev new no 80 24 - - - " + pub + "\n",
+		"missing field":        "MOSEY-CLIENT 2 new no 80 24 - - " + pub + "\n",
+		"extra field":          head + "- - - " + pub + " x\n",
 		"wrong magic":          strings.Replace(good, "MOSEY-CLIENT", "MOSEY-CLIENTS", 1),
-		"version zero-led":     strings.Replace(good, "CLIENT 1", "CLIENT 01", 1),
+		"version zero-led":     strings.Replace(good, "CLIENT 2", "CLIENT 02", 1),
 		"non-ASCII":            strings.Replace(good, "new", "néw", 1),
-		"over MaxClientLine":   head + "- " + pub + strings.Repeat("A", MaxClientLine) + "\n",
+		"over MaxClientLine":   head + "- - - " + pub + strings.Repeat("A", MaxClientLine) + "\n",
 		"empty":                "",
 		"just LF":              "\n",
 		"credential, not ours": string(MarshalCredentialLine(sampleCredentialLine())),
@@ -197,20 +199,20 @@ func TestEveryRuleOfAClientLineIsEnforced(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	if _, err := ParseClientLine([]byte(head + "- " + pub + "\n")); err != nil {
+	if _, err := ParseClientLine([]byte(head + "- - - " + pub + "\n")); err != nil {
 		t.Errorf("the good base line was refused: %v", err)
 	}
 }
 
 func TestALineOfAnotherVersionSaysWhichVersion(t *testing.T) {
 	for _, line := range []string{
-		strings.Replace(string(MarshalClientLine(sampleClientLine())), "CLIENT 1", "CLIENT 2", 1),
+		strings.Replace(string(MarshalClientLine(sampleClientLine())), "CLIENT 2", "CLIENT 3", 1),
 		"MOSEY-CLIENT 7 whatever the rest may be\n",
 		"MOSEY-CLIENT 7\n",
 	} {
 		_, err := ParseClientLine([]byte(line))
 		var v *VersionError
-		if !errors.As(err, &v) || v.Got != 2 && v.Got != 7 || !errors.Is(err, ErrBadLine) {
+		if !errors.As(err, &v) || v.Got != 3 && v.Got != 7 || !errors.Is(err, ErrBadLine) {
 			t.Errorf("%.30q: %v", line, err)
 		}
 	}
@@ -334,6 +336,59 @@ func TestACredentialLineWithABadNameIsRefused(t *testing.T) {
 		line := strings.Replace(good, " quiet-heron ", " "+name+" ", 1)
 		if _, err := ParseCredentialLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%q gave %v", name, err)
+		}
+	}
+}
+
+// -dir and -type travel base64url, so spaces and any letter survive, and
+// the text inside is still held to §6.2: one line of ordinary text, tab
+// allowed in -type only, at most 1024 bytes (§9.2.3).
+func TestDirAndTypeCarryOneLineOfTextAndNothingElse(t *testing.T) {
+	for _, c := range []struct{ dir, typ string }{
+		{"src/my project", "claude -w feature x"},
+		{"/srv/données", "echo 'hi there'\tand a tab"},
+		{strings.Repeat("d", MaxStartText), strings.Repeat("t", MaxStartText)},
+		{"", "vim"},
+		{"work", ""},
+	} {
+		l := ClientLine{Attach: AttachName, Name: "work", Cols: 80, Rows: 24, Dir: c.dir, Type: c.typ, Public: key(1)}
+		got, err := ParseClientLine(MarshalClientLine(l))
+		if err != nil || got.Dir != c.dir || got.Type != c.typ {
+			t.Errorf("%q, %q came back as %q, %q, %v", c.dir, c.typ, got.Dir, got.Type, err)
+		}
+	}
+	for name, s := range map[string]string{
+		"1025 bytes": strings.Repeat("x", MaxStartText+1),
+		"NUL":        "a\x00b",
+		"LF":         "echo a\necho b",
+		"CR":         "echo a\r",
+		"ESC":        "\x1b[A",
+		"DEL":        "a\x7f",
+		"Ctrl-C":     "\x03",
+		"C1 NEL":     "a\u0085b",
+		"bad UTF-8":  "a\xffb",
+	} {
+		if ValidDir(s) || ValidType(s) {
+			t.Errorf("%s: accepted", name)
+		}
+		line := MarshalClientLine(ClientLine{Cols: 80, Rows: 24, Type: s, Public: key(1)})
+		if _, err := ParseClientLine(line); !errors.Is(err, ErrBadLine) {
+			t.Errorf("%s: a line carrying it gave %v", name, err)
+		}
+	}
+	if !ValidType("a\tb") || ValidDir("a\tb") {
+		t.Error("a tab is for -type only")
+	}
+	good := string(MarshalClientLine(ClientLine{Cols: 80, Rows: 24, Dir: "src", Public: key(1)}))
+	for name, field := range map[string]string{
+		"padding":       "c3Jj==",
+		"trailing bits": "c3J", // "sr" is c3I: J leaves an unused bit set
+		"not base64url": "c3J+",
+		"empty text":    "",
+	} {
+		line := strings.Replace(good, " c3Jj ", " "+field+" ", 1)
+		if _, err := ParseClientLine([]byte(line)); !errors.Is(err, ErrBadLine) {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }

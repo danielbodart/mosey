@@ -28,7 +28,7 @@ func TestAProbeLineSurvivesARoundTrip(t *testing.T) {
 			t.Errorf("%q is over MaxProbeLine", line)
 		}
 	}
-	if got := string(MarshalProbeLine(ProbeLine{"Linux", "aarch64"})); got != "MOSEY-PROBE 1 Linux aarch64\n" {
+	if got := string(MarshalProbeLine(ProbeLine{"Linux", "aarch64"})); got != "MOSEY-PROBE 2 Linux aarch64\n" {
 		t.Errorf("marshalled %q", got)
 	}
 	if n := len(MarshalProbeLine(ProbeLine{strings.Repeat("S", 64), strings.Repeat("m", 64)})); n != 144 {
@@ -38,33 +38,33 @@ func TestAProbeLineSurvivesARoundTrip(t *testing.T) {
 
 func TestAProbeLineOutsideItsGrammarIsRefused(t *testing.T) {
 	for _, line := range []string{
-		"MOSEY-PROBE 1 Linux\n",
-		"MOSEY-PROBE 1 Linux x86_64 none\n",
-		"MOSEY-PROBE 1 Linux  x86_64\n",
-		"MOSEY-PROBE 1 Linux x86_64 \n",
-		"MOSEY-PROBE 1 Linux x86_64",
-		"MOSEY-PROBE 1 Linux x86_64\r\n",
+		"MOSEY-PROBE 2 Linux\n",
+		"MOSEY-PROBE 2 Linux x86_64 none\n",
+		"MOSEY-PROBE 2 Linux  x86_64\n",
+		"MOSEY-PROBE 2 Linux x86_64 \n",
+		"MOSEY-PROBE 2 Linux x86_64",
+		"MOSEY-PROBE 2 Linux x86_64\r\n",
 		"MOSEY-PROBE 01 Linux x86_64\n",
-		"MOSEY-PROBE 1 Lin\x00ux x86_64\n",
-		"MOSEY-PROBE 1 " + strings.Repeat("S", 65) + " x86_64\n",
+		"MOSEY-PROBE 2 Lin\x00ux x86_64\n",
+		"MOSEY-PROBE 2 " + strings.Repeat("S", 65) + " x86_64\n",
 	} {
 		if p, err := ParseProbeLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%q: %+v %v", line, p, err)
 		}
 	}
 	var ve *VersionError
-	if _, err := ParseProbeLine([]byte("MOSEY-PROBE 2 Linux x86_64\n")); !errors.As(err, &ve) || ve.Got != 2 {
+	if _, err := ParseProbeLine([]byte("MOSEY-PROBE 3 Linux x86_64\n")); !errors.As(err, &ve) || ve.Got != 3 {
 		t.Errorf("another version: %v", err)
 	}
 }
 
 func TestReadCredentialReturnsTheProbeAsNoServer(t *testing.T) {
-	_, err := ReadCredential(strings.NewReader("Welcome\nMOSEY-PROBE 1 Linux aarch64\n"))
+	_, err := ReadCredential(strings.NewReader("Welcome\nMOSEY-PROBE 2 Linux aarch64\n"))
 	var ns *NoServerError
 	if !errors.As(err, &ns) || !errors.Is(err, ErrNoServer) || ns.Probe != (ProbeLine{"Linux", "aarch64"}) {
 		t.Fatalf("%v", err)
 	}
-	if _, err := ReadCredential(strings.NewReader("MOSEY-PROBE 1 Linux x86 64\n")); !errors.Is(err, ErrBadLine) {
+	if _, err := ReadCredential(strings.NewReader("MOSEY-PROBE 2 Linux x86 64\n")); !errors.Is(err, ErrBadLine) {
 		t.Errorf("a probe line with a space in a field: %v", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestTheCachePathAndTheProtocolAnswerAreSafeInAScript(t *testing.T) {
 	if !ValidServer(CachePath) {
 		t.Errorf("%q", CachePath)
 	}
-	if got := ProtocolAnswer(1); got != "1 1" || !validProtocolAnswer(got) {
+	if got := ProtocolAnswer(1); got != "2 1" || !validProtocolAnswer(got) {
 		t.Errorf("%q", got)
 	}
 	for _, a := range []string{"", "1", "1  1", "1 1 1", "01 1", "1 x", "1;1", "1 1'", "1000 1"} {
@@ -161,7 +161,7 @@ func TestWithoutRemoteTheBootstrapProbes(t *testing.T) {
 	if err := s.Check(); err != nil {
 		t.Fatal(err)
 	}
-	if !s.Probes() || !strings.Contains(s.RemoteCommand(), `--serve=protocol </dev/null 2>/dev/null)" = "1 1" ]`) {
+	if !s.Probes() || !strings.Contains(s.RemoteCommand(), `--serve=protocol </dev/null 2>/dev/null)" = "2 1" ]`) {
 		t.Errorf("no probe: %q", s.RemoteCommand())
 	}
 	s = SSH{Destination: "far", Server: "/opt/mosey"}

@@ -59,7 +59,7 @@ func TestAPlainClientTakesTheNewestDetachedSessionAndNeverAnAttachedOne(t *testi
 // naming it are refused with its number; and its name is never given to
 // a new session.
 func TestASessionOfAnotherAttachProtocolIsPassedOverOrRefused(t *testing.T) {
-	elder := speaking(2, session("work", 1, bootstrap.SessionDetached, 900))
+	elder := speaking(1, session("work", 1, bootstrap.SessionDetached, 900))
 	ours := session("play", 2, bootstrap.SessionDetached, 100)
 	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{elder, ours}, fixedName); c.start || c.err != nil || c.take != 1 {
 		t.Errorf("a plain client: %+v, not the attachable detached session", c)
@@ -67,15 +67,15 @@ func TestASessionOfAnotherAttachProtocolIsPassedOverOrRefused(t *testing.T) {
 	var taken map[string]bool
 	c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{elder}, func(t map[string]bool) string { taken = t; return "fresh" })
 	if !c.start || c.name != "fresh" || !taken["work"] {
-		t.Errorf("a plain client with only an attach-2 session: %+v, avoiding %v; want a new session, not called work", c, taken)
+		t.Errorf("a plain client with only an attach-1 session: %+v, avoiding %v; want a new session, not called work", c, taken)
 	}
 	byName := choose(line(bootstrap.AttachName, "work"), []bootstrap.SessionLine{elder}, fixedName)
 	byID := choose(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: [16]byte{1}, Holder: [8]byte{7}, HasHolder: true},
 		[]bootstrap.SessionLine{elder}, fixedName)
 	for name, c := range map[string]choice{"-s work": byName, "R3's resume": byID} {
-		if c.err == nil || c.err.Code != bootstrap.CodeAttach || c.err.Detail != "2-1" ||
-			!strings.Contains(c.err.Text, "speaks attach protocol 2; this mosey speaks 1") {
-			t.Errorf("%s of an attach-2 session: %+v", name, c)
+		if c.err == nil || c.err.Code != bootstrap.CodeAttach || c.err.Detail != "1-2" ||
+			!strings.Contains(c.err.Text, "speaks attach protocol 1; this mosey speaks 2") {
+			t.Errorf("%s of an attach-1 session: %+v", name, c)
 		}
 	}
 }

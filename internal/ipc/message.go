@@ -51,7 +51,7 @@ const (
 	// message after its type and flags.
 	MaxFragment = MaxMessage - 2
 	// MaxClientLine and MaxCredentialLine are bootstrap.md §6.2 and §6.3's.
-	MaxClientLine     = 4096
+	MaxClientLine     = 8192
 	MaxCredentialLine = 2048
 	// MaxExitReason and MaxFailed bound the human-readable texts.
 	MaxExitReason = 200

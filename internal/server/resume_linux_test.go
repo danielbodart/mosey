@@ -500,7 +500,7 @@ func TestAReconnectsHoldIsTheReconnectingClientsOwn(t *testing.T) {
 	}
 	// Another client's reconnect is refused as taken, and proto hears
 	// nothing of it.
-	if r := wait(t, reconnect([8]byte{8})); r.err == nil || !strings.HasPrefix(r.out, "MOSEY-ERROR 1 taken ") {
+	if r := wait(t, reconnect([8]byte{8})); r.err == nil || !strings.HasPrefix(r.out, "MOSEY-ERROR 2 taken ") {
 		t.Errorf("another client's reconnect: %v, %q", r.err, r.out)
 	}
 	// The same client's next try is its own again.

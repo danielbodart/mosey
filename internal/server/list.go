@@ -49,7 +49,7 @@ var ErrNoSuchSession = errors.New("no session of that name")
 
 // Kill is `mosey --serve=kill NAME` (bootstrap.md §9.5): it finds the
 // session called name among those that answer and asks its spawner to
-// hang the shell up. With none, it prints `MOSEY-ERROR 1 session -` on w
+// hang the shell up. With none, it prints `MOSEY-ERROR 2 session -` on w
 // for the client and returns ErrNoSuchSession.
 func Kill(w io.Writer, getenv func(string) string, name string) error {
 	if !bootstrap.ValidSessionName(name) {

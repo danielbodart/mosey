@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func FuzzParseClientLine(f *testing.F) {
@@ -21,6 +22,10 @@ func FuzzParseClientLine(f *testing.F) {
 	r.Attach, r.Name, r.HasHolder = AttachName, "quiet-heron", false
 	f.Add(MarshalClientLine(r))
 	r.Attach = AttachAuto
+	f.Add(MarshalClientLine(r))
+	r.Dir, r.Type = "src/my project", "claude -w x\tü"
+	f.Add(MarshalClientLine(r))
+	r.Attach, r.Dir, r.Type = AttachNew, "/tmp", ""
 	f.Add(MarshalClientLine(r))
 	f.Add([]byte("MOSEY-CLIENT 1 dev new no 80 24 - AAAA\n"))
 	f.Add([]byte("MOSEY-CLIENT 2\n"))
@@ -45,6 +50,43 @@ func FuzzParseClientLine(f *testing.F) {
 			if _, ok := slices.BinarySearch(EnvNames, n); !ok || !ValidEnvValue(v) {
 				t.Fatalf("accepted env %s=%q", n, v)
 			}
+		}
+		if c.Dir != "" && !referenceText(c.Dir, false) || c.Type != "" && !referenceText(c.Type, true) {
+			t.Fatalf("accepted dir %q, type %q", c.Dir, c.Type)
+		}
+	})
+}
+
+// referenceText is §6.2's dirtext and typetext written out by hand, rune
+// by rune, as the fuzzer's reference for ValidDir and ValidType: 1 to
+// 1024 bytes, valid UTF-8, and none of Unicode's Cc controls (U+0000 to
+// U+001F and U+007F to U+009F), but a tab where tab is allowed.
+func referenceText(s string, tab bool) bool {
+	if len(s) < 1 || len(s) > 1024 {
+		return false
+	}
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && n <= 1 {
+			return false
+		}
+		if (r < 0x20 || r >= 0x7f && r <= 0x9f) && !(tab && r == '\t') {
+			return false
+		}
+		i += n
+	}
+	return true
+}
+
+// Agreement with the reference, on any text: what the line's grammar
+// takes is exactly what §6.2 says.
+func FuzzValidDirAndType(f *testing.F) {
+	for _, s := range []string{"src", "a b", "\t", "x\ty", "\x00", "\xc2\x85", "\xff", "é", strings.Repeat("x", 1025)} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		if ValidDir(s) != referenceText(s, false) || ValidType(s) != referenceText(s, true) {
+			t.Fatalf("%q: ValidDir %v, ValidType %v", s, ValidDir(s), ValidType(s))
 		}
 	})
 }

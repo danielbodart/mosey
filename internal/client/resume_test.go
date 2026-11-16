@@ -17,7 +17,7 @@ import (
 // A refusal the user can meet says what it means (bootstrap.md §6.4).
 func TestARefusalIsExplained(t *testing.T) {
 	for line, want := range map[string]string{
-		"MOSEY-ERROR 2 version -\n":  "far's mosey speaks protocol 2; this mosey speaks 1",
+		"MOSEY-ERROR 3 version -\n":  "far's mosey speaks protocol 3; this mosey speaks 2",
 		"MOSEY-ERROR 1 session -\n":  "no such session on far",
 		"MOSEY-ERROR 1 internal -\n": "the server failed to start (see above)",
 	} {
@@ -132,22 +132,22 @@ func TestKillRunsServeKillWithTheName(t *testing.T) {
 // launcher's stderr is not shown, as in R3's reconnect (bootstrap.md
 // §6.4).
 func TestAnAttachRefusalNamesBothProtocolsInTheClientsOwnLine(t *testing.T) {
-	refusal := &bootstrap.RemoteError{ErrorLine: bootstrap.ErrorLine{Proto: 1, Code: bootstrap.CodeAttach, Detail: "2-1"}}
+	refusal := &bootstrap.RemoteError{ErrorLine: bootstrap.ErrorLine{Proto: 2, Code: bootstrap.CodeAttach, Detail: "1-2"}}
 	b := &spawn{ssh: bootstrap.SSH{Destination: "far"}, line: bootstrap.ClientLine{Name: "work"}}
 	var f *Failure
-	if err := b.refused(refusal); !errors.As(err, &f) || f.Msg != "session work on far speaks attach protocol 2; far's mosey speaks 1" {
+	if err := b.refused(refusal); !errors.As(err, &f) || f.Msg != "session work on far speaks attach protocol 1; far's mosey speaks 2" {
 		t.Errorf("attach: %v", err)
 	}
 
 	dir := t.TempDir()
 	ssh := fakeSSH(t, dir, "hostname far\n", 0)
 	server := filepath.Join(dir, "mosey")
-	if err := os.WriteFile(server, []byte("#!/bin/sh\necho 'MOSEY-ERROR 1 attach 2-1'\nexit 1\n"), 0o755); err != nil {
+	if err := os.WriteFile(server, []byte("#!/bin/sh\necho 'MOSEY-ERROR 2 attach 1-2'\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
 	o := KillOptions{SSH: bootstrap.SSH{Program: ssh, Destination: "far", Server: server}, Name: "elder", Stdout: &out, Stderr: &errs}
-	if err := Kill(context.Background(), o); !errors.As(err, &f) || f.Msg != "session elder on far speaks attach protocol 2; far's mosey speaks 1" {
+	if err := Kill(context.Background(), o); !errors.As(err, &f) || f.Msg != "session elder on far speaks attach protocol 1; far's mosey speaks 2" {
 		t.Errorf("kill: %v", err)
 	}
 }
