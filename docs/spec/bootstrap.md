@@ -77,17 +77,25 @@ enter raw mode, run Session
 ## 2. The command line the client accepts
 
 ```
-mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-- SSH-OPTION...] [DESTINATION]
+mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-- SSH-OPTION...] DESTINATION
+mosey
 ```
 
-With no `DESTINATION` the session is on this machine, and no ssh is run
-(§2.2).
+A `DESTINATION` of `localhost` (any case) is this machine, and no ssh is
+run (§2.2). `mosey` with no arguments at all prints the usage on stdout
+and exits 0, starting nothing, as `-h` does; any other command line with
+no `DESTINATION` is a usage error (`mosey: needs a DESTINATION; use
+localhost for this machine`, exit 2) [D: Dan, 2026-11-16: a bare `mosey`
+opening a shell was surprising, so this machine is asked for by name].
 
 - `DESTINATION` is passed to ssh unchanged: `host`, `user@host`, an alias
-  from `~/.ssh/config`, or `ssh://user@host:port`. If given, it must be at
+  from `~/.ssh/config`, or `ssh://user@host:port`. It must be at
   most 1024 bytes, must not start with `-`, and must not contain bytes below
   0x21 or 0x7F (ssh would read a space as the start of the command). Anything
-  else is a usage error (exit 2).
+  else is a usage error (exit 2). Only the exact word `localhost` is this
+  machine without ssh: `127.0.0.1`, `::1`, `me@localhost` and an ssh
+  alias for this host all go through ssh, as any other host does, so the
+  ssh path can still be run against this machine.
 - `-remote PATH` is the remote mosey binary (§4.2). Without it the client
   uses whatever mosey the host has, and copies itself over only if there
   is none it can use (D7, §4.7).
@@ -161,12 +169,18 @@ usage error.
 ForwardAgent=no -A` and `ssh -A -o ForwardAgent=no` both resolve to
 `forwardagent yes`; `-t -o RequestTTY=no` resolves to `requesttty true`).
 
-### 2.2 No DESTINATION: this machine
+### 2.2 `localhost`: this machine
 
-`mosey`, `mosey -s NAME`, `mosey -new`, `mosey -list` and `mosey -kill
-NAME` with no `DESTINATION` act on this user's sessions on the machine the
-client runs on, with no ssh at all: mosey as a local terminal multiplexer,
-and an end-to-end test that needs no sshd [D: Dan, 2026-11-16].
+`mosey localhost`, `mosey -s NAME localhost`, `mosey -new localhost`,
+`mosey -list localhost` and `mosey -kill NAME localhost` act on this
+user's sessions on the machine the client runs on, with no ssh at all:
+mosey as a local terminal multiplexer, and an end-to-end test that needs
+no sshd [D: Dan, 2026-11-16]. Until Dan's second decision of that day
+this was mosey with no `DESTINATION`; the word `localhost` is the one
+every user already reads as this machine, and it makes the hint a
+session leaves (`mosey -s NAME localhost`) the same shape as any
+other's. The word is compared without regard to case, and nothing else
+(no `user@`, no address, no alias) is taken as this machine.
 
 **The local launcher.** Where §4.1 runs `ssh ... -- DEST "exec /bin/sh -c
 'exec mosey --serve'"`, the client runs the server binary itself, as
@@ -219,17 +233,16 @@ session's, not the client's, the agent follows whichever client is
 attached: one taken over ssh with `-A` gets that client's agent, bound as
 §8 says, and one taken back here gets this terminal's again.
 
-**Flags that need a destination.** `-upload` and `-ssh` say how to reach a
-host or what to copy to it; with no `DESTINATION` they are a usage error
-(`mosey: -upload needs a DESTINATION: with none, mosey runs here, without
-ssh`), not silently ignored, since giving them means the host was most
-likely forgotten. ssh options after `--` cannot arise: the last word is
-always the destination. `-A`, `-a`, `-remote`, `-predict`, `-dir`, `-type`
-and the session flags mean what they mean over ssh.
+**Flags that need ssh.** `-upload` and `-ssh` say how to reach a host or
+what to copy to it, and ssh options after `--` are for an ssh there is
+not; with `localhost` they are a usage error (`mosey: -upload has no
+use with localhost, which runs without ssh`), not silently ignored. `-A`,
+`-a`, `-remote`, `-predict`, `-dir`, `-type` and the session flags mean
+what they mean over ssh.
 
-**Messages** name `this machine` where they would name `DEST` (`no sessions
-on this machine`, `no session called NAME on this machine`), and a hint
-names no host (`resume it with: mosey -s NAME`). A launcher that prints no
+**Messages** name `localhost` where they name `DEST` (`no sessions on
+localhost`, `work is not a directory on localhost`), and a hint names it
+too (`resume it with: mosey -s NAME localhost`). A launcher that prints no
 line is named with its status (`SERVER exited with status N and no mosey
 line`), and one that cannot be run with `running SERVER: ERR`.
 
@@ -2027,7 +2040,7 @@ NAME          STATE     SINCE
 quiet-heron   detached  2026-11-14T09:30:12+00:00
 ```
 
-`SINCE` is in the client's local zone, as §9.1's times are. With no line it prints `no sessions on DEST` (`on this machine` with no destination, §2.2).
+`SINCE` is in the client's local zone, as §9.1's times are. With no line it prints `no sessions on DEST` (`on localhost` for this machine, §2.2).
 
 A lister sends no ClientLine; the spawner sees the connection close after
 its greeting and does nothing.
@@ -2270,7 +2283,7 @@ type SSH struct {
 }
 
 func (s SSH) Check() error // §2 and §4.1: destination and Server rules
-func (s SSH) Local() bool  // no Destination: this machine, with no ssh (§2.2)
+func (s SSH) Local() bool  // Destination localhost: this machine, with no ssh (§2.2)
 func (s SSH) Resolve(ctx context.Context) (Config, error) // runs ssh -G; locally LocalConfig()
 func (s SSH) Command(ctx context.Context, c Config) *exec.Cmd // locally the server itself (§2.2)
 // UploadCommand is §4.7.6's ssh, which reads the binary on stdin.
@@ -2428,14 +2441,16 @@ missing `~/.local` and `~/.local/bin` are made 0700.
 remembered-hosts file; the release fetch against a local HTTPS server:
 the right asset is chosen, a hash mismatch, a missing asset, a 404, an
 oversized body and an `http` redirect are each refused before any upload.
-With no destination (§2.2): the server stand-in is run with no ssh and
+With `localhost` (§2.2): the server stand-in is run with no ssh and
 no `ssh -G`, as `--serve`, `--serve=list` or `--serve=kill NAME`, without
 the client's `SSH_CONNECTION` or `SSH_AUTH_SOCK`; the agent decision of
 §2.2 for each of `-A`, `-a` and neither, with and without
 `SSH_AUTH_SOCK`; R3's try resumes on loopback with the agent unbound; and
-the messages name this machine. In `cmd/mosey`, every session command
-parses with no destination, and `-upload` or `-ssh` without one is a
-usage error.
+the messages and hints name `localhost`. In `cmd/mosey`, every session
+command parses with `localhost`, in any case, as this machine, and
+`127.0.0.1`, `::1` and `me@localhost` as hosts for ssh; `-upload`, `-ssh`
+or ssh options with `localhost` are a usage error, as is any command
+line with flags and no `DESTINATION`; `mosey` alone is the usage, exit 0.
 
 **Fuzz** (each run locally for at least a few minutes before it lands,
 durations in the commit message; 10 s each in CI):
@@ -2468,10 +2483,10 @@ durations in the commit message; 10 s each in CI):
 **End to end, `internal/e2e`:**
 
 - **This machine, no ssh** (§2.2; no sshd needed, so it always runs on
-  Linux). The real binary with no destination, its `HOME`,
+  Linux). The real binary with `localhost`, its `HOME`,
   `XDG_RUNTIME_DIR` and `SHELL` the test's own: a session starts and
-  predicts (`-predict always`), detaches on SIGHUP with a hint naming no
-  host, is listed detached, and is reattached by `-s NAME` with its shell's
+  predicts (`-predict always`), detaches on SIGHUP with a hint naming
+  `localhost`, is listed detached, and is reattached by `-s NAME` with its shell's
   state; `-dir` of no directory starts nothing, then starts there;
   `-kill` ends a session; a throwaway agent is the shell's unless `-a`.
   With the throwaway sshd as well, a session started locally is listed

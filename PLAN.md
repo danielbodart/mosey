@@ -149,7 +149,10 @@ request). The decisions are in §2. Gaps they left:
    `screen.md` §2.5 and §8.7), with a fresh client reprinting one
    screenful of it on resume (Dan, 2026-11-16), and a flood held back
    while a client listens, so no line is cut, with a queue small enough
-   that Ctrl-C stays prompt (Dan, 2026-11-16). Next:
+   that Ctrl-C stays prompt (Dan, 2026-11-16), and `mosey localhost`
+   for a session on this machine with no ssh at all, asked for by name
+   so that `mosey` alone only prints the usage (Dan, 2026-11-16;
+   `bootstrap.md` §2.2). Next:
    Dan's call on O15.)
 2. `docs/threat-model.md` grows with the slices.
 3. Release pipeline (D10) from the first commit. Then use it daily, on

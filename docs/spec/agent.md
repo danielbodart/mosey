@@ -209,7 +209,7 @@ checks, an agent's per-connection judgement) sees the same shape.
 the agent sees the bootstrap host's bind with `is_forwarding = 1`, then an
 onward ssh's own bind, and judges the hop as it would [S3 E8].
 
-**A session on this machine** (`bootstrap.md` §2.2, no ssh) has no bind:
+**A session on this machine** (`mosey localhost`, `bootstrap.md` §2.2, no ssh) has no bind:
 none was captured, and there is no far host for one to name. Its
 forwarder is `Unbound` and skips steps 2 and 3, so each connection reaches
 the agent exactly as a local process's own does. This is no wider than
