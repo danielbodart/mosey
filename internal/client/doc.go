@@ -1,7 +1,9 @@
 // Package client is mosey's client, `mosey host`: it bootstraps over SSH
 // (docs/spec/bootstrap.md), connects over UDP, and then runs the session,
 // sending what the user types as a userinput.Stream and drawing the
-// screen.Grid the server sends.
+// screen.Grid the server sends. With no host, `mosey` is this machine:
+// the same bootstrap with the server binary run directly instead of over
+// ssh (bootstrap.md §2.2), and everything after it unchanged.
 //
 // It never parses a remote escape sequence (D9). Bytes from the network
 // reach the terminal only as a Grid that screen's Apply has validated and

@@ -52,10 +52,13 @@ type spawn struct {
 	// only once.
 	forward      *agent.Forwarder
 	saidAgentOff bool
+	// localAgent is the agent socket a local session's shell is given
+	// (bootstrap.md §2.2), or "".
+	localAgent string
 }
 
 func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Config, error) {
-	dest := b.ssh.Destination
+	dest := where(b.ssh)
 	cfg, err := b.ssh.Resolve(ctx)
 	if err != nil {
 		var re *bootstrap.ResolveError
@@ -70,8 +73,14 @@ func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Co
 	b.cfg = cfg
 	// D25: forward the agent exactly when ssh would (bootstrap.md §5),
 	// through a capture socket that takes ssh's own session-bind (§8).
-	capt, sock := b.startCapture(cfg)
-	if capt != nil {
+	// With no ssh there is no bind, and no far host to need one (§2.2).
+	var (
+		capt *agent.Capture
+		sock string
+	)
+	if b.ssh.Local() {
+		b.startLocalAgent()
+	} else if capt, sock = b.startCapture(cfg); capt != nil {
 		defer capt.Close()
 	}
 
@@ -130,7 +139,34 @@ func (b *spawn) run(ctx context.Context) (bootstrap.CredentialLine, bootstrap.Co
 	if capt != nil {
 		b.finishCapture(ctx, capt, cfg, sock, exited)
 	}
+	if b.localAgent != "" {
+		b.forward = &agent.Forwarder{Dial: agent.DialUnix(b.localAgent), Unbound: true, Log: b.log}
+	}
 	return cred, cfg, nil
+}
+
+// startLocalAgent is §2.2's agent decision for a session on this machine:
+// its shell gets the agent this client has, as a shell in a local terminal
+// would, through the session's own agent socket, so the agent follows
+// whichever client is attached. -a says no agent; -A with no SSH_AUTH_SOCK
+// says why there is none, as over ssh. Nothing else applies: there is no
+// ssh config to read.
+func (b *spawn) startLocalAgent() {
+	b.localAgent = ""
+	sock := b.getenv("SSH_AUTH_SOCK")
+	flag := b.ssh.Options.Agent
+	b.log.Info("agent forwarding", "local", true, "off", flag == 'a', "socket", sock)
+	switch {
+	case flag == 'a':
+		return
+	case sock == "":
+		if flag == 'A' {
+			b.agentOff("SSH_AUTH_SOCK is not set")
+		}
+		return
+	}
+	b.localAgent = sock
+	b.line.Agent = true
 }
 
 // startCapture decides whether to forward the agent (bootstrap.md §5) and,
@@ -208,7 +244,7 @@ func (b *spawn) agentOff(why string) {
 // explain turns a bootstrap failure into what the user reads
 // (bootstrap.md §6.4, §10), showing first anything the far side said.
 func (b *spawn) explain(err error, status int) error {
-	dest := b.ssh.Destination
+	dest := where(b.ssh)
 	var (
 		remote *bootstrap.RemoteError
 		nl     *bootstrap.NoLineError
@@ -231,6 +267,9 @@ func (b *spawn) explain(err error, status int) error {
 		switch {
 		case nl.Overflow:
 			return fail(err, "%s printed over %d bytes and no mosey line", dest, bootstrap.MaxPreamble)
+		case b.ssh.Local():
+			// No ssh, no probe: only the launcher's own status (§2.2).
+			return fail(err, "%s exited with status %d and no mosey line", localServer(b.ssh), status)
 		case status == 255:
 			// ssh has said why on stderr already.
 			return fail(err, "ssh to %s failed", dest)
@@ -260,7 +299,7 @@ func (b *spawn) refused(e *bootstrap.RemoteError) error {
 	case bootstrap.CodeVersion:
 		// A line version the server cannot read: there is one each side,
 		// and no fallback (D8 V1, §6.4).
-		return fail(e, "%s's mosey speaks protocol %d; this mosey speaks %d", b.ssh.Destination, e.Proto, bootstrap.Version)
+		return fail(e, "%s's mosey speaks protocol %d; this mosey speaks %d", where(b.ssh), e.Proto, bootstrap.Version)
 	case bootstrap.CodeAttach:
 		// The session's spawner is of another attach protocol (§9.2 step
 		// 5).
@@ -268,17 +307,17 @@ func (b *spawn) refused(e *bootstrap.RemoteError) error {
 		if b.line.Name != "" {
 			session = "session " + b.line.Name
 		}
-		return attachRefused(e, session, b.ssh.Destination)
+		return attachRefused(e, session, where(b.ssh))
 	case bootstrap.CodeUnsupported:
 		return fail(e, "the remote mosey can't do %s yet", e.Detail)
 	case bootstrap.CodeSession:
-		return fail(e, "no such session on %s", b.ssh.Destination)
+		return fail(e, "no such session on %s", where(b.ssh))
 	case bootstrap.CodeTaken:
-		return fail(e, "the session on %s is held by another client", b.ssh.Destination)
+		return fail(e, "the session on %s is held by another client", where(b.ssh))
 	case bootstrap.CodeDir:
 		// -dir names no directory there; nothing was started (§9.2.3).
 		// The text is the user's own, checked for controls (§6.2).
-		return fail(e, "%s is not a directory on %s, so no session was started", b.line.Dir, b.ssh.Destination)
+		return fail(e, "%s is not a directory on %s, so no session was started", b.line.Dir, where(b.ssh))
 	case bootstrap.CodeInternal:
 		return fail(e, "the server failed to start (see above)")
 	}
@@ -309,6 +348,32 @@ func (b *spawn) show(p []byte) {
 	if p[len(p)-1] != '\n' {
 		b.stderr.Write([]byte("\n"))
 	}
+}
+
+// where names the host for the user's messages: the destination as they
+// typed it, or this machine when there is none (bootstrap.md §2.2).
+func where(s bootstrap.SSH) string {
+	if s.Local() {
+		return "this machine"
+	}
+	return s.Destination
+}
+
+// again is the destination to repeat in a command the user is told to
+// run, with its leading space: nothing for this machine.
+func again(s bootstrap.SSH) string {
+	if s.Local() {
+		return ""
+	}
+	return " " + s.Destination
+}
+
+// localServer names the binary a local bootstrap ran (bootstrap.md §2.2).
+func localServer(s bootstrap.SSH) string {
+	if s.Server == "" {
+		return "this mosey's --serve"
+	}
+	return s.Server
 }
 
 // piped is the parent's ends of a child's stdio pipes.

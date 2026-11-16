@@ -41,7 +41,6 @@ func TestTheClientCommandLine(t *testing.T) {
 
 func TestABadCommandLineIsAUsageError(t *testing.T) {
 	for _, args := range [][]string{
-		{},
 		{"-bogus", "far"},
 		{"--", "-t", "far"},
 		{"--", "far", "ls"},
@@ -118,7 +117,6 @@ func TestSessionsOnTheCommandLine(t *testing.T) {
 		{"-s", "-work", "far"},
 		{"-s", "a b", "far"},
 		{"-kill", "x;y", "far"},
-		{"-s", "far"}, // no destination: far is the name
 		{"-r", "far"},
 	} {
 		_, err := parseArgs(args)
@@ -174,6 +172,58 @@ func TestDirAndTypeOnTheCommandLine(t *testing.T) {
 		_, err := parseArgs(args)
 		var u *bootstrap.UsageError
 		if !errors.As(err, &u) {
+			t.Errorf("%q: %v", args, err)
+		}
+	}
+}
+
+// No DESTINATION is this machine, with no ssh (bootstrap.md §2.2): every
+// session command works, -A and -a still say whether the shell gets the
+// agent, and -remote names the local binary, which needs no quoting.
+func TestNoDestinationIsThisMachine(t *testing.T) {
+	for _, c := range []struct {
+		args          []string
+		attach        bootstrap.Attach
+		name, kill    string
+		list          bool
+		dir, typ, bin string
+		agent         byte
+	}{
+		{args: nil, attach: bootstrap.AttachAuto},
+		{args: []string{"--"}, attach: bootstrap.AttachAuto},
+		{args: []string{"-s", "far"}, attach: bootstrap.AttachName, name: "far"}, // far is the name
+		{args: []string{"-new"}, attach: bootstrap.AttachNew},
+		{args: []string{"-list"}, attach: bootstrap.AttachAuto, list: true},
+		{args: []string{"-kill", "work"}, attach: bootstrap.AttachAuto, kill: "work"},
+		{args: []string{"-s", "work", "-dir", "Projects/x", "-type", "claude"}, attach: bootstrap.AttachName, name: "work", dir: "Projects/x", typ: "claude"},
+		{args: []string{"-remote", "/opt/my tools/mosey"}, attach: bootstrap.AttachAuto, bin: "/opt/my tools/mosey"},
+		{args: []string{"-a"}, attach: bootstrap.AttachAuto, agent: 'a'},
+		{args: []string{"-a", "-A"}, attach: bootstrap.AttachAuto, agent: 'A'},
+	} {
+		got, err := parseArgs(c.args)
+		if err != nil {
+			t.Errorf("%q: %v", c.args, err)
+			continue
+		}
+		s := got.ssh
+		if !s.Local() || s.Program != "" || s.Server != c.bin || s.Options.Agent != c.agent || len(s.Options.Args) != 0 {
+			t.Errorf("%q: %+v", c.args, s)
+		}
+		if got.attach != c.attach || got.name != c.name || got.list != c.list || got.kill != c.kill || got.dir != c.dir || got.typ != c.typ {
+			t.Errorf("%q: %+v", c.args, got)
+		}
+	}
+	// What only says how to use ssh, or what to copy to a host over it,
+	// is refused, not ignored: it means the user forgot the host.
+	for _, args := range [][]string{
+		{"-upload", "yes"},
+		{"-upload=ask"},
+		{"-ssh", "/usr/bin/ssh"},
+		{"-list", "-ssh", "ssh"},
+	} {
+		_, err := parseArgs(args)
+		var u *bootstrap.UsageError
+		if !errors.As(err, &u) || !strings.Contains(u.Msg, "needs a DESTINATION") {
 			t.Errorf("%q: %v", args, err)
 		}
 	}

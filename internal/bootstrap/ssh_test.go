@@ -55,7 +55,7 @@ func TestDestinationAndRemoteAreChecked(t *testing.T) {
 	if err := good.Check(); err != nil {
 		t.Fatal(err)
 	}
-	for _, d := range []string{"", "-oProxyCommand=x", "a b", "a\tb", "a\x7fb", "a\nb", strings.Repeat("h", 1025)} {
+	for _, d := range []string{"-oProxyCommand=x", "a b", "a\tb", "a\x7fb", "a\nb", strings.Repeat("h", 1025)} {
 		s := good
 		s.Destination = d
 		var u *UsageError

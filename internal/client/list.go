@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os/exec"
 	"text/tabwriter"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
@@ -28,8 +29,8 @@ type ListOptions struct {
 	Log            *slog.Logger
 }
 
-// List is `mosey -list host` (bootstrap.md §9.4): it runs `mosey
-// --serve=list` there over the user's ssh, parses the MOSEY-LIST lines it
+// List is `mosey -list [host]` (bootstrap.md §9.4): it runs `mosey
+// --serve=list` there over the user's ssh (or here, with none, §2.2), parses the MOSEY-LIST lines it
 // prints, and lays out the table itself: name, state, since when.
 // Every field is from a grammar of printable ASCII, so no remote escape
 // sequence reaches the terminal (D9). A host with no mosey is told so,
@@ -47,10 +48,10 @@ func List(ctx context.Context, o ListOptions) error {
 	rows, dropped := bootstrap.ReadList(out)
 	if dropped > 0 {
 		o.Log.Warn("list lines that did not parse", "count", dropped)
-		fmt.Fprintf(o.Stderr, "mosey: %s sent %d list lines this mosey could not read\n", o.SSH.Destination, dropped)
+		fmt.Fprintf(o.Stderr, "mosey: %s sent %d list lines this mosey could not read\n", where(o.SSH), dropped)
 	}
 	if len(rows) == 0 {
-		fmt.Fprintf(o.Stdout, "no sessions on %s\n", o.SSH.Destination)
+		fmt.Fprintf(o.Stdout, "no sessions on %s\n", where(o.SSH))
 		return nil
 	}
 	tw := tabwriter.NewWriter(o.Stdout, 0, 0, 2, ' ', 0)
@@ -61,7 +62,7 @@ func List(ctx context.Context, o ListOptions) error {
 	if err := tw.Flush(); err != nil {
 		return err
 	}
-	fmt.Fprintf(o.Stderr, "attach to one with: mosey -s NAME %s\n", o.SSH.Destination)
+	fmt.Fprintf(o.Stderr, "attach to one with: mosey -s NAME%s\n", again(o.SSH))
 	return nil
 }
 
@@ -84,25 +85,26 @@ func Kill(ctx context.Context, o KillOptions) error {
 	out, err := runRole(ctx, o.SSH, o.Stderr, o.Log)
 	var remote *bootstrap.RemoteError
 	if err != nil && errors.As(err, &remote) && remote.Code == bootstrap.CodeSession {
-		return fail(err, "no session called %s on %s", o.Name, o.SSH.Destination)
+		return fail(err, "no session called %s on %s", o.Name, where(o.SSH))
 	}
 	if err != nil && errors.As(err, &remote) && remote.Code == bootstrap.CodeAttach {
 		// Its spawner speaks another attach protocol, so this host's mosey
 		// cannot ask it to end (bootstrap.md §9.2 step 5).
-		return attachRefused(remote, "session "+o.Name, o.SSH.Destination)
+		return attachRefused(remote, "session "+o.Name, where(o.SSH))
 	}
 	if err != nil {
 		return err
 	}
 	o.Log.Info("killed", "name", o.Name, "said", len(out))
-	fmt.Fprintf(o.Stdout, "mosey: ended session %s on %s\n", o.Name, o.SSH.Destination)
+	fmt.Fprintf(o.Stdout, "mosey: ended session %s on %s\n", o.Name, where(o.SSH))
 	return nil
 }
 
-// runRole runs a server role over the user's ssh with stdin closed and
-// returns what it printed (bootstrap.md §9.4, §9.5): ssh -G first, its
-// stderr through the filter, the probe answered as §4.7.1 says, and a
-// remote ErrorLine as a *bootstrap.RemoteError.
+// runRole runs a server role over the user's ssh, or on this machine with
+// no ssh (bootstrap.md §2.2), with stdin closed and returns what it
+// printed (§9.4, §9.5): ssh -G first, its stderr through the filter, the
+// probe answered as §4.7.1 says, and a remote ErrorLine as a
+// *bootstrap.RemoteError.
 func runRole(ctx context.Context, ssh bootstrap.SSH, stderr io.Writer, log *slog.Logger) ([]byte, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -142,8 +144,18 @@ func runRole(ctx context.Context, ssh bootstrap.SSH, stderr io.Writer, log *slog
 			return nil, fail(ns, "no mosey on %s, so no sessions: mosey %s starts one, copying mosey there", ssh.Destination, ssh.Destination)
 		}
 	}
+	var exited *exec.ExitError
 	switch status := bootstrap.ExitStatus(err); {
 	case status == 0:
+	case !errors.As(err, &exited):
+		// It never ran, or did not exit of itself.
+		return nil, fail(err, "running %s: %v", cmd.Path, err)
+	case ssh.Local():
+		// No ssh and no probe: only the server's own words (§2.2).
+		if e, perr := bootstrap.ParseErrorLine(last); perr == nil {
+			return nil, &bootstrap.RemoteError{ErrorLine: e}
+		}
+		return nil, fail(err, "%s exited with status %d", localServer(ssh), status)
 	case status == 255:
 		return nil, fail(err, "ssh to %s failed", ssh.Destination)
 	case status == 126 || status == 127:

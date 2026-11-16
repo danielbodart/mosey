@@ -24,25 +24,28 @@ var version = "dev"
 
 const usage = `mosey -- a remote terminal for bad networks
 
-  mosey [OPTIONS] DESTINATION
+  mosey [OPTIONS] [DESTINATION]
         Log in to DESTINATION with ssh, as your ssh config says, and stay
         connected over UDP as the network comes and goes. Resumes your
         most recently detached session there, or starts a new one; it
         never takes a session another terminal is using.
+        With no DESTINATION the session is on this machine, started
+        without ssh: the same sessions as mosey THISHOST would find, so
+        one started here can be taken from another device, and back.
 
-  mosey -s NAME [OPTIONS] DESTINATION
+  mosey -s NAME [OPTIONS] [DESTINATION]
         Attach to the session called NAME, taking it over from wherever
         it is attached (that client is told), or start it if there is
         none. NAME is up to 32 letters, digits, '-', '_' and '.'.
 
-  mosey -new [OPTIONS] DESTINATION
+  mosey -new [OPTIONS] [DESTINATION]
         Start a new session, with a generated name.
 
-  mosey -list [OPTIONS] DESTINATION
-        List your sessions there: name, attached or detached, and since
-        when.
+  mosey -list [OPTIONS] [DESTINATION]
+        List your sessions there (or here): name, attached or detached,
+        and since when.
 
-  mosey -kill NAME [OPTIONS] DESTINATION
+  mosey -kill NAME [OPTIONS] [DESTINATION]
         End the session called NAME: its shell gets SIGHUP.
 
   OPTIONS: [-dir DIR] [-type TEXT] [-remote PATH] [-upload ask|yes|no]
@@ -70,7 +73,10 @@ const usage = `mosey -- a remote terminal for bad networks
         never by this. -remote PATH runs that remote binary instead and
         copies nothing.
 
-        -A and -a are ssh's own: forward the agent or don't.
+        -A and -a are ssh's own: forward the agent or don't. With no
+        DESTINATION the session's shell has this terminal's agent,
+        unless -a; -upload, -ssh and ssh options need a DESTINATION,
+        and -remote PATH names the local mosey to run.
 
         -predict says when to show your typing before the server echoes
         it: adaptive (the default) on a slow link, always, or never.
@@ -78,9 +84,10 @@ const usage = `mosey -- a remote terminal for bad networks
 
   A session lives on the server until its shell exits: exit or Ctrl-D
   there ends it. Closing this terminal, or your own machine sleeping,
-  crashing or rebooting, only detaches; plain mosey DESTINATION picks it
-  up again. While mosey runs it rides out a dead spot, and reconnects by
-  itself, over ssh, if it hears nothing for 15 s. There is no detach key.
+  crashing or rebooting, only detaches; plain mosey [DESTINATION] picks
+  it up again. While mosey runs it rides out a dead spot, and reconnects
+  by itself (over ssh, to a DESTINATION) if it hears nothing for 15 s.
+  There is no detach key.
   A session left detached for 7 days is ended.
 
   mosey -version
@@ -115,8 +122,10 @@ type cli struct {
 }
 
 // parseArgs reads `mosey [-remote PATH] [-upload MODE] [-ssh PROGRAM]
-// [-A | -a] [-predict MODE] [-- SSH-OPTION...] DESTINATION`. Every plain word belongs to the client (D7):
-// the destination is the last argument, whatever it is called.
+// [-A | -a] [-predict MODE] [-- SSH-OPTION...] [DESTINATION]`. Every plain
+// word belongs to the client (D7): the destination is the last argument,
+// whatever it is called, and with none the session is on this machine
+// (bootstrap.md §2.2).
 func parseArgs(args []string) (cli, error) {
 	var c cli
 	flags := flag.NewFlagSet("mosey", flag.ContinueOnError)
@@ -185,7 +194,17 @@ func parseArgs(args []string) (cli, error) {
 	}
 	rest := flags.Args()
 	if len(rest) == 0 {
-		return cli{}, &bootstrap.UsageError{Msg: "mosey: no destination"}
+		// No DESTINATION is this machine, with no ssh (bootstrap.md §2.2):
+		// the flags that only say how to use ssh, or what to copy to a host
+		// over it, are a mistake here, not something to ignore.
+		for _, f := range []string{"ssh", "upload"} {
+			if flagGiven(flags, f) {
+				return cli{}, &bootstrap.UsageError{Msg: "mosey: -" + f + " needs a DESTINATION: with none, mosey runs here, without ssh"}
+			}
+		}
+		c.ssh.Program = ""
+		c.ssh.Options.Agent = byte(agent)
+		return c, c.ssh.Check()
 	}
 	c.ssh.Destination = rest[len(rest)-1]
 	opts, err := bootstrap.ParseSSHOptions(rest[:len(rest)-1])

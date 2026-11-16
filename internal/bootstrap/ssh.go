@@ -17,19 +17,26 @@ import (
 // SSH is how the client runs the system ssh for a bootstrap (D6): the
 // user's own ssh, config, keys and known_hosts, with the few options the
 // bootstrap needs placed first so nothing in the user's config undoes them.
+//
+// With no Destination it is the local launcher instead (§2.2): no ssh at
+// all, the server binary run directly on this machine with the same two
+// lines on its stdin and stdout, so everything after the bootstrap, and
+// every session, is the same as over ssh to this host.
 type SSH struct {
 	// Program is ssh; "ssh" looks it up on PATH.
 	Program string
 	// Destination is what the user typed: host, user@host, an alias from
 	// their ssh config, or ssh://user@host:port. Passed to ssh unchanged,
-	// after --.
+	// after --. Empty is this machine (§2.2).
 	Destination string
 	// Options are the user's own ssh options, filtered (§2.1).
 	Options SSHOptions
 	// Server is the remote mosey binary, run as `Server --serve`: -remote's
 	// path. Empty is D7's probe (§4.7.2), which runs mosey on the remote
 	// PATH, of whatever version, or else ~/.local/bin/mosey if it
-	// answers Protocol, and otherwise says what the host is.
+	// answers Protocol, and otherwise says what the host is. Locally it is
+	// the binary run with no shell between, and empty is this one
+	// (os.Executable).
 	Server string
 	// Protocol is what the probe needs ~/.local/bin/mosey's --serve=protocol
 	// to say: ProtocolAnswer, this client's protocol numbers. Only the
@@ -69,6 +76,9 @@ const ResolveTimeout = 10 * time.Second
 // Check says whether Destination and Server can be passed on safely (§2,
 // §4.1). Its errors are *UsageError.
 func (s SSH) Check() error {
+	if s.Local() {
+		return s.checkLocal()
+	}
 	d := s.Destination
 	if d == "" || len(d) > maxDestination || d[0] == '-' {
 		return &UsageError{fmt.Sprintf("mosey: %q is not a destination", d)}
@@ -79,6 +89,17 @@ func (s SSH) Check() error {
 			return &UsageError{fmt.Sprintf("mosey: %q is not a destination", d)}
 		}
 	}
+	if err := s.checkRole(); err != nil {
+		return err
+	}
+	if s.Server != "" && !ValidServer(s.Server) {
+		return &UsageError{fmt.Sprintf("mosey: -remote %q: a remote path may hold only letters, digits and ._/+- (and start with ~/)", s.Server)}
+	}
+	return nil
+}
+
+// checkRole says whether Role and RoleArg are a role the client runs.
+func (s SSH) checkRole() error {
 	switch {
 	case s.Role != "" && s.Role != RoleList && s.Role != RoleKill:
 		return &UsageError{fmt.Sprintf("mosey: no server role %q", s.Role)}
@@ -86,9 +107,6 @@ func (s SSH) Check() error {
 		return &UsageError{fmt.Sprintf("mosey: %q is not a session name: 1 to 32 letters, digits, '-', '_' and '.', starting with a letter or digit", s.RoleArg)}
 	case s.Role != RoleKill && s.RoleArg != "":
 		return &UsageError{"mosey: only --serve=kill takes a session name"}
-	}
-	if s.Server != "" && !ValidServer(s.Server) {
-		return &UsageError{fmt.Sprintf("mosey: -remote %q: a remote path may hold only letters, digits and ._/+- (and start with ~/)", s.Server)}
 	}
 	return nil
 }
@@ -142,6 +160,9 @@ func (e *ResolveError) Unwrap() error { return e.Err }
 // destination (§3), with the user's options and agent flag, no stdin, and
 // a deadline.
 func (s SSH) Resolve(ctx context.Context) (Config, error) {
+	if s.Local() {
+		return LocalConfig(), nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, ResolveTimeout)
 	defer cancel()
 	args := []string{"-G"}
@@ -204,7 +225,7 @@ func (s SSH) flag() string {
 // Probes reports whether RemoteCommand is §4.7.2's probe, which may answer
 // with a ProbeLine. Only a new session's is answered with an upload: R3,
 // -list and -kill copy nothing (§4.7.1).
-func (s SSH) Probes() bool { return s.Server == "" }
+func (s SSH) Probes() bool { return s.Server == "" && !s.Local() }
 
 // wrap is §4.1's wrapper: script, run by /bin/sh whatever the login shell.
 // script must hold no ' (it ends the quoting), no \ (fish reads \' and \\
@@ -278,6 +299,9 @@ func uploadCommand(hash [32]byte, size int64) string {
 // user's -o nor their config can undo them; the flags that would beat a -o
 // (-A, -t) never get here (§2.1).
 func (s SSH) Command(ctx context.Context, c Config) *exec.Cmd {
+	if s.Local() {
+		return s.localCommand(ctx)
+	}
 	return s.command(ctx, c, s.RemoteCommand())
 }
 

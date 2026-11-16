@@ -20,7 +20,8 @@
 // The rest is the client's half of the ssh invocation: ParseSSHOptions
 // filters the user's ssh options, SSH.Resolve reads their config with
 // `ssh -G`, SSH.Command is the bootstrap ssh itself, and ChooseAddr decides
-// where UDP goes.
+// where UDP goes. An SSH with no Destination is the local launcher (§2.2):
+// the same two lines, with the server run directly and no ssh at all.
 //
 // Every parser is fuzzed: the stdin line is parsed by the spawner, which
 // is unsandboxed, and the stdout line comes from a host SSH vouched for but

@@ -147,7 +147,7 @@ func Run(ctx context.Context, o Options) error {
 
 	server, pc, err := udpTo(ctx, line, cfg, o.Log)
 	if err != nil {
-		return fail(err, "%s: %v", o.SSH.Destination, err)
+		return fail(err, "%s: %v", where(o.SSH), err)
 	}
 	if cfg.Get("proxyjump") != "" && cfg.Get("proxyjump") != "none" || cfg.Get("proxycommand") != "" && cfg.Get("proxycommand") != "none" {
 		// UDP cannot follow an ssh proxy, so say where it goes instead.
@@ -166,7 +166,7 @@ func Run(ctx context.Context, o Options) error {
 		Agent:        b.forward,
 		Predict:      o.Predict,
 		Name:         line.Name,
-		Destination:  o.SSH.Destination,
+		Destination:  where(o.SSH),
 		Reconnect:    reconnector(o, line.SessionID),
 	}
 	// The Session has its own copy, which dial wipes once msg1 is built
@@ -177,9 +177,9 @@ func Run(ctx context.Context, o Options) error {
 	var g *GoneError
 	switch {
 	case errors.As(err, &d):
-		d.Destination = o.SSH.Destination
+		d.Destination, d.Local = o.SSH.Destination, o.SSH.Local()
 	case errors.As(err, &g):
-		g.Destination = o.SSH.Destination
+		g.Destination = where(o.SSH)
 	}
 	return err
 }

@@ -53,13 +53,19 @@ func (e *TakenOverError) Error() string {
 type DetachedError struct {
 	// Name is the session's (an sname, safe to print).
 	Name string
-	// Destination is the host as the user named it, for the hint.
+	// Destination is the host as the user named it, for the hint; Local
+	// is a session on this machine, whose hint names none (bootstrap.md
+	// §2.2). Neither leaves the hint out.
 	Destination string
+	Local       bool
 }
 
 func (e *DetachedError) Error() string {
 	msg := "detached from session " + e.Name
-	if e.Destination != "" {
+	switch {
+	case e.Local:
+		msg += fmt.Sprintf("; resume it with: mosey -s %s", e.Name)
+	case e.Destination != "":
 		msg += fmt.Sprintf("; resume it with: mosey -s %s %s", e.Name, e.Destination)
 	}
 	return msg

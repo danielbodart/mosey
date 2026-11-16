@@ -147,6 +147,17 @@ mosey -s work -dir src/app -type 'claude' host
                            # create session work in ~/src/app running claude; later, just go back to it
 ```
 
+**Leave out the host and it's this machine**, with no ssh at all: `mosey`,
+`mosey -s work`, `mosey -new`, `mosey -list`, `mosey -kill NAME` and
+`mosey -s work -dir Projects/x -type claude` work as above, on the
+machine you're at, the way you'd use tmux. These are the very sessions
+`mosey thishost` finds over ssh, so one you started at your desk can be
+taken from your laptop with `mosey -s work thishost`, and taken back by
+`mosey -s work` at the desk. The shell starts with your environment, as
+under tmux, and has your agent (`SSH_AUTH_SOCK`) unless you pass `-a`.
+`-upload` and `-ssh` need a host, and are refused without one.
+([docs/spec/bootstrap.md §2.2](docs/spec/bootstrap.md))
+
 `-dir` and `-type` say how a session starts: its shell starts in that
 directory (relative to your home there), and the text is typed into it,
 followed by Enter, as `tmux new-session -c DIR` and `tmux send-keys TEXT

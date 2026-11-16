@@ -47,8 +47,9 @@ type Session struct {
 	Predict predict.Mode
 	// Name is the session's (D8 R2), for the messages it ends with.
 	Name string
-	// Destination is the host as the user typed it, for the messages;
-	// "" names the server by its address.
+	// Destination is the host as the user typed it, or "this machine"
+	// (bootstrap.md §2.2), for the messages; "" names the server by its
+	// address.
 	Destination string
 	// Reconnect, if set, is R3 (bootstrap.md §9.2.2): after
 	// ReconnectAfter of silence the session calls it, in the background,
