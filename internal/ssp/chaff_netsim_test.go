@@ -468,23 +468,32 @@ func TestMeasureChaffTicks(t *testing.T) {
 // direction names at most 5% of keys on any profile (without server
 // chaff it names all of them); and on the LAN, where nothing piles up,
 // the wire names at most 5% in all, the first key of each run of typing.
+//
+// The share is judged over three runs together, as §9.1.5 measured it
+// over several seeds: one run's share has a tail (1-2% as a rule, about
+// one run in thirty above 5% on train or hsr, measured 2026-11-16) from
+// randomness the netsim seed does not reach, and a single run made the
+// test flaky without saying anything about the tick.
 func TestChaffHidesKeysOnEveryProfile(t *testing.T) {
 	needNetsim(t)
 	both := chaffVariant{name: "both", tick: chaffTick, clientChaffs: true, serverChaffs: true}
 	for _, profile := range netsim.Profiles() {
 		t.Run(profile.Name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				r := runChaff(t, 1, profile, false, both, 400)
-				if r.lost > 0 {
-					t.Errorf("%d of %d keys or their echoes never arrived", r.lost, r.keys)
-				}
-				if share := float64(r.exposedS) / float64(r.keys); share > 0.05 {
-					t.Errorf("the server's datagrams name %.1f%% of keys; want at most 5%%", 100*share)
-				}
-				if share := float64(r.exposed) / float64(r.keys); profile.Name == "lan" && share > 0.05 {
-					t.Errorf("the wire names %.1f%% of keys on the LAN; want at most 5%%", 100*share)
-				}
-			})
+			var r chaffRun
+			for seed := range uint64(3) {
+				synctest.Test(t, func(t *testing.T) {
+					r.add(runChaff(t, seed+1, profile, false, both, 400))
+				})
+			}
+			if r.lost > 0 {
+				t.Errorf("%d of %d keys or their echoes never arrived", r.lost, r.keys)
+			}
+			if share := float64(r.exposedS) / float64(r.keys); share > 0.05 {
+				t.Errorf("the server's datagrams name %.1f%% of keys; want at most 5%%", 100*share)
+			}
+			if share := float64(r.exposed) / float64(r.keys); profile.Name == "lan" && share > 0.05 {
+				t.Errorf("the wire names %.1f%% of keys on the LAN; want at most 5%%", 100*share)
+			}
 		})
 	}
 }
