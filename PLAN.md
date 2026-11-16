@@ -141,7 +141,8 @@ request). The decisions are in §2. Gaps they left:
    2026-11-15) to one protocol number per layer and D7 using whatever
    mosey the host has, with one installed file (`~/.local/bin/mosey`
    since 2026-11-16, so hopping needs no rc file), and `-dir` and `-type` to
-   start a new session in a directory with text typed into it, so a
+   start a new session in a directory with text typed into it once the
+   shell has printed its prompt (Dan, 2026-11-16), so a
    session can stand in for a tmux one (Dan, 2026-11-15), and lines
    that scroll off the remote screen printed into the local terminal's
    own scrollback, so mosey needs no tmux for history (Dan, 2026-11-15;

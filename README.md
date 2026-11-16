@@ -147,7 +147,9 @@ mosey -s work -dir src/app -type 'claude' host
 `-dir` and `-type` say how a session starts: its shell starts in that
 directory (relative to your home there), and the text is typed into it,
 followed by Enter, as `tmux new-session -c DIR` and `tmux send-keys TEXT
-Enter` would. They only apply when the command creates the session; when
+Enter` would. The text is typed once the shell has printed its prompt
+(or after 2 seconds if it prints nothing), so it shows once, as if you had
+typed it. They only apply when the command creates the session; when
 it resumes one they are ignored, so the same command takes you back.
 When the program exits you are at a shell in that directory, with your
 whole `PATH`.
