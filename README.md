@@ -173,7 +173,8 @@ HOST`, or `inputs.mosey.url = "github:danielbodart/mosey/v<V>"` and the
 flake's `packages.<system>.mosey`. The package is that release's own
 binary, fetched by the hash in the tag's `nix/release.json`, not a build
 from source, so it is the file `SHA256SUMS` and the attestation vouch for.
-Trunk has no package (no release, no file): always pin a tag.
+Trunk has no package (no release, no file): always pin a tag. The
+package installs the shell completions below for bash, zsh and fish.
 
 ### Shell completion
 

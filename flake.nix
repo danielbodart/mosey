@@ -47,6 +47,11 @@
       # binary needs on neither NixOS nor darwin, and which would make it
       # differ from the release's SHA256SUMS and from what D7 copies to a
       # host.
+      #
+      # The shell completions are the binary's own (mosey -completion
+      # SHELL), installed where bash-completion, zsh and fish look for a
+      # package's. Running it needs a binary for the machine doing the
+      # build; a cross build goes without them rather than failing.
       mkMosey = pkgs: { version, binary }: pkgs.stdenvNoCC.mkDerivation {
         pname = "mosey";
         inherit version;
@@ -54,10 +59,17 @@
         dontUnpack = true;
         dontConfigure = true;
         dontBuild = true;
+        nativeBuildInputs = [ pkgs.installShellFiles ];
         installPhase = ''
           runHook preInstall
           install -Dm0755 $src $out/bin/mosey
           runHook postInstall
+        '';
+        postInstall = lib.optionalString (pkgs.stdenvNoCC.buildPlatform.canExecute pkgs.stdenvNoCC.hostPlatform) ''
+          installShellCompletion --cmd mosey \
+            --bash <($out/bin/mosey -completion bash) \
+            --zsh <($out/bin/mosey -completion zsh) \
+            --fish <($out/bin/mosey -completion fish)
         '';
         dontFixup = true;
         meta = {
