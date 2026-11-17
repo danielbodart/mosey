@@ -109,6 +109,22 @@ func echoes(master *os.File) (bool, error) {
 	return on, err
 }
 
+func foregroundRoot(master *os.File) (bool, error) {
+	var pgrp int
+	err := control(master, func(fd int) error {
+		var err error
+		pgrp, err = unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("reading the pty's foreground process group: %w", err)
+	}
+	if pgrp <= 0 {
+		return false, nil
+	}
+	return rootIn("/proc", pgrp), nil
+}
+
 func sessionLeader() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 }

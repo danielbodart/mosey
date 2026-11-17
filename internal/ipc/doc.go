@@ -6,7 +6,7 @@
 //	launcher -> spawner  ClientLine
 //	spawner -> launcher  Ready, Failed
 //	spawner -> proto     Start (UDP socket, pty master), EmuLink (emu's socket),
-//	                     ShellExit, EmuPaused, Resume
+//	                     ShellExit, EmuPaused, Resume, Root
 //	proto -> spawner     Credential, Exit, KillEmu, Attached, Detached
 //	proto -> emu         Init, Output, Resize, Flush
 //	emu -> proto         Update, Replies

@@ -110,6 +110,9 @@ func shown(g *screen.Grid) *screen.Grid {
 	}
 	w.Modes.KittyKeyboard = 0
 	w.EchoOff, w.EchoAck, w.EchoApplied, w.InputConsumed, w.Rebuilt = false, 0, 0, 0, screen.Rebuilt{}
+	// Root is a mark on the tab (§8.8), which a terminal's grid has no
+	// field for.
+	w.Root = false
 	return w
 }
 
@@ -654,8 +657,12 @@ func TestCapabilitiesFromTheEnvironment(t *testing.T) {
 // over a previous frame: every byte written is in the alphabet, and with
 // every capability the terminal ends up showing the grid. The top two bits
 // of capBits give the alphabet check's renderer a local width (none, the
-// grid's, or narrower), so history lines are also wrapped (§8.7).
+// grid's, or narrower), so history lines are also wrapped (§8.7). A seed
+// whose first byte is odd also marks the session remote with a host made
+// of the next bytes, so the client's own mark is written, escaped and
+// unset in the same alphabet (§8.8).
 func FuzzRender(f *testing.F) {
+	f.Add([]byte("\x01dan@blade;a\\b\x1b]2;x\x07\xc2\x9c"), uint8(0xff))
 	f.Add([]byte("seed"), uint8(0xff))
 	f.Add([]byte("\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a"), uint8(0))
 	f.Add([]byte(strings.Repeat("\xf0\x0f\x33", 40)), uint8(0x15))
@@ -669,6 +676,9 @@ func FuzzRender(f *testing.F) {
 		}
 		var out bytes.Buffer
 		r := render.New(&out, caps)
+		if len(seed) > 0 && seed[0]&1 != 0 {
+			r.SetRemote(string(seed[1:min(len(seed), 40)]))
+		}
 		if w := [4]int{0, 30, 13, 1}[capBits>>6]; w > 0 {
 			r.Resize(w, 8)
 		}

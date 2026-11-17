@@ -55,6 +55,71 @@ func (c *idleClock) detached() { c.t.Reset(c.after) }
 // attached stops it.
 func (c *idleClock) attached() { c.t.Stop() }
 
+// RootPoll is how often the spawner looks at whether the far keyboard runs
+// as root while a client is attached (server.md §2.9, screen.md §4.8)
+// [derived: the tab is read at a glance, and half a second after `sudo -i`
+// is prompt; a sample is one ioctl and one small file read, so two a second
+// cost nothing that matters].
+const RootPoll = 500 * time.Millisecond
+
+// rootWatch is the spawner's measurement of root (server.md §2.9): it
+// samples at once when a client attaches and every RootPoll while one is,
+// never while the session is detached, since nobody would be told, and
+// sends only a change. proto starts from false, so the first send is
+// always a rise. A measurement that fails counts as not root: an unknown is
+// never shown as root. Like idleClock it is its own type, so the rule is
+// tested in a synctest bubble apart from the spawner's processes.
+type rootWatch struct {
+	measure func() (bool, error)
+	send    func(root bool) error
+	t       *time.Ticker
+	ticking bool
+	sent    bool
+}
+
+func newRootWatch(measure func() (bool, error), send func(bool) error) *rootWatch {
+	t := time.NewTicker(RootPoll)
+	t.Stop()
+	return &rootWatch{measure: measure, send: send, t: t}
+}
+
+// C ticks every RootPoll while a client is attached; nil otherwise, so a
+// select on it waits for ever.
+func (w *rootWatch) C() <-chan time.Time {
+	if !w.ticking {
+		return nil
+	}
+	return w.t.C
+}
+
+// attached samples now and starts the ticks.
+func (w *rootWatch) attached() {
+	w.sample()
+	w.t.Reset(RootPoll)
+	w.ticking = true
+}
+
+// detached stops them.
+func (w *rootWatch) detached() {
+	w.t.Stop()
+	w.ticking = false
+}
+
+// sample measures, and sends the result if it is not what was last sent.
+// A send that fails is tried again at the next tick.
+func (w *rootWatch) sample() {
+	root, err := w.measure()
+	if err != nil {
+		root = false
+	}
+	if root == w.sent {
+		return
+	}
+	if w.send(root) == nil {
+		w.sent = root
+	}
+}
+
 // emu restarts (server.md §5.2, from S4 §3.8's supervisor): wait 50 ms
 // before the first restart, doubling to at most 5 s, back to 50 ms once an
 // emu has lived 60 s; at most 10 starts in any 60 s. When the budget is

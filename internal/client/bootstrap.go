@@ -361,6 +361,17 @@ func where(s bootstrap.SSH) string {
 	return s.Destination
 }
 
+// remoteMark is the host the terminal is marked remote with (screen.md
+// §8.8): the destination as typed, unless it is `localhost`, this machine
+// with no ssh (bootstrap.md §2.2). me@localhost and 127.0.0.1 go through
+// ssh and are marked, as an ssh to them would count as remote.
+func remoteMark(s bootstrap.SSH) string {
+	if s.Local() {
+		return ""
+	}
+	return s.Destination
+}
+
 // again is the destination to repeat in a command the user is told to
 // run, with its leading space.
 func again(s bootstrap.SSH) string {

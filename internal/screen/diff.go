@@ -715,6 +715,13 @@ func (e *encoder) state() {
 		e.out = binary.AppendUvarint(e.out, uint64(len(to.Cwd)))
 		e.out = append(e.out, to.Cwd...)
 	}
+	if to.Root != from.Root {
+		b := byte(0)
+		if to.Root {
+			b = 1
+		}
+		e.out = append(e.out, opRoot, b)
+	}
 }
 
 // history writes the lines of the target's history that the receiver does

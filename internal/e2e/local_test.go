@@ -113,6 +113,11 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 	first.typeLine("M=kept-$((40+2)); echo set-$((1+1))")
 	first.shows("set-2")
 	name := first.name()
+	// mosey localhost is this machine: the tab is not marked remote
+	// (screen.md §8.8).
+	if strings.Contains(first.screen.String(), "vte.ext.mosey") {
+		t.Errorf("a local session marked the tab:\n%q", first.screen.String())
+	}
 
 	first.cmd.Process.Signal(syscall.SIGHUP)
 	if status := first.exits(); status != 0 {

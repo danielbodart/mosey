@@ -48,6 +48,61 @@ func Echoes(master *os.File) (bool, error) {
 	return echoes(master)
 }
 
+// ForegroundRoot says whether the process at the keyboard of the pty whose
+// master this is runs as root: the leader of the slave's foreground
+// process group, read with TIOCGPGRP, has effective uid 0 in the Uid line
+// of /proc/PGID/status (screen.md §4.8, server.md §2.9). The leader is one
+// small file; every member of the group would be a walk of /proc. A
+// leader that is gone or hidden is not root: an unknown is never shown as
+// root. Outside Linux it returns errors.ErrUnsupported.
+func ForegroundRoot(master *os.File) (bool, error) {
+	return foregroundRoot(master)
+}
+
+// maxStatus bounds the read of /proc/PID/status: the Uid line is the
+// ninth or so of a file of about 1.5 KiB [measured here, Linux 6.18], so
+// 4 KiB holds it with room to spare and a kernel that grew the file
+// cannot make the read unbounded.
+const maxStatus = 4096
+
+// rootIn reads the status file of process pid under proc (/proc, or a
+// test's fake) and says whether its effective uid is 0.
+func rootIn(proc string, pid int) bool {
+	f, err := os.Open(filepath.Join(proc, strconv.Itoa(pid), "status"))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxStatus))
+	if err != nil {
+		return false
+	}
+	euid, ok := effectiveUID(b)
+	return ok && euid == 0
+}
+
+// effectiveUID is the second field of a proc(5) status file's Uid line,
+// "Uid:" then the real, effective, saved and filesystem uids, tab
+// separated. A line that is missing, short, or not decimal gives false.
+func effectiveUID(status []byte) (uint32, bool) {
+	for line := range bytes.SplitSeq(status, []byte("\n")) {
+		rest, ok := bytes.CutPrefix(line, []byte("Uid:"))
+		if !ok {
+			continue
+		}
+		f := strings.Fields(string(rest))
+		if len(f) != 4 {
+			return 0, false
+		}
+		u, err := strconv.ParseUint(f[1], 10, 32)
+		if err != nil {
+			return 0, false
+		}
+		return uint32(u), true
+	}
+	return 0, false
+}
+
 // Shell is how to start the user's login shell (D14, server.md §2.5).
 type Shell struct {
 	// Path is the shell to run; LoginShell finds the user's.

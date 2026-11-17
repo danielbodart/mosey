@@ -46,9 +46,16 @@ type Renderer struct {
 	link  string // the OSC 8 link open, if any
 	title string
 	// mark is the container mark last written to the terminal, the far
-	// side's: the client never marks the terminal itself
+	// side's: the client never writes a container mark of its own
 	// (docs/spec/screen.md §8.4). cwd is the directory last written.
-	mark    screen.Container
+	mark screen.Container
+	// remote is the host the client marks the terminal as remote with,
+	// "" for none (SetRemote); shownRemote and shownRoot are mosey's own
+	// marks as last written (docs/spec/screen.md §8.8).
+	remote      string
+	shownRemote string
+	shownRoot   bool
+
 	cwd     string
 	modes   screen.Modes
 	shape   screen.CursorShape
@@ -74,6 +81,18 @@ type Renderer struct {
 // New is a renderer that writes to w, which is the terminal in raw mode.
 func New(w io.Writer, caps Capabilities) *Renderer {
 	return &Renderer{w: w, caps: caps}
+}
+
+// SetRemote is the host the terminal is marked remote with, as the user
+// typed it, or "" for a session on this machine (docs/spec/screen.md
+// §8.8). It is the client's own fact, written on the next frame and
+// unset by Leave. A host that is not a valid termprop value is marked
+// "?", so the fact is still told.
+func (r *Renderer) SetRemote(host string) {
+	if host != "" && !screen.ValidContainerValue(host) {
+		host = "?"
+	}
+	r.remote = host
 }
 
 // Resize tells the renderer the local terminal's size, which it clips to,
@@ -177,6 +196,12 @@ func (r *Renderer) Leave() error {
 	if r.mark.Set() {
 		r.buf = append(r.buf, clearMark...)
 	}
+	// mosey's own marks go too: the prefix unsets both, and the tab is
+	// local again (§8.6 item 11, §8.8).
+	if r.shownRemote != "" || r.shownRoot {
+		r.buf = append(r.buf, clearMoseyMarks...)
+	}
+	r.shownRemote, r.shownRoot = "", false
 	r.mark, r.cwd = screen.Container{}, ""
 	r.modes, r.shape, r.pen = screen.Modes{}, 0, ""
 	return r.flush()
@@ -557,6 +582,7 @@ func (r *Renderer) state(g *screen.Grid) {
 		}
 	}
 	r.container(g.Container)
+	r.marks(g.Root)
 	if g.Cwd != r.cwd {
 		r.cwd = g.Cwd
 		if g.Cwd != "" && screen.ValidCwd(g.Cwd) {
@@ -631,6 +657,42 @@ func (r *Renderer) container(c screen.Container) {
 		r.termpropValue(p.value)
 	}
 	r.buf = append(r.buf, "\x1b\\"...)
+}
+
+// mosey's own termprops (docs/spec/screen.md §8.8). VTE takes an
+// application's termprops only under vte.ext., and ignores them unless
+// the terminal installed them: GNOME Console, patched, installs these two
+// and colours the tab from them. A bare name unsets one; the prefix unsets
+// both and leaves the container mark alone [measured, VTE 0.84.1].
+const (
+	remoteMark      = "\x1b]666;vte.ext.mosey.remote"
+	rootSet         = "\x1b]666;vte.ext.mosey.root=1\x1b\\"
+	rootUnset       = "\x1b]666;vte.ext.mosey.root\x1b\\"
+	clearMoseyMarks = "\x1b]666;vte.ext.mosey.\x1b\\"
+)
+
+// marks writes mosey's own marks that changed (§8.4 item 6): remote, from
+// SetRemote, and root, from the grid's Root, which only the server's
+// measurement sets (§4.8). They are facts; the terminal shows one state
+// from them and its own, root first (§8.8).
+func (r *Renderer) marks(root bool) {
+	if r.remote != r.shownRemote {
+		r.buf = append(r.buf, remoteMark...)
+		if r.remote != "" {
+			r.buf = append(r.buf, '=')
+			r.termpropValue(r.remote)
+		}
+		r.buf = append(r.buf, "\x1b\\"...)
+		r.shownRemote = r.remote
+	}
+	if root != r.shownRoot {
+		if root {
+			r.buf = append(r.buf, rootSet...)
+		} else {
+			r.buf = append(r.buf, rootUnset...)
+		}
+		r.shownRoot = root
+	}
 }
 
 // termpropValue writes a value with VTE's escapes for the two bytes that

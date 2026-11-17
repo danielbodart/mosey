@@ -80,6 +80,7 @@ const (
 	typeAgentConn   = 0x04
 	typeResume      = 0x05
 	typeEmuPaused   = 0x06
+	typeRoot        = 0x07
 	typeInit        = 0x10
 	typeOutput      = 0x11
 	typeResize      = 0x12
@@ -165,6 +166,12 @@ type Resume struct {
 // EmuPaused tells proto that emu's restart budget is spent and no emu
 // will start for Seconds (server.md §5.2).
 type EmuPaused struct{ Seconds uint16 }
+
+// Root tells proto whether the process at the far keyboard, the leader of
+// the pty's foreground process group, runs as uid 0, as the spawner
+// measured it (server.md §2.9, screen.md §4.8). Only the spawner can: proto
+// cannot open /proc inside its sandbox. Sent only when it changes.
+type Root struct{ Root bool }
 
 // Init is proto's first request on each emu: the size and the colours emu
 // answers colour queries with.
@@ -281,6 +288,7 @@ func (ShellExit) typ() byte   { return typeShellExit }
 func (AgentConn) typ() byte   { return typeAgentConn }
 func (Resume) typ() byte      { return typeResume }
 func (EmuPaused) typ() byte   { return typeEmuPaused }
+func (Root) typ() byte        { return typeRoot }
 func (Init) typ() byte        { return typeInit }
 func (Output) typ() byte      { return typeOutput }
 func (Resize) typ() byte      { return typeResize }
@@ -311,6 +319,7 @@ var routes = map[byte]route{
 	typeAgentConn:   {Spawner, Proto, 1},
 	typeResume:      {Spawner, Proto, 0},
 	typeEmuPaused:   {Spawner, Proto, 0},
+	typeRoot:        {Spawner, Proto, 0},
 	typeInit:        {Proto, Emu, 0},
 	typeOutput:      {Proto, Emu, 0},
 	typeResize:      {Proto, Emu, 0},
@@ -390,6 +399,12 @@ func Marshal(m Message) ([]byte, error) {
 		b = append(b, m.ClientPublic...)
 	case EmuPaused:
 		b = binary.BigEndian.AppendUint16(b, m.Seconds)
+	case Root:
+		if m.Root {
+			b = append(b, 1)
+		} else {
+			b = append(b, 0)
+		}
 	case Init:
 		b = binary.BigEndian.AppendUint16(b, m.Cols)
 		b = binary.BigEndian.AppendUint16(b, m.Rows)
@@ -557,6 +572,14 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 			return nil, malformed("EmuPaused for %d s", m.Seconds)
 		}
 		return m, nil
+	case typeRoot:
+		if err := fixed(1); err != nil {
+			return nil, err
+		}
+		if body[0] > 1 {
+			return nil, malformed("Root %#02x, not 0 or 1", body[0])
+		}
+		return Root{Root: body[0] == 1}, nil
 	case typeInit:
 		if err := fixed(80); err != nil {
 			return nil, err

@@ -32,7 +32,13 @@ type Grid struct {
 	Container Container
 	// Cwd is the program's current directory as a file: URI from OSC 7,
 	// already through the allow-list (§4.7), or "".
-	Cwd   string
+	Cwd string
+	// Root is set while the process at the far keyboard, the leader of
+	// the pty's foreground process group, runs as uid 0
+	// (docs/spec/screen.md §4.8). The spawner measures it and proto sets
+	// it; no output can, so the client's root mark (§8.8) cannot be
+	// forged or hidden by anything a program prints.
+	Root  bool
 	Modes Modes
 	// EchoOff is set while the shell's pty has echo off in canonical mode
 	// (!ECHO && ICANON), as at a password prompt. The client neither
@@ -198,7 +204,7 @@ func (g *Grid) Clone() *Grid {
 func (g *Grid) Equal(other *Grid) bool {
 	if g.cols != other.cols || g.rows != other.rows ||
 		g.Cursor != other.Cursor || g.Title != other.Title || g.Modes != other.Modes ||
-		g.Container != other.Container || g.Cwd != other.Cwd ||
+		g.Container != other.Container || g.Cwd != other.Cwd || g.Root != other.Root ||
 		g.EchoOff != other.EchoOff || g.EchoAck != other.EchoAck || g.EchoApplied != other.EchoApplied ||
 		g.InputConsumed != other.InputConsumed || g.Bell != other.Bell ||
 		g.Rebuilt != other.Rebuilt || g.Clipboard.Seq != other.Clipboard.Seq ||

@@ -28,8 +28,9 @@ func TestTheFarSidesMarkIsSetReplacedAndClearedInExactBytes(t *testing.T) {
 	_ = r.Enter()
 	g := screen.NewGrid(10, 3)
 	_ = r.Render(g)
-	// The client marks nothing of its own: no mark on the far side, none
-	// written (screen.md §8.4, Dan 2026-11-16).
+	// No container mark of the client's own: no mark on the far side,
+	// none written (screen.md §8.4). Its own marks are separate (§8.8),
+	// and this renderer has neither a remote host nor root.
 	if s := written(&out); s != "" {
 		t.Fatalf("with no mark the renderer wrote %q", s)
 	}

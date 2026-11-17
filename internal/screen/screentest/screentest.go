@@ -266,6 +266,9 @@ func (s *Source) State(g *screen.Grid) {
 	if s.N(4) == 0 {
 		g.Cwd = []string{"", "file://host/home/dan", "file:///tmp/a%20b", "FILE://h/%E6%BC%A2"}[s.N(4)]
 	}
+	if s.N(4) == 0 {
+		g.Root = s.Bool()
+	}
 }
 
 // Next is a later version of g: g scrolled, resized, partly rewritten or

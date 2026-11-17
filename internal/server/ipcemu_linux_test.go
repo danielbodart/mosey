@@ -248,6 +248,14 @@ func TestEveryViolationKillsEmuAndChangesNothing(t *testing.T) {
 			f.mu.Unlock()
 			return []ipc.Message{f.update()}
 		}, nil},
+		// Root is the spawner's measurement, never emu's: a hostile emu
+		// must not mark the user's tab root (screen.md §4.8, §7.3).
+		{"Root set", func(f *fakeEmu, req ipc.Message) []ipc.Message {
+			f.mu.Lock()
+			f.screen.Root = true
+			f.mu.Unlock()
+			return []ipc.Message{f.update()}
+		}, nil},
 		{"a diff over MaxDiff", func(f *fakeEmu, req ipc.Message) []ipc.Message {
 			var out []ipc.Message
 			for range screen.MaxDiff/len(big) + 2 {

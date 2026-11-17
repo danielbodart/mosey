@@ -29,6 +29,7 @@ func examples() []Message {
 		AgentConn{},
 		Resume{ClientPublic: key()},
 		EmuPaused{Seconds: 1}, EmuPaused{Seconds: MaxEmuPause},
+		Root{Root: false}, Root{Root: true},
 		Init{Cols: 1, Rows: 1, ScrollbackCells: 1},
 		Init{Cols: MaxCols, Rows: MaxRows, ScrollbackCells: MaxScrollbackCells, Foreground: 2<<24 | 0xffffff, Background: 1<<24 | 255, Palette: pal},
 		Output{Data: []byte{0}}, Output{Data: bytes.Repeat([]byte{0x1b}, MaxOutput)},
@@ -207,6 +208,16 @@ func TestReservedBitsAreRefused(t *testing.T) {
 	}
 }
 
+// Root is one byte, 0 or 1 (server.md §3.3): a 2, a missing byte or a
+// trailing one is refused, never read as true.
+func TestARootOtherThanOneByteOfZeroOrOneIsRefused(t *testing.T) {
+	for _, b := range [][]byte{{typeRoot, 2}, {typeRoot, 0xff}, {typeRoot}, {typeRoot, 1, 0}} {
+		if m, err := Parse(Spawner, Proto, b); !errors.Is(err, ErrMalformed) {
+			t.Errorf("Parse(% x) = %v, %v", b, m, err)
+		}
+	}
+}
+
 // Each Conn accepts only its own peer's types: the spawner never even
 // parses an Update.
 func TestATypeFromTheWrongPeerIsRefused(t *testing.T) {
@@ -226,7 +237,7 @@ func TestATypeFromTheWrongPeerIsRefused(t *testing.T) {
 }
 
 func TestUnknownTypesAndTheRetiredExitCodeAreRefused(t *testing.T) {
-	for _, typ := range []byte{0x00, 0x08, 0x07, 0x14, 0x22, 0x35, 0x43, 0xff} {
+	for _, typ := range []byte{0x00, 0x08, 0x14, 0x22, 0x35, 0x43, 0xff} {
 		for _, from := range []Peer{Launcher, Spawner, Proto, Emu} {
 			for _, to := range []Peer{Launcher, Spawner, Proto, Emu} {
 				if _, err := Parse(from, to, []byte{typ, 0, 0, 0, 0}); err == nil {

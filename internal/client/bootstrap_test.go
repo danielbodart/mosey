@@ -248,3 +248,22 @@ func (s *syncBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+// The terminal is marked remote with DESTINATION as typed, unless it is
+// the word localhost in any case, this machine with no ssh (screen.md
+// §8.8); anything that goes through ssh counts, as ssh would.
+func TestOnlyLocalhostIsNotMarkedRemote(t *testing.T) {
+	for dest, want := range map[string]string{
+		"localhost":        "",
+		"LocalHost":        "",
+		"dan@blade":        "dan@blade",
+		"blade":            "blade",
+		"me@localhost":     "me@localhost",
+		"127.0.0.1":        "127.0.0.1",
+		"ssh://blade:2222": "ssh://blade:2222",
+	} {
+		if got := remoteMark(bootstrap.SSH{Destination: dest}); got != want {
+			t.Errorf("%q: marked %q, want %q", dest, got, want)
+		}
+	}
+}

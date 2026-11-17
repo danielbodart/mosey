@@ -82,6 +82,10 @@ var oscForm = regexp.MustCompile(`^\x1b\](2|8;;|52;c;|7;|666;)([^\x00-\x1f\x7f]*
 // its value, with no ';' or '\' except in VTE's \\ and \s escapes.
 var termpropItem = regexp.MustCompile(`^vte\.container\.(name|runtime|uid)=((?:[^\\;]|\\\\|\\s)+)$`)
 
+// mosey is an escaped value of mosey's own remote mark: no ';' or '\'
+// except in VTE's escapes.
+var mosey = regexp.MustCompile(`^(?:[^\\;]|\\\\|\\s)+$`)
+
 // escape recognizes one sequence at the start of b and says how long it
 // is.
 func escape(b []byte) (int, error) {
@@ -112,8 +116,16 @@ func escape(b []byte) (int, error) {
 			return 0, fmt.Errorf("a directory outside the allow-list: %q", body)
 		}
 	case "666;":
-		if body == "vte.container." {
-			break
+		switch body {
+		case "vte.container.", "vte.ext.mosey.", "vte.ext.mosey.root=1", "vte.ext.mosey.root", "vte.ext.mosey.remote":
+			return len(m[0]), nil
+		}
+		if host, ok := strings.CutPrefix(body, "vte.ext.mosey.remote="); ok {
+			// The host, escaped as a container value is (§8.8).
+			if !mosey.MatchString(host) || !screen.ValidContainerValue(strings.NewReplacer(`\\`, `\`, `\s`, ";").Replace(host)) {
+				return 0, fmt.Errorf("a remote mark outside the alphabet: %q", body)
+			}
+			return len(m[0]), nil
 		}
 		for _, item := range strings.Split(body, ";") {
 			m := termpropItem.FindStringSubmatch(item)

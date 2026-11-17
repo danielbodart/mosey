@@ -315,3 +315,46 @@ func TestAnInterruptDiscardsTheOutputNotYetRead(t *testing.T) {
 	}
 	t.Logf("held %d bytes; %d survived the interrupt", held, kept)
 }
+
+// The measurement through a real pty: the login shell is its own
+// foreground job, so ForegroundRoot says whether this test runs as root.
+// Root itself cannot be made here without root; the fake /proc tests cover
+// uid 0, and this shows the ioctl and the read join up.
+func TestForegroundRootReadsTheForegroundLeaderThroughTheMaster(t *testing.T) {
+	m, s := openPTY(t, Size{80, 24})
+	if root, err := ForegroundRoot(m); err != nil || root {
+		t.Fatalf("with no foreground job: root %v, %v", root, err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Shell{Path: self, Dir: "/", Env: []string{"MOSEY_PTY_SHELL=1"}}.Start(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	m.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := bufio.NewReader(m).ReadString('\n'); err != nil {
+		t.Fatalf("reading the shell: %v", err)
+	}
+	root, err := ForegroundRoot(m)
+	m.Write([]byte("\n"))
+	p.Wait()
+	if err != nil || root != (os.Geteuid() == 0) {
+		t.Fatalf("root %v, %v; this test runs as uid %d", root, err, os.Geteuid())
+	}
+}
+
+// The real /proc's status file parses, and its effective uid is this
+// process's: so a false from ForegroundRoot above is a measured uid, not
+// a read that failed.
+func TestTheRealStatusFileGivesThisProcesssEffectiveUID(t *testing.T) {
+	b, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		t.Skipf("no /proc here: %v", err)
+	}
+	if euid, ok := effectiveUID(b); !ok || int(euid) != os.Geteuid() {
+		t.Fatalf("effective uid %d, %v; want %d", euid, ok, os.Geteuid())
+	}
+}

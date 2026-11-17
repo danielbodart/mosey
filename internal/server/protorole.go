@@ -223,7 +223,7 @@ func exitFor(ctx context.Context, err error) (ipc.Exit, bool) {
 var errSpawnerGone = errors.New("the spawner closed the control socket")
 
 // readControl is proto's C reader: EmuLink, EmuPaused, AgentConn,
-// ShellExit and Resume from the spawner. A malformed message is a bug in a more trusted process, so
+// ShellExit, Resume and Root from the spawner. A malformed message is a bug in a more trusted process, so
 // proto logs it and ends (server.md §5.3).
 func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, resume func([]byte) error, cancel context.CancelCauseFunc, log *slog.Logger) {
 	gen := uint32(1)
@@ -265,6 +265,8 @@ func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, resume func([]by
 				cancel(err)
 				return
 			}
+		case ipc.Root:
+			sess.SetRoot(m.Root)
 		case ipc.ShellExit:
 			// The pty reader normally sees EIO first; this ends the
 			// session even if a job the shell left holds the slave open.

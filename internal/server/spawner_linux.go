@@ -755,6 +755,11 @@ func (s *spawner) supervise(ctx context.Context) error {
 	// grace a hung-up shell has to exit before the teardown.
 	idle := newIdleClock(s.cfg.IdleTimeout)
 	defer idle.attached()
+	// root is whether the far keyboard runs as root, sampled while a
+	// client is attached (server.md §2.9).
+	root := newRootWatch(func() (bool, error) { return pty.ForegroundRoot(s.master) },
+		func(r bool) error { return s.ctl.Send(ipc.Root{Root: r}) })
+	defer root.detached()
 	var hungUp <-chan time.Time
 	var restart <-chan time.Time
 	var nextReason ipc.EmuEnd
@@ -783,6 +788,8 @@ func (s *spawner) supervise(ctx context.Context) error {
 				s.teardown(reason)
 				return nil
 			}
+		case <-root.C():
+			root.sample()
 		case <-idle.C():
 			s.log.Info("detached for the idle timeout; hanging the shell up", "after", s.cfg.IdleTimeout)
 			hungUp = s.hangup()
@@ -893,11 +900,13 @@ func (s *spawner) supervise(ctx context.Context) error {
 					backstopTimer.Stop()
 				}
 				idle.attached()
+				root.attached()
 				s.setAttached(m.Credential, m.Peer)
 				s.log.Info("a client attached", "peer", m.Peer, "credential", fmt.Sprintf("%x", m.Credential))
 			case ipc.Detached:
 				s.setDetached()
 				idle.detached()
+				root.detached()
 				s.log.Info("the client detached")
 			case ipc.Credential:
 				if len(s.pending) == 0 {

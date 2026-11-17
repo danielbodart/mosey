@@ -257,6 +257,10 @@ func TestARealSessionOverLoopbackThroughSSH(t *testing.T) {
 		// read off the screen its bytes draw, not out of the bytes.
 		return strings.Contains(screenOf([]byte(screen.String()), 100, 30), "hello mosey-42 h\u00e9llo")
 	})
+	// The tab is marked remote with the host as typed (screen.md §8.8).
+	if mark := "\x1b]666;vte.ext.mosey.remote=" + s.host + "\x1b\\"; !strings.Contains(screen.String(), mark) {
+		t.Errorf("no remote mark %q", mark)
+	}
 	spawner := findSpawner(t, mosey)
 	// The client holds the session's keys for as long as it runs: neither
 	// the user's other processes nor a core dump may read them
@@ -288,6 +292,11 @@ func TestARealSessionOverLoopbackThroughSSH(t *testing.T) {
 	}
 	// The terminal is back as it was: the alternate screen left.
 	waitFor(t, "the terminal to be restored", func() bool { return strings.Contains(screen.String(), "\x1b[?25h\x1b[?7h") })
+	// And the remote mark unset, so the tab is local again.
+	waitFor(t, "the marks unset", func() bool {
+		out := screen.String()
+		return strings.LastIndex(out, "\x1b]666;vte.ext.mosey.\x1b\\") > strings.LastIndex(out, "vte.ext.mosey.remote=")
+	})
 	waitFor(t, "the session's processes to end", func() bool { return !running(spawner) })
 }
 

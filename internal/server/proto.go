@@ -150,6 +150,9 @@ type Session struct {
 	cols      int
 	rows      int
 	holding   bool
+	// root is the spawner's last word on whether the far keyboard runs as
+	// root (server.md §2.9), set on every screen published.
+	root bool
 	// listening is whether the attached client is heard, the state in
 	// which the pty reader holds the program back on its acknowledgement
 	// (screen.md §2.5); histNext and histLen are the history of the screen
@@ -315,6 +318,21 @@ func (s *Session) serveAgents(ctx context.Context) error {
 func (s *Session) ShellExited() {
 	s.init()
 	s.exitOnce.Do(func() { close(s.shellExit) })
+}
+
+// SetRoot is the spawner's measurement of whether the process at the far
+// keyboard runs as root (server.md §2.9, screen.md §4.8). Every screen
+// published from now on carries it, and a change is published at once:
+// the client's root mark (screen.md §8.8) follows it, and nothing the
+// program prints can.
+func (s *Session) SetRoot(root bool) {
+	s.mu.Lock()
+	changed := s.root != root
+	s.root = root
+	s.mu.Unlock()
+	if changed {
+		s.publish()
+	}
 }
 
 // Minted tells the session a credential was minted for a resume. Until a
@@ -720,10 +738,11 @@ func (s *Session) deliverFinal(a *attachment) {
 
 // publish hands SSP the screen as it is now, with proto's own fields:
 // the echo-off bit, the echo ack and the applied count (D12,
-// prediction.md §3.1) and the input consumed (ssp.md §10.1). If the
-// emulator held the screen under synchronised output, it asks again once
-// SyncHold has passed (screen.md §6.3), so a program that opens mode 2026
-// and never closes it freezes its screen only briefly. It returns the
+// prediction.md §3.1), the input consumed (ssp.md §10.1) and root
+// (screen.md §4.8). If the emulator held the screen under synchronised
+// output, it asks again once SyncHold has passed (screen.md §6.3), so a
+// program that opens mode 2026 and never closes it freezes its screen
+// only briefly. It returns the
 // screen it set, or nil before a client has attached.
 func (s *Session) publish() *screen.Grid {
 	ep := s.endpoint()
@@ -741,6 +760,7 @@ func (s *Session) publish() *screen.Grid {
 	}
 	s.mu.Lock()
 	g.InputConsumed = s.consumed
+	g.Root = s.root
 	if s.ep == ep {
 		// EchoApplied is read after the snapshot, so it may count an
 		// event written in between: an upper bound, which is the safe

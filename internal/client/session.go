@@ -51,6 +51,11 @@ type Session struct {
 	// machine (bootstrap.md §2.2), for the messages; "" names the server by its
 	// address.
 	Destination string
+	// Remote is the host the local terminal is marked remote with
+	// (screen.md §8.8): DESTINATION as the user typed it, or "" for
+	// `mosey localhost`, a session on this machine. It is the client's own
+	// fact; nothing the far side prints can set it.
+	Remote string
 	// Reconnect, if set, is R3 (bootstrap.md §9.2.2): after
 	// ReconnectAfter of silence the session calls it, in the background,
 	// for a fresh bootstrap that resumes this same session naming holder,
@@ -135,6 +140,7 @@ func (s *Session) Run(ctx context.Context) error {
 	defer s.Terminal.Restore()
 
 	paint := render.New(s.Terminal, s.Capabilities)
+	paint.SetRemote(s.Remote)
 	if cols, rows, err := s.Terminal.Size(); err == nil {
 		// The renderer clips to the local size (screen.md §8.3); after
 		// this, the loop tells it of every change.

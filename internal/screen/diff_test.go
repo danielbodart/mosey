@@ -282,6 +282,10 @@ func TestEachRuleOfTheFormatRefusesWhatBreaksIt(t *testing.T) {
 		"CWD with a space":                    cat([]byte{0x5b}, uv(11), []byte("file://h/ a")),
 		"CWD over MaxCwd":                     cat([]byte{0x5b}, uv(screen.MaxCwd+1), []byte("file://h/"), bytes.Repeat([]byte("x"), screen.MaxCwd-8)),
 		"CWD twice":                           {0x5b, 0, 0x5b, 0},
+		"ROOT 2":                              {0x5c, 2},
+		"ROOT 0xff":                           {0x5c, 0xff},
+		"ROOT truncated":                      {0x5c},
+		"ROOT twice":                          {0x5c, 1, 0x5c, 1},
 		"PEN no flags":                        {0x4c, 0x00},
 		"PEN reserved flag":                   {0x4c, 0x40},
 		"PEN colour kind 3":                   {0x4c, 0x01, 0x03},
@@ -427,10 +431,11 @@ func TestStateOpsRoundTrip(t *testing.T) {
 	to.Cursor.Shape = 6
 	to.Container = screen.Container{Name: "frisket · a;b\\c", Runtime: "flong", UID: "4294967295"}
 	to.Cwd = "file://host/home/dan/%E6%BC%A2"
+	to.Root = true
 	roundTrip(t, from, to)
 	// A mark cleared is a mark of three empty values; the directory too.
 	cleared := to.Clone()
-	cleared.Container, cleared.Cwd = screen.Container{}, ""
+	cleared.Container, cleared.Cwd, cleared.Root = screen.Container{}, "", false
 	roundTrip(t, to, cleared)
 	// A clipboard of exactly MaxClipboard passes; the empty write clears.
 	to2 := to.Clone()
@@ -460,6 +465,24 @@ func TestAContainerMarkAndADirectoryAreTheSpecsBytes(t *testing.T) {
 	cleared.Container = screen.Container{}
 	if d := cleared.Diff(to); !bytes.Equal(d, []byte{0x5a, 0, 0, 0}) {
 		t.Fatalf("the clear is % x", d)
+	}
+}
+
+// §5.11 example 10: ROOT is one byte after its opcode, 1 to set and 0 to
+// clear, and the grid's Root is the only field it changes.
+func TestRootIsTheSpecsTwoBytesEachWay(t *testing.T) {
+	from := base80x24()
+	to := from.Clone()
+	to.Root = true
+	if d := to.Diff(from); !bytes.Equal(d, []byte{0x5c, 0x01}) {
+		t.Fatalf("setting Root is % x", d)
+	}
+	if d := from.Diff(to); !bytes.Equal(d, []byte{0x5c, 0x00}) {
+		t.Fatalf("clearing Root is % x", d)
+	}
+	g := from.Clone()
+	if err := g.Apply([]byte{0x5c, 0x01}); err != nil || !g.Equal(to) {
+		t.Fatalf("Apply: %v, Root %v", err, g.Root)
 	}
 }
 

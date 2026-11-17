@@ -50,6 +50,7 @@ const (
 	opConsumed  = 0x59
 	opContainer = 0x5a
 	opCwd       = 0x5b
+	opRoot      = 0x5c
 	// The history ops of phase 3 (§2.5, §5.6).
 	opHist  = 0x60
 	opHLine = 0x61
@@ -96,6 +97,7 @@ const (
 	onceConsumed
 	onceContainer
 	onceCwd
+	onceRoot
 )
 
 // Apply turns g into the grid a Diff was made towards. The diff is hostile:
@@ -301,6 +303,8 @@ func (d *decoder) step(code byte) error {
 		return d.container()
 	case opCwd:
 		return d.cwd()
+	case opRoot:
+		return d.root()
 	case opHist:
 		return d.hist()
 	}
@@ -346,6 +350,22 @@ func (d *decoder) cwd() error {
 		return d.fail("CWD outside the allow-list")
 	}
 	d.out.Cwd = s
+	return nil
+}
+
+// root is ROOT: one byte, 0 or 1, and nothing else (§4.8, §5.6).
+func (d *decoder) root() error {
+	if err := d.onceOnly(onceRoot, "ROOT"); err != nil {
+		return err
+	}
+	b, err := d.byte1("ROOT")
+	if err != nil {
+		return err
+	}
+	if b > 1 {
+		return d.fail("ROOT %#02x, not 0 or 1", b)
+	}
+	d.out.Root = b == 1
 	return nil
 }
 
