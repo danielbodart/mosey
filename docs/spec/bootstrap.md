@@ -513,9 +513,10 @@ the timeouts T1–T3 are `server.md` §8.
    30 s [derived: `handshake.CredentialTTL`; the client writes the line
    before authentication, so it is there when the command starts]. Stdin
    must be exactly one ClientLine: one LF, at the end, then EOF. Anything
-   else is `MOSEY-ERROR ... line`.
+   else is `MOSEY-ERROR 1 !code=line`.
 2. **Launcher.** Parse it (§6.2), which checks the line's protocol
-   version (§6.4); no software version is sent or compared (D8 V1). Then
+   number (§6.4) and refuses a critical field it does not know with
+   `unsupported` (§6.2); no software version is sent or compared (D8 V1). Then
    start the spawner, `mosey --serve=spawner`, as a new
    process with `Setsid`, stdio on `/dev/null` and B as fd 3, send it
    `ClientLine` (0x40), and wait up to T2 = 15 s for `Ready` or `Failed`.
@@ -525,15 +526,15 @@ the timeouts T1–T3 are `server.md` §8.
    2 unused per session). Proto returns it as `Credential` (0x30), within
    T3 = 10 s [choice]. **The spawner checks every field it owns**: the
    line must parse (`ParseCredentialLine`), re-marshal to the same bytes,
-   and carry exactly the spawner's own advertised `addr` (or `-`), its own
+   and carry exactly the spawner's own advertised `addr` (or none), its own
    bound `port` and the session's `name` (`server.md` §3.4). Proto chooses
-   only `credid`, `sessionid`, `psk` and `public`, the four things it
+   only `credid`, `sid`, `psk` and `public`, the four things it
    alone knows; a compromised or buggy proto cannot choose where the
    client sends UDP. Only then does the spawner start
    the login shell with the line's environment (§6.2), type a `type`'s
    text once the shell has written its first output (§9.2.3), and send
    `Ready` (0x41) with the line.
-4. **Launcher.** If the line says `agent=yes` and sshd set
+4. **Launcher.** If the line says `!agent=yes` and sshd set
    `SSH_AUTH_SOCK`, trigger ssh's bind (§8, "Server"). Then write the line
    from `Ready` to stdout in **one** write.
 5. **Launcher. Detach.** No process of the session may keep fds 0, 1 or 2
@@ -600,7 +601,7 @@ files print), and that login is the user. See the review notes (§15).
 
 **Environment for the shell.** sshd's `SSH_AUTH_SOCK` (if any) dies with
 the bootstrap connection, so the spawner never passes it to the shell; with
-`agent=yes` the shell gets mosey's own socket instead (`agent.md` §4.1). Other session
+`!agent=yes` the shell gets mosey's own socket instead (`agent.md` §4.1). Other session
 variables are `server.md`'s concern.
 
 **Known hazard (not ours to fix in slice 1).** With systemd-logind's
@@ -733,7 +734,7 @@ client                                                     far host
 ssh … "PROBE"   + ClientLine  ──────────────────────────►  mosey on PATH, not ~/.local/bin/mosey? exec it --serve
                                                            else ~/.local/bin/mosey, if its
                                                              --serve=protocol is the client's?    exec it --serve
-                              ◄──────── MOSEY-PROBE 1 Linux x86_64   (neither: say what this host is)
+                              ◄──────── MOSEY-PROBE 1 machine=x86_64 system=Linux   (neither: say what this host is)
 ask the user (first time per host)
 pick the binary: our own file, or the release asset, SHA-256 checked
 ssh … "UPLOAD"  + the binary  ──────────────────────────►  mktemp in ~/.local/bin; cat; run it as
@@ -770,10 +771,10 @@ round trip to ask, and D7 names this one.
 
 The remote command (one argument, as §4.1; `B H` is the client's
 `--serve=protocol` answer, `bootstrap.Version` and `handshake.ProtocolVersion`,
-now `2 1`):
+now `1 1`):
 
 ```
-exec /bin/sh -c 'b="$HOME/.local/bin"; f="$b/mosey"; p=$(command -v mosey 2>/dev/null); case $p in "$f"|"") ;; *) exec mosey FLAG;; esac; w=; for d in "$HOME/" "$HOME/.local/" "$b/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; if test -h "$b" || test -h "$f" || test -n "$w"; then :; elif test -O "$HOME/.local" && test -O "$b" && test -O "$f"; then if [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; p=; fi; if [ -n "$p" ]; then exec "$f" FLAG; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 ${s:-unknown} ${a:-unknown}"'
+exec /bin/sh -c 'b="$HOME/.local/bin"; f="$b/mosey"; p=$(command -v mosey 2>/dev/null); case $p in "$f"|"") ;; *) exec mosey FLAG;; esac; w=; for d in "$HOME/" "$HOME/.local/" "$b/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; if test -h "$b" || test -h "$f" || test -n "$w"; then :; elif test -O "$HOME/.local" && test -O "$b" && test -O "$f"; then if [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; p=; fi; if [ -n "$p" ]; then exec "$f" FLAG; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 machine=${a:-unknown} system=${s:-unknown}"'
 ```
 
 - **`PATH` first** (Dan, 2026-11-15). A `mosey` on the remote `PATH`
@@ -817,7 +818,9 @@ exec /bin/sh -c 'b="$HOME/.local/bin"; f="$b/mosey"; p=$(command -v mosey 2>/dev
 - **`--serve=protocol`** prints one line, the bootstrap line version
   (§6.1) and the handshake protocol (`transport.md` §2.3), as decimals
   separated by a space: `1 1` now. It is the one thing every mosey answers
-  the same way for ever (D8 V1). The attach protocol (§9.2.1) is not in
+  the same way for ever (D8 V1), and since each number names only its
+  layer's envelope (`versioning.md` §5), a copy of any later release
+  answers the same until an envelope changes. The attach protocol (§9.2.1) is not in
   it: that is spoken between server binaries on one host, never by the
   client.
 - **Neither:** one `MOSEY-PROBE` line on stdout, then exit 0. It does not
@@ -845,14 +848,18 @@ exec /bin/sh -c 'b="$HOME/.local/bin"; f="$b/mosey"; p=$(command -v mosey 2>/dev
 ours and fuzzed with them:
 
 ```
-probe-line = "MOSEY-PROBE" SP proto SP sysname SP machine LF
-proto      = decimal                 ; must be Version
-sysname    = 1*64(%x21-7E)           ; uname -s, or "unknown"
-machine    = 1*64(%x21-7E)           ; uname -m, or "unknown"
+probe-line = "MOSEY-PROBE" SP "1" *(SP field) LF     ; §6.1, fields in key order
 ```
 
-At most 148 bytes [derived: 11 + 1 + 5 + 1 + 64 + 1 + 64 + LF];
-**`MaxProbeLine` = 160**. Canonical as §6.1 asks. `ReadCredential` returns
+| Field | Value | Mandatory | Critical | Why critical or not |
+|---|---|---|---|---|
+| `machine` | `1*64(%x21-7E)`: `uname -m`, or `unknown` | mandatory | no | it describes the host; a wrong one gets a build that does not run, never a wrong action |
+| `system` | `1*64(%x21-7E)`: `uname -s`, or `unknown` | mandatory | no | as `machine` |
+
+At most 163 bytes [derived: 11, SP, 5 digits, ` machine=` 9 and 64,
+` system=` 8 and 64, LF]; **`MaxProbeLine` = 256** [choice: room for
+fields a later release adds]. Canonical as §6.1 asks. The shell prints
+the fields in key order itself, so the script stays the one line above. `ReadCredential` returns
 it as a `*NoServerError` (`errors.Is(err, ErrNoServer)`) carrying the
 fields. A `uname` that prints a space or something longer gives a line
 that does not parse, which is `ErrBadLine`: a host that odd has no release
@@ -1149,61 +1156,68 @@ reflects the flags with ssh's own precedence:
 It is a pure function of `Config` and the environment (`AgentSocket`, unit
 tested). A session on this machine, with no ssh, decides otherwise (§2.2).
 Off: the bootstrap runs with `ForwardAgent=no`, the ClientLine says
-`agent=no`, and the Hello has no `ChannelAgent`. On: §8, and `agent.md`.
+no `!agent` field, and the Hello has no `ChannelAgent`. On: §8, and `agent.md`.
 
 ---
 
-## 6. The two lines
+## 6. The lines
 
 ### 6.1 Common rules
 
-- Both lines are **printable ASCII**: fields of bytes 0x21–0x7E, separated
-  by exactly one space (0x20), ending in exactly one LF (0x0A). No CR, no
-  leading or trailing space, no empty field, no tab.
-- **Binary fields** are base64url without padding (RFC 4648 §5), decoded
-  strictly (`base64.RawURLEncoding.Strict()`: unused trailing bits must be
-  zero), and must decode to exactly the stated length. Why base64url: no
-  `+` or `/`, so nothing a shell, a log viewer or a recorder might mangle.
-- **Decimal fields** are `0` or a non-zero digit followed by digits: no
-  sign, no leading zero.
-- **The first two fields are frozen forever**: a magic word, then the
-  bootstrap protocol version (`bootstrap.Version`, now `2`). Any version of
-  mosey can therefore tell a line it cannot read from a line that is not
-  its own, and the `MOSEY-ERROR` grammar in full, its size bound included,
-  is frozen too, so a client of any version can read any server's refusal
-  (§6.4).
-- **Canonical.** A parser accepts a line only if marshalling what it parsed
-  gives back the same bytes. The fuzz targets check exactly this (§12).
-- **One version, strictly.** Each build speaks exactly one line
-  version, `bootstrap.Version`. Its parser refuses any ClientLine,
-  CredentialLine or ProbeLine whose version field is another, before
-  reading the rest, with an error that carries the number it saw
-  (`*VersionError`, §10.1). The ErrorLine is the exception: its parser
-  accepts any `proto`, since its whole grammar is frozen. There is no
-  range and no fallback: a mismatch fails the bootstrap with one line
-  naming both numbers (§6.4). A new field or a new value means a new
-  version. **Version 2** (2026-11-15) added the ClientLine's `dir` and
-  `type` (§6.2, §9.2.3) and the ErrorLine code `dir`; nothing else
-  changed from 1. A v1 server meeting a v2 client, or the reverse, fails
-  with §6.4's one line naming both numbers, and the host's mosey is
-  upgraded as D7 says (Nix, or replacing the binary). No v1 line is
-  still read or written (no users yet: no compatibility work, Dan,
-  2026-11-15).
-- **Stable from here on (D8 V1).** The grammars of §6.2–§6.4 are
-  frozen like the wire protocol: a client and a server of different
-  releases meet as a matter of course (whatever mosey the host has,
-  §4.7), so a release may not change what a field of this version means
-  or add a value its parser would refuse. The version is the promise: as
-  long as it is `2`, every release reads every other's lines. No line carries a
-  software version, and nothing compares one (Dan, 2026-11-15: "when I
-  use SSH I don't really worry about the version stuff"). Fields marked
-  *reserved* below have a grammar now so a later slice can start accepting
-  values without changing the grammar; a server refuses them with
-  `unsupported`.
+Every line of this document, and the attach socket's greeting (§9.2.1),
+is in the one grammar of `versioning.md` §6: a tag, a protocol number,
+then `key=value` fields in ascending key order, a `!` before the key of
+a critical one, ending in one LF. That section is normative; in short:
 
 ```
-SP      = %x20
-LF      = %x0A
+line   = tag SP number *(SP field) LF
+field  = ["!"] key "=" value         ; key: a-z first, then a-z 0-9 -, 1..16 bytes
+value  = 1*(%x21-7E)                 ; printable ASCII, no space
+```
+
+- **The tag and the number are frozen for ever** as the first two words,
+  so any version of mosey can tell a line it cannot read from a line that
+  is not its own, and name the number it saw. The number is the
+  bootstrap protocol's, `bootstrap.Version`, now **1**, on every line of
+  this section and on the ProbeLine and ListLine (§4.7.2, §9.4); the
+  greeting carries the attach protocol's instead (§9.2.1). The
+  ErrorLine's grammar, its bound included, is frozen in full, so a
+  client of any version can read any server's refusal (§6.4).
+- **Must-ignore, critical marked** (`versioning.md` §2, §3). A field the
+  parser does not know is dropped before anything is decided, unless
+  its key has a `!`, which refuses the line. Each line's table below
+  says, for every field, whether it is mandatory and whether it is
+  critical, and why; a known field must carry exactly that marking. A
+  missing mandatory field refuses the line.
+- **Absent, never `-`.** A field with nothing to say is left out: no
+  `-` placeholders, no empty values. A boolean is `yes` or absent.
+- **Binary values** are base64url without padding (RFC 4648 §5), decoded
+  strictly (`base64.RawURLEncoding.Strict()`: unused trailing bits must
+  be zero), and must decode to exactly the stated length. Why base64url:
+  no `+` or `/`, so nothing a shell, a log viewer or a recorder might
+  mangle.
+- **Decimal values** are `0` or a non-zero digit followed by digits: no
+  sign, no leading zero.
+- **Canonical.** A parser accepts a line only if marshalling what it
+  parsed gives back the same bytes with the unknown fields left out. The
+  fuzz targets check exactly this, and that an unknown field without
+  `!` changes nothing while one with `!` is refused (§12).
+- **One number, strictly** (D8 V1). Each build speaks exactly one line
+  number. Its parser refuses any ClientLine, CredentialLine, ProbeLine
+  or ListLine whose number is another, before reading the rest, with an
+  error that carries the number it saw (`*VersionError`, §10.1). The
+  ErrorLine is the exception: its parser accepts any number, since its
+  whole grammar is frozen. There is no range and no fallback: a mismatch
+  fails the bootstrap with one line naming both numbers (§6.4).
+- **Stable** (D8 V1, `versioning.md` §5). The number names the grammar
+  above and each line's mandatory fields, nothing more. A new field is
+  optional, and is critical or not by `versioning.md` §3; a new value
+  of a known field is a new field, or a feature (`versioning.md` §4).
+  Neither changes the number. No line carries a software version, and
+  nothing compares one (Dan, 2026-11-15: "when I use SSH I don't really
+  worry about the version stuff").
+
+```
 dec     = "0" / (%x31-39 *DIGIT)
 b64(n)  = base64url, no padding, of exactly n bytes
 word    = 1*64( ALPHA / DIGIT / "." / "_" / "+" / "-" )
@@ -1212,9 +1226,22 @@ word    = 1*64( ALPHA / DIGIT / "." / "_" / "+" / "-" )
 ### 6.2 ClientLine: client → server, on ssh's stdin
 
 ```
-client-line = "MOSEY-CLIENT" SP proto SP attach SP agent
-              SP cols SP rows SP env SP dir SP type SP public [SP cmd] LF
-proto   = dec                       ; = 2
+client-line = "MOSEY-CLIENT" SP "1" *(SP field) LF     ; fields in key order
+```
+
+| Field | Value | Mandatory | Critical | Why critical or not |
+|---|---|---|---|---|
+| `!agent` | `yes`; absent for no | optional | yes | it instructs: the server makes the agent socket and triggers ssh's bind (D25, §8). Ignored, the shell would get no agent and the client would learn it only at its capture's deadline (§8) |
+| `!attach` | `attach` below | mandatory | yes | it selects which session, and `resume:SID:CREDID` restricts the takeover to a session still held by CREDID (§9.2.2) |
+| `!cmd` | `b64text` of a `cmdtext` | optional | yes | it instructs: run this in place of the shell, and `auto` matches on it (§9.2). Ignored, the user would get a shell, or a detached session that runs something else |
+| `cols` | `dec`, 1..65535 | mandatory | no | it describes the client's terminal; the server clamps it, and the client sends its size again as its first event |
+| `!dir` | `b64text` of a `dirtext` | optional | yes | it instructs: start here. Ignored, what the user types next would run in another directory |
+| `env` | `var *("," var)` | optional | no | it describes the client's locale and terminal; a server that dropped it would give the shell the default locale |
+| `!public` | `b64(1216)` | mandatory | yes | it authenticates: the client's one-shot X-Wing key (D20) |
+| `rows` | `dec`, 1..65535 | mandatory | no | as `cols` |
+| `!type` | `b64text` of a `typetext` | optional | yes | it instructs: type this into the new shell. Ignored, the session would start without what the user asked to run |
+
+```
 attach  = "auto"                    ; R1: the newest detached session started with this cmd (or none), else a new one (§9.2)
         / "new"                     ; -new: a new session with a generated name
         / "name:" sname             ; -s NAME: NAME, taken over if attached, else started
@@ -1222,80 +1249,62 @@ attach  = "auto"                    ; R1: the newest detached session started wi
         / "resume:" b64(16)         ; launcher → attach socket: take over session SID
           [":" b64(8)]              ; R3: ... only if it is detached or held by this credential
 sname   = (ALPHA / DIGIT) 0*31(ALPHA / DIGIT / "-" / "_" / ".")
-agent   = "no" / "yes"              ; D25, §8
-cols    = dec                       ; 1..65535
-rows    = dec                       ; 1..65535
-env     = "-" / var *("," var)      ; names strictly ascending (byte order), no repeats
-var     = name "=" 1*64vchar
+var     = name "=" 1*64vchar        ; names strictly ascending (byte order), no repeats
 name    = "COLORTERM" / "LANG" / "LANGUAGE" / "LC_ADDRESS" / "LC_ALL"
         / "LC_COLLATE" / "LC_CTYPE" / "LC_IDENTIFICATION" / "LC_MEASUREMENT"
         / "LC_MESSAGES" / "LC_MONETARY" / "LC_NAME" / "LC_NUMERIC"
         / "LC_PAPER" / "LC_TELEPHONE" / "LC_TIME" / "TERM"
 vchar   = ALPHA / DIGIT / "." / "_" / "@" / ":" / "+" / "-"
-dir     = "-" / b64text             ; -dir; the base64url of a dirtext
-type    = "-" / b64text             ; -type; the base64url of a typetext
 b64text = base64url, no padding, of 1..1024 bytes
 dirtext = 1..1024 bytes of UTF-8, no control character (Unicode Cc)
 typetext = 1..1024 bytes of UTF-8, no control character (Unicode Cc) but TAB
-public  = b64(1216)                 ; 1622 characters
-cmd     = b64text                   ; the command after DEST; the base64url of a cmdtext
-cmdtext = 1..1024 bytes of UTF-8, no control character (Unicode Cc) but TAB
+cmdtext = typetext
 ```
 
 | Field | Meaning |
 |---|---|
-| `proto` | `bootstrap.Version` |
 | `attach` | which session (D8, §9.2): `auto` for a plain `mosey DEST` or `mosey DEST COMMAND`, `new` for `-new`, `name:NAME` for `-s NAME`, and `resume:SID:CREDID` for R3's background reconnect, naming the session and the credential this client last held it with. `new:NAME` and `resume:SID` are what the launcher, having chosen, hands the session's spawner (§9.2), with a reconnect's CREDID kept (§9.2.2); a launcher refuses `new:NAME` from a client with `line`. The all-zero SID is refused: no session has it |
-| `agent` | whether the client will forward an agent (D25). The server needs it at spawn time to give the shell an `SSH_AUTH_SOCK` (`agent.md` §4.1) and, for `new` and resume alike, to trigger ssh's bind (§8). Slice 1 sent `no` only and refused `yes` with `unsupported agent`; the agent slice accepts both |
+| `agent` | whether the client will forward an agent (D25). The server needs it at spawn time to give the shell an `SSH_AUTH_SOCK` (`agent.md` §4.1) and, for `new` and resume alike, to trigger ssh's bind (§8) |
 | `cols`, `rows` | the client terminal's size; a terminal that reports 0 is sent as 80×24. The server clamps it (D23, `screen.ClampSize`). The client sends its size again as the first userinput event after connecting, in case it changed during the bootstrap |
-| `env` | the client's locale and terminal variables, from the allow-list only. A variable that is unset, empty, longer than 64 bytes or holds a byte outside `vchar` is left out (logged at debug), never escaped. The server gives the locale variables to the shell; what it does with `TERM` and `COLORTERM` is `server.md`'s (the shell's `TERM` describes the server's emulator, not the client's terminal) |
-| `dir` | `-dir`: the directory a new session's login shell starts in, relative to the remote `$HOME` unless absolute (§9.2.3). `-` for none: the shell starts in `$HOME` (`server.md` §2.5). Only a session the line creates uses it |
-| `type` | `-type`: the text typed into a new session's pty once its shell has started, followed by Enter (§9.2.3). `-` for none. Only a session the line creates uses it |
-| `cmd` | the command after `DESTINATION` (§2), joined with spaces, run as `SHELL -c CMD` in place of the interactive shell (§9.2.3). Absent, not `-`, when there is none. Only a session the line creates runs it; with `auto` it is also what the launcher matches a detached session on (§9.2). A line with `cmd` and a `type` is refused (`line`) |
+| `env` | the client's locale and terminal variables, from the allow-list only. A variable that is unset, empty, longer than 64 bytes or holds a byte outside `vchar` is left out (logged at debug), never escaped; with none, the field is absent. The server gives the locale variables to the shell; what it does with `TERM` and `COLORTERM` is `server.md`'s (the shell's `TERM` describes the server's emulator, not the client's terminal) |
+| `dir` | `-dir`: the directory a new session's login shell starts in, relative to the remote `$HOME` unless absolute (§9.2.3). Absent: the shell starts in `$HOME` (`server.md` §2.5). Only a session the line creates uses it |
+| `type` | `-type`: the text typed into a new session's pty once its shell has started, followed by Enter (§9.2.3). Only a session the line creates uses it |
+| `cmd` | the command after `DESTINATION` (§2), joined with spaces, run as `SHELL -c CMD` in place of the interactive shell (§9.2.3). Only a session the line creates runs it; with `auto` it is also what the launcher matches a detached session on (§9.2). A line with `cmd` and `type` is refused (`line`) |
 | `public` | the client's one-shot X-Wing encapsulation key, `OneShotKey.PublicKey()`, 1216 bytes [S1, measured from `crypto/hpke`] |
 
-`dir` and `type` are base64url because a path or a command holds spaces,
-and §6.1 keeps every field free of them; base64url keeps the line
+`dir`, `type` and `cmd` are base64url because a path or a command holds
+spaces, and §6.1 keeps every value free of them; base64url keeps the line
 printable ASCII whatever the user typed, and its strict decoding keeps
 the line canonical. The text inside is still checked: valid UTF-8 (Go's
 `utf8.Valid`) and no rune for which `unicode.IsControl` holds, but TAB in
-`type`. So a `-dir` cannot smuggle a NUL or a newline into a path, and a
-`-type` cannot carry an Enter of its own (a second command), an ESC (a
-line editor's key binding) or a Ctrl-C [choice: one line of ordinary
-text, with tab kept because a user may type it]. The bound is 1024 bytes
-each [choice: `PATH_MAX` on macOS, so any of our platforms can name the
-directory; for `type`, a quarter of the 4096 bytes termios(3) says a
-canonical-mode line holds, so the text and its Enter always arrive as one
-line the shell can read].
+`type` and `cmd`. So a `-dir` cannot smuggle a NUL or a newline into a
+path, and a `-type` cannot carry an Enter of its own (a second command),
+an ESC (a line editor's key binding) or a Ctrl-C [choice: one line of
+ordinary text, with tab kept because a user may type it]. The bound is
+1024 bytes each [choice: `PATH_MAX` on macOS, so any of our platforms can
+name the directory; for `type`, a quarter of the 4096 bytes termios(3)
+says a canonical-mode line holds, so the text and its Enter always arrive
+as one line the shell can read; for `cmd`, a command a user types on one
+line].
 The check keeps out control characters, not the line editor: what is
 left arrives as if the user typed it, so a TAB starts completion in bash
 and zsh, and where readline's `convert-meta` is on (bash's default in a C
 or 8-bit locale) a byte of 0x80 or above is read as a Meta chord. The
 text is the user's own, so that is what typing it would do anyway.
 
-`cmd` follows the same rules, `cmdtext` being `typetext` again [choice:
-a command a user types on one line; the bound keeps the longest line
-under `MaxClientLine`]. Unlike every other field it is optional, and
-last: a line with no command is byte for byte the line of before
-commands, so the line's version did not change (protocol numbers change
-only with Dan's approval, 2026-11-16). A launcher of this version that
-predates commands counts the fields and refuses a line with one as
-`line`; the client, having sent one, says so (`DEST's mosey could not
-read this request: it may be older than this one, and unable to run a
-command`). One from the first days of commands, before `auto` matched
-on `cmd` (§9.2), takes the newest detached session whatever it runs,
-and adds `existing`, so the client says the command was not run; no
-compatibility work is done about it (no users yet, Dan, 2026-11-15).
-The parser still takes exactly one form of each line: the
-field is either absent or a valid `b64text`, never `-` and never empty.
+**A server that does not know a critical field** (one from a later
+release, say) refuses the line with `MOSEY-ERROR 1 !code=unsupported
+detail=KEY` (§6.4), and the client says `mosey: DEST's mosey can't do KEY
+yet`: a server never starts a session without doing what the line asked.
 
-Size: at most 5710 bytes [derived: the fixed fields and their 9 spaces come
-to 1698 with the longest attach, `resume:SID:CREDID` at 41 bytes; env at
-most 1277 (156 bytes of names, 17 × 65 for `=` and value, 16 commas);
-`dir` 1366 (the base64url of 1024 bytes); then either `type` at 1366
-with no `cmd`, or `type` `-` and `cmd` at 1366 and its space; LF 1].
-**`MaxClientLine` = 8192** [derived: the next power of two, so the
-server's read bound is fixed and generous].
+Size: at most 5756 bytes [derived: `MOSEY-CLIENT 1` 14; ` !agent=yes` 11;
+` !attach=` and the longest attach, `resume:SID:CREDID` at 41, 50;
+` cols=` and ` rows=` 11 each; ` !dir=` 1372 (the base64url of 1024
+bytes is 1366); ` env=` 1282 (at most 1277: 156 bytes of names, 17 × 65
+for `=` and value, 16 commas); ` !public=` 1631; then either ` !type=`
+1373 or ` !cmd=` 1372, never both; LF 1]. **`MaxClientLine` = 8192**
+[derived: the next power of two, so the server's read bound is fixed and
+generous, and over 2 KiB is left for fields a later release adds].
 
 Why not pass the environment as ssh `SendEnv`: sshd's `AcceptEnv` decides
 what arrives, differently on every host, and the values arrive in the
@@ -1305,34 +1314,37 @@ grammar is ours and the parser is fuzzed.
 Example (key shortened; `c3Jj` is `-dir src`):
 
 ```
-MOSEY-CLIENT 2 new no 211 58 COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256color c3Jj - nW3b…Qe8
+MOSEY-CLIENT 1 !attach=new cols=211 !dir=c3Jj env=COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256color !public=nW3b…Qe8 rows=58
 ```
 
 ### 6.3 CredentialLine: server → client, on ssh's stdout
 
 ```
-cred-line = "MOSEY-CONNECT" SP proto SP addr SP port
-            SP credid SP sessionid SP name SP psk SP public [SP "existing"] LF
-addr      = "-" / ipv4 / ipv6       ; netip.Addr.String() form, no zone, never 4-in-6;
-                                    ; not unspecified, multicast or 255.255.255.255
-port      = dec                     ; 1..65535
-credid    = b64(8)                  ; 11 characters
-sessionid = b64(16)                 ; 22 characters
-name      = sname                   ; §6.2, 1..32 characters
-psk       = b64(32)                 ; 43 characters
-public    = b64(1216)               ; 1622 characters
+cred-line = "MOSEY-CONNECT" SP "1" *(SP field) LF     ; fields in key order
+```
+
+| Field | Value | Mandatory | Critical | Why critical or not |
+|---|---|---|---|---|
+| `!addr` | `ipv4 / ipv6`, below; absent for none | optional | yes | it selects where the client sends its UDP (§7.2) |
+| `!credid` | `b64(8)` | mandatory | yes | it authenticates: `handshake.Credential.ID` [S1: 8 bytes, our choice] |
+| `existing` | `yes`; absent otherwise | optional | no | it describes what happened: the command was not run, and the client says so. The attach is the same either way |
+| `name` | `sname` (§6.2), 1..32 | mandatory | no | it names the session to the user; nothing is decided by it (R3 resumes by `sid`, §9.2.2) |
+| `!port` | `dec`, 1..65535 | mandatory | yes | it selects where the client sends its UDP |
+| `!psk` | `b64(32)` | mandatory | yes | it authenticates: `Credential.PSK` [S1] |
+| `!public` | `b64(1216)` | mandatory | yes | it authenticates: `Credential.ServerPublic`, the server's one-shot X-Wing key [S1] |
+| `!sid` | `b64(16)` | mandatory | yes | it selects: `Credential.SessionID`, the session the handshake binds (`transport.md` §3.4), named for resume (D8) and in the logs |
+
+```
+ipv4 / ipv6   ; netip.Addr.String() form, no zone, never 4-in-6;
+              ; not unspecified, multicast or 255.255.255.255
 ```
 
 | Field | Meaning |
 |---|---|
-| `addr` | the server's address as SSH reached it: the third field of `SSH_CONNECTION`, parsed with `netip.ParseAddr`, unmapped (`Unmap`) and with any zone dropped. `-` if there is no `SSH_CONNECTION`, it does not parse as four fields, or the address is one the grammar forbids. Set by the spawner from its own environment; proto must copy it exactly (§4.4 step 3) |
+| `addr` | the server's address as SSH reached it: the third field of `SSH_CONNECTION`, parsed with `netip.ParseAddr`, unmapped (`Unmap`) and with any zone dropped. Absent if there is no `SSH_CONNECTION`, it does not parse as four fields, or the address is one the grammar forbids. Set by the spawner from its own environment; proto must copy it exactly (§4.4 step 3) |
 | `port` | the UDP port the spawner bound; likewise the spawner's, checked |
-| `credid` | `handshake.Credential.ID` [S1: 8 bytes, our choice] |
-| `sessionid` | `Credential.SessionID`, 16 bytes; names the session for resume (D8) and the logs |
 | `name` | the session's name (D8 R2): the one the user gave with `-s`, or the one the launcher generated. The client shows it and keeps it, in memory only, for R3. Its grammar is letters, digits and `-_.`, so it is safe to print as it is |
-| `psk` | `Credential.PSK`, 32 bytes [S1] |
-| `public` | `Credential.ServerPublic`, the server's one-shot X-Wing key, 1216 bytes [S1] |
-| `existing` | present only in answer to a ClientLine with a `cmd`, when the line took a session that was already running and was not started with that `cmd`, so the command was not run (§9.2.3: `name:NAME` only, since `auto` takes only a session started with the same `cmd`); the client says so. A launcher writes it on no line in answer to one without a `cmd`, so a client from before commands never sees it |
+| `existing` | present only in answer to a ClientLine with a `cmd`, when the line took a session that was already running and was not started with that `cmd`, so the command was not run (§9.2.3: `name:NAME` only, since `auto` takes only a session started with the same `cmd`); the client says so |
 
 The parser is canonical, so `addr` must be exactly what `netip.Addr.String()`
 gives for an unmapped, zone-free address: `::ffff:192.0.2.1`, `fe80::1%eth0`
@@ -1344,9 +1356,10 @@ and `ff00::/8` (`IsMulticast`), and the limited broadcast
 belong to the grammar and the fuzzer; the checks that need the client's own
 interfaces or config are §7.2's.
 
-Size: at most 1806 bytes [derived: 13 + 1 + 39 (longest IPv6 text) +
-5 + 11 + 22 + 32 + 43 + 1622, 8 spaces, LF, and 9 for ` existing`]. **`MaxCredentialLine` = 2048**
-[derived].
+Size: at most 1853 bytes [derived: `MOSEY-CONNECT 1` 15; ` !addr=` and
+the longest IPv6 text, 39, 46; ` !credid=` 20; ` existing=yes` 13;
+` name=` 38; ` !port=` 12; ` !psk=` 49; ` !public=` 1631; ` !sid=` 28;
+LF 1]. **`MaxCredentialLine` = 2048** [derived: the next power of two].
 
 The client turns it into a `handshake.Credential` (ID, SessionID, PSK,
 ServerPublic) and a UDP destination (§7.2). `bootstrap` does not import
@@ -1355,51 +1368,61 @@ ServerPublic) and a UDP destination (§7.2). `bootstrap` does not import
 ### 6.4 ErrorLine: server → client, on ssh's stdout
 
 ```
-error-line = "MOSEY-ERROR" SP eproto SP code SP detail LF
-eproto     = "0" / (%x31-39 0*4DIGIT)    ; 0..99999, any version, no leading zero
-code       = 1*16(%x61-7A)               ; a lower-case word
-detail     = "-" / word
+error-line = "MOSEY-ERROR" SP number *(SP field) LF   ; number: 0..99999, any
 ```
 
-This grammar, **and its bound `MaxErrorLine` = 128 bytes**, is frozen in
-full, for every version: a v7 client must be able to read a v1 server's
-refusal, and no future server may send a longer one. It freezes the
-*shape* of each field, not a list of values: `code` is any lower-case word
-of 1 to 16 letters, so a later version can add a code and an older client
-still parses the line. The longest line is 100 bytes [derived:
-`MOSEY-ERROR` 11 + SP + 5 digits + SP + 16 letters + SP + 64-byte word +
-LF]; 128 leaves room and is the bound the client enforces.
+| Field | Value | Mandatory | Critical | Why critical or not |
+|---|---|---|---|---|
+| `!code` | `1*16(%x61-7A)`, a lower-case word | mandatory | yes | it decides what the client does: which message, which exit status, whether R3 stops retrying (§9.2.2) |
+| `detail` | `word` | optional | no | it fills in the message: a field's name, two numbers, a time |
+
+This grammar, **and its bound `MaxErrorLine` = 256 bytes**, is frozen in
+full, for every number: a client of any version must be able to read any
+server's refusal, and no server may send a longer one. It freezes the
+*shape*, not a list of values: `code` is any lower-case word of 1 to 16
+letters, so a later version can add a code and an older client still
+parses the line, and a later field is skipped as any unknown field is.
+The longest line of the two fields is 112 bytes [derived: `MOSEY-ERROR`
+11, SP, 5 digits, ` !code=` 7 and 16 letters, ` detail=` 8 and a 64-byte
+word, LF]; 256 [choice] leaves room for fields a later release adds.
 
 A client reading a code it does not know treats it as `internal` (the
 generic message below, with the code shown in it). The codes defined so
-far (`dir` since version 2):
+far:
 
 | Code | When | `detail` | Client says (exit 1) |
 |---|---|---|---|
-| `line` | the stdin line is malformed or not alone | `-` | `mosey: the server could not read this client's request: a bug, please report it` |
-| `version` | the ClientLine's `proto` is not the server's line version (§6.1) | `-` | `mosey: DEST's mosey speaks protocol P; this mosey speaks N`, P being the line's `eproto`. A CredentialLine or ProbeLine of another version (`*VersionError`) gets the same message |
+| `line` | the stdin line is malformed or not alone | absent | `mosey: the server could not read this client's request: a bug, please report it` |
+| `version` | the ClientLine's number is not the server's line number (§6.1) | absent | `mosey: DEST's mosey speaks protocol P; this mosey speaks N`, P being the ErrorLine's number. A CredentialLine or ProbeLine of another number (`*VersionError`) gets the same message |
 | `attach` | `name:NAME` or `resume:SID…` names a session whose spawner speaks another attach protocol (§9.2.1), which this launcher cannot attach | `P-N`: that spawner's attach protocol, then the launcher's | `mosey: session NAME on DEST speaks attach protocol P; DEST's mosey speaks N`, from the detail alone, so it names both numbers even where the launcher's stderr is not shown (R3's reconnect logs it); `-kill` says the same |
-| `unsupported` | a reserved value the server does not yet accept (slice 1 sent it for `agent=yes`; no v1 value is reserved now) | the field's name | `mosey: the remote mosey can't do F yet` |
-| `session` | `resume:SID…` names no session of this user that answers (§9.2) | `-` | R3's reconnect (§9.2.2): `mosey: session NAME on DEST has ended: its shell exited, or the host restarted` |
+| `unsupported` | the ClientLine has a critical field this server does not know (§6.2), or a value of one it does not yet accept | the field's key | `mosey: DEST's mosey can't do F yet` |
+| `session` | `resume:SID…` names no session of this user that answers (§9.2) | absent | R3's reconnect (§9.2.2): `mosey: session NAME on DEST has ended: its shell exited, or the host restarted` |
 | `taken` | R3's `resume:SID:CREDID` finds its session held by another credential than CREDID: another client has taken it over (§9.2.2, D26) | when that client attached, in unix seconds | `mosey: session NAME taken over by another client at TIME` (exit 3, as §9.1) |
-| `dir` | the line would create a session and its `dir` is not a directory the launcher can reach (§9.2.3); no session was started | `-` | `mosey: DIR is not a directory on DEST, so no session was started`, DIR as the user gave it |
-| `internal` | the server failed to start the session; stderr says why | `-` | `mosey: the server failed to start (see above)` |
+| `dir` | the line would create a session and its `dir` is not a directory the launcher can reach (§9.2.3); no session was started | absent | `mosey: DIR is not a directory on DEST, so no session was started`, DIR as the user gave it |
+| `internal` | the server failed to start the session; stderr says why | absent | `mosey: the server failed to start (see above)` |
 | any other word | a later server's code | any | `mosey: the server refused: CODE (see above)` |
 
-**No software versions** (D8 V1, as amended by Dan on 2026-11-15). Client
-and server of different mosey versions is normal and must work: no line
-carries a software version and nothing compares one. What two builds
-must agree on is one protocol number per layer: the bootstrap line's
-version here (§6.1), the handshake's protocol (`transport.md` §2.3,
-§3.6) and, between server binaries on one host, the attach protocol
-(§9.2.1). Each is checked for equality, and a mismatch fails with one
-line naming both numbers. D7 uses whatever mosey the host has (§4.7);
-the host's mosey is upgraded by Nix or by replacing the binary, and new
-sessions use it. A session of an older binary goes on running that
-binary until it ends. There is no live upgrade (Dan, 2026-11-15).
+An ErrorLine with an unknown critical field is refused like any other
+line of ours that does not parse (§6.5): the client still fails, saying
+the server's answer was malformed.
 
-The ErrorLine carries the server's own `proto`, which is how the client
-names the server's number.
+**No software versions** (D8 V1, as amended by Dan on 2026-11-15 and
+2026-11-17). Client and server of different mosey versions is normal and
+must work: no line carries a software version and nothing compares one.
+What two builds must agree on is one protocol number per layer, and it
+names only that layer's envelope (`versioning.md` §5): the bootstrap
+lines' here (§6.1), the handshake's (`transport.md` §2.3, §3.6) and,
+between server binaries on one host, the attach protocol's (§9.2.1).
+Each is checked for equality, and a mismatch fails with one line naming
+both numbers. Everything else is an element a receiver either knows or
+skips, or refuses because it is critical. D7 uses whatever mosey the
+host has (§4.7); the host's mosey is upgraded by Nix or by replacing the
+binary, and new sessions use it. A session of an older binary goes on
+running that binary until it ends. There is no live upgrade (Dan,
+2026-11-15).
+
+The ErrorLine carries the server's own number, which is how the client
+names the server's.
 
 ### 6.5 Reading stdout: `ReadCredential`
 
@@ -1415,8 +1438,8 @@ therefore:
 2. Skips every other line, counting its bytes. More than
    **`MaxPreamble` = 64 KiB** [choice: well above any motd-like rc noise]
    of skipped bytes in total is fatal (`ErrNoLine`).
-3. A protocol line longer than its maximum (2048 for CONNECT, 128 for
-   ERROR, 160 for PROBE) is fatal. A skipped line may be any length; it counts against
+3. A protocol line longer than its maximum (2048 for CONNECT, 256 for
+   ERROR, 256 for PROBE) is fatal. A skipped line may be any length; it counts against
    `MaxPreamble`.
 4. Returns at the first protocol line; it reads nothing past its LF.
    (Afterwards, the client drains stdout to EOF in the background, at most
@@ -1584,7 +1607,7 @@ the replay's are `agent.md` §2 and §3; this section is the procedure.
    `$XDG_RUNTIME_DIR/mosey/`, else `os.TempDir()/mosey-UID/`, checked to be
    ours and 0700), and listen on `cap-HEX.sock` in it, `HEX` 16 random
    bytes, socket mode 0600, unlinked on close.
-2. Run the bootstrap ssh with `-o ForwardAgent=PATH`, send `agent=yes`.
+2. Run the bootstrap ssh with `-o ForwardAgent=PATH`, send `!agent=yes`.
 3. After `cmd.Start`, tell the capture the only acceptable peer: ssh's pid
    and our uid.
 4. The capture is a strict state machine on **one** connection (the
@@ -1628,7 +1651,7 @@ the replay's are `agent.md` §2 and §3; this section is the procedure.
 7. **Bound**: the bind is replayed with `is_forwarding=1` at the head of
    every mosey agent channel, before any frame from the server.
 
-**Server.** With `agent=yes` and `SSH_AUTH_SOCK` set by sshd, the launcher,
+**Server.** With `!agent=yes` and `SSH_AUTH_SOCK` set by sshd, the launcher,
 before printing the CredentialLine, triggers ssh's bind: connect to
 `SSH_AUTH_SOCK`, send `SSH_AGENTC_REQUEST_IDENTITIES`, read one reply frame
 (at most 256 KiB), close; deadline 5 s [choice]. A failure is logged and
@@ -1726,7 +1749,7 @@ the CredentialLine (§6.3), so the client can say it, and in the greeting
 |---|---|---|
 | `mosey DEST` | `auto`, no `cmd` | of the sessions the launcher can attach (step 5: any version's, if their attach protocol is this launcher's) that are `detached` (below) and whose greeting has no `cmd` (§9.2.1: started without a command, `-type` and `-dir` ones included), the one with the newest `since`, taken with `resume:SID`; if there is none, a new session with a generated name, `new:NAME`. It never takes a session that is `new` or `attached`, nor one running a command |
 | `mosey DEST COMMAND` | `auto` with `cmd` | as `mosey DEST`, but of the sessions whose greeting's `cmd` is the line's, byte for byte (§9.2.3; PLAN D8, option C); if there is none, a new session with a generated name running the command |
-| `mosey -s NAME DEST` | `name:NAME` | session NAME (step 5: of any version; one of another attach protocol is `MOSEY-ERROR 2 attach P-N`), whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
+| `mosey -s NAME DEST` | `name:NAME` | session NAME (step 5: of any version; one of another attach protocol is `MOSEY-ERROR 1 !code=attach detail=P-N`), whatever its state, with `resume:SID`: a takeover if it is attached (D26); if there is no session NAME, a new one called NAME, `new:NAME` |
 | `mosey -new DEST` | `new` | a new session with a generated name, `new:NAME` |
 | R3's reconnect | `resume:SID:CREDID` | §9.2.2 |
 | `mosey -list DEST` | none: `--serve=list` (§9.4) | |
@@ -1770,9 +1793,9 @@ The steps:
 
 1. **Client.** It bootstraps exactly as §4–§7 with a fresh one-shot key and
    its `attach`. Its `cols`/`rows` are its own terminal's.
-2. **Launcher.** It checks the protocol version as for any line, and
+2. **Launcher.** It checks the protocol number as for any line, and
    triggers ssh's bind before printing the line (§4.4 step 4, §8) when
-   `agent=yes`, so a resuming client captures its own bind from its own
+   `!agent=yes`, so a resuming client captures its own bind from its own
    SSH login. It takes the lock, connects to every `R/mosey/*/attach.sock`
    (`server.md` §2.6 says what `R` is and how the directories are
    checked), keeps those that answer with a greeting within 2 s, and
@@ -1781,7 +1804,7 @@ The steps:
    its own. To take one it closes every other connection, rewrites the
    line's `attach` as `resume:SID` (a reconnect keeps its CREDID,
    `resume:SID:CREDID`, §9.2.2) and sends it to that session's spawner.
-   A `new:NAME` or the all-zero SID from a client is `MOSEY-ERROR 2 line -`.
+   A `new:NAME` or the all-zero SID from a client is `MOSEY-ERROR 1 !code=line`.
 3. **Spawner.** The session's spawner owns the socket. It checks the
    peer's uid with `SO_PEERCRED` [S1 `resume.go`], sends its greeting
    (§9.2.1), and reads the launcher's `ClientLine` (0x40). It parses it
@@ -1791,11 +1814,11 @@ The steps:
    (`Resume`, 0x05), and proto mints a credential for the **same SID**
    with the usual TTL (30 s) and cap (2 unused, the oldest evicted and
    logged). The credential comes back as `Credential` (0x30); the spawner
-   checks it as at bootstrap (§4.4 step 3), and that its `sessionid` is
+   checks it as at bootstrap (§4.4 step 3), and that its `sid` is
    the session's, marks the session held by it (the lock paragraph above)
    and sends it to the launcher in `Ready` (0x41), which prints it exactly
    as for a new session. Any failure is `Failed` (0x42), which the
-   launcher turns into `MOSEY-ERROR 2 internal -`.
+   launcher turns into `MOSEY-ERROR 1 !code=internal`.
 4. **Handshake and takeover** as §7 and §9.1: on confirmation every other
    transport of the session is revoked, and its client exits saying so.
 5. **Versions** (D8 V1). Every session's greeting is in the stable
@@ -1811,9 +1834,13 @@ The steps:
    not parse is not chosen. One whose attach protocol is not this
    launcher's is never taken by `auto` (it is listed by `-list`, so the
    user can see it); `name:NAME` or `resume:SID` naming it is refused with
-   `MOSEY-ERROR 2 attach P-N`, P its spawner's number and N the
+   `MOSEY-ERROR 1 !code=attach detail=P-N`, P its spawner's number and N the
    launcher's, and the launcher's stderr says `session NAME speaks attach protocol P; this mosey speaks
-   N`. Its name stays taken: a new session is never given it.
+   N`. One whose greeting has a critical field this launcher does not
+   know (§9.2.1) is treated the same way, but refused with
+   `MOSEY-ERROR 1 !code=unsupported detail=KEY`, so the client says
+   which field this host's mosey cannot honour. Either way its name
+   stays taken: a new session is never given it.
 6. **The size** in the ClientLine is not applied by the spawner (an
    unconfirmed attach must change nothing). The client sends its size as
    the first input event once connected (§6.2), which resizes the pty and
@@ -1829,24 +1856,24 @@ The steps:
 #### 9.2.1 The greeting
 
 The first message the spawner sends on an attach socket, one seqpacket
-message of printable ASCII (§6.1's rules), **not** an IPC message:
+message in §6.1's grammar, **not** an IPC message:
 
 ```
-session-line = "MOSEY-SESSION" SP aproto SP sessionid SP name
-               SP started SP state SP since SP peer SP holder [SP cmd] LF
+session-line = "MOSEY-SESSION" SP aproto *(SP field) LF   ; fields in key order
 aproto       = dec              ; the attach protocol the spawner speaks,
-                                ; 1..255; "2" now
-sessionid    = b64(16)
-name         = sname            ; §6.2
-started      = dec              ; unix seconds the session started
-state        = "new" / "attached" / "detached"
-since        = dec              ; unix seconds of the last change of state
-peer         = "-" / addrport   ; netip.AddrPort.String() of the last attached
-                                ; client, unmapped, no zone; "-" if none known
-holder       = "-" / b64(8)     ; the credential id that holds the session
-cmd          = b64text          ; §6.2: the command the session was started
-                                ; with; absent if it was started without one
+                                ; 1..255; "1" now
 ```
+
+| Field | Value | Mandatory | Critical | Why critical or not |
+|---|---|---|---|---|
+| `!cmd` | `b64text` (§6.2): the command the session was started with | optional | yes | it selects: `auto` takes only a session started with its own command (§9.2). A launcher that ignored it would resume a running command for a plain `mosey DEST` |
+| `!holder` | `b64(8)`: the credential id that holds the session | optional | yes | it restricts: R3 takes a session back only if this is its own credential (§9.2.2). Ignored, a reconnect could take a session from whoever took it over |
+| `!name` | `sname` (§6.2) | mandatory | yes | it selects: `-s NAME` and `-kill NAME` find the session by it |
+| `peer` | `addrport`: `netip.AddrPort.String()` of the last attached client, unmapped, no zone | optional | no | it describes, for the takeover message |
+| `!sid` | `b64(16)` | mandatory | yes | it selects: the session a resume names (`resume:SID`) |
+| `since` | `dec`: unix seconds of the last change of state | mandatory | no | it describes; R1 orders detached sessions by it, but never takes one it would not otherwise take |
+| `started` | `dec`: unix seconds the session started | mandatory | no | it describes |
+| `!state` | `new` / `attached` / `detached` | mandatory | yes | it restricts: `auto` takes only a detached session, and never steals an attached one (D8 R1) |
 
 `new` is a session no client has attached to yet; `attached` one whose
 client is attached, or for which a resume's credential is out and not yet
@@ -1855,7 +1882,8 @@ leaving, whose connection failed, or which proto has not heard from for
 `SilentAfter` (§9.2). `holder` is the id of the credential the attached
 connection was made with, or the one the pending resume was minted with,
 except that a reconnect's pending resume names the CREDID the reconnecting
-client gave (§9.2.2), and `-` when the session is `new` or `detached`. A credential id is not
+client gave (§9.2.2), and absent when the session is `new` or `detached`.
+A credential id is not
 secret: it travels in the clear in msg1 (`transport.md` §3.4), and only
 the user's own processes can read a greeting. R3 uses it to tell "still
 held by me" from "held by someone else" (§9.2.2). `cmd` is the `cmd`
@@ -1863,37 +1891,25 @@ of the ClientLine that created the session, exactly as it came (§6.2,
 §9.2.3), for as long as the session lives; `auto` matches on it (§9.2)
 and `-list` shows it (§9.4).
 
-**Frozen in full** (D8 V1). The whole line is stable across releases:
-`aproto` is the one version of the attach protocol (`server.md` §2.8,
-the messages that follow the greeting) the session's spawner speaks, and
-the fields after it keep their v1 meaning in every later release. A
-later attach version changes what it needs in messages after the
-greeting, never in it, so `ParseSessionLine` reads the greeting of any
-session of any later version, whatever its `aproto`. A launcher attaches
-a session only if `aproto` equals its own `bootstrap.AttachProtocol`
-(§9.2 step 5). No software version is in it. The parser is canonical and
-fuzzed.
+**Stable** (D8 V1, `versioning.md` §5). `aproto` is the one number of the
+attach protocol (`server.md` §2.8, the greeting and the messages that
+follow it) the session's spawner speaks, and names only its envelope:
+§6.1's grammar, the greeting's mandatory fields and the framing of the
+messages. A later release adds a field to the greeting as any line gains
+one, so `ParseSessionLine` reads the greeting of any session of the same
+number. A launcher attaches a session only if `aproto` equals its own
+`bootstrap.AttachProtocol` (§9.2 step 5). No software version is in it.
+The parser is canonical and fuzzed. A greeting with a critical field this
+launcher does not know is one it cannot judge: the session is not chosen
+by `auto`, and `name:NAME` or `resume:SID` naming it is refused as for
+another attach protocol, with `attach` and its own number on both sides.
 
-**Attach protocol 2** (2026-11-15). The `ClientLine` message (0x40)
-carries a ClientLine, so when that line's version went to 2 (§6.1) the
-attach protocol went to 2 with it: a spawner of attach protocol 1 would
-refuse a version-2 line. A session started by a binary of attach
-protocol 1 is therefore listed, but not taken (§9.2 step 5), until it
-ends; nothing else changed.
-
-**The optional `cmd`** (2026-11-16, within attach protocol 2: protocol
-numbers change only with Dan's approval, and there are no users yet).
-It is the one optional field, and last, as the ClientLine's `cmd` is
-(§6.2), so the greeting of a session started without a command is byte
-for byte the greeting of before. Releases from before it read the
-greeting into a buffer of 256 bytes and parse exactly 9 fields, so they
-pass over a session started with a command (it is not chosen, and not
-listed), and read every other as before. `MaxSessionLine` = 2048
-bytes [derived: the longest line without `cmd` is 13 + 3 + 22 + 32 + 12
-+ 8 + 12 + 47 + 11, 8 spaces and LF = 169, with the 12-digit bound on the
-times; `cmd` adds a space and at most 1366, the base64url of 1024 bytes,
-so 1536; then the next power of two]. A seqpacket message of that size
-fits any socket buffer the kernel gives.
+`MaxSessionLine` = 2048 bytes [derived: the longest greeting is 1588
+bytes: `MOSEY-SESSION` and 5 digits 19; ` !cmd=` 1372; ` !holder=` 20;
+` !name=` 39; ` peer=` and 47, 53; ` !sid=` 28; ` since=` and
+` started=` with the 12-digit bound on the times, 19 and 21; ` !state=`
+and `detached`, 16; LF; then the next power of two]. A seqpacket message
+of that size fits any socket buffer the kernel gives.
 
 #### 9.2.2 Reconnect (D8 R3)
 
@@ -1945,12 +1961,12 @@ own session, in the background, and never asks the user anything:
   part of what is drawn, not of the session's screen: the server never
   sees it, and the renderer's diff puts the row back when it goes.
 - **The launcher's answer** to `resume:SID:CREDID`, under the lock: no
-  session SID that answers is `MOSEY-ERROR 2 session -`. A session that is
+  session SID that answers is `MOSEY-ERROR 1 !code=session`. A session that is
   `detached`, or whose `holder` is CREDID, is taken as §9.2 step 2 says:
   the second case is a path broken one way only (the server still hears
   the client, so it never went `detached`), and the takeover revokes this
   client's own old transport. A session any other credential holds is
-  `MOSEY-ERROR 2 taken SINCE`, SINCE its greeting's `since`. The
+  `MOSEY-ERROR 1 !code=taken detail=SINCE`, SINCE its greeting's `since`. The
   launcher passes CREDID on to the spawner, and while the credential it
   mints is out the greeting's `holder` is CREDID, not the new one: the
   hold is that client's. Otherwise a try dropped at the swap (below)
@@ -2009,7 +2025,7 @@ attached with: a tmux user's `tmux new-session -c DIR` followed by
   launcher can `stat` (symlinks followed). Before it starts a spawner,
   holding the lock, the launcher checks this; if it fails the launcher
   starts nothing, writes `the directory DIR is not one: ERR` on stderr and
-  `MOSEY-ERROR 2 dir -` on stdout, and the client says `mosey: DIR is not
+  `MOSEY-ERROR 1 !code=dir` on stdout, and the client says `mosey: DIR is not
   a directory on DEST, so no session was started` and exits 1 (§6.4). The
   spawner resolves the same `dir` the same way and starts the login shell
   there (`server.md` §2.5); should it have gone in between, starting the
@@ -2154,29 +2170,29 @@ nothing), reads each greeting, prints one line per session that answered,
 oldest first, and exits 0:
 
 ```
-list-line = "MOSEY-LIST" SP "1" SP lname SP lstate SP lsince [SP lcmd] LF
-lname     = sname
-lstate    = "new" / "attached" / "detached"
-lsince    = dec                 ; unix seconds of the last change of state
-lcmd      = b64text             ; §6.2: the greeting's cmd, absent if none
+list-line = "MOSEY-LIST" SP "1" *(SP field) LF     ; §6.1, fields in key order
 ```
 
-`lcmd` (2026-11-16) is optional and last, as the greeting's `cmd` is
-(§9.2.1), so a session started without a command is listed exactly as
-before and the line's `1` stays (protocol numbers change only with Dan's
-approval). A client from before it counts the fields and drops a line
-with one, saying how many it dropped.
+| Field | Value | Mandatory | Critical | Why critical or not |
+|---|---|---|---|---|
+| `cmd` | `b64text` (§6.2): the greeting's `cmd` | optional | no | the list is only shown: every field describes |
+| `name` | `sname` | mandatory | no | as `cmd` |
+| `since` | `dec`: unix seconds of the last change of state | mandatory | no | as `cmd` |
+| `state` | `new` / `attached` / `detached` | mandatory | no | as `cmd` |
+
+The number is the bootstrap lines' (§6.1), checked like theirs.
 
 The client reads ssh's stdout (at most 2 MiB [derived: `MaxListed` ×
 `MaxListLine`]), skips anything that is
 not a `MOSEY-` line (a login shell's chatter, §6.5), and parses each
 `MOSEY-LIST` line with `ParseListLine`: canonical, at most `MaxListLine` =
-2048 bytes [derived: 10 + 1 + 32 + 8 + 12, 4 spaces and LF = 68, and
-` lcmd` at most 1367, so 1435; then the next power of two],
+2048 bytes [derived: `MOSEY-LIST` and 5 digits 16; ` cmd=` 1371;
+` name=` 38; ` since=` 19; ` state=` and `detached` 15; LF; 1460 in
+all; then the next power of two],
 and fuzzed, since a hostile server writes it. At most `MaxListed` = 1024
 lines are shown [choice]; a line that does not parse is not shown, and
-the client says how many it dropped. Every field but `lcmd` is from a
-grammar of printable ASCII with no space; `lcmd` decodes to a `cmdtext`
+the client says how many it dropped. Every field but `cmd` is from a
+grammar of printable ASCII with no space; `cmd` decodes to a `cmdtext`
 (valid UTF-8, no control character but tab), checked by the parser, and
 the client shows it with every rune that is not printable
 (`unicode.IsPrint` false: tab, format characters such as the bidi
@@ -2207,7 +2223,7 @@ and after its greeting sends it `Hangup` (0x43, `server.md` §2.6); the
 spawner hangs the shell up (§9.3), and closes the connection once it has
 sent the signals. The server prints nothing and exits 0, and the client
 says `mosey: ended session NAME on DEST`. With no session called NAME the
-server prints `MOSEY-ERROR 2 session -` and exits 1, and the client says
+server prints `MOSEY-ERROR 1 !code=session` and exits 1, and the client says
 `mosey: no session called NAME on DEST` and exits 1. Any other failure is
 reported as `-list`'s are.
 
@@ -2227,6 +2243,7 @@ reported as `-list`'s are.
 | ProbeLine (`ErrNoServer`, no `-remote`) | the upload of §4.7, and its messages; for `-list` and `-kill`, §4.7.1's messages and no upload; for R3's reconnect, a log line and another try | 1 |
 | `ErrNoLine`, other exit | `mosey: the remote mosey exited with status N` | 1 |
 | `ErrBadLine` | `mosey: DEST sent a malformed mosey line` | 1 |
+| ErrorLine `unsupported` | `mosey: DEST's mosey can't do F yet` (§6.4) | 1 |
 | `ErrBadAddr` | §7.2 | 1 |
 | ErrorLine | per §6.4 | 1 |
 | Dial timeout | §7.3 | 1 |
@@ -2252,35 +2269,35 @@ const (
 	Version           = 1
 	MaxClientLine     = 8192
 	MaxCredentialLine = 2048
-	MaxErrorLine      = 128 // frozen with the ErrorLine grammar
+	MaxErrorLine      = 256 // frozen with the ErrorLine grammar
 	MaxPreamble       = 64 << 10
 )
 
-// ClientLine is §6.2. Marshal always writes proto = Version.
+// ClientLine is §6.2. Marshal always writes the number Version.
 type ClientLine struct {
 	Attach          Attach            // AttachNew (the zero value), AttachAuto, AttachName, AttachResume
 	Name            string            // "name:NAME", or "new:NAME" ("" is plain "new")
 	SessionID       [16]byte          // "resume:SID"
 	Holder          [8]byte           // "resume:SID:CREDID", when HasHolder (R3)
 	HasHolder       bool
-	Agent           bool              // agent
+	Agent           bool              // !agent=yes; false is absent
 	Cols, Rows      uint16            // 1..65535
 	Env             map[string]string // allow-listed names only; Marshal sorts
-	Dir, Type       string            // dir, type: "" is "-" (§6.2, §9.2.3)
+	Dir, Type       string            // !dir, !type: "" is absent (§6.2, §9.2.3)
 	Public          []byte            // 1216 bytes
-	Command         string            // cmd: "" is no field (§6.2, §9.2.3)
+	Command         string            // !cmd: "" is absent (§6.2, §9.2.3)
 }
 
-// CredentialLine is §6.3. Marshal always writes proto = Version.
+// CredentialLine is §6.3. Marshal always writes the number Version.
 type CredentialLine struct {
-	Addr            netip.Addr // the zero Addr is "-"
+	Addr            netip.Addr // the zero Addr is absent
 	Port            uint16
 	CredentialID    [8]byte
 	SessionID       [16]byte
 	Name            string // sname
 	PSK             [32]byte
 	Public          []byte // 1216 bytes
-	Existing        bool   // "existing": a cmd was not run (§9.2.3)
+	Existing        bool   // existing=yes: a cmd was not run (§9.2.3)
 }
 
 // ValidSessionName is §6.2's sname.
@@ -2290,7 +2307,7 @@ func ValidSessionName(string) bool
 func ValidDir(string) bool
 func ValidType(string) bool
 
-// ErrorLine is §6.4; Detail "" is "-".
+// ErrorLine is §6.4; Detail "" is absent.
 type ErrorLine struct {
 	Proto  int
 	Code   string
@@ -2305,7 +2322,13 @@ const (
 	CodeSession     = "session"
 	CodeTaken       = "taken" // R3: another credential holds the session (§9.2.2)
 	CodeInternal    = "internal"
+	CodeDir         = "dir"
 )
+
+// CriticalError is a line with a critical field this build does not
+// know (§6.1, versioning.md §3); errors.Is(err, ErrBadLine) holds. Key
+// is the field's key, without its "!".
+type CriticalError struct{ Key string }
 
 // SessionLine is §9.2.1, the spawner's greeting on its attach socket.
 type SessionLine struct {
@@ -2317,24 +2340,28 @@ type SessionLine struct {
 	Started         time.Time // to the second
 	State           SessionState // New, Attached, Detached
 	Since           time.Time
-	Peer            netip.AddrPort // the zero AddrPort is "-"
-	Holder          [8]byte        // HasHolder false is "-"
-	Command         string         // cmd; "" is absent (§9.2.3)
+	Peer            netip.AddrPort // the zero AddrPort is absent
+	Holder          [8]byte        // HasHolder false is absent
+	Command         string         // !cmd; "" is absent (§9.2.3)
 	HasHolder       bool
+	// Unknown is the key of a critical field this build does not know;
+	// ParseSessionLine sets it beside a *CriticalError, so the launcher
+	// can name the session it will not attach (§9.2 step 5).
+	Unknown         string
 }
 
 const (
 	MaxSessionLine = 2048
-	AttachProtocol = 2 // this build's attach protocol (§9.2.1)
+	AttachProtocol = 1 // this build's attach protocol (§9.2.1)
 )
 
 // ListLine is §9.4: one session as --serve=list prints it, and the
-// client parses it; Name "" and State 0 are "-", Since zero is "-".
+// client parses it.
 type ListLine struct {
 	Name    string
 	State   SessionState
 	Since   time.Time
-	Command string // lcmd; "" is absent
+	Command string // cmd; "" is absent
 }
 
 const (
@@ -2361,7 +2388,7 @@ func ParseErrorLine([]byte) (ErrorLine, error)
 func ReadCredential(r io.Reader) (CredentialLine, error)
 
 // ProbeLine is §4.7.2: what the probe prints when the host has no mosey
-// it can use. Marshal always writes proto = Version.
+// it can use. Marshal always writes the number Version.
 type ProbeLine struct {
 	System  string // uname -s
 	Machine string // uname -m
@@ -2395,7 +2422,7 @@ var (
 	ErrBadAddr  = errors.New("bootstrap: no usable UDP address")
 )
 
-// VersionError is a line whose proto is not Version; errors.Is(err,
+// VersionError is a line whose number is not Version; errors.Is(err,
 // ErrBadLine) is true.
 type VersionError struct{ Got int }
 
@@ -2481,16 +2508,17 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 
 | Name | Value | Provenance |
 |---|---|---|
-| `bootstrap.Version` | 2 | ours (§6.1: 2 added `dir` and `type`) |
-| `MaxClientLine` | 8192 B | [derived] §6.2: at most 5710 B used |
+| `bootstrap.Version` | 1 | ours (§6.1, `versioning.md` §5: the number names the lines' envelope only; reset from 2 by Dan, 2026-11-17) |
+| `MaxFields` (any line) | 32 | [choice] `versioning.md` §6 |
+| `MaxClientLine` | 8192 B | [derived] §6.2: at most 5756 B used |
 | `-dir`, `-type` length | 1–1024 B each | [choice] §6.2: macOS `PATH_MAX`; a quarter of termios(3)'s 4096-byte canonical line |
-| `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1806 B used |
-| `MaxErrorLine` | 128 B, frozen | [derived] §6.4: at most 100 B used |
+| `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1853 B used |
+| `MaxErrorLine` | 256 B, frozen | [choice] §6.4: at most 112 B used by its two fields |
 | Session with no confirmed credential | ends after `handshake.CredentialTTL` (30 s) | [derived] §4.5 |
 | Spawner backstop (requirement on server.md) | CredentialTTL + 10 s | [choice] §4.5 |
 | Client log rotation | 1 MiB, one old file | [choice] §7.4 |
 | `MaxPreamble` | 64 KiB | [choice] |
-| `MaxProbeLine` | 160 B | [derived] §4.7.2: at most 148 B used |
+| `MaxProbeLine` | 256 B | [choice] §4.7.2: at most 163 B used |
 | `MaxBinary` (upload, download, installer) | 128 MiB | [choice]; a release is about 10 MB |
 | `SHA256SUMS` read bound | 64 KiB | [choice]; four lines today |
 | Release fetch deadline | 5 min | [choice] §4.7.4 |
@@ -2514,8 +2542,8 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Default size when the terminal says 0 | 80×24 | [choice]; the VT100's |
 | stderr filter line cut | 1024 B | [choice] |
 | Taken-over exit status | 3 | ours |
-| `MaxSessionLine` | 2048 B | [derived] §9.2.1: at most 1536 B used (169 without `cmd`) |
-| `bootstrap.AttachProtocol` | 2 | ours (§9.2.1, `server.md` §2.8: 2 since the ClientLine's version 2) |
+| `MaxSessionLine` | 2048 B | [derived] §9.2.1: at most 1588 B used |
+| `bootstrap.AttachProtocol` | 1 | ours (§9.2.1, `server.md` §2.8, `versioning.md` §5: reset from 2 by Dan, 2026-11-17) |
 | Greeting deadline (launcher, lister) | 2 s per socket | [choice]: the spawner answers at once; a hung one is skipped, not waited on |
 | Session name (`sname`) | 1–32 B of letters, digits, `-_.` | [choice] §6.2: safe unquoted in any shell and on any terminal |
 | Generated name | `ADJECTIVE-NOUN`, 64 × 64 words; 32 draws, then `-` and 4 hex digits | [choice] §9.2 |
@@ -2526,7 +2554,7 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | `ReconnectTry` (one R3 try, to the dial) | 60 s | [D] §9.2.2: twice the credential TTL |
 | `IdleTimeout` (a detached session's shell is hung up) | 7 days | [D] Dan, 2026-11-15 (D8 R4); a constant (PLAN O14) |
 | `HangupGrace` (SIGHUP, then the teardown) | 10 s | [choice] §9.3 |
-| `MaxListLine`, `MaxListed` | 2048 B, 1024 lines | [derived] §9.4: at most 1435 B used (68 without `lcmd`); [choice] |
+| `MaxListLine`, `MaxListed` | 2048 B, 1024 lines | [derived] §9.4: at most 1460 B used; [choice] |
 | R3: no session | exit 1 | [choice] §9.2.2 |
 
 ---
@@ -2546,12 +2574,17 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
   non-zero trailing bits, wrong decoded length, leading zero, `0` cols,
   65536, unknown env name, unsorted or repeated names, `::ffff:` and zoned
   addresses, `0.0.0.0`, `::`, `224.0.0.1`, `ff02::1` and `255.255.255.255`
-  as `addr`, a wrong version (error carries the number), a missing or extra
-  field.
-- ErrorLine: every v1 code; an unknown 16-letter code parses (and maps to
+  as `addr`, a wrong number (error carries the number), a missing
+  mandatory field, keys out of order or repeated (`!k=` beside `k=`
+  too), an empty value, a key outside the grammar, a known field with the
+  wrong `!` marking, and more than `MaxFields` fields.
+- Must-ignore (`versioning.md` §7), on every line: an unknown field
+  without `!` parses to exactly what the line without it does; an
+  unknown field with `!` is refused as a `*CriticalError` naming it.
+- ErrorLine: every code; an unknown 16-letter code parses (and maps to
   `internal` in the client); a 17-letter code, an upper-case code, a
-  6-digit or zero-led `eproto`, and a line over 128 bytes are refused; a
-  `proto` other than 1 is accepted.
+  6-digit or zero-led number, and a line over 256 bytes are refused; a
+  number other than 1 is accepted.
 - `ChooseAddr`, each row of §7.2's table with an injected resolver and
   interface list: a usable `addr`; a loopback `addr` with a non-loopback
   `hostname` (falls back), and with `localhost` (kept); a local directed
@@ -2617,8 +2650,15 @@ usage error.
 **Fuzz** (each run locally for at least a few minutes before it lands,
 durations in the commit message; 10 s each in CI):
 
+- Every line's fuzz target (`FuzzParseClientLine`,
+  `FuzzParseCredentialLine`, `FuzzParseErrorLine`, `FuzzParseProbeLine`,
+  `FuzzParseSessionLine`, `FuzzParseListLine`) also checks
+  `versioning.md` §7: for whatever it accepts, the same line with an
+  unknown field added without `!` parses to the same value, and with `!`
+  is refused naming the key.
 - `FuzzParseClientLine`, `FuzzParseCredentialLine`, `FuzzParseErrorLine`:
-  no panic; anything accepted re-marshals to the identical bytes; no
+  no panic; anything accepted re-marshals to the identical bytes less its
+  unknown fields; no
   accepted CredentialLine has an unspecified, multicast or limited
   broadcast `addr`; no accepted ClientLine has a `dir`, `type` or `cmd`
   outside `dirtext`, `typetext` and `cmdtext` (§6.2), checked against a
@@ -2638,11 +2678,12 @@ durations in the commit message; 10 s each in CI):
   input naming exactly that name; anything accepted has no line outside
   the grammar.
 - `FuzzParseSessionLine`: no panic; anything accepted re-marshals to the
-  identical bytes, and its `cmd`, if any, is a `cmdtext`; seeds with and
-  without `cmd`.
+  identical bytes less its unknown fields, and its `cmd`, if any, is a
+  `cmdtext`; seeds with and without `cmd`.
 - `FuzzParseListLine`: no panic; anything accepted re-marshals to the
-  identical bytes, every field but `lcmd` is printable ASCII with no
-  space, and `lcmd` is a `cmdtext`; seeds with and without `lcmd`;
+  identical bytes less its unknown fields, every field but `cmd` is
+  printable ASCII with no space, and `cmd` is a `cmdtext`; seeds with and
+  without `cmd`;
   `FuzzReadList` for the whole of `-list`'s output: at most
   `MaxListed` rows, none longer than its fields allow.
 - `FuzzListCommand` (`internal/client`): what `-list` shows of any
@@ -2680,7 +2721,7 @@ durations in the commit message; 10 s each in CI):
   With the real `mosey` built by the test: the line exchange, a server of
   another version (a second build with another `-X main.version`) that
   serves the client all the same (D8 V1), a server of another protocol
-  (a stand-in that answers `MOSEY-ERROR 3 version -`) refused with §6.4's
+  (a stand-in that answers `MOSEY-ERROR 3 !code=version`) refused with §6.4's
   line, `-remote` to a
   missing file (exit 127), a server that prints rc noise before the line,
   and that the fake ssh exits once the line is out while the session lives
@@ -2764,11 +2805,12 @@ durations in the commit message; 10 s each in CI):
 | stdout recorded or leaked (recorder, bastion) | B3: the line does not let anyone impersonate either side ([S1] `b3_stdout_leak`); the PSK only filters DoS |
 | a hostile or compromised remote writes control sequences to stdout or stderr | stdout is parsed, never shown; stderr and skipped lines pass the filter (§6.5), D9 |
 | a hostile remote sends a huge or endless stdout | `MaxPreamble`, line maxima, ssh killed 10 s after the line |
-| the stdin line attacks the unsandboxed spawner | fixed grammar, 4 KiB read bound, 30 s deadline, fuzzed, canonical |
+| the stdin line attacks the unsandboxed spawner | one grammar, `MaxClientLine` read bound, at most `MaxFields` fields, 30 s deadline, fuzzed, canonical; an unknown field is dropped before anything acts on the line, and one marked critical refuses it |
+| a field that restricts or instructs is silently ignored by an older peer (`versioning.md` §3) | every such field is critical (`!`), so a peer that does not know it refuses the line rather than acting without it; each line's table says which fields are and why (§6.2–§6.4, §4.7.2, §9.2.1, §9.4) |
 | a hostile remote injects a session-bind after ssh's | §8's state machine: anything after ssh's own bind means no bind ([S3] E11) |
 | a live ControlMaster carries the bootstrap | always a fresh connection ([S3] E12, E12b) |
 | the user's config undoes a bootstrap option | ours come first; flags that beat `-o` are filtered (§2.1, §4.1) |
-| version skew between client and server | normal (D8 V1): no software version is compared; the line's version and the handshake's protocol are each checked for equality, the latter inside the authenticated handshake (`transport.md` §3.6), so no one on the path can make two builds disagree about it; a session runs the binary that started it until it ends (§9.2 step 5, `server.md` §2.8) |
+| version skew between client and server | normal (D8 V1): no software version is compared; the lines' number and the handshake's protocol name only their envelopes (`versioning.md` §5) and are each checked for equality, the latter inside the authenticated handshake (`transport.md` §3.6), so no one on the path can make two builds disagree about it; a session runs the binary that started it until it ends (§9.2 step 5, `server.md` §2.8) |
 | a stolen client keeps the session | exclusive attach on any new confirmed login (§9.1, D26); its background reconnect never takes back a session another credential holds (§9.2.2) |
 | a hostile server prints escape sequences in `-list`'s names | the client parses each list line against a grammar of printable ASCII and lays out the table itself (§9.4, fuzzed) |
 | a hostile server sends a name that is not an `sname` | the CredentialLine refuses it (§6.3), so the client never prints one |

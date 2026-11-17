@@ -732,9 +732,11 @@ A diff is a sequence of ops, each starting with an opcode byte. There is
 no header, no trailer and no padding. An empty diff (zero bytes) is the
 identity. The format is versioned by the protocol version the handshake
 agreed (`transport.md` §2.3, D8 V1), not inside the diff: a later version
-adds ops under a number of its own, so the two ends may be different
-builds and still agree on every op they send. An unknown opcode is an
-error, never skipped.
+adds ops as property ops, which a decoder that does not know one skips
+unless it is critical (§5.4, `versioning.md`), so the two ends may be
+different builds and still agree on every op they both know. An unknown
+core opcode, or an unknown critical property op, is an error, never
+skipped.
 
 ### 5.3 Decoder state
 
@@ -752,10 +754,31 @@ State during a diff:
 | last character | none |
 | link table | empty; index 0 means "no link" |
 | phase | 0 |
-| state ops seen | none |
+| property ops seen | none, and no unknown ones skipped |
 | cells written | 0, against a budget of `2 × C × R` (at most 10⁶, so it fits in any `int`). Every write op checks `k ≤ budget − written` for the `k` cells it is about to write, before it writes any (§5.8) |
 
 ### 5.4 Opcodes
+
+Two kinds of op (`versioning.md` §2):
+
+- **Core ops** carry the cells, the cursor and the history: fixed
+  layouts with no length, because a length byte on every cell op would
+  cost the format what §5.1 bought (an echo would go from 2 bytes to 3).
+  They are the format's envelope, every one critical: an opcode in a
+  core range that this decoder does not know is an error, and only a new
+  protocol number can add one (`versioning.md` §5).
+- **Property ops** set one field of the screen's state each, and are
+  length-prefixed, so a decoder steps over one it does not know:
+
+  ```
+  prop = opcode varint(L) body     ; opcode 0xC0..0xFF, body L bytes
+  ```
+
+  Bit 5 of the opcode is its critical marking: **`0xC0`–`0xDF` are
+  critical**, and an unknown one is an error, as an unknown core op is;
+  **`0xE0`–`0xFF` may be ignored**, and an unknown one is skipped. A
+  property op's body must be consumed exactly by its fields: a known op
+  with bytes left over, or too few, is an error.
 
 | opcode | name | arguments | phase allowed |
 |---|---|---|---|
@@ -776,25 +799,42 @@ State during a diff:
 | `0x4D` | LINK | string (1..`MaxLink`) | 2 |
 | `0x50` | CURSOR | `varint x`, `varint y` | 2, once* |
 | `0x51` | HERE | none | 2, once* |
-| `0x52` | CURSTYLE | `byte` | 2, once |
-| `0x53` | TITLE | string (0..`MaxTitle`) | 2, once |
-| `0x54` | MODES | 4 bytes | 2, once |
-| `0x55` | ECHO | `byte flags`, `varint ack`, `varint ahead` | 2, once |
-| `0x56` | BELL | `varint count` | 2, once |
-| `0x57` | CLIP | `varint seq`, string (0..`MaxClipboard`) | 2, once |
-| `0x58` | REBUILT | `varint seq`, `byte reason` | 2, once |
-| `0x59` | CONSUMED | `varint index` | 2, once |
-| `0x5A` | CONTAINER | string name (0..`MaxContainerValue`), string runtime (0..`MaxContainerValue`), string uid (0..10) | 2, once |
-| `0x5B` | CWD | string (0..`MaxCwd`) | 2, once |
-| `0x5C` | ROOT | `byte` (0 or 1) | 2, once |
 | `0x60` | HIST | `varint seq` | starts phase 3, once |
 | `0x61` | HLINE | `varint cols` | 3 |
 | `0x62` | HROW | `varint src` | 3 |
 | `0x80`–`0xBF` | TEXT+HERE (short) | stream of `opcode − 0x7F` bytes (1–64), then as HERE | 2, once* |
-| anything else | | | error |
+| `0x4E`–`0x4F`, `0x52`–`0x5F`, `0x63`–`0x7F` | | reserved core: an error | |
 
 \* CURSOR, HERE and TEXT+HERE all set the cursor. Together they may appear
 at most once per diff.
+
+Property ops, each at most once per diff, allowed anywhere after SIZE (if
+any) and before HIST, and changing no phase:
+
+| opcode | name | body | Critical | Why critical or not |
+|---|---|---|---|---|
+| `0xC0` | MODES | 4 bytes | yes | it changes the meaning of what the client sends: how keys are encoded (DECCKM, the keypad, kitty's keyboard), and bracketed paste, without which a pasted newline would run as a typed one |
+| `0xC1` | ECHO | `byte flags`, `varint ack`, `varint ahead` | yes | it restricts prediction: `EchoOff` stops the client showing what is typed, at a password prompt above all (D12) |
+| `0xC2` | CONSUMED | `varint index` | yes | it is input flow control (`ssp.md` §10.1): a client that ignored it would stall or misjudge what it may send |
+| `0xE0` | CURSTYLE | `byte` | no | display: the cursor's shape and whether it shows |
+| `0xE1` | TITLE | the title, the whole body (0..`MaxTitle`) | no | display |
+| `0xE2` | BELL | `varint count` | no | display: a bell not rung |
+| `0xE3` | CLIP | `varint seq`, then the content, the rest of the body (0..`MaxClipboard`) | no | a clipboard write not made is the safe way to miss one (§4.4) |
+| `0xE4` | REBUILT | `varint seq`, `byte reason` | no | a notice to the user |
+| `0xE5` | CONTAINER | string name (0..`MaxContainerValue`), string runtime (0..`MaxContainerValue`), then uid, the rest of the body (0..10) | no | a mark on the tab (§4.6, §8.8) |
+| `0xE6` | CWD | the URI, the whole body (0..`MaxCwd`) | no | a mark on the tab (§4.7) |
+| `0xE7` | ROOT | `byte` (0 or 1) | no | a mark on the tab (§4.8): a client that ignores it shows a root shell as an ordinary one, which costs a warning, not an action |
+| `0xC3`–`0xDF` | | unknown: an error | yes | |
+| `0xE8`–`0xFF` | | unknown: skipped | no | |
+
+An unknown property op's `L` is at most `MaxProperty` and at most the
+bytes left, and a diff may hold at most `MaxUnknownProps` of them; both
+are checked before it is skipped, and a skipped op changes nothing at
+all. `MaxProperty` = 65,546 [derived: CLIP's largest body, a 10-byte
+varint and `MaxClipboard`]; `MaxUnknownProps` = 16 [choice: more than
+the property ops defined so far; together at most about 1 MiB, inside
+§5.12's slack]. A known property op's `L` is bounded by its own fields'
+bounds before its body is read.
 
 **Phases.**
 
@@ -802,22 +842,26 @@ at most once per diff.
   first op.
 - **Phase 1** comes after SIZE, or at the start if there is no SIZE. ROWS
   and SCROLL are allowed here, and only here.
-- **Phase 2** begins at the first op that is not SIZE, ROWS or SCROLL.
-  From then on, SIZE, ROWS or SCROLL is an error.
+- **Phase 2** begins at the first core op that is not SIZE, ROWS or
+  SCROLL. From then on, SIZE, ROWS or SCROLL is an error.
 - **Phase 3** begins at HIST, which may follow any phase. It carries
   the history lines (§5.6, history ops) and nothing else: after HIST the
   only ops allowed are HLINE, HROW, and the line ops TEXT (short and
   long), COL, SKIP, ERASE, REPEAT and PEN, which write the current
-  history line instead of the screen. Every other op is an error.
+  history line instead of the screen. Every other op, property ops known
+  or not included, is an error.
+
+Property ops touch no row and no write position, so they neither end
+phase 1 nor need it ended: a decoder that skips one it does not know is
+in exactly the state a decoder that knows it is, but for the one field it
+sets. That is what lets an unknown one be dropped with nothing changed.
 
 When phase 1 ends, the row map (§5.6) is fixed. Every later op reads and
 writes the rows as they stand after it.
 
-Reserved for later slices, and errors until a spec section defines them:
-
-- `0x5D`–`0x5F`: more state;
-- `0x63`–`0x6F`: more history ops;
-- `0x4E`–`0x4F`, `0x70`–`0x7F` and `0xC0`–`0xFF`.
+New ops are added as property ops (`versioning.md` §2); a critical one
+only for a client that advertised the feature it belongs to
+(`versioning.md` §4), since a refused diff ends the session (§5.9).
 
 ### 5.5 The text stream
 
@@ -987,6 +1031,9 @@ the write position as it stands at this point in the diff.
 **TEXT+HERE.** The stream is applied as for TEXT, then the op acts as
 HERE.
 
+The property ops below are each read from their body (§5.4), which
+their fields must fill exactly.
+
 **CURSTYLE `b`.**
 
 - Bit 7 is `Visible`, and bits 0–2 are `Shape`, which must be 0–6
@@ -994,7 +1041,8 @@ HERE.
   [xterm].
 - Bits 3–6 must be 0.
 
-**TITLE `s`.** Requires `ValidTitle(s)`. Sets `Title`.
+**TITLE `s`.** `s` is the whole body. Requires `ValidTitle(s)`. Sets
+`Title`.
 
 **MODES `m0 m1 m2 m3`.**
 
@@ -1017,8 +1065,8 @@ HERE.
 **BELL `count`.** Sets `Bell = count`. It is absolute, so it is idempotent
 under SSP's resends. The client rings when the count goes up (§8.4).
 
-**CLIP `seq s`.** Requires `len(s) ≤ MaxClipboard`. Sets
-`Clipboard = {seq, copy of s}`.
+**CLIP `seq s`.** `s` is the rest of the body. Requires
+`len(s) ≤ MaxClipboard`. Sets `Clipboard = {seq, copy of s}`.
 
 **REBUILT `seq reason`.** Requires `reason ≤ 3` (0 none, 1 emu memory
 limit, 2 emu panic or exit, 3 other). Sets `Rebuilt` (§11 item 1).
@@ -1027,24 +1075,24 @@ limit, 2 emu panic or exit, 3 other). Sets `Rebuilt` (§11 item 1).
 accepted: the client clamps a value above its own stream's length to that
 length [`ssp.md` §10.1], so the decoder needs no bound (§11 item 15).
 
-**CONTAINER `name runtime uid`.** Requires `ValidContainerValue(name)`,
-`ValidContainerValue(runtime)` and `ValidContainerUID(uid)` (§4.6). Sets
-`Container` whole.
+**CONTAINER `name runtime uid`.** `uid` is the rest of the body.
+Requires `ValidContainerValue(name)`, `ValidContainerValue(runtime)` and
+`ValidContainerUID(uid)` (§4.6). Sets `Container` whole.
 
-**CWD `s`.** Requires `ValidCwd(s)` (§4.7). Sets `Cwd`.
+**CWD `s`.** `s` is the whole body. Requires `ValidCwd(s)` (§4.7). Sets
+`Cwd`.
 
 **ROOT `b`.** Requires `b` to be 0 or 1; any other byte is an error.
-Sets `Root` to `b == 1` (§4.8). It was added to protocol 2 as it stands,
-without a new protocol number (Dan, 2026-11-16: there are no users yet,
-and protocol numbers change only with his approval), so a build from
-before it refuses a diff that carries it as an unknown op.
+Sets `Root` to `b == 1` (§4.8). It may be ignored (§5.4): a client that
+does not know it shows no root mark, and draws everything else as
+before.
 
 **History ops (phase 3, §2.5).** They append lines to the history; the
 diff states the number of the first one, and the lines follow in order.
 
 - **HIST `seq`.**
   - Allowed once. Ends phase 1 if it is still open (the row map is fixed
-    as at any phase-2 op), and begins phase 3.
+    as at any phase-2 core op), and begins phase 3.
   - Requires `seq ≥ base.History.Next` (history only grows) and
     `seq ≤ 2^64 − 1 − HistoryLines`, so no count below can wrap.
   - Resets the pen to `Style{}`, `w` to 1, and the last character to
@@ -1091,13 +1139,14 @@ emu fell behind its own window can have (§7.2).
 The grammar, in EBNF:
 
 ```
-diff     = [ size ] { rowmove } { op2 } [ history ] ;
+diff     = [ size ] { rowmove | prop } { op2 | prop } [ history ] ;
 size     = 0x41 varint varint ;
 rowmove  = 0x42 varint varint varint | 0x43 varint ;
 op2      = text | pos | col | next | skip | erase | erased | repeat | copy
-         | pen | link | cursor | here | textHere | curstyle | title
-         | modes | echo | bell | clip | rebuilt | consumed | container
-         | cwd | root ;
+         | pen | link | cursor | here | textHere ;
+prop     = ( 0xC0 .. 0xFF ) varint body ;   (* modes, echo, consumed,
+             curstyle, title, bell, clip, rebuilt, container, cwd, root,
+             and unknown ones *)
 history  = 0x60 varint { hline { lineop } | hrow } ;
 hline    = 0x61 varint ;
 hrow     = 0x62 varint ;
@@ -1105,7 +1154,8 @@ lineop   = text | col | skip | erase | repeat | pen ;
 ```
 
 Along with the once-only rule in §5.4, the destination order of `rowmove`,
-and the bounds above.
+the critical marking and bounds of property ops (§5.4), and the bounds
+above.
 
 ### 5.8 End of diff: final checks, then commit
 
@@ -1281,9 +1331,9 @@ All examples are at 80 × 24 unless a size is given. Bytes are in hex.
    | `41 50 18` | SIZE 80 24 |
    | `00 24` | TEXT `$` |
    | `50 02 00` | CURSOR (2, 0) |
-   | `52 80` | CURSTYLE visible, shape 0 |
+   | `E0 01 80` | CURSTYLE visible, shape 0 |
 
-   10 bytes.
+   11 bytes.
 
 6. **`漢字` at the write position.**
 
@@ -1309,13 +1359,19 @@ All examples are at 80 × 24 unless a size is given. Bytes are in hex.
 
    | bytes | op |
    |---|---|
-   | `5A 03` `box` `05` `flong` `04` `1000` | CONTAINER `box`, `flong`, uid 1000 |
-   | `5B 0D` `file://h/home` | CWD, 13 bytes |
+   | `E5 0E 03` `box` `05` `flong` `1000` | CONTAINER `box`, `flong`, uid 1000: a 14-byte body |
+   | `E6 0D` `file://h/home` | CWD, 13 bytes |
 
-   Clearing the mark is `5A 00 00 00`, 4 bytes.
+   Clearing the mark is `E5 02 00 00`, 4 bytes.
 
-10. **Root, then not.** `5C 01` sets `Root`; `5C 00` clears it. `5C 02`
-    is an error.
+10. **Root, then not.** `E7 01 01` sets `Root`; `E7 01 00` clears it.
+    `E7 01 02` is an error, and so is `E7 02 01 00`: ROOT's body is one
+    byte.
+
+11. **An op from a later release.** `F0 03 61 62 63` is skipped whole by
+    this decoder: `0xF0` may be ignored, and its 3-byte body is read
+    past, so the diff applies as if it were not there. `D0 03 61 62 63`
+    is an error: `0xD0` is critical and unknown.
 
 ### 5.12 Size: what it costs, the bound, the gate
 
@@ -1355,12 +1411,13 @@ the 1-byte echo floor changes wire bytes by a few percent at most.
   at 4 each, attrs 2 and link 2. The TEXT costs 68 bytes: opcode 1, `w`
   switch 1, `0x03 n` 2, cluster 64.
 - That is 86 B × 500,000 = 43.0 MB. Add up to 1.02 MiB of LINK ops,
-  64 KiB of CLIP, and under 1 KiB for the other state ops: about
-  44.2 MB.
+  64 KiB of CLIP, under 1 KiB for the other property ops, and up to
+  `MaxUnknownProps` × `MaxProperty` ≈ 1.05 MB of unknown ones skipped:
+  about 45.3 MB.
 - The history (§2.5) adds a full window written the same way, with no
   links: PEN 16 B and TEXT 68 B a cell, 84 B × `HistoryCells` = 16.8 MB,
   plus HIST and at most `HistoryLines` HLINEs of 3 bytes each: about
-  16.8 MB, so 61.0 MB in all.
+  16.8 MB, so 62.1 MB in all.
 - 64 MiB (67.1 MB) leaves room above that and is the bound SSP uses for
   `MaxRemoteBytes` [D24]. It was 48 MiB before the history.
 
@@ -2136,14 +2193,22 @@ commit message, and for 10 s each in CI (`mise run fuzz-smoke`)
   - on error, the grid is `Equal` to a clone taken before;
   - on success, `Grid.Valid()` holds;
   - nothing panics;
-  - the heap stays under a bound, as S2's target checked.
+  - the heap stays under a bound, as S2's target checked;
+  - must-ignore (`versioning.md` §7): an unknown property op that may be
+    ignored, inserted at any op boundary where a property op is allowed,
+    gives the same result as the diff without it, error or grid; an
+    unknown critical one there makes the diff an error with the grid
+    unchanged.
 
   Seeds: every example in §5.11, S2's hostile probes, and each case in
   the list below.
 - **`FuzzRoundTrip`.** Two grids built from fuzz bytes by a generator that
   only makes valid grids, including wide characters, clusters, links,
   every mode and counter, and different sizes. Check E1, E2 and E3 for
-  `b.Diff(a)` applied to `a`.
+  `b.Diff(a)` applied to `a`, and that the same diff with an unknown
+  property op inserted after its SIZE (or at its start) and before its
+  HIST (or at its end) still gives `b` when the op may be ignored, and
+  is refused with `a` unchanged when it is critical.
 - **`FuzzSanitize`.** For every `Sanitize*` (container values, uids and
   directories among them): the output is `Valid*`,
   `Sanitize*` is idempotent, and `Valid*(s)` is the same as
@@ -2372,11 +2437,18 @@ agreed first).
     them from tuios' `PrivateOSC` and `WorkingDirectory` callbacks, and
     `render` writes them (§8.4). Owners: screen and handshake (container
     slice).
-18. **`Grid.Root`** and opcode `0x5C` ROOT (§4.8, §5.6), in protocol 2
-    as it stands (Dan, 2026-11-16), leaving `0x5D`–`0x5F` reserved; the
+18. **`Grid.Root`** and ROOT (§4.8, §5.6; `0xE7` since item 19) as it
+    stands (Dan, 2026-11-16); the
     spawner's `pty.ForegroundRoot` and IPC `Root` (`server.md` §2.9,
     §3.3); `render.Renderer.SetRemote` for the client's remote mark
     (§8.8). Owners: screen, server and render (marks slice).
+19. **Property ops** (Dan, 2026-11-17, `versioning.md`): the state ops
+    CURSTYLE to ROOT become length-prefixed property ops, `0xC0`–`0xDF`
+    critical (MODES, ECHO, CONSUMED) and `0xE0`–`0xFF` ignorable (the
+    rest), so a later op is added without a protocol number and an older
+    client skips what it does not know; `0x52`–`0x5F` become reserved
+    core. Protocol 1, as if designed so. Owners: screen and all users of
+    the diff (versioning slice).
 
 ## Review notes
 

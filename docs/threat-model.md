@@ -139,13 +139,22 @@ decapsulating what the other encapsulated to its one-shot key, so:
   first, then the session id, both one-shot public keys, the credential id,
   both receiver indices and every byte of both messages [S1 §3.1]. There
   is no algorithm negotiation to downgrade: the protocol name fixes every
-  cryptographic choice. What the hellos carry, the protocol version (D8
-  V1: one number each side, which must be equal), channel types (D15)
-  and attach mode (D26), is in the encrypted `Hello`, inside the
-  transcript, so an on-path attacker cannot make the two sides disagree
-  about it (`transport.md` §2.3, §3.6). Client and server may be
-  different releases; a pair of different protocol numbers fails at
-  once, saying so, at both ends.
+  cryptographic choice. What the hellos carry, the protocol number (D8
+  V1: one number each side, which must be equal), channel types (D15),
+  attach mode (D26) and features (`versioning.md` §4), is in the
+  encrypted `Hello`, inside the transcript, so an on-path attacker
+  cannot make the two sides disagree about it, nor strip a feature or a
+  critical element from it (`transport.md` §2.3, §3.6). Client and
+  server may be different releases; a pair of different protocol numbers
+  fails at once, saying so, at both ends.
+- **Must-ignore cannot be turned into a downgrade** (`versioning.md`).
+  Every element a peer may skip is one whose loss costs at most a
+  display (a tab mark, a title, a bell); everything that authenticates,
+  restricts, selects or instructs is critical and refused when unknown,
+  so an older peer never acts on half a message. Skipped elements are
+  bounded in size and count and dropped before any state changes, and
+  only an authenticated peer can send them (the bootstrap lines arrive
+  over SSH, the rest inside the AEAD).
 - **Off-path flooding** (T1). msg1 carries the credential id in the clear;
   an unknown id is dropped with one map lookup (< 0.05 µs with 1000
   credentials outstanding [M S1 §2.2]), before any MAC. A known id with a
@@ -1128,6 +1137,7 @@ target (architecture §6).
 | A background reconnect never takes a session another client holds (PLAN O15's placeholder, until Dan decides) | `server`, `e2e` | the launcher's holder rule (`TestReconnectTakesItsOwnSessionAndNeverAnothers`); netsim: a reconnect told `taken` exits 3 |
 | Only the user reaches the attach socket | `server` | the directory checks refuse group/other bits, a foreign owner and a symlink; a foreign uid is closed unanswered |
 | A protocol mismatch fails at once, naming both numbers | `handshake`, `transport`, `bootstrap`, `server`, `e2e` | a peer of protocol 2 fails the handshake at both ends with both numbers named, in both directions; a bootstrap line of another version, a greeting of another attach protocol and a `PATH` mosey of another protocol each fail with both numbers |
+| An unknown element is skipped only when it may be, and a critical one refused with nothing changed (`versioning.md`) | `bootstrap`, `handshake`, `screen`, `userinput`, `channel`, `server` | every line, the hello, the screen diff, the userinput diff and channel frames: fuzzed with unknown elements of both markings (`versioning.md` §7) |
 | Chaff hides keys within a run, in both directions, and idle costs nothing | `ssp` | one client datagram per 20 ms tick, all 64 B, ending 1–2 s after the last key; the server on its own grid at 64 B; an idle session sends no chaff; on every netsim profile the server's datagrams name at most 5% of keys and the LAN's wire at most 5% (`TestChaffHidesKeysOnEveryProfile`) |
 | End to end under every netsim profile | `e2e` | client and server sessions in process; real binaries over loopback through a throwaway sshd |
 | Only ssh's own bind is captured | `agent` | `FuzzCapture`; the unit list of `agent.md` §7: another pid, a bind as frame 2, no forwarding flag, a bad signature, a second connection, a byte after the answer, the deadline |

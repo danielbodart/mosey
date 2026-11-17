@@ -11,7 +11,11 @@ slice (D8 V1) then made the wire and the attach socket stable across
 releases, and the simplification of 2026-11-15 (Dan) left one protocol
 number per layer (the bootstrap lines, the hello, the greeting), each
 checked for equality, no software version anywhere on the wire, and D7
-using whatever mosey the host has.
+using whatever mosey the host has. Since 2026-11-17 (Dan) the protocol
+is open: every element of every format can be skipped by a peer that
+does not know it unless it is marked critical, features are advertised
+by name in the hello, and each number, all of them 1, names only its
+layer's envelope (`versioning.md`).
 
 The interfaces themselves are Go, with doc comments, under `internal/`.
 Changing an exported signature another owner calls means agreeing it with
@@ -447,7 +451,11 @@ drops `AnySession` and `CodeAmbiguous`; the simplification of
 `ValidSoftwareVersion`, gives `SessionLine` one `AttachProtocol` (with
 the constant `AttachProtocol`) in place of a range, and adds
 `CodeAttach`; `CodeVersion` means only a line version the server cannot
-read.
+read. The versioning slice (`versioning.md`) puts every line in one
+`key=value` grammar with a `!` on critical fields, adds
+`*CriticalError` (a critical field the parser does not know, which the
+launcher answers with `CodeUnsupported`), and drops `-` placeholders
+for absent fields.
 
 **terminal.** `Terminal` (`Read`, `Write`, `Size`, `Resized`, `Raw`,
 `Restore`); `Open(in, out)` leaves the mode alone, since the terminal

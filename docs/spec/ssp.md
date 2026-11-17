@@ -161,7 +161,7 @@ offset  size   field
 
 | Field | Why it is like this |
 |---|---|
-| flags | One byte holds the three presence bits, so nothing needs a sentinel value [D]. Reserved bits must be zero: the two ends may be different builds (D8 V1), but any change to this layout comes with a protocol version of its own, negotiated in the handshake (`transport.md` §2.3), so under v1 an unknown bit is a protocol error rather than something to skip [D]. |
+| flags | One byte holds the three presence bits, so nothing needs a sentinel value [D]. Reserved bits must be zero. The datagram header is part of the connection's envelope (`versioning.md` §5): a flag bit says which fields follow, so a receiver that does not know one cannot find the rest, and every bit is therefore critical. An unknown bit is a protocol error, not something to skip, and a new one would be a new protocol number (`transport.md` §2.3) [D]. What grows is the instruction's body, the objects' diffs, whose elements are open (§10.1, `screen.md` §5.4). |
 | ts | The paper puts a millisecond timestamp on every datagram [P §2.2]. Microseconds, because milliseconds would quantise a LAN round trip to 0 or 1 ms. 32 bits of microseconds wrap after 71 minutes, far beyond any round trip or hold time, and all arithmetic on them is mod 2^32 [D, S5 spec §2.4]. The clock is microseconds since the endpoint was made, read through `time` so `testing/synctest` drives it. |
 | echo | The paper's optional timestamp reply [P §2.2], absent when there is nothing to echo, which saves 4 bytes on most datagrams [D]. Its value is in §7.1. |
 | ack | In every datagram, not inside the instruction [D]. Acks then flow even in datagrams that carry only part of an instruction, and an instruction's bytes never depend on the ack, so a retransmission can repeat them exactly and the receiver can complete an instruction from fragments of two transmissions (§5). |
@@ -212,7 +212,7 @@ order:
 ```
 from      uvarint   the version the diff starts from; also the sender's floor
 to        uvarint   the version it makes; to > from
-encoding  u8        0x00 stored | 0x01 DEFLATE | 0x02 reserved | others: error
+encoding  u8        0x00 stored | 0x01 DEFLATE | 0x02 reserved | others: error (critical: §4.1)
 body      ...       the diff, encoded as `encoding` says, to the end
 ```
 
@@ -240,6 +240,11 @@ it fragments the instruction (D24). Mosh 1.4.0 does the same, compressing
 every update with no padding and no size threshold [M,
 mosh-compression.md §2].
 
+- **The encoding byte is critical** (`versioning.md` §3): a body in an
+  encoding the receiver does not know cannot be read at all, so an
+  unknown one is an error, never skipped. It is part of protocol 1's
+  envelope; a new encoding would be offered as a feature in the hello
+  (`versioning.md` §4) before any sender used it.
 - **Format**: raw DEFLATE (RFC 1951), no zlib or gzip wrapper, from the
   standard library's `compress/flate` at `flate.DefaultCompression` (level
   6). Level 6 cut screen bytes to 0.352 of raw at 7.6 µs to encode and
@@ -1061,16 +1066,39 @@ Events are numbered from 0; `Len()` is how many were ever appended.
 start   uvarint   = from.Len(): the index of the first event below
 n       uvarint   = s.Len() − from.Len()
 n times:
-  kind  u8        0x01 keys | 0x02 resize | others: error
-  keys:   len uvarint (1 .. MaxKeyEvent), then len bytes
-  resize: cols uvarint (1 .. 65535), rows uvarint (1 .. 65535)
+  kind  u8        bit 7 set: a receiver that does not know it may ignore it
+  len   uvarint   the body's length, 1 .. MaxKeyEvent
+  body  len bytes
 ```
+
+Every event is a kind, a length and a body (`versioning.md` §2), so a
+receiver can step over one it does not know:
+
+| kind | event | body | Critical | Why critical or not |
+|---|---|---|---|---|
+| `0x01` | keys | the bytes for the pty, 1..`MaxKeyEvent` | yes | it is the user's input: dropping it would lose keystrokes |
+| `0x02` | resize | cols uvarint (1 .. 65535), rows uvarint (1 .. 65535), exactly filling the body | yes | it instructs: the pty and the emulator take the size (D23) |
+| `0x03`–`0x7F` | | unknown: an error | yes | |
+| `0x80`–`0xFF` | | unknown: an event that does nothing | no | |
+
+An unknown event that may be ignored is still an event: it takes its
+index, so the two ends number the stream alike and `InputConsumed`
+means the same on both, and its encoded size counts toward what is
+pending and kept like any other (below). It does nothing when the
+server reaches it. Its body is bounded like a key event's,
+`MaxKeyEvent`, and the count of events of every kind by
+`MaxDiffEvents`.
 
 **Apply** to receiver `r`, validating all of it before appending anything:
 `start == r.Len()` (SSP applies a diff only to the version it was made
 from, so anything else is a bug or an attack); `n ≤ MaxDiffEvents`; every
-kind known and every field in range and in shortest form; the whole diff
-at most `MaxDiffBytes`; no bytes left over. Then append the n events.
+length in range and in shortest form; every known event's fields in
+range and in shortest form, and filling its body exactly; no unknown
+critical kind; the whole diff at most `MaxDiffBytes`; no bytes left
+over. Then append the n events. The fuzz target checks
+`versioning.md` §7: an unknown event that may be ignored appends one
+event that does nothing and changes nothing else, and an unknown
+critical one refuses the diff with the stream unchanged.
 
 **Equal** compares `Len()`: two streams of one session with the same
 length hold the same events, because events are only ever appended.
@@ -1080,7 +1108,7 @@ length hold the same events, because events are only ever appended.
 | `MaxKeyEvent` | 4096 | `Type` splits longer input into events of at most this, so no single event is unbounded [D]. |
 | `MaxPendingInput` | 64 KiB | The client stops reading its terminal while its input not yet **consumed** by the server is this many encoded bytes or more, and resumes below it (flow control, below). A huge paste therefore crosses in pieces at the speed the path and the program allow, and a diff never grows without bound [D]. Window size changes that arrive while reading is stopped are coalesced to the newest and appended when it resumes. |
 | `MaxRead` | 16 KiB | The client reads its terminal with a buffer of at most this, and `Type` encodes one read (keys translated for the screen's modes, bracketed-paste markers included) into at most `2 × MaxRead` encoded bytes of events [D]. This is what makes `MaxDiffBytes` derivable. |
-| `MaxDiffBytes` | 128 KiB | The most one diff may be. The client checks the condition before each read, so pending input is below `MaxPendingInput` when a read starts, and one read adds at most `2 × MaxRead` = 32 KiB plus at most one coalesced resize (7 bytes) and the diff header (20 bytes): under 96 KiB, so 128 KiB leaves a quarter spare [derived]. The server's `Config.MaxRemoteBytes` is this. |
+| `MaxDiffBytes` | 128 KiB | The most one diff may be. The client checks the condition before each read, so pending input is below `MaxPendingInput` when a read starts, and one read adds at most `2 × MaxRead` = 32 KiB plus at most one coalesced resize (8 bytes) and the diff header (20 bytes): under 96 KiB, so 128 KiB leaves a quarter spare [derived]. The server's `Config.MaxRemoteBytes` is this. |
 | `ConsumedStep` | 16 KiB | How far the server's consumed index must move before the server publishes it (below) [D]. |
 | `MaxDiffEvents` | 65536 | One more cap, so a diff of a byte per event cannot be costly to validate [D]. |
 | `RetainBytes` | 256 KiB | A stream keeps only its newest events up to this many encoded bytes; older ones are counted, not kept. Twice `MaxDiffBytes`, so a diff from the acknowledged version never needs a forgotten event; that would be a bug, and `Diff` panics on it [D]. It also bounds how long typed bytes stay in memory. |
@@ -1117,7 +1145,7 @@ the program sat on a paste, and the server's stream would run past
   than the pending input. (An honest server acks before it consumes, so
   `base` is `InputConsumed`.)
 - **The bound that follows.** An honest server's stream is at most
-  `MaxPendingInput` + `2 × MaxRead` + `ConsumedStep` + 27 bytes (under
+  `MaxPendingInput` + `2 × MaxRead` + `ConsumedStep` + 28 bytes (under
   112 KiB) past `applied`, well inside `RetainBytes`; so is the diff SSP
   carries. When the program stops reading, the client stops reading its
   terminal within one round trip and the paste waits in the user's

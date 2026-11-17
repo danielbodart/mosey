@@ -161,7 +161,7 @@ ssh ──stdin──► launcher                       spawner                p
       `Exit` instead carries proto's reason for `Failed`.
    8. Make the session directory and the attach socket (§2.6), now that
       the credential has named the session, and, if the `ClientLine`
-      says `agent=yes`, the agent socket (§2.7). A failure is logged; the
+      says `!agent=yes`, the agent socket (§2.7). A failure is logged; the
       session goes on, not resumable or without an agent.
    9. Start the login shell on the pty's slave (§2.5), then close the
       slave. The shell starts this late so a failure earlier leaves no
@@ -385,7 +385,7 @@ since it holds the keys.
   connection carries the agent is the hello's business, `agent.md` §4.1)
   (`handshake.CheckPublicKey`). Then it sends proto `Resume` and waits up
   to T3 for the `Credential`, which it checks as in §3.4, and also that
-  its `sessionid` is the session's. Once it has sent `Ready` the greeting
+  its `sid` is the session's. Once it has sent `Ready` the greeting
   says `attached`, held by that credential, for `handshake.CredentialTTL`
   unless an `Attached` or `Detached` comes first (`bootstrap.md` §9.2
   "The lock").
@@ -416,7 +416,7 @@ spawner for the same reason: proto cannot make or accept on a filesystem
 socket. `agent.md` §4 is its full rule; in short:
 
 - made, after the attach socket, only when the session's first
-  `ClientLine` says `agent=yes`; `SOCK_STREAM`, bound at
+  `ClientLine` says `!agent=yes`; `SOCK_STREAM`, bound at
   `agent.sock.tmp`, listening, mode 0600, renamed to `agent.sock`;
 - the shell's `SSH_AUTH_SOCK` (§2.5) is its path;
 - each accepted connection's `SO_PEERCRED` uid must be the spawner's own
@@ -442,25 +442,50 @@ releases that speak the same attach protocol.
 (`bootstrap.md` §9.2.1) and the messages that follow it on an attach
 socket: `ClientLine` (0x40), `Ready` (0x41), `Failed` (0x42) and
 `Hangup` (0x43) (§3.3), with §3.1's framing (one seqpacket message each,
-type byte first). This is **attach protocol 2**
-(`bootstrap.AttachProtocol`; 2 since 0x40's ClientLine went to version
-2, `bootstrap.md` §9.2.1); the greeting's `aproto` says which one
-version a session's spawner speaks, and a launcher attaches it only if
-it is its own, as the handshake does with its own number (`transport.md`
-§3.6). There is no range: a release that changes one of its messages, or adds
-one a spawner of this number would refuse, gives the attach protocol a new number;
-0x44 to 0x4F are kept for that. Every other IPC type (§3.2) is private to one build: a
+type byte first). This is **attach protocol 1** (`bootstrap.AttachProtocol`,
+reset from 2 by Dan, 2026-11-17); the greeting's `aproto` says which one
+number a session's spawner speaks, and a launcher attaches it only if it
+is its own, as the handshake does with its own number (`transport.md`
+§3.6). There is no range, and the number names only the envelope
+(`versioning.md` §5): the greeting's grammar and mandatory fields, and
+this framing. What the messages carry is open:
+
+- `ClientLine`, `Ready` and the greeting carry lines of
+  `bootstrap.md` §6.1's grammar, which gain fields without a new number
+  (`versioning.md` §6).
+- **New message types** come from 0x44 to 0x4F, and bit 3 of the type
+  says whether a peer that does not know one may ignore it
+  (`versioning.md` §3):
+
+  | types | an unknown one | why |
+  |---|---|---|
+  | 0x40–0x47 | refused: the receiver closes the connection, as for a malformed message | critical, like the four defined here: each asks for or answers an action (attach, hang up) |
+  | 0x48–0x4F | skipped, unread, and the receiver goes on waiting for what it was waiting for, within the same deadline | may be ignored: for a message that only adds something, such as a hint the spawner may log |
+
+  A receiver skips at most 4 such messages on one connection [choice: no
+  exchange needs more], each within §3.1's `MaxMessage`, and refuses
+  the connection at the fifth; it reads nothing of them, so they change
+  nothing.
+
+A message type is critical or not by its number, which fixes it once
+for every message of the type. The four defined are all critical and
+mandatory to understand: a spawner that ignored `Hangup` would leave a
+session the user ended running, and a launcher that ignored `Failed`
+would wait out its deadline. Every other IPC type (§3.2) is private to one build: a
 spawner only ever exchanges them with its own proto and emu, and a
-launcher with the spawner it started from its own file.
+launcher with the spawner it started from its own file, so they stay
+closed (`versioning.md` §5: an unknown one is refused).
 
 A launcher takes a session of any mosey version (`bootstrap.md` §9.2
 step 5) and attaches it as §2.6 says: it sends the session's spawner the
 line, and prints the credential line the session's own proto mints.
 Nothing compares software versions. A session whose greeting does not
-parse is not chosen. One whose `aproto` is another number is not taken by
-`auto`; `name:NAME` or `resume:SID` naming it fails with `MOSEY-ERROR 2
-attach P-N` and, on stderr, `session NAME speaks attach protocol P; this
-mosey speaks N`.
+parse is not chosen. One whose `aproto` is another number, or whose
+greeting has a critical field this launcher does not know, is not taken
+by `auto`; `name:NAME` or `resume:SID` naming it fails with
+`MOSEY-ERROR 1 !code=attach detail=P-N` (or `!code=unsupported
+detail=KEY`) and, on stderr, `session NAME speaks attach protocol P;
+this mosey speaks N`.
 
 ### 2.9 Root at the far keyboard (`screen.md` §4.8)
 
@@ -563,10 +588,16 @@ deny-all and cannot open `/proc`.
 | 0x43 | Hangup | launcher (`--serve=kill`) → spawner | 0 |
 
 The high nibble names the direction, so a stray message is easy to spot
-in a trace. Unlisted types are refused. **0x40 to 0x4F are the attach
-protocol** and are stable as §2.8 says; on an attach socket the
+in a trace. Unlisted types are refused, but for 0x48–0x4F on an attach
+socket, which are skipped (§2.8). **0x40 to 0x4F are the attach
+protocol** and are open as §2.8 says; on an attach socket the
 "launcher" end is whoever connected (a launcher or a lister) and the
-"spawner" end the session. Everything else is private to one build.
+"spawner" end the session. Everything else is private to one build, and
+closed by design: proto and emu are always started from the spawner's
+own image, `/proc/self/exe` (§2.3), so there is no peer of another
+release to tolerate, and every unknown type, field or bit is refused as
+a violation (§5.3), since the peer is the less trusted side
+(`versioning.md` §5).
 
 ### 3.3 Layouts
 
@@ -757,7 +788,7 @@ one place a compromised proto could reach further. It accepts exactly:
 - `Credential`, once before T3 at bootstrap, and afterwards once for each
   `Resume` outstanding (§2.6) and only then; each only if
   `bootstrap.ParseCredentialLine` accepts it, its `addr` is exactly the
-  advertised address (or `-` for none) and its `port` the bound port,
+  advertised address (or none, the field absent) and its `port` the bound port,
   and `bootstrap.MarshalCredentialLine`
   of the parse is byte for byte the line received (so what reaches
   stdout is canonical printable ASCII and nothing else).
@@ -1689,7 +1720,7 @@ it lands, with the duration and exec count in the commit message.
   symlink; a peer of another uid is closed unanswered (where the test can
   be another uid; otherwise the check's function is tested alone).
 - A resume through the socket, with stub proto: greeting, `ClientLine`,
-  `Resume` forwarded, `Credential` checked (a different `sessionid`,
+  `Resume` forwarded, `Credential` checked (a different `sid`,
   `addr`, `port` or `name` is a violation), `Ready` returned. A wrong
   SID, `new` or a bad key is `Failed`, and proto never hears of it.
 - A lister that closes after the greeting changes nothing.

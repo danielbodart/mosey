@@ -74,8 +74,8 @@ not expect in its current state, without reply.
 | Type | Name | Direction | Size (UDP payload) | Status |
 |---|---|---|---|---|
 | `0x00` | | | | never assigned, so a zeroed buffer never parses |
-| `0x01` | msg1 | client → server | 1170–1185 B | slice 1 |
-| `0x02` | msg2 | server → client | 1150–1165 B | slice 1 |
+| `0x01` | msg1 | client → server | 1173–1200 B | slice 1 |
+| `0x02` | msg2 | server → client | 1147–1180 B | slice 1 |
 | `0x03` | | | | reserved, unassigned |
 | `0x04` | data | both | 30–1232 B | slice 1 |
 | `0x05` | NAT-traversal probe | both | ≤ 1200 B | reserved for O6 |
@@ -99,9 +99,10 @@ larger one has a bug: it MUST fail rather than send.
 
 The sizes in §2.1 and §4 are exact functions of the field sizes below and
 are checked by tests. They meet D5 with room to spare: the largest
-handshake message is msg1 at 1185 bytes, 15 under the limit. That settles
-the open item in `architecture.md` §4 (S1's msg1 measured 1208 with a
-42-byte hello; this spec's hello is at most 19 bytes, §3.6).
+handshake message is msg1 at 1200 bytes, exactly at the limit, which
+`MaxHello` is derived from (§3.6). That settles the open item in
+`architecture.md` §4 (S1's msg1 measured 1208 with a 42-byte hello; this
+spec's hello is at most 34 bytes, and 9 with today's two channels).
 
 ### 2.3 Integers and versions
 
@@ -113,24 +114,34 @@ the open item in `architecture.md` §4 (S1's msg1 measured 1208 with a
   a handshake message with any other version without reply. Data packets
   carry no version: their format is the protocol version the handshake
   agreed (next item).
-- **Protocol version** (D8 V1, a stable wire protocol; one number, Dan,
-  2026-11-15). A client and a server of different mosey releases is
-  normal and must work: nothing in the handshake or the bootstrap looks
-  at a software version (`bootstrap.md` §6.4). Each side's hello carries
-  the **one** protocol version it speaks, `handshake.ProtocolVersion`, and the
-  two must be equal (§3.6). This document is **v1**, and is the promise:
-  every release that says 1 speaks exactly this. A change a v1 peer
-  could not follow is a new number, and two peers of different numbers
-  fail the handshake with an error that names both, at once and at both
-  ends, never by timing out (§3.6); there is no range and no
-  negotiation. Both hellos are in the transcript (§3.7), so no one on the
-  path can make the two sides disagree about it.
+- **Protocol number** (D8 V1, a stable wire protocol; one number, Dan,
+  2026-11-15; it names the envelope only, Dan, 2026-11-17,
+  `versioning.md` §5). A client and a server of different mosey releases
+  is normal and must work: nothing in the handshake or the bootstrap
+  looks at a software version (`bootstrap.md` §6.4). Each side's hello
+  carries the **one** protocol number it speaks,
+  `handshake.ProtocolVersion`, and the two must be equal (§3.6). This
+  document is **protocol 1**. The number names the envelope of the
+  connection: the hello's element framing, the data packet, the frame
+  kind byte, SSP's datagram and instruction headers (`ssp.md` §3, §4),
+  the screen diff's core ops (`screen.md` §5.4), the userinput event
+  framing (`ssp.md` §10.1) and the channel frame header (`agent.md`
+  §5.1). Inside that envelope everything is an element a peer either
+  knows, skips, or refuses because it is critical (`versioning.md`), so
+  adding one never changes the number; a feature in the hello says what
+  a peer may be sent (§3.6). Only a change to the envelope is a new
+  number, and two peers of different numbers fail the handshake with an
+  error that names both, at once and at both ends, never by timing out
+  (§3.6); there is no range and no negotiation. Both hellos are in the
+  transcript (§3.7), so no one on the path can make the two sides
+  disagree about it.
 - **Protocol name.** The name (§3.1) is hashed into the transcript first.
   Changing any cryptographic choice changes the name, and a transcript of
   one protocol can then never match another.
 - **Frame kinds** that a receiver does not know are authenticated and then
   ignored (§4.2), so later slices add frames without breaking older peers.
-- **Channel types** are negotiated in the hello (D15).
+- **Channel types** and **features** are negotiated in the hello (D15,
+  `versioning.md` §4).
 
 ## 3. The handshake (B3)
 
@@ -269,9 +280,9 @@ offset  size   field
 2       8      cred_id
 10      4      idx_C            client's receiver index, u32 LE, nonzero (§4.3)
 14      1120   enc1             ENCAP to s_S
-1134    3+n+16 c1               EncryptAndHash(hello_c)      n = channel count, 1..16
-1153+n  16     mac1
-total   1169+n                  1170..1185 bytes
+1134    L+16   c1               EncryptAndHash(hello_c)      L = hello length, 1..34 (§3.6)
+1150+L  16     mac1
+total   1166+L                  1167..1200 bytes; 1173 and up from this build
 ```
 
 The client builds it:
@@ -297,21 +308,49 @@ mac1 = HMAC(K_mac1, hdr1 || enc1 || c1)[0:16]
 ### 3.6 Hello
 
 Inside `c1` and `c2`, encrypted. The grammar is ours and deliberately
-small, so msg1 fits in 1200 bytes:
+small, so msg1 fits in 1200 bytes. After the protocol byte it is a list
+of elements, each a type, a length and a value (`versioning.md` §2):
 
 ```
 offset  size  field
-0       1     protocol    the protocol version this side speaks; 1..255;
+0       1     protocol    the protocol number this side speaks; 1..255;
                           1 in this document (§2.3)
-1       1     attach      0 = exclusive (D26); 1..255 reserved
-2       1     count       number of channel types, 1..16
-3       count channels    channel types, one byte each, strictly increasing
+1       ...   elements, types strictly increasing, each:
+                type   1 byte; bit 7 set: a peer that does not know it may ignore it
+                len    1 byte
+                value  len bytes
+total         at most MaxHello = 34 bytes
 ```
 
-The first byte is frozen in place for every version: whatever a later
-version does to the rest of the hello, a peer of any version reads its
-number first, before parsing the rest, and so can always say why it cannot
-go on.
+The first byte is frozen in place for every number: a peer of any number
+reads it first, before parsing the rest, and so can always say why it
+cannot go on. `MaxHello` = 34 [derived: msg1 is 1166 bytes besides the
+hello (§3.5), and 1200 − 1166 = 34, so a hello of any elements keeps
+msg1 within `wire.MaxHandshake`].
+
+| Type | Element | Value | Mandatory | Critical | Why critical or not |
+|---|---|---|---|---|---|
+| `0x01` | attach | 1 byte: the attach mode, `0` = exclusive (D26); 1..255 reserved | mandatory | yes | it changes what attaching does to every other client of the session (D26) |
+| `0x02` | channels | 1..16 bytes: channel types, strictly increasing | mandatory | yes | it decides which frames the connection carries (D15); a peer that ignored it could neither refuse an unwanted agent channel nor offer one |
+| `0x81` | features | 1..16 bytes: feature codes (`versioning.md` §4), strictly increasing | optional | no | a peer that does not know it advertises nothing, so it is sent nothing that needs a feature |
+
+- **Unknown elements.** An element whose type the parser does not know is
+  skipped when bit 7 of the type is set. When it is clear, the hello is
+  **refused** (§3.8 step 7, and below). Either way an element's length
+  is bounded by the hello's own `MaxHello`, which is checked first, so an
+  unknown element costs no more than a known one could.
+- **Canonical.** Types strictly increasing, so no element repeats; no
+  element of length 0; a known element exactly as `MarshalHello` writes
+  it. `ParseHello` refuses a hello over `MaxHello`, one whose last element
+  overruns it, a `protocol` of 0, a missing mandatory element, a count of
+  channel types or features of 0 or over 16, and values not strictly
+  increasing. Anything it accepts re-encodes to the same bytes less its
+  unknown elements; its fuzz target checks that, and that an unknown
+  element with bit 7 set changes nothing while one with it clear is
+  refused (`versioning.md` §7).
+- It does **not** refuse unknown channel types, feature codes or attach
+  modes: those are policy, checked by the handshake after parsing, so
+  that the parser stays the same as the registries grow.
 
 | Channel type | Value | Status |
 |---|---|---|
@@ -319,20 +358,15 @@ go on.
 | agent | `0x01` | agent-forwarding slice (D25; `handshake.ChannelAgent`) |
 | `0x02`–`0xFF` | | reserved: port forwarding and later channels (D15) |
 
-`ParseHello` is strict: it refuses a short or long input, a count of 0 or
-over 16, a `protocol` of 0, and channel types that are
-not strictly increasing (which also refuses duplicates). Anything it accepts re-encodes
-to the same bytes; its fuzz target checks that. It does **not** refuse
-unknown channel types or attach modes: those are policy, checked by the
-handshake after parsing, so that the parser stays the same as the
-registry grows.
+Feature codes are `versioning.md` §4's registry; none is defined yet.
 
 Policy:
 
-- The **client** offers its own protocol version, every channel type it
+- The **client** offers its own protocol number, every channel type it
   supports (the terminal, and the agent when it has a bind, `agent.md`),
+  every feature it understands (none yet: the element is then absent),
   and `attach = 0`.
-- **The version.** Each side checks the other's `protocol` equals its
+- **The number.** Each side checks the other's `protocol` equals its
   own, from the first byte of the decrypted hello before it parses the
   rest (D8 V1, §2.3), and the connection runs at it
   (`transport.Conn.Protocol`).
@@ -340,13 +374,16 @@ Policy:
   asks for an attach mode it does not support. Refusing means sending
   nothing, as for any bad msg1 (§3.8); it logs at Info, because a peer
   that knows the PSK and is still wrong is a bug worth seeing.
-- The **server's hello** has its own protocol version, the attach mode it
-  applied (always the client's), and the intersection of the offered
-  channel types with its own, in increasing order.
-- **Another version.** The server answers anyway, with its own hello in
+- The **server's hello** has its own protocol number, the attach mode it
+  applied (always the client's), the intersection of the offered channel
+  types with its own, and the intersection of the offered features with
+  its own (absent when empty), each in increasing order. It holds no
+  element type the client's lacked, so it is never longer than the
+  client's.
+- **Another number.** The server answers anyway, with its own hello in
   msg2: the client knows the PSK, so it is the genuine client of another
   protocol, and the answer is how it learns why. The pending handshake is
-  marked as having no version, and a confirmation under its keys is
+  marked as having no number, and a confirmation under its keys is
   dropped and counted (`State`), so no connection is ever made. The
   client, finding another number in an authentic msg2, fails Dial at once
   with `*IncompatibleVersionError` (`ErrIncompatible`), which names both
@@ -354,18 +391,30 @@ Policy:
   speaks handshake protocol 2; this mosey speaks 1`. That keeps D8 V1's
   promise of no silent lockout: a mismatched pair says so, at both ends,
   in one round trip. Because the number is the hello's first byte and is
-  read before the rest, this holds whatever a later version puts after
+  read before the rest, this holds whatever a later number puts after
   it, as long as msg2 keeps §3.7's layout and size bounds, which wire
   version `0x01` freezes.
-- The **client** refuses a msg2 whose hello names a channel type it did not
-  offer, lacks the terminal, or has a different attach mode. That msg2
-  authenticated, so the server is genuine and incompatible: Dial fails with
-  an error that says so, rather than waiting.
+- **An unknown critical element.** Likewise a genuine client, of a later
+  release of this number, asking for something this server cannot do.
+  The server answers with a **refusal**: a hello of its protocol byte
+  alone, with no elements, which no hello it would otherwise send can be
+  (attach and channels are mandatory). Its pending is marked as having no
+  number, as above, so it is never confirmed. The client, finding an
+  authentic hello with no elements, fails Dial at once with
+  `ErrIncompatible`, saying the server refused its hello; the user is
+  told `mosey: DEST's mosey refused this client's hello: it is older and
+  cannot do what was asked`. The client should not get there: what needs
+  a critical element is a feature first (`versioning.md` §4).
+- The **client** refuses a msg2 whose hello names a channel type or a
+  feature it did not offer, lacks the terminal, or has a different attach
+  mode. That msg2 authenticated, so the server is genuine and
+  incompatible: Dial fails with an error that says so, rather than
+  waiting.
 
-Since the server's channels are a subset of the client's, `hello_s` is
-never longer than `hello_c`, and msg2 is always at least 20 bytes shorter
-than the msg1 it answers (§3.7). The server never sends more than it
-receives in the handshake.
+Since the server's elements are a subset of the client's, each no longer
+than the client's, `hello_s` is never longer than `hello_c`, and msg2 is
+always at least 20 bytes shorter than the msg1 it answers (§3.7). The
+server never sends more than it receives in the handshake.
 
 ### 3.7 msg2
 
@@ -376,8 +425,8 @@ offset  size   field
 2       4      idx_S            server's receiver index, u32 LE, nonzero
 6       4      idx_C            echoed from msg1
 10      1120   enc2             ENCAP to s_C
-1130    3+m+16 c2               EncryptAndHash(hello_s)      m = channel count, 1..n
-total   1149+m                  1150..1165 bytes
+1130    L+16   c2               EncryptAndHash(hello_s)      L = hello length, 1..34 (§3.6)
+total   1146+L                  1147..1180 bytes
 ```
 
 The server, continuing from its copy of the state after `c1`:
@@ -411,8 +460,8 @@ The server's `Listener` reads every datagram on its socket. For type
 `0x01` it runs these steps **in order of cost**, and a failure at any step
 drops the datagram silently, counts the reason, and changes nothing:
 
-1. **Length and header.** The length is 1170 to 1185 and the version byte
-   is `0x01`.
+1. **Length and header.** The length is 1167 to 1200 (a hello of 1 to
+   `MaxHello` bytes) and the version byte is `0x01`.
 2. **Credential lookup.** `cred_id` names a live credential: one map
    lookup, under 0.05 µs with 1000 outstanding [S1 §2.2]. An unknown id
    costs nothing more.
@@ -424,9 +473,10 @@ drops the datagram silently, counts the reason, and changes nothing:
 5. **mac1**, compared in constant time.
 6. **KEM and AEAD**, on a copy of the credential's initial state:
    `DECAP(sk_S, enc1, h)`, `MixKey`, `DecryptAndHash(c1)`.
-7. **Hello**: `ParseHello`, then the policy of §3.6. A hello with no
-   protocol version in common with the server's still goes on to step 8
-   (§3.6, "No version in common"); its pending can never be confirmed.
+7. **Hello**: `ParseHello`, then the policy of §3.6. A hello of another
+   protocol number, or with a critical element this server does not
+   know, still goes on to step 8 (§3.6, "Another number", "An unknown
+   critical element"); its pending can never be confirmed.
 8. **Commit.** Only now: take `idx_S` from the transport (below), build
    msg2, register `idx_S` in the receiver-index table pointing at the new
    pending handshake, cache `(HASH(msg1), msg2)` with it, and send msg2 to
@@ -661,7 +711,14 @@ Rules for every kind:
   replay (it is committed) and for paths (§7).
 - **An unknown kind** is ignored in the same way. That is what lets a
   later slice add kinds; it is safe because only the peer could have
-  sealed it.
+  sealed it. Frame kinds have no critical marking (`versioning.md` §3):
+  every unknown kind may be ignored. So a kind a peer must not ignore
+  (one that restricts or changes the meaning of others) is sent only to
+  a peer whose hello advertised the feature it belongs to
+  (`versioning.md` §4); every kind above is part of protocol 1, which
+  every peer of protocol 1 knows. A known kind's body is checked in full,
+  and its reserved values are its own business (END's reason, for one,
+  ends the connection whatever it is).
 - **Only TERMINAL reaches SSP** through `Conn.Recv`, and only CHANNEL
   reaches `Conn.RecvChannel` (§4.4). The transport handles the others
   itself.
@@ -1393,10 +1450,15 @@ Beyond the general rules in `architecture.md` §6:
   another number: a client of protocol 2 and this server, and this client
   and a server of protocol 2, fail at once at both ends with both numbers
   in the error, and the server never confirms the pending; a hello whose
-  rest does not parse as v1 but whose first byte says 2 still gets the
-  error that names 2.
-- **Sizes.** msg1 with 1 and 16 channels is 1170 and 1185 bytes; msg2
-  1150 to 1165; each INIT part 642; REKEY_RESP 1154; KEEPALIVE 31;
+  rest does not parse as protocol 1 but whose first byte says 2 still
+  gets the error that names 2.
+- **Must-ignore** (`versioning.md` §7): a client hello with an unknown
+  element of bit 7 set handshakes exactly as without it; one with bit 7
+  clear gets the refusal hello, Dial fails at once with
+  `ErrIncompatible`, and the server never confirms the pending.
+- **Sizes.** msg1 with today's hello (1 or 2 channels, no features) is
+  1173 or 1174 bytes, and with a 34-byte hello 1200; msg2 1147 to 1180;
+  each INIT part 642; REKEY_RESP 1154; KEEPALIVE 31;
   PATH_CHALLENGE and PATH_RESPONSE 38; a full TERMINAL packet 1232. No
   handshake or rekey message over 1200.
 - **Tamper every byte** of msg1, msg2 and a data packet: each is refused
@@ -1443,7 +1505,8 @@ Beyond the general rules in `architecture.md` §6:
 - **Revocation**: the old client receives REVOKED, reports the address and
   time, and its later packets get at most three copies.
 - **Fuzz targets** (each run for minutes locally, durations recorded):
-  `ParseHello` (round trip), `Responder.ReadMsg1` with mac1 recomputed so
+  `ParseHello` (round trip of known elements; an unknown element with
+  bit 7 set changes nothing, with it clear is refused), `Responder.ReadMsg1` with mac1 recomputed so
   mutations reach the KEM and AEAD (a failure changes nothing, only the
   genuine msg1 succeeds), `Initiator.ReadMsg2` (no msg2 from a server
   without `sk_S` is accepted), the data-packet receive path (a rejected
@@ -1459,8 +1522,9 @@ Beyond the general rules in `architecture.md` §6:
 | `transport.Overhead` | 30 B | §4.1 | [derived] 13 + 1 + 16 |
 | `transport.MaxPayload` | 1202 B | §4.1 | [derived] 1232 − 30 |
 | Wire version | `0x01` | §2.3 | [ours] |
-| Protocol versions spoken | `1..1` | §2.3, §3.6 | [D] D8 V1: v1 is this document |
-| Hello channel types | ≤ 16 | §3.6 | [ours]: keeps msg1 ≤ 1185 |
+| Protocol number | 1 | §2.3, §3.6 | [D] D8 V1: protocol 1 is this document's envelope (`versioning.md` §5) |
+| `MaxHello` | 34 B | §3.6 | [derived] 1200 − 1166: keeps msg1 ≤ `wire.MaxHandshake` |
+| Hello channel types, features | ≤ 16 each | §3.6 | [ours] |
 | X-Wing pk / enc | 1216 / 1120 B | §3.2 | [S1] measured from `crypto/hpke` |
 | HPKE suite | KEM `0x647a`, KDF `0x0001`, AEAD `0xFFFF` | §3.2 | [RFC 9180]; draft-ietf-hpke-pq |
 | mac1 | 16 B of HMAC-SHA-256 | §3.5 | [S1], after WireGuard's mac1 [WG §5.3] |

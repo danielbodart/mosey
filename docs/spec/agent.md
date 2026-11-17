@@ -230,7 +230,7 @@ and passes each accepted connection to proto as an `AgentConn` IPC message
 carrying its fd (`server.md` §3.3). proto never needs `accept4`: its
 policy is unchanged.
 
-- Made only when the session's first `ClientLine` says `agent=yes`, after
+- Made only when the session's first `ClientLine` says `!agent=yes`, after
   the credential has named the session and before the shell starts (the
   shell's environment needs the path). A failure is logged and the shell
   starts with no `SSH_AUTH_SOCK`, which is what `ssh` without `-A` gives.
@@ -252,8 +252,8 @@ A resume does not change the socket: the shell keeps its `SSH_AUTH_SOCK`
 for its whole life, and each connection goes to whichever client is
 attached at the time, or is refused if none is, or if that client did not
 negotiate the agent. The one exception is the session's start (§4.2): a
-connection made before the first client has attached waits for it. A session started with `agent=no` has no socket, and
-a later `agent=yes` resume does not add one: the shell's environment was
+connection made before the first client has attached waits for it. A session started without `!agent=yes` has no socket, and
+a later `!agent=yes` resume does not add one: the shell's environment was
 fixed when it started [derived].
 
 ### 4.2 proto
@@ -303,13 +303,26 @@ off  len  field
 5    …    the op's fields, then zero padding to the body's length
 ```
 
-| op | name | fields after the op | fixed part |
-|---|---|---|---|
-| `0x01` | OPEN | type (1, a `handshake.ChannelType`), window (4) | 10 |
-| `0x02` | ACCEPT | window (4) | 9 |
-| `0x03` | DATA | flags (1: bit 0 FIN, others 0), offset (8), length (2), `length` bytes | 16 + length |
-| `0x04` | ACK | flags (1: bit 0 FIN received, others 0), next (8), window (4) | 18 |
-| `0x05` | RESET | reason (1) | 6 |
+| op | name | fields after the op | fixed part | Critical | Why |
+|---|---|---|---|---|---|
+| `0x01` | OPEN | type (1, a `handshake.ChannelType`), window (4) | 10 | yes | it creates a stream |
+| `0x02` | ACCEPT | window (4) | 9 | yes | it grants a window |
+| `0x03` | DATA | flags (1: bit 0 FIN, others 0), offset (8), length (2), `length` bytes | 16 + length | yes | it carries the stream's bytes |
+| `0x04` | ACK | flags (1: bit 0 FIN received, others 0), next (8), window (4) | 18 | yes | it moves the window and ends retransmission |
+| `0x05` | RESET | reason (1) | 6 | yes | it ends a stream |
+| `0x06`–`0x7F` | | | | yes: unknown, the frame is malformed | |
+| `0x80`–`0xFF` | | | | no: unknown, the frame is dropped | |
+
+- **Ops are open** (`versioning.md` §2, §3). Each frame is one op, and
+  the transport delimits the frame, so a receiver can drop a frame whose
+  op it does not know without reading it. Bit 7 of the op is its
+  critical marking: a frame with an unknown op of bit 7 set is dropped
+  and counted, and changes nothing, not even the stream it names; one of
+  bit 7 clear is malformed, which resets the stream it names
+  (§5.7). Every op above is part of protocol 1. The header (stream id
+  and op) is the envelope (`versioning.md` §5), and a known op's flag
+  bits and padding are its own and checked in full: a reserved flag bit
+  set is malformed, since a flag can change what the rest means.
 
 - **Padding.** Every body is padded with zero bytes so that the sealed
   plaintext (the kind byte plus the body) is at least
@@ -333,8 +346,11 @@ off  len  field
   any value the same: the stream is over.
 
 `channel.ParseFrame` is the one parser; its fuzz target checks that
-anything it accepts re-marshals to the same bytes and that every refusal
-leaves the mux unchanged (§5.7).
+anything it accepts re-marshals to the same bytes, that every refusal
+leaves the mux unchanged (§5.7), and `versioning.md` §7: a frame of an
+unknown op with bit 7 set is reported as one to drop
+(`channel.ErrIgnored`) and changes nothing at all, and one with bit 7
+clear is malformed.
 
 ### 5.2 Opening
 
@@ -472,7 +488,8 @@ answered.
   entries; `FuzzCapture` (any byte sequence on the one connection: Bound
   only for exactly the honest sequence, and then only that bind), which
   reaches `ParseBind` through frame 1.
-- `internal/channel`: `FuzzParseFrame` (round trip; padding must be zero)
+- `internal/channel`: `FuzzParseFrame` (round trip; padding must be zero;
+  unknown ops by their bit 7)
   and `FuzzMux` (any frames from the peer keep every bound); streams over
   a seeded simulated path under synctest (D18; channel needs no addresses,
   so a small link rather than netsim) with loss, reordering and duplication
