@@ -70,7 +70,7 @@ func buildMosey(t *testing.T, version string) string {
 	}
 	out := filepath.Join(t.TempDir(), "mosey")
 	cmd := exec.Command(gobin, "build", "-o", out, "-ldflags", "-X main.version="+version, "../../cmd/mosey")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	cmd.Env = childEnv("CGO_ENABLED=0")
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building mosey: %v\n%s", err, b)
 	}
@@ -160,6 +160,61 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// userSessionVars are the variables through which a child of a test
+// could reach the developer's own agent, or take itself to be in their ssh
+// login: none may leak into a test, which must never touch the user's
+// agent (CLAUDE.md). A test that wants an agent names its throwaway one.
+var userSessionVars = []string{
+	"SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY",
+	"SSH_ASKPASS", "SSH_ASKPASS_REQUIRE",
+}
+
+// childEnv is the environment for every process a test starts: the test's
+// own, less userSessionVars, then with each of set applied in order. A
+// NAME=value entry sets NAME, replacing any inherited value; a bare NAME
+// unsets it. So SSH_AUTH_SOCK reaches a child only as an explicit
+// "SSH_AUTH_SOCK="+throwaway.sock.
+func childEnv(set ...string) []string {
+	drop := map[string]bool{}
+	for _, name := range userSessionVars {
+		drop[name] = true
+	}
+	for _, kv := range set {
+		name, _, _ := strings.Cut(kv, "=")
+		drop[name] = true
+	}
+	var env []string
+	for _, kv := range os.Environ() {
+		if name, _, _ := strings.Cut(kv, "="); !drop[name] {
+			env = append(env, kv)
+		}
+	}
+	for _, kv := range set {
+		if strings.Contains(kv, "=") {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
+// noSystemEnvironment tells NixOS's /etc/profile, /etc/bashrc and
+// /etc/zshenv that /etc/set-environment has been read already, so a far
+// or local session's shell does not read it. That file exports the host's
+// environment.variables afresh, and a host may name its own agent there
+// (the chase-trusted container sets SSH_AUTH_SOCK to frisket's), which
+// would replace the session's agent socket with the user's real one, as
+// it would for plain ssh -A on such a host. Elsewhere it means nothing.
+const noSystemEnvironment = "__NIXOS_SET_ENVIRONMENT_DONE=1"
+
+// command is exec.Command with childEnv as its environment, so no tool a
+// test runs (ssh-keygen, sshd, ssh, mosey) inherits the developer's agent;
+// a test that needs more sets Env from childEnv itself.
+func command(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.Env = childEnv()
+	return cmd
 }
 
 // runtimeDir is a throwaway $XDG_RUNTIME_DIR for a server under test, so

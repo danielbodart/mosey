@@ -92,7 +92,7 @@ func startSSHDWith(t *testing.T, o sshdOptions) *sshd {
 		s.home = t.TempDir()
 	}
 	for _, k := range []string{"host", "user"} {
-		if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "mosey-e2e", "-f", filepath.Join(s.dir, k)).CombinedOutput(); err != nil {
+		if out, err := command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "mosey-e2e", "-f", filepath.Join(s.dir, k)).CombinedOutput(); err != nil {
 			t.Fatalf("ssh-keygen: %v %s", err, out)
 		}
 	}
@@ -169,10 +169,10 @@ SetEnv %[3]s
   BatchMode yes%[5]s
 `, s.host, port, me.Username, s.dir, o.clientExtra, o.identityAgent))
 
-	if out, err := exec.Command(bin, "-t", "-f", sshdConfig).CombinedOutput(); err != nil {
+	if out, err := command(bin, "-t", "-f", sshdConfig).CombinedOutput(); err != nil {
 		t.Skipf("this sshd will not take a throwaway config: %v %s", err, out)
 	}
-	cmd := exec.Command(bin, "-D", "-f", sshdConfig, "-E", filepath.Join(s.dir, "sshd.log"))
+	cmd := command(bin, "-D", "-f", sshdConfig, "-E", filepath.Join(s.dir, "sshd.log"))
 	if err := cmd.Start(); err != nil {
 		t.Skip(err)
 	}
@@ -223,11 +223,11 @@ func TestARealSessionOverLoopbackThroughSSH(t *testing.T) {
 
 	master, slave := openPTY(t)
 	state := t.TempDir()
-	cmd := exec.Command(mosey, "-remote", mosey, "--", "-F", s.config, s.host)
+	cmd := command(mosey, "-remote", mosey, "--", "-F", s.config, s.host)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 	// Its log goes to the test's directory, not the user's state.
-	cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state, "TERM=xterm-256color", "LANG=C.UTF-8")
+	cmd.Env = childEnv("XDG_STATE_HOME="+state, "TERM=xterm-256color", "LANG=C.UTF-8")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -325,10 +325,10 @@ SSH_CONNECTION='127.0.0.1 40000 127.0.0.1 22' exec /bin/sh -c "$last"
 	}
 	start := func(remote string) *run {
 		master, slave := openPTY(t)
-		cmd := exec.Command(mosey, "-ssh", ssh, "-remote", remote, "127.0.0.1")
+		cmd := command(mosey, "-ssh", ssh, "-remote", remote, "127.0.0.1")
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+t.TempDir(), "XDG_RUNTIME_DIR="+runtimeDir(t), "TERM=xterm-256color")
+		cmd.Env = childEnv("XDG_STATE_HOME="+t.TempDir(), "XDG_RUNTIME_DIR="+runtimeDir(t), "TERM=xterm-256color")
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}

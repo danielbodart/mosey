@@ -34,10 +34,10 @@ func startAgent(t *testing.T) *throwawayAgent {
 		}
 	}
 	a := &throwawayAgent{t: t, sock: filepath.Join(runtimeDir(t), "agent.sock"), key: filepath.Join(t.TempDir(), "agentkey")}
-	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", agentKeyComment, "-f", a.key).CombinedOutput(); err != nil {
+	if out, err := command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", agentKeyComment, "-f", a.key).CombinedOutput(); err != nil {
 		t.Fatalf("ssh-keygen: %v %s", err, out)
 	}
-	cmd := exec.Command("ssh-agent", "-D", "-a", a.sock)
+	cmd := command("ssh-agent", "-D", "-a", a.sock)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
 	if err := cmd.Start(); err != nil {
 		t.Skip(err)
@@ -50,7 +50,7 @@ func startAgent(t *testing.T) *throwawayAgent {
 // add runs ssh-add against the throwaway agent with args.
 func (a *throwawayAgent) add(args ...string) {
 	a.t.Helper()
-	cmd := exec.Command("ssh-add", args...)
+	cmd := command("ssh-add", args...)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "SSH_AUTH_SOCK=" + a.sock}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		a.t.Fatalf("ssh-add %v: %v %s", args, err, out)
@@ -65,16 +65,10 @@ func startAgentClient(t *testing.T, name, mosey string, s *sshd, a *throwawayAge
 	master, slave := openPTY(t)
 	c := &realClient{t: t, label: name, master: master, screen: &screenLog{}, exited: make(chan error, 1), state: t.TempDir()}
 	args := append(append([]string{}, flags...), "-remote", mosey, "--", "-F", s.config, s.host)
-	c.cmd = exec.Command(mosey, args...)
+	c.cmd = command(mosey, args...)
 	c.cmd.Stdin, c.cmd.Stdout, c.cmd.Stderr = slave, slave, slave
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-	env := []string{}
-	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "SSH_AUTH_SOCK=") && !strings.HasPrefix(kv, "XDG_RUNTIME_DIR=") {
-			env = append(env, kv)
-		}
-	}
-	c.cmd.Env = append(env, "XDG_STATE_HOME="+c.state, "XDG_RUNTIME_DIR="+runtimeDir(t), "SSH_AUTH_SOCK="+a.sock,
+	c.cmd.Env = childEnv("XDG_STATE_HOME="+c.state, "XDG_RUNTIME_DIR="+runtimeDir(t), "SSH_AUTH_SOCK="+a.sock,
 		"TERM=xterm-256color", "LANG=C.UTF-8")
 	if err := c.cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -94,6 +88,24 @@ func startAgentClient(t *testing.T, name, mosey string, s *sshd, a *throwawayAge
 		}
 	})
 	return c
+}
+
+// startAgentSSHD is startSSHDWith for a test of which agent the far side
+// sees: nothing on that host may name an agent of its own. ssh's commands
+// there read no system environment (noSystemEnvironment), so the launcher
+// triggers the bind through the agent sshd forwarded, and the session's
+// shell is plainShell, which reads no profile, so its SSH_AUTH_SOCK is the
+// one the spawner gave it. PATH is the test's own, which that environment
+// would otherwise have set.
+func startAgentSSHD(t *testing.T, o sshdOptions) *sshd {
+	t.Helper()
+	path := os.Getenv("PATH")
+	if path == "" || strings.ContainsAny(path, " \t\"") {
+		t.Skipf("this PATH cannot go into sshd's SetEnv: %q", path)
+	}
+	o.shell, o.path = plainShell(t), path
+	o.env = append(o.env, noSystemEnvironment)
+	return startSSHDWith(t, o)
 }
 
 // hopConfig is an ssh_config for an ssh run inside the session to hop to
@@ -152,9 +164,9 @@ func knownByAlias(t *testing.T, hosts ...*sshd) string {
 func TestTheAgentIsForwardedThroughARealSession(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
 	agentKeys := startAgent(t)
-	hop := startSSHDWith(t, sshdOptions{alias: "mosey-hop", authorized: agentKeys.key + ".pub"})
-	other := startSSHDWith(t, sshdOptions{alias: "mosey-elsewhere"})
-	s := startSSHDWith(t, sshdOptions{allowAgent: true, alias: "mosey-first", clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"})
+	hop := startAgentSSHD(t, sshdOptions{alias: "mosey-hop", authorized: agentKeys.key + ".pub"})
+	other := startAgentSSHD(t, sshdOptions{alias: "mosey-elsewhere"})
+	s := startAgentSSHD(t, sshdOptions{allowAgent: true, alias: "mosey-first", clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"})
 	mosey := buildMosey(t, "e2e")
 	agentKeys.add(agentKeys.key)
 
@@ -207,7 +219,7 @@ func TestTheAgentIsNotForwardedWhenSSHWouldNotForwardIt(t *testing.T) {
 		"-a":              {sshdOptions{allowAgent: true, clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"}, []string{"-a"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			s := startSSHDWith(t, c.opts)
+			s := startAgentSSHD(t, c.opts)
 			cl := startAgentClient(t, name, mosey, s, agentKeys, c.flags...)
 			cl.shows("$")
 			cl.typeLine("printenv SSH_AUTH_SOCK; echo env-checked")
@@ -229,7 +241,7 @@ func TestTheSessionGoesOnWithoutTheAgentWhenTheServerRefusesIt(t *testing.T) {
 	skipUntilBuilt(t, allPackages...)
 	agentKeys := startAgent(t)
 	agentKeys.add(agentKeys.key)
-	s := startSSHDWith(t, sshdOptions{clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"})
+	s := startAgentSSHD(t, sshdOptions{clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"})
 	mosey := buildMosey(t, "e2e")
 	c := startAgentClient(t, "the client", mosey, s, agentKeys)
 	c.shows("$")
@@ -257,16 +269,16 @@ func TestForwardAgentYesForwardsTheIdentityAgent(t *testing.T) {
 	envAgent.add(envAgent.key)
 	// The second agent's key, under another comment, to tell them apart.
 	other := filepath.Join(t.TempDir(), "idkey")
-	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "identity-agent-key", "-f", other).CombinedOutput(); err != nil {
+	if out, err := command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "identity-agent-key", "-f", other).CombinedOutput(); err != nil {
 		t.Fatalf("ssh-keygen: %v %s", err, out)
 	}
 	idAgent.add(other)
-	s := startSSHDWith(t, sshdOptions{allowAgent: true})
+	s := startAgentSSHD(t, sshdOptions{allowAgent: true})
 	list := func(opts ...string) string {
 		args := append([]string{"-F", s.config, "-o", "ForwardAgent=yes"}, opts...)
 		args = append(args, s.host, "ssh-add -l")
-		cmd := exec.Command("ssh", args...)
-		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "SSH_AUTH_SOCK=" + envAgent.sock}
+		cmd := command("ssh", args...)
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + s.home, "SSH_AUTH_SOCK=" + envAgent.sock}
 		out, _ := cmd.CombinedOutput()
 		return string(out)
 	}
@@ -291,11 +303,11 @@ func TestAResumedSessionForwardsTheResumingClientsAgent(t *testing.T) {
 	first, second := startAgent(t), startAgent(t)
 	first.add(first.key)
 	secondKey := filepath.Join(t.TempDir(), "secondkey")
-	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "second-device-key", "-f", secondKey).CombinedOutput(); err != nil {
+	if out, err := command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "second-device-key", "-f", secondKey).CombinedOutput(); err != nil {
 		t.Fatalf("ssh-keygen: %v %s", err, out)
 	}
 	second.add(secondKey)
-	s := startSSHDWith(t, sshdOptions{allowAgent: true, clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"})
+	s := startAgentSSHD(t, sshdOptions{allowAgent: true, clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"})
 	mosey := buildMosey(t, "e2e")
 
 	a := startAgentClient(t, "the first device", mosey, s, first)
@@ -332,11 +344,11 @@ func TestPredictionAndTheAgentBothCarryOverAResume(t *testing.T) {
 	first, second := startAgent(t), startAgent(t)
 	first.add(first.key)
 	secondKey := filepath.Join(t.TempDir(), "secondkey")
-	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "second-device-key", "-f", secondKey).CombinedOutput(); err != nil {
+	if out, err := command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "second-device-key", "-f", secondKey).CombinedOutput(); err != nil {
 		t.Fatalf("ssh-keygen: %v %s", err, out)
 	}
 	second.add(secondKey)
-	s := startSSHDWith(t, sshdOptions{allowAgent: true, clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"})
+	s := startAgentSSHD(t, sshdOptions{allowAgent: true, clientExtra: "\n  ForwardAgent yes", identityAgent: "SSH_AUTH_SOCK"})
 	mosey := buildMosey(t, "e2e")
 
 	a := startAgentClient(t, "the first device", mosey, s, first, "-predict", "always")

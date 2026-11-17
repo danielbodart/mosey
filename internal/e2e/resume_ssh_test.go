@@ -40,10 +40,10 @@ func startCommand(t *testing.T, name, mosey string, s *sshd, flags []string, wor
 	master, slave := openPTY(t)
 	c := &realClient{t: t, label: name, master: master, screen: &screenLog{}, exited: make(chan error, 1), state: t.TempDir()}
 	args := append(append(append([]string{}, flags...), "-remote", mosey, "--", "-F", s.config, s.host), words...)
-	c.cmd = exec.Command(mosey, args...)
+	c.cmd = command(mosey, args...)
 	c.cmd.Stdin, c.cmd.Stdout, c.cmd.Stderr = slave, slave, slave
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-	c.cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+c.state, "TERM=xterm-256color", "LANG=C.UTF-8")
+	c.cmd.Env = childEnv("XDG_STATE_HOME="+c.state, "TERM=xterm-256color", "LANG=C.UTF-8")
 	if err := c.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -133,8 +133,8 @@ func spawners(path string) []int {
 func moseyCmd(t *testing.T, mosey string, s *sshd, args ...string) (string, int) {
 	t.Helper()
 	all := append(append([]string{}, args...), "-remote", mosey, "--", "-F", s.config, s.host)
-	cmd := exec.Command(mosey, all...)
-	cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+t.TempDir())
+	cmd := command(mosey, all...)
+	cmd.Env = childEnv("XDG_STATE_HOME=" + t.TempDir())
 	out, err := cmd.CombinedOutput()
 	return string(out), bootstrap.ExitStatus(err)
 }

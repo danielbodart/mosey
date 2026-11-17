@@ -29,10 +29,10 @@ func startUploadClient(t *testing.T, s *sshd, mosey, state string, flags ...stri
 	t.Helper()
 	master, slave := openPTY(t)
 	args := append(flags, "--", "-F", s.config, s.host)
-	c := &clientRun{cmd: exec.Command(mosey, args...), master: master, exited: make(chan error, 1)}
+	c := &clientRun{cmd: command(mosey, args...), master: master, exited: make(chan error, 1)}
 	c.cmd.Stdin, c.cmd.Stdout, c.cmd.Stderr = slave, slave, slave
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-	c.cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state, "TERM=xterm-256color", "LANG=C.UTF-8")
+	c.cmd.Env = childEnv("XDG_STATE_HOME="+state, "TERM=xterm-256color", "LANG=C.UTF-8")
 	if err := c.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func tools(t *testing.T) string {
 // NixOS's bash does even for ssh's commands.
 func farPath(t *testing.T, s *sshd) []string {
 	t.Helper()
-	out, err := exec.Command("ssh", "-F", s.config, s.host, `exec /bin/sh -c 'printf %s "$PATH"'`).Output()
+	out, err := command("ssh", "-F", s.config, s.host, `exec /bin/sh -c 'printf %s "$PATH"'`).Output()
 	if err != nil {
 		t.Fatalf("asking the far host its PATH: %v", err)
 	}
@@ -164,7 +164,7 @@ func farPath(t *testing.T, s *sshd) []string {
 // hide.
 func noMoseyOnFarPath(t *testing.T, s *sshd) {
 	t.Helper()
-	if exec.Command("ssh", "-F", s.config, s.host, `exec /bin/sh -c 'command -v mosey'`).Run() == nil {
+	if command("ssh", "-F", s.config, s.host, `exec /bin/sh -c 'command -v mosey'`).Run() == nil {
 		t.Skip("the far host's PATH has a mosey of this machine's that the test cannot hide")
 	}
 }
@@ -278,8 +278,8 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 		// Nothing on the remote PATH: only the probe's look in
 		// ~/.local/bin finds a lister (bootstrap.md §9.4). The last
 		// session may still be on its way out, so it may be listed.
-		cmd := exec.Command(b, "-list", "--", "-F", s.config, s.host)
-		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state)
+		cmd := command(b, "-list", "--", "-F", s.config, s.host)
+		cmd.Env = childEnv("XDG_STATE_HOME=" + state)
 		out, err := cmd.CombinedOutput()
 		if err != nil || !strings.Contains(string(out), "no sessions") && !strings.HasPrefix(string(out), "NAME ") {
 			t.Errorf("mosey -list: %v\n%q", err, out)
@@ -305,8 +305,8 @@ func TestAutoUploadThroughSSH(t *testing.T) {
 		if err := os.RemoveAll(filepath.Dir(s.installed())); err != nil {
 			t.Fatal(err)
 		}
-		cmd := exec.Command(b, "-list", "--", "-F", s.config, s.host)
-		cmd.Env = append(os.Environ(), "XDG_STATE_HOME="+state)
+		cmd := command(b, "-list", "--", "-F", s.config, s.host)
+		cmd.Env = childEnv("XDG_STATE_HOME=" + state)
 		out, err := cmd.CombinedOutput()
 		if bootstrap.ExitStatus(err) == 0 || !strings.Contains(string(out), "no mosey on mosey-e2e") {
 			t.Errorf("mosey -list: %v\n%q", err, out)

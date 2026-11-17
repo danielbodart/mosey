@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -33,24 +32,18 @@ func newMachine(t *testing.T) *thisMachine {
 
 // env is the client's environment on this machine: the test's own, less
 // anything of the user's that a session would use, plus the machine's
-// directories, and the agent socket if one is given.
+// directories, and the agent socket if one is given. Local mode passes
+// the client's SSH_AUTH_SOCK to the session on purpose (bootstrap.md
+// §2.2), so it is only ever the throwaway agent's, or unset, and the
+// login shell reads no system environment that could name another.
 func (m *thisMachine) env(state, agentSock string) []string {
-	var env []string
-	for _, kv := range os.Environ() {
-		name, _, _ := strings.Cut(kv, "=")
-		switch name {
-		case "SSH_AUTH_SOCK", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "HOME", "SHELL",
-			"XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "ENV", "BASH_ENV":
-			continue
-		}
-		env = append(env, kv)
-	}
-	env = append(env, "HOME="+m.home, "XDG_RUNTIME_DIR="+m.runtime, "XDG_STATE_HOME="+state,
-		"SHELL=/bin/sh", "TERM=xterm-256color", "LANG=C.UTF-8")
+	agent := "SSH_AUTH_SOCK"
 	if agentSock != "" {
-		env = append(env, "SSH_AUTH_SOCK="+agentSock)
+		agent += "=" + agentSock
 	}
-	return env
+	return childEnv("XDG_CONFIG_HOME", "ENV", "BASH_ENV", agent,
+		"HOME="+m.home, "XDG_RUNTIME_DIR="+m.runtime, "XDG_STATE_HOME="+state,
+		"SHELL=/bin/sh", "TERM=xterm-256color", "LANG=C.UTF-8", noSystemEnvironment)
 }
 
 // startLocal is the real mosey client given flags and then localhost, and
@@ -60,7 +53,7 @@ func startLocal(t *testing.T, name, mosey string, m *thisMachine, agentSock stri
 	t.Helper()
 	master, slave := openPTY(t)
 	c := &realClient{t: t, label: name, master: master, screen: &screenLog{}, exited: make(chan error, 1), state: t.TempDir()}
-	c.cmd = exec.Command(mosey, append(append(slices.Clone(flags), "localhost"), words...)...)
+	c.cmd = command(mosey, append(append(slices.Clone(flags), "localhost"), words...)...)
 	c.cmd.Stdin, c.cmd.Stdout, c.cmd.Stderr = slave, slave, slave
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 	c.cmd.Env = m.env(c.state, agentSock)
@@ -88,7 +81,7 @@ func startLocal(t *testing.T, name, mosey string, m *thisMachine, agentSock stri
 // localhost after args, and returns what it printed and its exit status.
 func localCmd(t *testing.T, mosey string, m *thisMachine, args ...string) (string, int) {
 	t.Helper()
-	cmd := exec.Command(mosey, append(slices.Clone(args), "localhost")...)
+	cmd := command(mosey, append(slices.Clone(args), "localhost")...)
 	cmd.Env = m.env(t.TempDir(), "")
 	out, err := cmd.CombinedOutput()
 	return string(out), bootstrap.ExitStatus(err)
