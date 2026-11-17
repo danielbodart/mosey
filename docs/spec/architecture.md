@@ -37,7 +37,7 @@ decision wins.
 | `internal/render` | Draws a `Grid` on the local terminal with escape sequences it writes itself | client | **screen** | `render.go` |
 | `internal/predict` | Predictive local echo (D12, `prediction.md`): epochs over the user's own keystrokes, judged against the server's cells, drawn as an overlay on the client's copy of the screen | client | **prediction** | `doc.go`, `engine.go`, `keys.go`, `width.go`, `overlay.go` |
 | `internal/emu` | The `Emulator` interface and the tuios.dev/vt implementation (D23) | emu (tests: in process) | **screen** | `emu.go`, `tuios.go` |
-| `internal/pty` | Open ptys, set their size, read the echo-off bit, start the login shell (D14) | spawner, proto | **server-proc** | `pty.go`, `pty_linux.go`, `pty_other.go` |
+| `internal/pty` | Open ptys, set their size, read the echo-off bit and whether the foreground runs as root, start the login shell (D14) | spawner, proto | **server-proc** | `pty.go`, `pty_linux.go`, `pty_other.go` |
 | `internal/sandbox` | Landlock deny-all, seccomp cBPF compiler and per-role policies, `DUMPABLE=0` (D22) | proto, emu | **server-proc** | `doc.go`, `sandbox.go`, `bpf.go`, `sandbox_linux.go`, `sandbox_other.go` |
 | `internal/nocore` | `DUMPABLE=0` and `RLIMIT_CORE=0` for every process that holds a secret (threat-model.md §4.10) | client, launcher, spawner, proto, emu | **server-proc** | `doc.go`, `nocore.go` |
 | `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | launcher, spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
@@ -386,13 +386,17 @@ throttles on (`ssp.md` §10.1).
 
 **screen.** `*Grid` is an `ssp.State[*Grid]`: cells (`Cell`: cluster,
 width, `Style`), `Cursor`, `Title`, `Container` and `Cwd` (OSC 666's
-container mark and OSC 7's directory, `screen.md` §4.6, §4.7), `Modes`, and prediction's `EchoOff`
+container mark and OSC 7's directory, `screen.md` §4.6, §4.7), `Root`
+(the far keyboard runs as root, measured by the spawner and never from
+output, `screen.md` §4.8), `Modes`, and prediction's `EchoOff`
 (D12), `EchoAck` and `EchoApplied` (`prediction.md` §3), `Clipboard` (OSC 52 write, D27) and `Bell`,
 plus `InputConsumed` (the client's input flow control, `ssp.md` §10.1),
 `Rebuilt` (D23's rebuild notice) and `History` (the scrollback window,
 `screen.md` §2.5). `allow.go` is the allow-list and the
 bounds. `render.Renderer` (`Render`, `Invalidate`, `Enter`, `Leave`,
-`Resize` for the local size it clips to) draws a Grid, with the
+`Resize` for the local size it clips to, `SetRemote` for the client's
+own remote mark, the host as typed, `screen.md` §8.8) draws a Grid, with
+the
 `Capabilities` from `render.FromEnv`, the locale's UTF-8 among them.
 
 **predict.** `New(Config{Mode})`, then `Key(n, bytes)` for each key event
@@ -419,7 +423,7 @@ which keeps a never-attached session waiting.
 **ipc.** `Pair()`, `Conn.Send(Message)`, `Conn.Recv()`; messages, with
 fixed layouts and a fuzzed `Parse` (`server.md` §3): launcher↔spawner
 `ClientLine`, `Ready`, `Failed`; spawner→proto `Start`, `EmuLink`,
-`ShellExit`, `EmuPaused`, `Resume`; proto→spawner `Credential`,
+`ShellExit`, `EmuPaused`, `Resume`, `Root`; proto→spawner `Credential`,
 `Attached{Peer}`, `Detached`, `KillEmu`, `Exit`; proto→emu `Init`,
 `Output`, `Resize`, `Flush`; emu→proto `Update`, `Replies`; and the
 stable attach protocol (`server.md` §2.8) `ClientLine`, `Ready`,

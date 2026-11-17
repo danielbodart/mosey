@@ -58,6 +58,16 @@ bytes are ever written to the user's real terminal:
 Every other byte the client writes comes from a fixed table in
 `internal/render` (§8.2), with numbers formatted by the client.
 
+The client also marks the local terminal **itself**, with termprops of
+mosey's own (§8.8): that the session is remote, naming the host as the
+user typed it, and that the program at the far keyboard runs as root.
+Neither is a remote-chosen byte. The host comes from the user's own
+command line, and root from the server's measurement of the pty (§4.8),
+which reaches the client as a bit that no output can set. A program
+that prints mosey's termprops is consumed by the server's emulator like
+any other termprop (§4.5), so `cat evil.txt` can neither colour the
+tab nor hide that it is root (Dan, 2026-11-16).
+
 Kinds 5 and 6 were added to the list after slice 1 (Dan, 2026-11-16). D9
 says "anything deliberately passed through goes through a strict
 allow-list"; these extend the list in that way and loosen nothing: each
@@ -94,6 +104,7 @@ fuzzed decoder protects both boundaries.
 | `Clipboard` | latest OSC 52 write, `{Seq, Data}` [D27] | CLIP |
 | `Container` | `{Name, Runtime, UID}`: the container mark the program set with OSC 666 (§4.6); all empty is no mark | CONTAINER |
 | `Cwd` | the program's current directory as a `file:` URI from OSC 7 (§4.7); empty is none | CWD |
+| `Root` | the pty's foreground process runs as uid 0, as the spawner measured it (§4.8); never from output | ROOT |
 | `Bell` | count of bells | BELL |
 | `Rebuilt` (§11 item 1) | `{Seq, Reason}`: the emulator was rebuilt [D23] | REBUILT |
 | `InputConsumed` (§11 item 15) | the index in the client's input stream up to which the server has written events to the pty: input flow control [`ssp.md` §10.1] | CONSUMED |
@@ -518,7 +529,8 @@ What VTE does with the sequence is taken from flong's `DESIGN.md` ("OSC
 **The field.** `Container{Name, Runtime, UID}`, three strings. All three
 empty is no mark. Only these three properties are carried; every other
 termprop, and every other `vte.container.*` property, is consumed by the
-server's emulator (§4.5).
+server's emulator (§4.5). That includes mosey's own `vte.ext.mosey.*`
+(§8.8): the far side cannot print the client's marks.
 
 **`ValidContainerValue(s)`** (for `Name` and `Runtime`): empty, or 1 to
 `MaxContainerValue` bytes of valid UTF-8 with no forbidden code point and
@@ -591,6 +603,42 @@ A URI `SanitizeCwd` refuses changes nothing; the last good one stays.
 
 **The client** writes `OSC 7 ; <Cwd> ST` when `Cwd` changes to a
 non-empty value (§8.4), and nothing on `Leave` (§8.6).
+
+### 4.8 Root (measured, never from output)
+
+GNOME Console colours a tab red while it runs something as root, which it
+learns from the local process tree. A mosey tab's process tree is the
+client's, so `sudo` at the far end never showed (Dan, 2026-11-16: "make
+them a protocol rather than this kind of process detection").
+
+**The field.** `Root bool`: the process at the far keyboard runs as root.
+It is not terminal state and not the emulator's: the spawner measures it
+(`server.md` §2.9) and proto sets it on each screen it publishes, as it
+sets `EchoOff` (§7.2). An emulator's grid that sets it is a violation
+(§7.3), and no escape sequence touches it, so printed output cannot set
+or clear it.
+
+**What is measured.** The pty's foreground process group, read with
+`TIOCGPGRP` on the master, and the **effective** uid of that group's
+leader, the process whose pid is the group id, from the `Uid:` line of
+`/proc/<pgid>/status` [Linux proc(5)]. `Root` is that uid being 0.
+So `sudo cmd` counts while it runs (sudo is set-uid root and leads the
+job), and so does a shell from `sudo -i` or `su` (it is the leader of
+each job it runs in the foreground, and of itself at its prompt). A
+session that is root from the start, `mosey root@host`, is root
+throughout.
+
+What it does not see, by design or for cost [derived]:
+
+- a root process that is not the group's leader (`ls | sudo tee f`
+  leads with `ls`): reading every process's group costs a walk of
+  `/proc`, where the leader is one small file;
+- root inside a container entered from the far shell: the foreground
+  process on the pty is the container tool, as the user;
+- a leader `/proc` will not show (it has exited, or `hidepid`): `Root` is
+  false. An unknown is never shown as root;
+- macOS and anything else that is not Linux: `Root` is always false
+  (`pty.ForegroundRoot` returns `errors.ErrUnsupported`, D22).
 
 ## 5. The diff format (O11)
 
@@ -738,6 +786,7 @@ State during a diff:
 | `0x59` | CONSUMED | `varint index` | 2, once |
 | `0x5A` | CONTAINER | string name (0..`MaxContainerValue`), string runtime (0..`MaxContainerValue`), string uid (0..10) | 2, once |
 | `0x5B` | CWD | string (0..`MaxCwd`) | 2, once |
+| `0x5C` | ROOT | `byte` (0 or 1) | 2, once |
 | `0x60` | HIST | `varint seq` | starts phase 3, once |
 | `0x61` | HLINE | `varint cols` | 3 |
 | `0x62` | HROW | `varint src` | 3 |
@@ -766,7 +815,7 @@ writes the rows as they stand after it.
 
 Reserved for later slices, and errors until a spec section defines them:
 
-- `0x5C`–`0x5F`: more state;
+- `0x5D`–`0x5F`: more state;
 - `0x63`–`0x6F`: more history ops;
 - `0x4E`–`0x4F`, `0x70`–`0x7F` and `0xC0`–`0xFF`.
 
@@ -984,6 +1033,12 @@ length [`ssp.md` §10.1], so the decoder needs no bound (§11 item 15).
 
 **CWD `s`.** Requires `ValidCwd(s)` (§4.7). Sets `Cwd`.
 
+**ROOT `b`.** Requires `b` to be 0 or 1; any other byte is an error.
+Sets `Root` to `b == 1` (§4.8). It was added to protocol 2 as it stands,
+without a new protocol number (Dan, 2026-11-16: there are no users yet,
+and protocol numbers change only with his approval), so a build from
+before it refuses a diff that carries it as an unknown op.
+
 **History ops (phase 3, §2.5).** They append lines to the history; the
 diff states the number of the first one, and the lines follow in order.
 
@@ -1042,7 +1097,7 @@ rowmove  = 0x42 varint varint varint | 0x43 varint ;
 op2      = text | pos | col | next | skip | erase | erased | repeat | copy
          | pen | link | cursor | here | textHere | curstyle | title
          | modes | echo | bell | clip | rebuilt | consumed | container
-         | cwd ;
+         | cwd | root ;
 history  = 0x60 varint { hline { lineop } | hrow } ;
 hline    = 0x61 varint ;
 hrow     = 0x62 varint ;
@@ -1167,7 +1222,8 @@ E1–E6, not the exact bytes.
    - Otherwise, if it is where the write position stands, use HERE.
    - Otherwise use CURSOR.
 5. **State.** Emit CURSTYLE, TITLE, MODES, ECHO, BELL, CLIP, REBUILT,
-   CONSUMED, CONTAINER and CWD for each field that differs from `from`.
+   CONSUMED, CONTAINER, CWD and ROOT for each field that differs from
+   `from`.
 6. **History.** If `g.History` differs from `from.History`, emit HIST
    with `max(from.History.Next, first)`, where `first` is the number of
    `g`'s oldest held line, then each line from there: HROW for a line
@@ -1257,6 +1313,9 @@ All examples are at 80 × 24 unless a size is given. Bytes are in hex.
    | `5B 0D` `file://h/home` | CWD, 13 bytes |
 
    Clearing the mark is `5A 00 00 00`, 4 bytes.
+
+10. **Root, then not.** `5C 01` sets `Root`; `5C 00` clears it. `5C 02`
+    is an error.
 
 ### 5.12 Size: what it costs, the bound, the gate
 
@@ -1461,8 +1520,9 @@ creates it at the clamped size and sets it up as follows. Each item is
     representation and give `MouseX10` (§11 item 10).
 - **Clipboard and bell.** `Clipboard` and `Bell` are emu's own counters
   (§4.4). proto renumbers them (§7.3).
-- **Left zero.** `EchoOff`, `EchoAck`, `EchoApplied`, `Rebuilt` and `InputConsumed` are
-  always zero in emu's grid. They are proto's.
+- **Left zero.** `EchoOff`, `EchoAck`, `EchoApplied`, `Rebuilt`,
+  `InputConsumed` and `Root` are always zero in emu's grid. They are
+  proto's.
 - **History.** emu's own window (§2.5), numbered from 0 in each
   generation. A held snapshot (§6.3) carries the history as it stands,
   not as it stood when the hold began, so `Next` never goes backwards.
@@ -1589,8 +1649,10 @@ proto treats emu as hostile.
 - **When emu's grid oversteps.** proto kills emu and asks the spawner to
   rebuild it (`KillEmu{violation}`) if an `Update`:
   - fails `Apply`;
-  - leaves the mirror with a non-zero `EchoOff`, `EchoAck`, `Rebuilt` or
-    `InputConsumed`. Those four fields are proto's alone;
+  - leaves the mirror with a non-zero `EchoOff`, `EchoAck`, `Rebuilt`,
+    `InputConsumed` or `Root`. Those fields are proto's alone, and
+    `Root` above all: a hostile emu must not be able to say the far
+    keyboard is root or, by fighting proto, that it is not (§4.8);
   - leaves the mirror at a size other than the last one proto sent, in
     `Init` or `Resize`. emu's sizes are proto's to choose: a program
     can't resize (DECCOLM and XTWINOPS are ignored, §4.5), so a
@@ -1656,6 +1718,7 @@ own (§8.5).
 | link | `OSC 8 ; ; <uri> ST`, and `OSC 8 ; ; ST` to end it |
 | clipboard | `OSC 52 ; c ; <base64> ST` |
 | container mark | `OSC 666 ; vte.container. ST` (clear), then `OSC 666 ; <items> ST`, each item `vte.container.name=`, `vte.container.runtime=` or `vte.container.uid=` and its escaped value, joined by `;` (§8.4) |
+| mosey's marks | `OSC 666 ; vte.ext.mosey.remote=<host> ST`, `OSC 666 ; vte.ext.mosey.remote ST`, `OSC 666 ; vte.ext.mosey.root=1 ST`, `OSC 666 ; vte.ext.mosey.root ST`, and `OSC 666 ; vte.ext.mosey. ST` (clear both) (§8.8) |
 | directory | `OSC 7 ; <uri> ST` |
 | bell | `BEL` (0x07) |
 | modes | `CSI ? 1 h/l`, `ESC =` / `ESC >`, `CSI ? 2004 h/l`, `CSI ? 1004 h/l`, `CSI ? 1000 h/l`, `CSI ? 1002 h/l`, `CSI ? 1003 h/l`, `CSI ? 1006 h/l`, and `CSI = n ; 1 u` (kitty flags, only once a later slice enables them) |
@@ -1760,28 +1823,34 @@ this (§10).
      the allow-list leaves no newline or other control to escape;
    - without `Capabilities.UTF8`, with each non-ASCII rune as `?`.
 
-   The client never marks the terminal itself (Dan, 2026-11-16): his
-   Console colours a session as remote from its process tree, which
-   knows `mosey` as it knows `ssh`, and as a container only from the
-   termprops, so a mark of the client's own would make every mosey tab
-   look like a container. A fresh renderer has written no mark, so on
-   attach or resume the first frame writes the grid's current one.
-6. **Directory.** If `Cwd` changed and is not empty, write `OSC 7 ; Cwd
+   The client never writes a container mark of its own: one would make
+   every mosey tab look like a container. Its own marks are the
+   separate `vte.ext.mosey.*` termprops (item 6, §8.8). A fresh
+   renderer has written no mark, so on attach or resume the first
+   frame writes the grid's current one.
+6. **mosey's marks** (§8.8). If the remote host or `Root` differs from
+   what the renderer last wrote, write the changed one: `OSC 666 ;
+   vte.ext.mosey.remote=<host> ST` or, for none, `OSC 666 ;
+   vte.ext.mosey.remote ST`; `OSC 666 ; vte.ext.mosey.root=1 ST` or
+   `OSC 666 ; vte.ext.mosey.root ST`. The host is escaped as a
+   container value is (item 5) and written only if it passes
+   `ValidContainerValue`.
+7. **Directory.** If `Cwd` changed and is not empty, write `OSC 7 ; Cwd
    ST` after checking it again with `ValidCwd`. A `Cwd` that becomes
    empty writes nothing: OSC 7 has no form that unsets the directory.
-7. **Clipboard.** If `Capabilities.Clipboard` is set and `Clipboard.Seq`
+8. **Clipboard.** If `Capabilities.Clipboard` is set and `Clipboard.Seq`
    is greater than the last one acted on, write `OSC 52 ; c ;
    base64(Data) ST`, using `encoding/base64.StdEncoding`.
    - The first grid a renderer draws only *records* its `Seq`. Attaching
      must not replay an old write into the user's clipboard.
-8. **Bell.** If `Bell` went up, write one `BEL`, however many bells were
+9. **Bell.** If `Bell` went up, write one `BEL`, however many bells were
    missed. The first grid only records the count.
-9. **Modes.** Mirror the input modes that changed (§8.5).
-10. **Cursor.**
+10. **Modes.** Mirror the input modes that changed (§8.5).
+11. **Cursor.**
    - CUP to `Cursor`, clipped to the local size.
    - DECSCUSR if `Shape` changed.
    - Show the cursor if `Visible`.
-11. End the synchronised update.
+12. End the synchronised update.
 
 **Rebuilt.** If `Rebuilt.Seq` went up, the renderer reports it to its
 caller. The client tells the user: "the remote screen was reset (reason)".
@@ -1844,6 +1913,8 @@ local input is the user's own, not remote data (§11 item 6).
       detach or exit does not leave the local terminal labelled as the
       remote container. The client cannot read what mark the terminal
       had before it, so it restores none: the termprops are unset.
+  11. `OSC 666 ; vte.ext.mosey. ST`, if either of mosey's own marks is
+      shown (§8.8): the prefix unsets both, so the tab is local again.
 
   It writes no OSC 7. There is no form that unsets the directory, and
   the client does not know which directory the local terminal last
@@ -1911,6 +1982,110 @@ and the order holds [measured here, with tuios as the local terminal:
 a shrink of 3 doubled 3 lines and a grow of 6 lost 6,
 `TestAResizeLosesOrDoublesAtMostTheRowsItMoves`]. The client does not
 try to undo the local terminal's reflow.
+
+### 8.8 The tab's marks: remote, root, container
+
+Dan, 2026-11-16, reversing §8.4's earlier "the client never marks the
+terminal itself" (commit 1aaa774): GNOME Console colours a tab red for
+root, purple for remote and blue for a container, and learned the first
+two from the **local** process tree, which for a mosey tab is the
+client. So `sudo` inside a session never went red. The client now marks
+the local terminal itself, from what it knows or the server measures,
+never from what a far-side program prints.
+
+**The termprops.** VTE takes an application's own termprops only under
+`vte.ext.` (`VTE_TERMPROP_NAME_PREFIX`), with at least four
+dot-separated parts, lower-case, and ignores any termprop the terminal
+has not installed with `vte_install_termprop` [measured here: VTE 0.84.1
+through its C API installs `vte.ext.mosey.remote` and
+`vte.ext.mosey.root`, and refuses `vte.ext.mosey`, `mosey.root` and
+`vte.ext.mosey.Root`]. mosey's are:
+
+| termprop | VTE type | set | unset | meaning |
+|---|---|---|---|---|
+| `vte.ext.mosey.remote` | `VTE_PROPERTY_STRING` | `vte.ext.mosey.remote=<host>` | `vte.ext.mosey.remote` | the session is on another machine; the value is DESTINATION as the user typed it (`dan@blade`, `blade`, `ssh://blade:2222`) |
+| `vte.ext.mosey.root` | `VTE_PROPERTY_BOOL` | `vte.ext.mosey.root=1` | `vte.ext.mosey.root` | the process at the far keyboard runs as root (§4.8) |
+| `vte.container.name`, `.runtime`, `.uid` | VTE's own | §8.4 item 5 | `vte.container.` | the far side's container mark, carried as today (§4.6); forgeable by design |
+
+Each is written as `ESC ] 666 ; <item> ESC \`, never BEL-terminated
+(VTE refuses that form). `OSC 666 ; vte.ext.mosey. ST` unsets both of
+mosey's and leaves the container mark alone. A bare name unsets the
+property: VTE then reports it as not set, which a reader takes as
+false or no host. The value of `remote` uses VTE's escapes, `\\` and
+`\s`, as a container value does. [Measured here, VTE 0.84.1 fed through
+`vte_terminal_feed` with both installed: `root=1`, `=true` and `=TRUE`
+set true and `=0`, `=false` set false; `=yes` and the BEL form change
+nothing; the bare name and the `vte.ext.mosey.` prefix unset; `a\sb\\c`
+reads back as `a;b\c`; an unknown `vte.ext.mosey.*` item beside a known
+one is skipped and the known one still set.]
+
+**When.**
+
+- **remote** is set on the first frame whenever DESTINATION is not
+  `localhost` (the word, in any case: `bootstrap.md` §2.2), so
+  `me@localhost` and `127.0.0.1`, which go through ssh, count as remote
+  as an `ssh` to them would. It does not change during a session. A
+  DESTINATION that fails `ValidContainerValue` (no user can type one
+  ssh would take) is written as `?`, so the fact is still told.
+- **root** follows the grid's `Root`, written when it changes.
+- Both are written by `Render` (§8.4 item 6) and unset by `Leave` (§8.6
+  item 11). A fresh renderer has written neither, so a resume writes
+  them again.
+
+**Facts, not one state; the priority is Console's.** The client emits
+each fact separately, and the terminal applies the priority. The tab
+shows **one** state for whatever has the keyboard now:
+
+| root | container mark | remote | tab |
+|---|---|---|---|
+| set | any | any | **root** (red) |
+| unset | set | any | **container** (blue) |
+| unset | unset | set | **remote** (purple) |
+| unset | unset | unset | local |
+
+Why the terminal and not the client: Console already ORs facts of its
+own from the local process tree (a local `sudo mosey`, a local
+`toolbox enter`), so it needs this order over the union whatever the
+client sends, and only it can apply it; a second copy in the client
+could not see the local facts and could disagree. Facts also keep the
+container's name in the header while the tab is red, and the host for
+the header if Console wants it.
+
+Upstream Console 50 does not apply this order: it adds a CSS class per
+status bit and its stylesheet's later rules win, playbox over remote
+over root, so the patch that reads these termprops must also make root
+win. For that patch:
+
+1. `vte_install_termprop ("vte.ext.mosey.remote", VTE_PROPERTY_STRING,
+   VTE_PROPERTY_FLAG_NONE)` and `vte_install_termprop
+   ("vte.ext.mosey.root", VTE_PROPERTY_BOOL, VTE_PROPERTY_FLAG_NONE)`,
+   once, before any terminal is made.
+2. On `termprop-changed` for either: `vte.ext.mosey.root` read with
+   `vte_terminal_get_termprop_bool` and true feeds `KGX_PRIVILEGED`; a
+   non-empty `vte.ext.mosey.remote` feeds `KGX_REMOTE`; both alongside
+   the process tree, as the container patch feeds `KGX_PLAYBOX` from
+   `vte.container.name`.
+3. The window takes one class, in the table's order: root, else
+   playbox, else remote.
+4. `mosey` comes off the process-name list of remote programs: the
+   termprop says it, and says nothing for `mosey localhost`.
+
+**Why a printed mark cannot hide root.** Root reaches the terminal only
+as `vte.ext.mosey.root`, which the client writes only from `Root`,
+which only the spawner's measurement sets (§4.8): emu consumes every
+`vte.ext.*` item a program prints (§4.6), and proto refuses an emu grid
+with `Root` set (§7.3). A printed container mark adds only
+`vte.container.*`, below root in the table. So a hostile far side can
+make a tab blue, which is accepted (§4.6), and never take away its red.
+
+**Nested hops.** If the far foreground program is itself `ssh` or
+`mosey`, the keyboard is on yet another machine, and the tab already says
+remote: the client asserts it for the whole session, and a container
+mark above it hides the colour, not the fact, which the terminal still
+holds. So nothing more is built for the first hop. What a nested mosey
+knows (root or a container three hops away) would need a side channel
+from it, and is parked (Dan, 2026-11-16). The one case not covered is
+`mosey localhost` and then `ssh` inside it: the tab stays local.
 
 ## 9. What the client must never do
 
@@ -2020,6 +2195,9 @@ commit message, and for 10 s each in CI (`mise run fuzz-smoke`)
   `file:` URI with `%1B`, an `http:` one), over their bounds, or twice,
   are refused; `FuzzApply` has seeds of both, and `FuzzRoundTrip`'s
   generator sets both.
+- **Root.** ROOT with a byte other than 0 or 1, or twice, is refused and
+  changes nothing; `FuzzApply` has seeds of it, and `FuzzRoundTrip`'s
+  generator sets `Root`.
 
 **`internal/emu`**
 
@@ -2029,7 +2207,16 @@ commit message, and for 10 s each in CI (`mise run fuzz-smoke`)
 - **Container and directory through the emulator**: OSC 666 set, clear
   by prefix and by name, escapes round-tripping through the client's
   writer, and every refusal; OSC 7 accepted, percent-encoded, and
-  refused.
+  refused. A program printing `vte.ext.mosey.root=1` or
+  `vte.ext.mosey.remote=…` changes nothing in the grid: `Root` stays
+  false and no mark is set (§8.8).
+
+**`internal/render`**
+
+- **mosey's marks** (§8.8): a remote host is written on the first frame
+  and not again; none for localhost; `Root` written when it rises and
+  unset when it falls; `Leave` unsets both with the prefix only if one
+  was shown; a printed container mark never touches either.
 
 - **`FuzzEmuRoundTrip`.** Program bytes and resizes up to the clamp go
   into `emu.New`. A snapshot is taken and diffed after each half, and the
@@ -2185,6 +2372,11 @@ agreed first).
     them from tuios' `PrivateOSC` and `WorkingDirectory` callbacks, and
     `render` writes them (§8.4). Owners: screen and handshake (container
     slice).
+18. **`Grid.Root`** and opcode `0x5C` ROOT (§4.8, §5.6), in protocol 2
+    as it stands (Dan, 2026-11-16), leaving `0x5D`–`0x5F` reserved; the
+    spawner's `pty.ForegroundRoot` and IPC `Root` (`server.md` §2.9,
+    §3.3); `render.Renderer.SetRemote` for the client's remote mark
+    (§8.8). Owners: screen, server and render (marks slice).
 
 ## Review notes
 

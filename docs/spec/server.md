@@ -462,6 +462,39 @@ parse is not chosen. One whose `aproto` is another number is not taken by
 attach P-N` and, on stderr, `session NAME speaks attach protocol P; this
 mosey speaks N`.
 
+### 2.9 Root at the far keyboard (`screen.md` §4.8)
+
+The client marks the user's tab as root while the process at the far
+keyboard runs as uid 0 (Dan, 2026-11-16; `screen.md` §8.8). Only the
+spawner can tell: it holds a reference to the pty master and is not
+sandboxed, while proto, which also holds the master, is under Landlock
+deny-all and cannot open `/proc`.
+
+- **The measurement** is `pty.ForegroundRoot(master)`: `TIOCGPGRP` on the
+  master gives the foreground process group, and the `Uid:` line of
+  `/proc/<pgid>/status` the effective uid of its leader [Linux proc(5)];
+  root is that uid being 0. Any failure (no foreground group, the leader
+  gone, `/proc` hidden, a line that does not parse) is "not root". The
+  status file is bounded: at most 4 KiB is read. On anything but Linux
+  it returns `errors.ErrUnsupported`, and the spawner never sends `Root`.
+- **When.** Every `RootPoll` (500 ms) while a client is attached, and at
+  once when one attaches; never while the session is detached, since
+  nobody would be told [derived: the tab is read at a glance, and half a
+  second after `sudo -i` is prompt; each sample is one ioctl and one
+  small file read, microseconds, so two a second cost nothing that
+  matters]. Not on output: only proto sees output, and telling the
+  spawner of each read would be an IPC message per frame to save at
+  most half a second. A `sudo cmd` shorter than the tick may not show,
+  and `sudo` waiting for its password counts as root, since it is the
+  set-uid process at the keyboard.
+- **Sending.** The spawner sends `Root` (§3.3) only when the measurement
+  differs from what it last sent, and proto starts from false, so the
+  first message is always a rise.
+- **Proto** keeps the last value and sets `Grid.Root` on every screen it
+  publishes, as it sets `EchoOff` (`screen.md` §7.2); a `Root` that
+  changes the value publishes at once. A grid from emu with `Root` set is
+  a violation (`screen.md` §7.3).
+
 ---
 
 ## 3. IPC
@@ -511,6 +544,7 @@ mosey speaks N`.
 | 0x04 | AgentConn | spawner → proto | 1 |
 | 0x05 | Resume | spawner → proto | 0 |
 | 0x06 | EmuPaused | spawner → proto | 0 |
+| 0x07 | Root | spawner → proto | 0 |
 | 0x10 | Init | proto → emu | 0 |
 | 0x11 | Output | proto → emu | 0 |
 | 0x12 | Resize | proto → emu | 0 |
@@ -588,6 +622,10 @@ a bug: proto logs it and ends the session with `Exit{Error}`.
 long (§5.2). Length 3. Proto stays "emu down" (§3.6) and tells the
 client the screen is unavailable (§11, item 7); the next `EmuLink` ends
 the pause.
+
+**0x07 Root** (spawner → proto): type, then one byte, 0 (not root) or 1
+(root): the far keyboard's process, as §2.9 measured it. Length 2. Any
+number, at any time after `Start`; any other byte is malformed.
 
 **0x10 Init** (proto → emu). Exactly the first message on each E.
 
@@ -764,8 +802,8 @@ proto, per E:                            emu:
 - proto treats as a **violation** (§5.3): an emu message while Idle, a
   second `Replies`, `Replies` after an `Update` fragment, a diff over
   `screen.MaxDiff`, a diff `Grid.Apply` refuses, a complete diff after
-  which the mirror has a non-zero `EchoOff`, `EchoAck`, `EchoApplied`
-  or `Rebuilt` (fields that are proto's alone, `screen.md` §7.3; the check runs on a
+  which the mirror has a non-zero `EchoOff`, `EchoAck`, `EchoApplied`,
+  `Rebuilt`, `InputConsumed` or `Root` (fields that are proto's alone, `screen.md` §7.3; the check runs on a
   copy, so the mirror is unchanged when it fails), a `Replies` whose
   bytes do not split under §4.1, or any malformed message. Tokens over
   the request's reply allowance (§4.1) are not a violation: they are
@@ -1433,8 +1471,8 @@ is its threads of control and the ordering rules the IPC imposes:
   new size, and that output must reach an emulator already at it
   [derived].
 - **network**: the transport listener and SSP endpoint (their specs).
-- **C reader**: `EmuLink`, `EmuPaused`, `AgentConn` and `ShellExit` from the
-  spawner; EOF ends the session at once.
+- **C reader**: `EmuLink`, `EmuPaused`, `AgentConn`, `ShellExit` and `Root`
+  from the spawner; EOF ends the session at once.
 
 ---
 
@@ -1469,6 +1507,7 @@ is its threads of control and the ordering rules the IPC imposes:
 | `HangupGrace`: SIGHUP, then the teardown | 10 s | spawner | [choice] `bootstrap.md` §9.3 |
 | `TypeWait`: the most a `type` waits for the shell's first output and its tty to stop echoing | 2 s | spawner | [choice] `bootstrap.md` §9.2.3 |
 | `echoPoll`: how often that wait looks at the tty's echo bit | 10 ms | spawner | [choice] `bootstrap.md` §9.2.3 |
+| `RootPoll`: how often the foreground's uid is sampled while a client is attached | 500 ms | spawner | [derived] §2.9 |
 | a resume's hold on the greeting | `handshake.CredentialTTL`, 30 s | spawner | [derived] `bootstrap.md` §9.2 |
 | emu restart backoff | 50 ms, ×2, ≤ 5 s; reset after 60 s alive | spawner | [S4 §3.8] |
 | emu restart budget | 10 per 60 s | spawner | [S4 §3.8] |
