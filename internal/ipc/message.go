@@ -93,13 +93,39 @@ const (
 	typeAttached    = 0x33
 	typeDetached    = 0x34
 	typeFirstOutput = 0x35
-	// 0x40 to 0x4F are the attach protocol, stable across releases
-	// (server.md §2.8); everything else is private to one build.
+	// 0x40 to 0x4F are the attach protocol, open across releases
+	// (server.md §2.8); everything else is private to one build, and
+	// closed.
 	typeClientLine = 0x40
 	typeReady      = 0x41
 	typeFailed     = 0x42
 	typeHangup     = 0x43
+	// attachIgnorable is the attach protocol's critical mark: a type of
+	// 0x48 to 0x4F that this build does not know may be skipped, while
+	// one of 0x40 to 0x47 is refused like any malformed message
+	// (server.md §2.8, versioning.md §3).
+	attachIgnorable = 0x08
 )
+
+// MaxSkipped is how many attach messages of types this build does not know
+// one connection skips before it refuses the next (server.md §2.8)
+// [choice: no exchange needs more].
+const MaxSkipped = 4
+
+// ErrSkipped is Parse's answer to an attach message this build does not
+// know whose type says it may be ignored (server.md §2.8): not malformed,
+// but nothing to act on, and Conn.Recv reads past it.
+var ErrSkipped = errors.New("ipc: an attach message this build does not know, which may be ignored")
+
+// skippable says whether t, from from to to, is an attach message this
+// build does not know that may be ignored: only between a launcher (or
+// lister) and a spawner, the one pair of peers that may be different
+// releases, and only of the ignorable half of the attach range.
+func skippable(from, to Peer, t byte) bool {
+	attach := from == Launcher && to == Spawner || from == Spawner && to == Launcher
+	_, known := routes[t]
+	return attach && !known && t&0xf0 == typeClientLine&0xf0 && t&attachIgnorable != 0
+}
 
 // Message is one IPC message.
 type Message interface {
@@ -477,6 +503,9 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		return nil, malformed("%d bytes is over %d", len(b), MaxMessage)
 	}
 	t := b[0]
+	if skippable(from, to, t) {
+		return nil, ErrSkipped
+	}
 	r, ok := routes[t]
 	if !ok {
 		return nil, malformed("unknown type %#02x", t)

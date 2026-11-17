@@ -255,6 +255,29 @@ func TestAMessageOverMaxMessageIsRefusedNotCut(t *testing.T) {
 	}
 }
 
+// The attach protocol is open (server.md §2.8, versioning.md §3): between
+// a launcher and a spawner a type of 0x48 to 0x4F this build does not
+// know is skipped, one of 0x44 to 0x47 is refused, and neither is
+// skipped between any other peers, whose IPC is closed.
+func TestAnUnknownAttachMessageIsSkippedOnlyWhenItMayBe(t *testing.T) {
+	for typ := byte(0x44); typ <= 0x4f; typ++ {
+		for _, ends := range [][2]Peer{{Launcher, Spawner}, {Spawner, Launcher}} {
+			_, err := Parse(ends[0], ends[1], []byte{typ, 1, 2, 3})
+			if typ >= 0x48 && !errors.Is(err, ErrSkipped) || typ < 0x48 && !errors.Is(err, ErrMalformed) {
+				t.Errorf("%#02x from %s to %s: %v", typ, ends[0], ends[1], err)
+			}
+		}
+		if _, err := Parse(Proto, Spawner, []byte{typ}); !errors.Is(err, ErrMalformed) {
+			t.Errorf("%#02x from proto: %v", typ, err)
+		}
+	}
+	for _, typ := range []byte{0x58, 0x08, 0xc8} {
+		if _, err := Parse(Launcher, Spawner, []byte{typ}); !errors.Is(err, ErrMalformed) {
+			t.Errorf("%#02x is outside the attach range: %v", typ, err)
+		}
+	}
+}
+
 func FuzzParse(f *testing.F) {
 	for _, m := range examples() {
 		b, _ := Marshal(m)
@@ -267,6 +290,14 @@ func FuzzParse(f *testing.F) {
 		for _, from := range peers {
 			for _, to := range peers {
 				m, err := Parse(from, to, b)
+				if errors.Is(err, ErrSkipped) {
+					// Only an unknown, ignorable attach type between a
+					// launcher and a spawner (server.md §2.8).
+					if !skippable(from, to, b[0]) || b[0] < 0x48 || b[0] > 0x4f {
+						t.Fatalf("skipped %x from %s to %s", b, from, to)
+					}
+					continue
+				}
 				if err != nil {
 					if !errors.Is(err, ErrMalformed) {
 						t.Fatalf("refusal not ErrMalformed: %v", err)

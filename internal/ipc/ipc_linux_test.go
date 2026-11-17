@@ -178,6 +178,46 @@ func TestAReaderThatExpectsNoFDsKeepsNone(t *testing.T) {
 	}
 }
 
+// On an attach socket a message of a later release that may be ignored is
+// read past, its fds closed, and the next message is the one Recv returns;
+// at most MaxSkipped of them, then the connection is refused (server.md
+// §2.8). One of a critical type is refused at once.
+func TestRecvReadsPastAnAttachMessageItMayIgnore(t *testing.T) {
+	for _, recvmsg := range []bool{true, false} {
+		l, r, _ := Pair()
+		self, peer := Spawner, Launcher // the spawner reads with recvmsg
+		if !recvmsg {
+			self, peer = Launcher, Spawner
+		}
+		c, _ := NewConn(r, self, peer)
+		next := []byte{typeHangup}
+		if !recvmsg {
+			next = []byte{typeFailed, 'n', 'o'}
+		}
+		for range MaxSkipped {
+			l.Write([]byte{0x4c, 9, 9, 9})
+		}
+		l.Write(next)
+		if m, err := c.Recv(); err != nil || m.typ() != next[0] {
+			t.Errorf("recvmsg %v: %v, %v", recvmsg, m, err)
+		}
+		l.Write([]byte{0x48})
+		if _, err := c.Recv(); !errors.Is(err, ErrMalformed) {
+			t.Errorf("recvmsg %v: one past MaxSkipped: %v", recvmsg, err)
+		}
+		l.Close()
+		c.Close()
+	}
+	l, r, _ := Pair()
+	defer l.Close()
+	c, _ := NewConn(r, Spawner, Launcher)
+	defer c.Close()
+	l.Write([]byte{0x44})
+	if _, err := c.Recv(); !errors.Is(err, ErrMalformed) {
+		t.Errorf("a critical attach type: %v", err)
+	}
+}
+
 func TestAMessageOverMaxMessageOnTheWireIsRefused(t *testing.T) {
 	for _, recvmsg := range []bool{false, true} {
 		l, r, _ := Pair()

@@ -24,6 +24,9 @@ type Conn struct {
 	// (server.md §3.1, "Who reads with what").
 	recvmsg bool
 	buf     []byte
+	// skipped counts the attach messages of unknown, ignorable types
+	// Recv has read past (server.md §2.8).
+	skipped int
 }
 
 // NewConn wraps f, one end of a SOCK_SEQPACKET pair, as self's connection
@@ -131,8 +134,23 @@ func (c *Conn) Send(m Message) error {
 // Recv receives the next message from the peer. io.EOF means the peer has
 // closed its end. A message that fails to parse, comes from the wrong
 // direction, or carries the wrong number of fds is refused with an error
-// wrapping ErrMalformed, and every fd that came with it is closed.
+// wrapping ErrMalformed, and every fd that came with it is closed. An
+// attach message of a type this build does not know, whose type says it
+// may be ignored, is read past, with its fds closed, at most MaxSkipped
+// times on one connection (server.md §2.8).
 func (c *Conn) Recv() (Message, error) {
+	for {
+		m, err := c.recv()
+		if !errors.Is(err, ErrSkipped) {
+			return m, err
+		}
+		if c.skipped++; c.skipped > MaxSkipped {
+			return nil, malformed("more than %d attach messages this build does not know", MaxSkipped)
+		}
+	}
+}
+
+func (c *Conn) recv() (Message, error) {
 	n, fds, err := c.read()
 	if err != nil {
 		return nil, err
