@@ -206,14 +206,14 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	if sent := <-got; !bytes.Equal(sent, want) {
 		t.Errorf("the spawner got %q, not the line as resume:SID", sent)
 	}
-	// A session of attach protocol 1 is passed over by auto: a plain
+	// A session of attach protocol 2 is passed over by auto: a plain
 	// client starts its own (here there is no spawner to start, Self
 	// being empty).
-	aproto.Store(1)
+	aproto.Store(2)
 	out, _, err = run(auto)
 	if e, perr := bootstrap.ParseErrorLine([]byte(out)); err == nil || perr != nil || e.Code != bootstrap.CodeInternal ||
 		!strings.Contains(err.Error(), "starting the spawner") {
-		t.Errorf("a plain client with only an attach-1 session detached: %v, %q; want it to start a session", err, out)
+		t.Errorf("a plain client with only an attach-2 session detached: %v, %q; want it to start a session", err, out)
 	}
 	// Named, by -s or by R3, it is refused with both numbers: its number
 	// on the line, both on stderr.
@@ -223,9 +223,9 @@ func TestTheLauncherResumesThroughTheAttachSocket(t *testing.T) {
 	for name, line := range map[string][]byte{"-s work": byName, "R3's resume": byID} {
 		out, errs, err = run(line)
 		e, perr := bootstrap.ParseErrorLine([]byte(out))
-		if err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "1-2" ||
-			!strings.Contains(errs, "session work speaks attach protocol 1; this mosey speaks 2") {
-			t.Errorf("%s of an attach-1 session: %v, stdout %q, stderr %q", name, err, out, errs)
+		if err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "2-1" ||
+			!strings.Contains(errs, "session work speaks attach protocol 2; this mosey speaks 1") {
+			t.Errorf("%s of an attach-2 session: %v, stdout %q, stderr %q", name, err, out, errs)
 		}
 	}
 	// R3's reconnect of a session that is not there.
@@ -310,7 +310,7 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 		t.Fatal(err)
 	}
 	// s-ef was started with a command, which is listed (§9.4).
-	want := "MOSEY-LIST 1 s-ab detached 1794650100\nMOSEY-LIST 1 s-ef detached 1794650100 Y2xhdWRl\n"
+	want := "MOSEY-LIST 1 name=s-ab since=1794650100 state=detached\nMOSEY-LIST 1 cmd=Y2xhdWRl name=s-ef since=1794650100 state=detached\n"
 	if out.String() != want {
 		t.Errorf("the list is\n%s\nnot\n%s", out.String(), want)
 	}
@@ -346,7 +346,7 @@ func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
 	// attach protocol message: -kill says so with both numbers.
 	elder := [16]byte{0x44}
 	fakeSession(t, base, elder, func(f *os.File) {
-		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 1, SessionID: elder, Name: "elder",
+		f.Write(bootstrap.MarshalSessionLine(bootstrap.SessionLine{AttachProtocol: 2, SessionID: elder, Name: "elder",
 			Started: time.Unix(1794650000, 0), State: bootstrap.SessionDetached, Since: time.Unix(1794650000, 0)}))
 		conn, _ := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
 		if m, err := conn.Recv(); err == nil {
@@ -389,9 +389,9 @@ func TestKillSendsHangupToTheNamedSessionOnly(t *testing.T) {
 	}
 	out.Reset()
 	err := Kill(&out, getenv, "elder")
-	if e, perr := bootstrap.ParseErrorLine(out.Bytes()); err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "1-2" ||
-		!strings.Contains(err.Error(), "session elder speaks attach protocol 1; this mosey speaks 2") {
-		t.Errorf("kill of an attach-1 session: %v, %q", err, out.String())
+	if e, perr := bootstrap.ParseErrorLine(out.Bytes()); err == nil || perr != nil || e.Code != bootstrap.CodeAttach || e.Detail != "2-1" ||
+		!strings.Contains(err.Error(), "session elder speaks attach protocol 2; this mosey speaks 1") {
+		t.Errorf("kill of an attach-2 session: %v, %q", err, out.String())
 	}
 	select {
 	case sid := <-asked:

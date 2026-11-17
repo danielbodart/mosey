@@ -431,7 +431,7 @@ HOME='` + h.home + `' PATH='` + toolsOnly(t, "uname", "mkdir", "mktemp", "cat", 
 case "$1" in
 --serve=install) mkdir -p "$HOME/.local/bin" && cp "$4" "$HOME/.local/bin/mosey";;
 --serve=protocol) echo '` + c.says + `';;
---serve) cat >/dev/null; echo "MOSEY-ERROR 1 internal -";;
+--serve) cat >/dev/null; echo "MOSEY-ERROR 1 !code=internal";;
 esac
 `
 		var stderr bytes.Buffer

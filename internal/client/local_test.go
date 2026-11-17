@@ -136,7 +136,7 @@ func TestALocalServerThatGivesNoLineIsNamed(t *testing.T) {
 // so do the commands they suggest (bootstrap.md §2.2).
 func TestLocalMessagesNameLocalhost(t *testing.T) {
 	dir := t.TempDir()
-	server := localStandIn(t, dir, []byte("MOSEY-LIST 1 quiet-heron detached 1794651234\n"), "0")
+	server := localStandIn(t, dir, []byte("MOSEY-LIST 1 name=quiet-heron since=1794651234 state=detached\n"), "0")
 	var out, errs bytes.Buffer
 	if err := List(context.Background(), ListOptions{SSH: bootstrap.SSH{Destination: "localhost", Server: server}, Stdout: &out, Stderr: &errs}); err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestLocalMessagesNameLocalhost(t *testing.T) {
 		t.Errorf("%v: %q", err, out.String())
 	}
 
-	server = localStandIn(t, dir, []byte("MOSEY-ERROR 1 session -\n"), "1")
+	server = localStandIn(t, dir, []byte("MOSEY-ERROR 1 !code=session\n"), "1")
 	var f *Failure
 	if err := Kill(context.Background(), KillOptions{SSH: bootstrap.SSH{Destination: "localhost", Server: server}, Name: "play", Stdout: &out, Stderr: &errs}); !errors.As(err, &f) || f.Msg != "no session called play on localhost" {
 		t.Errorf("a kill of nothing: %v", err)

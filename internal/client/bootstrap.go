@@ -258,7 +258,7 @@ func (b *spawn) explain(err error, status int) error {
 	case errors.As(err, &remote):
 		return b.refused(remote)
 	case errors.As(err, &ver):
-		// D8 V1: one line version each side, both named (§6.4).
+		// D8 V1: one line number each side, both named (§6.4).
 		return fail(err, "%s's mosey speaks protocol %d; this mosey speaks %d", dest, ver.Got, bootstrap.Version)
 	case errors.Is(err, bootstrap.ErrBadLine):
 		return fail(err, "%s sent a malformed mosey line", dest)
@@ -295,11 +295,6 @@ func (b *spawn) explain(err error, status int) error {
 func (b *spawn) refused(e *bootstrap.RemoteError) error {
 	switch e.Code {
 	case bootstrap.CodeLine:
-		if b.line.Command != "" {
-			// A launcher of this line version from before commands counts
-			// the fields and refuses the one it does not know (§6.2).
-			return fail(e, "%s's mosey could not read this request: it may be older than this one, and unable to run a command", where(b.ssh))
-		}
 		return fail(e, "the server could not read this client's request: a bug, please report it")
 	case bootstrap.CodeVersion:
 		// A line version the server cannot read: there is one each side,
@@ -314,7 +309,10 @@ func (b *spawn) refused(e *bootstrap.RemoteError) error {
 		}
 		return attachRefused(e, session, where(b.ssh))
 	case bootstrap.CodeUnsupported:
-		return fail(e, "the remote mosey can't do %s yet", e.Detail)
+		// A critical field the server does not know, so it started
+		// nothing rather than act without it (versioning.md §3); the
+		// detail is the field's key, a word (§6.4).
+		return fail(e, "%s's mosey can't do %s yet", where(b.ssh), e.Detail)
 	case bootstrap.CodeSession:
 		return fail(e, "no such session on %s", where(b.ssh))
 	case bootstrap.CodeTaken:

@@ -68,7 +68,8 @@ func TestALineOfOursThatDoesNotParseIsNeverSkipped(t *testing.T) {
 		"MOSEY-CONNECT 1 nope\n",
 		"MOSEY-\n",
 		"MOSEY-SOMETHING else\n",
-		"MOSEY-ERROR 1 Bad -\n",
+		"MOSEY-ERROR 1 !code=Bad\n",
+		"MOSEY-ERROR 1 !code=line !later=x\n",
 		"MOSEY-CONNECT" + strings.Repeat(" x", 1100) + "\n",
 		strings.TrimSuffix(string(good), "\n"), // EOF inside the line
 	} {
@@ -80,7 +81,7 @@ func TestALineOfOursThatDoesNotParseIsNeverSkipped(t *testing.T) {
 }
 
 func TestAnErrorLineIsReturnedAsTheServersRefusal(t *testing.T) {
-	_, err := ReadCredential(strings.NewReader("rc noise\nMOSEY-ERROR 2 version -\n"))
+	_, err := ReadCredential(strings.NewReader("rc noise\nMOSEY-ERROR 2 !code=version later=x\n"))
 	var re *RemoteError
 	if !errors.As(err, &re) || re.Code != CodeVersion || re.Proto != 2 || re.Detail != "" {
 		t.Errorf("%v", err)

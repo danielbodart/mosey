@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,27 @@ func line(a bootstrap.Attach, name string) bootstrap.ClientLine {
 func speaking(aproto int, s bootstrap.SessionLine) bootstrap.SessionLine {
 	s.AttachProtocol = aproto
 	return s
+}
+
+// A ClientLine field the launcher does not know is ignored, unless it is
+// marked critical: then the client asked for something this server cannot
+// do, and is told which field rather than given a session that does
+// something else (versioning.md §3, bootstrap.md §6.2).
+func TestALineWithAnUnknownCriticalFieldIsRefusedAsUnsupported(t *testing.T) {
+	good := string(bootstrap.MarshalClientLine(bootstrap.ClientLine{Attach: bootstrap.AttachAuto, Cols: 80, Rows: 24,
+		Public: make([]byte, bootstrap.PublicKeySize)}))
+	with := func(word string) []byte { return []byte(strings.Replace(good, " cols=", " "+word+" cols=", 1)) }
+	if _, err := parseClientLine(with("colour=x")); err != nil {
+		t.Errorf("an unknown field: %v", err)
+	}
+	_, err := parseClientLine(with("!colour=x"))
+	var le *LaunchError
+	if !errors.As(err, &le) || le.Code != bootstrap.CodeUnsupported || le.Detail != "colour" {
+		t.Errorf("an unknown critical field: %v", err)
+	}
+	if _, err := parseClientLine(with("!attach=new")); !errors.As(err, &le) || le.Code != bootstrap.CodeLine {
+		t.Errorf("a repeated attach: %v", err)
+	}
 }
 
 // A plain mosey DEST takes the most recently detached session and never
@@ -154,7 +176,7 @@ func TestNameTakesTheSessionWhateverItRunsAndSaysWhenTheCommandWasNotRun(t *test
 // naming it are refused with its number; and its name is never given to
 // a new session.
 func TestASessionOfAnotherAttachProtocolIsPassedOverOrRefused(t *testing.T) {
-	elder := speaking(1, session("work", 1, bootstrap.SessionDetached, 900))
+	elder := speaking(2, session("work", 1, bootstrap.SessionDetached, 900))
 	ours := session("play", 2, bootstrap.SessionDetached, 100)
 	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{elder, ours}, fixedName); c.start || c.err != nil || c.take != 1 {
 		t.Errorf("a plain client: %+v, not the attachable detached session", c)
@@ -162,15 +184,42 @@ func TestASessionOfAnotherAttachProtocolIsPassedOverOrRefused(t *testing.T) {
 	var taken map[string]bool
 	c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{elder}, func(t map[string]bool) string { taken = t; return "fresh" })
 	if !c.start || c.name != "fresh" || !taken["work"] {
-		t.Errorf("a plain client with only an attach-1 session: %+v, avoiding %v; want a new session, not called work", c, taken)
+		t.Errorf("a plain client with only an attach-2 session: %+v, avoiding %v; want a new session, not called work", c, taken)
 	}
 	byName := choose(line(bootstrap.AttachName, "work"), []bootstrap.SessionLine{elder}, fixedName)
 	byID := choose(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: [16]byte{1}, Holder: [8]byte{7}, HasHolder: true},
 		[]bootstrap.SessionLine{elder}, fixedName)
 	for name, c := range map[string]choice{"-s work": byName, "R3's resume": byID} {
-		if c.err == nil || c.err.Code != bootstrap.CodeAttach || c.err.Detail != "1-2" ||
-			!strings.Contains(c.err.Text, "speaks attach protocol 1; this mosey speaks 2") {
-			t.Errorf("%s of an attach-1 session: %+v", name, c)
+		if c.err == nil || c.err.Code != bootstrap.CodeAttach || c.err.Detail != "2-1" ||
+			!strings.Contains(c.err.Text, "speaks attach protocol 2; this mosey speaks 1") {
+			t.Errorf("%s of an attach-2 session: %+v", name, c)
+		}
+	}
+}
+
+// A session whose greeting has a critical field this launcher does not
+// know (versioning.md §3) is one it cannot judge: a plain mosey HOST
+// passes it over, and -s NAME or R3's resume naming it is refused as
+// unsupported, naming the field; its name is never given to a new one.
+func TestASessionWithAnUnknownCriticalFieldIsPassedOverOrRefused(t *testing.T) {
+	later := session("work", 1, bootstrap.SessionDetached, 900)
+	later.Unknown = "lease"
+	ours := session("play", 2, bootstrap.SessionDetached, 100)
+	if c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{later, ours}, fixedName); c.start || c.err != nil || c.take != 1 {
+		t.Errorf("a plain client: %+v, not the session it can judge", c)
+	}
+	var taken map[string]bool
+	c := choose(line(bootstrap.AttachAuto, ""), []bootstrap.SessionLine{later}, func(t map[string]bool) string { taken = t; return "fresh" })
+	if !c.start || c.name != "fresh" || !taken["work"] {
+		t.Errorf("a plain client with only that session: %+v, avoiding %v", c, taken)
+	}
+	byName := choose(line(bootstrap.AttachName, "work"), []bootstrap.SessionLine{later}, fixedName)
+	byID := choose(bootstrap.ClientLine{Attach: bootstrap.AttachResume, SessionID: [16]byte{1}, Holder: [8]byte{7}, HasHolder: true},
+		[]bootstrap.SessionLine{later}, fixedName)
+	for name, c := range map[string]choice{"-s work": byName, "R3's resume": byID} {
+		if c.err == nil || c.err.Code != bootstrap.CodeUnsupported || c.err.Detail != "lease" ||
+			!strings.Contains(c.err.Text, "session work needs lease") {
+			t.Errorf("%s: %+v", name, c)
 		}
 	}
 }

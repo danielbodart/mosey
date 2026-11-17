@@ -20,9 +20,9 @@ import (
 // A refusal the user can meet says what it means (bootstrap.md §6.4).
 func TestARefusalIsExplained(t *testing.T) {
 	for line, want := range map[string]string{
-		"MOSEY-ERROR 3 version -\n":  "far's mosey speaks protocol 3; this mosey speaks 2",
-		"MOSEY-ERROR 1 session -\n":  "no such session on far",
-		"MOSEY-ERROR 1 internal -\n": "the server failed to start (see above)",
+		"MOSEY-ERROR 3 !code=version\n":  "far's mosey speaks protocol 3; this mosey speaks 1",
+		"MOSEY-ERROR 1 !code=session\n":  "no such session on far",
+		"MOSEY-ERROR 1 !code=internal\n": "the server failed to start (see above)",
 	} {
 		r := &run{dir: t.TempDir()}
 		ssh := fakeSSH(t, r.dir, "hostname far\n", 0)
@@ -75,9 +75,9 @@ func TestTheListIsLaidOutFromLinesThatParse(t *testing.T) {
 	server := filepath.Join(dir, "mosey")
 	script := "#!/bin/sh\n[ \"$1\" = --serve=list ] || exit 9\n" +
 		"printf 'welcome \\033[2J\\n'\n" +
-		"printf 'MOSEY-LIST 1 quiet-heron detached 1794651234\\n'\n" +
-		"printf 'MOSEY-LIST 1 evil\\033[2J attached 1\\n'\n" +
-		"printf 'MOSEY-LIST 1 old-work new 1794650000\\n'\n"
+		"printf 'MOSEY-LIST 1 name=quiet-heron since=1794651234 state=detached\\n'\n" +
+		"printf 'MOSEY-LIST 1 name=evil\\033[2J since=1 state=attached\\n'\n" +
+		"printf 'MOSEY-LIST 1 name=old-work since=1794650000 state=new\\n'\n"
 	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -118,11 +118,11 @@ func TestTheListShowsEachSessionsCommandAndNothingUnprintableOfIt(t *testing.T) 
 	server := filepath.Join(dir, "mosey")
 	cmd := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
 	script := "#!/bin/sh\n[ \"$1\" = --serve=list ] || exit 9\n" +
-		"printf 'MOSEY-LIST 1 shell detached 1794651234\\n'\n" +
-		"printf 'MOSEY-LIST 1 ai attached 1794651234 " + cmd("claude --resume") + "\\n'\n" +
-		"printf 'MOSEY-LIST 1 tricky detached 1794651234 " + cmd("ls\tgnp.exe\u202eyes") + "\\n'\n" +
-		"printf 'MOSEY-LIST 1 long detached 1794651234 " + cmd(strings.Repeat("x", 100)) + "\\n'\n" +
-		"printf 'MOSEY-LIST 1 evil detached 1794651234 " + cmd("a\x1b[2J") + "\\n'\n"
+		"printf 'MOSEY-LIST 1 name=shell since=1794651234 state=detached\\n'\n" +
+		"printf 'MOSEY-LIST 1 cmd=" + cmd("claude --resume") + " name=ai since=1794651234 state=attached\\n'\n" +
+		"printf 'MOSEY-LIST 1 cmd=" + cmd("ls\tgnp.exe\u202eyes") + " name=tricky since=1794651234 state=detached\\n'\n" +
+		"printf 'MOSEY-LIST 1 cmd=" + cmd(strings.Repeat("x", 100)) + " name=long since=1794651234 state=detached\\n'\n" +
+		"printf 'MOSEY-LIST 1 cmd=" + cmd("a\x1b[2J") + " name=evil since=1794651234 state=detached\\n'\n"
 	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestKillRunsServeKillWithTheName(t *testing.T) {
 	dir := t.TempDir()
 	ssh := fakeSSH(t, dir, "hostname far\n", 0)
 	server := filepath.Join(dir, "mosey")
-	script := "#!/bin/sh\n[ \"$1\" = --serve=kill ] || exit 9\n[ \"$2\" = work ] && exit 0\necho 'MOSEY-ERROR 1 session -'\nexit 1\n"
+	script := "#!/bin/sh\n[ \"$1\" = --serve=kill ] || exit 9\n[ \"$2\" = work ] && exit 0\necho 'MOSEY-ERROR 1 !code=session'\nexit 1\n"
 	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestAnAttachRefusalNamesBothProtocolsInTheClientsOwnLine(t *testing.T) {
 	dir := t.TempDir()
 	ssh := fakeSSH(t, dir, "hostname far\n", 0)
 	server := filepath.Join(dir, "mosey")
-	if err := os.WriteFile(server, []byte("#!/bin/sh\necho 'MOSEY-ERROR 2 attach 1-2'\nexit 1\n"), 0o755); err != nil {
+	if err := os.WriteFile(server, []byte("#!/bin/sh\necho 'MOSEY-ERROR 1 !code=attach detail=1-2'\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var out, errs bytes.Buffer
@@ -254,7 +254,7 @@ func TestTheListFindsTheInstalledCopy(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(installed), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\ncase \"$1\" in\n--serve=protocol) echo '" + probeProtocol + "';;\n--serve=list) echo 'MOSEY-LIST 1 abcd detached 1';;\n*) exit 9;;\nesac\n"
+	script := "#!/bin/sh\ncase \"$1\" in\n--serve=protocol) echo '" + probeProtocol + "';;\n--serve=list) echo 'MOSEY-LIST 1 name=abcd since=1 state=detached';;\n*) exit 9;;\nesac\n"
 	if err := os.WriteFile(installed, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}

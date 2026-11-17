@@ -104,11 +104,13 @@ func (l *Launcher) run(ctx context.Context) error {
 	var sessions []bootstrap.SessionLine
 	var conns []liveSession
 	for _, s := range liveSessions(base) {
-		// Every session whose greeting parses, of any attach protocol:
-		// choose passes over the others for auto, and names them for
-		// name:NAME and resume:SID (bootstrap.md §9.2 step 5).
+		// Every session whose greeting parses, of any attach protocol,
+		// and every one whose greeting has a critical field this build
+		// does not know, which ParseSessionLine still names: choose
+		// passes over those for auto, and names them for name:NAME and
+		// resume:SID (bootstrap.md §9.2 step 5).
 		g, err := bootstrap.ParseSessionLine(s.greeting)
-		if err != nil {
+		if err != nil && g.Unknown == "" {
 			s.f.Close()
 			continue
 		}
@@ -216,17 +218,27 @@ func (l *Launcher) start(ctx context.Context, line []byte, cl bootstrap.ClientLi
 
 // attachable says whether this launcher can attach a session whose
 // greeting is g: the one attach protocol each speaks must be the same
-// (D8 V1, bootstrap.md §9.2 step 5, server.md §2.8).
+// (D8 V1, bootstrap.md §9.2 step 5, server.md §2.8), and the greeting
+// must have no critical field this launcher does not know, since such a
+// field restricts or selects in a way it cannot judge (versioning.md §3).
 func attachable(g bootstrap.SessionLine) bool {
-	return g.AttachProtocol == bootstrap.AttachProtocol
+	return g.AttachProtocol == bootstrap.AttachProtocol && g.Unknown == ""
 }
 
 // attachMismatch is the refusal of a session this launcher cannot attach:
 // both numbers on the line, the session's then this launcher's, so the
 // client's own message can name both even where it shows none of the
 // launcher's stderr (R3's reconnect logs it), and both on stderr
-// (bootstrap.md §6.4).
+// (bootstrap.md §6.4). A greeting with a critical field this launcher
+// does not know is refused as unsupported, naming the field.
 func attachMismatch(g bootstrap.SessionLine) *LaunchError {
+	if g.AttachProtocol == bootstrap.AttachProtocol && g.Unknown != "" {
+		return &LaunchError{
+			Code:   bootstrap.CodeUnsupported,
+			Detail: g.Unknown,
+			Text:   fmt.Sprintf("session %s needs %s, which this mosey does not know", g.Name, g.Unknown),
+		}
+	}
 	return &LaunchError{
 		Code:   bootstrap.CodeAttach,
 		Detail: strconv.Itoa(g.AttachProtocol) + "-" + strconv.Itoa(bootstrap.AttachProtocol),
@@ -388,16 +400,23 @@ func readClientLine(ctx context.Context, r io.Reader) ([]byte, error) {
 }
 
 // parseClientLine is what the launcher checks of the client's line before
-// it chooses: that it parses, which checks its line version (bootstrap.md
+// it chooses: that it parses, which checks its line number (bootstrap.md
 // §6.2, §6.4). No software version is on it (D8 V1): any release's client
-// of this line version is served.
+// of this line number is served. A field it does not know is ignored,
+// unless it is critical: then the client asked for something this server
+// cannot do, and is told which field (versioning.md §3).
 func parseClientLine(line []byte) (bootstrap.ClientLine, error) {
 	cl, err := bootstrap.ParseClientLine(line)
 	if err != nil {
 		var ve *bootstrap.VersionError
-		if errors.As(err, &ve) {
+		var ce *bootstrap.CriticalError
+		switch {
+		case errors.As(err, &ve):
 			return cl, &LaunchError{Code: bootstrap.CodeVersion,
 				Text: fmt.Sprintf("the client speaks protocol %d; this mosey speaks %d", ve.Got, bootstrap.Version)}
+		case errors.As(err, &ce):
+			return cl, &LaunchError{Code: bootstrap.CodeUnsupported, Detail: ce.Key,
+				Text: fmt.Sprintf("the client asked for %s, which this mosey does not know", ce.Key)}
 		}
 		return cl, &LaunchError{Code: bootstrap.CodeLine, Text: "the client's line is malformed"}
 	}

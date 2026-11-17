@@ -9,22 +9,20 @@ import (
 
 // The attach socket's greeting (bootstrap.md §9.2.1): the first message a
 // session's spawner sends to whoever connects to it, a launcher resuming
-// the session or a lister. It is not an IPC message. The whole line is
-// stable across releases (D8 V1, server.md §2.8), so a launcher of any
-// later version reads all of it.
+// the session or a lister. It is not an IPC message. It is a line of
+// §6.1's open grammar (D8 V1, server.md §2.8), so a launcher of any later
+// release reads every field it knows and skips the rest.
 const (
 	sessionMagic = "MOSEY-SESSION"
-	// MaxSessionLine bounds a greeting, LF included: at most 1536 bytes
-	// are used, 169 without the optional cmd (§9.2.1). It was 256 before
-	// the cmd, and releases from then pass over a session with one; the
-	// greeting of every other is what it was.
+	// MaxSessionLine bounds a greeting, LF included: at most 1588 bytes
+	// are used (§9.2.1).
 	MaxSessionLine = 2048
-	// AttachProtocol is the one version of the attach protocol
-	// (server.md §2.8) this build speaks. A launcher attaches a session
-	// only if its greeting says the same number (D8 V1); there is no
-	// range. 2 since the ClientLine its 0x40 carries went to version 2
-	// (§9.2.1).
-	AttachProtocol = 2
+	// AttachProtocol is the one number of the attach protocol (server.md
+	// §2.8) this build speaks. A launcher attaches a session only if its
+	// greeting says the same number (D8 V1); there is no range. It names
+	// only the envelope (versioning.md §5). Reset from 2 to 1 by Dan,
+	// 2026-11-17.
+	AttachProtocol = 1
 	// maxAttachProtocol bounds a greeting's aproto (§9.2.1).
 	maxAttachProtocol = 255
 	// maxUnixDigits bounds the time fields: 12 digits reach the year
@@ -80,115 +78,131 @@ type SessionLine struct {
 	Holder    [CredentialIDSize]byte
 	HasHolder bool
 	// Command is the command the session was started with (a cmdtext,
-	// §9.2.3), or "" if it was started without one, the greeting's
-	// optional last field. A plain `mosey HOST [COMMAND]` resumes only a
-	// session whose Command is its own (PLAN D8, option C).
+	// §9.2.3), or "" if it was started without one. A plain `mosey HOST
+	// [COMMAND]` resumes only a session whose Command is its own (PLAN
+	// D8, option C).
 	Command string
+	// Unknown is the key of a critical field this build does not know:
+	// ParseSessionLine sets it beside a *CriticalError. A session with
+	// one is never attached, but can be named (§9.2 step 5). Marshal
+	// ignores it.
+	Unknown string
+}
+
+// sessionSpec is the greeting's fields (§9.2.1): what selects or restricts
+// which session a launcher takes is critical, so a launcher that does not
+// know such a field never takes the session on a guess; the peer and the
+// times only describe.
+var sessionSpec = lineSpec{
+	"cmd": true, "holder": true, "name": true, "peer": false, "sid": true,
+	"since": false, "started": false, "state": true,
 }
 
 // MarshalSessionLine is s as one line, LF included.
 func MarshalSessionLine(s SessionLine) []byte {
-	b := make([]byte, 0, MaxSessionLine)
-	b = append(b, sessionMagic...)
-	b = appendField(b, strconv.Itoa(s.AttachProtocol))
-	b = b64.AppendEncode(append(b, ' '), s.SessionID[:])
-	b = appendField(b, s.Name)
-	b = appendField(b, strconv.FormatInt(s.Started.Unix(), 10))
-	b = appendField(b, s.State.String())
-	b = appendField(b, strconv.FormatInt(s.Since.Unix(), 10))
-	if s.Peer.IsValid() {
-		b = appendField(b, s.Peer.String())
-	} else {
-		b = appendField(b, "-")
+	w := newLine(sessionMagic, s.AttachProtocol, MaxSessionLine)
+	if s.Command != "" {
+		w.addB64("cmd", true, []byte(s.Command))
 	}
 	if s.HasHolder {
-		b = b64.AppendEncode(append(b, ' '), s.Holder[:])
-	} else {
-		b = appendField(b, "-")
+		w.addB64("holder", true, s.Holder[:])
 	}
-	b = appendOptionalText(b, s.Command)
-	return append(b, '\n')
+	w.add("name", true, s.Name)
+	if s.Peer.IsValid() {
+		w.add("peer", false, s.Peer.String())
+	}
+	w.addB64("sid", true, s.SessionID[:])
+	w.add("since", false, strconv.FormatInt(s.Since.Unix(), 10))
+	w.add("started", false, strconv.FormatInt(s.Started.Unix(), 10))
+	w.add("state", true, s.State.String())
+	return w.end()
 }
 
 // ParseSessionLine reads a greeting, LF included, refusing anything not
 // canonical. A launcher reads it from a socket only the user can reach,
 // but it is a parser of another process's bytes, so it is fuzzed like the
-// rest.
+// rest. A greeting with a critical field this build does not know is
+// refused with a *CriticalError, but every known field is still read into
+// the SessionLine returned beside it, with Unknown set, so the launcher
+// can name the session it will not attach (§9.2 step 5).
 func ParseSessionLine(line []byte) (SessionLine, error) {
-	if len(line) > MaxSessionLine {
-		return SessionLine{}, badLine("session line of %d bytes", len(line))
-	}
-	n := 10
-	if hasOptionalField(line, n) {
-		n++
-	}
-	fields, err := splitFields(line, sessionMagic, n)
+	p, err := parseLine(line, MaxSessionLine, sessionMagic, true, sessionSpec)
 	if err != nil {
 		return SessionLine{}, err
 	}
 	var s SessionLine
-	if n == 11 {
-		if s.Command, err = parseText(fields[9], ValidCommand, "command"); err != nil {
+	if s.AttachProtocol, err = parseAttachProtocol(p.number); err != nil {
+		return SessionLine{}, err
+	}
+	if f, ok := p.known["cmd"]; ok {
+		if s.Command, err = parseText(f, ValidCommand, "command"); err != nil {
 			return SessionLine{}, err
 		}
 	}
-	if s.AttachProtocol, err = parseAttachProtocol(fields[1]); err != nil {
-		return SessionLine{}, err
-	}
-	if err := decodeFixed(s.SessionID[:], fields[2], "session id"); err != nil {
-		return SessionLine{}, err
-	}
-	if !ValidSessionName(string(fields[3])) {
-		return SessionLine{}, badLine("session name %q", fields[3])
-	}
-	s.Name = string(fields[3])
-	if s.Started, err = parseUnix(fields[4], "started"); err != nil {
-		return SessionLine{}, err
-	}
-	if s.State, err = parseState(fields[5]); err != nil {
-		return SessionLine{}, err
-	}
-	if s.Since, err = parseUnix(fields[6], "since"); err != nil {
-		return SessionLine{}, err
-	}
-	if h := fields[8]; string(h) != "-" {
+	if f, ok := p.known["holder"]; ok {
 		s.HasHolder = true
-		if err := decodeFixed(s.Holder[:], h, "holder"); err != nil {
+		if err := decodeFixed(s.Holder[:], f, "holder"); err != nil {
 			return SessionLine{}, err
 		}
 	}
-	if p := fields[7]; string(p) != "-" {
-		ap, err := netip.ParseAddrPort(string(p))
+	f, err := p.mandatory("name")
+	if err != nil {
+		return SessionLine{}, err
+	}
+	if !ValidSessionName(string(f)) {
+		return SessionLine{}, badLine("session name %q", f)
+	}
+	s.Name = string(f)
+	if f, ok := p.known["peer"]; ok {
+		ap, err := netip.ParseAddrPort(string(f))
 		if err != nil {
-			return SessionLine{}, badLine("peer %q", p)
+			return SessionLine{}, badLine("peer %q", f)
 		}
 		if a := ap.Addr(); a.Zone() != "" || a.Is4In6() || a.IsUnspecified() || ap.Port() == 0 {
-			return SessionLine{}, badLine("peer %q", p)
+			return SessionLine{}, badLine("peer %q", f)
 		}
 		s.Peer = ap
 	}
-	if !bytes.Equal(MarshalSessionLine(s), line) {
-		return SessionLine{}, badLine("session line is not canonical")
+	if f, err = p.mandatory("sid"); err != nil {
+		return SessionLine{}, err
+	}
+	if err := decodeFixed(s.SessionID[:], f, "session id"); err != nil {
+		return SessionLine{}, err
+	}
+	if f, err = p.mandatory("since"); err != nil {
+		return SessionLine{}, err
+	}
+	if s.Since, err = parseUnix(f, "since"); err != nil {
+		return SessionLine{}, err
+	}
+	if f, err = p.mandatory("started"); err != nil {
+		return SessionLine{}, err
+	}
+	if s.Started, err = parseUnix(f, "started"); err != nil {
+		return SessionLine{}, err
+	}
+	if f, err = p.mandatory("state"); err != nil {
+		return SessionLine{}, err
+	}
+	if s.State, err = parseState(f); err != nil {
+		return SessionLine{}, err
+	}
+	if err := p.canonical(MarshalSessionLine(s), "session"); err != nil {
+		return SessionLine{}, err
+	}
+	if ce, ok := p.unknown.(*CriticalError); ok {
+		s.Unknown = ce.Key
+		return s, ce
 	}
 	return s, nil
 }
 
-// parseAttachProtocol reads an aproto, a decimal 1..maxAttachProtocol
-// with no leading zero (§9.2.1). Any number is read: whether this
+// parseAttachProtocol checks a greeting's number, an aproto of
+// 1..maxAttachProtocol (§9.2.1). Any such number is read: whether this
 // launcher can attach a session of it is the launcher's to decide.
-func parseAttachProtocol(f []byte) (int, error) {
-	if len(f) == 0 || len(f) > 3 || f[0] == '0' {
-		return 0, badLine("attach protocol %q", f)
-	}
-	n := 0
-	for _, c := range f {
-		if c < '0' || c > '9' {
-			return 0, badLine("attach protocol %q", f)
-		}
-		n = n*10 + int(c-'0')
-	}
-	if n > maxAttachProtocol {
-		return 0, badLine("attach protocol %q", f)
+func parseAttachProtocol(n int) (int, error) {
+	if n < 1 || n > maxAttachProtocol {
+		return 0, badLine("attach protocol %d", n)
 	}
 	return n, nil
 }
@@ -227,11 +241,8 @@ func parseUnix(f []byte, what string) (time.Time, error) {
 // the user's terminal but fields of a printable grammar (D9).
 const (
 	listMagic = "MOSEY-LIST"
-	// listVersion is the list line's own version, frozen in position like
-	// every line's.
-	listVersion = 1
-	// MaxListLine bounds a list line, LF included: at most 1435 bytes are
-	// used, 68 without the optional command (§9.4).
+	// MaxListLine bounds a list line, LF included: at most 1460 bytes are
+	// used (§9.4).
 	MaxListLine = 2048
 	// MaxListed is the most list lines the client shows [choice].
 	MaxListed = 1024
@@ -249,16 +260,20 @@ type ListLine struct {
 	Command string
 }
 
+// listSpec is the list line's fields (§9.4): the list is only shown, so
+// nothing in it is critical.
+var listSpec = lineSpec{"cmd": false, "name": false, "since": false, "state": false}
+
 // MarshalListLine is l as one line, LF included.
 func MarshalListLine(l ListLine) []byte {
-	b := make([]byte, 0, MaxListLine)
-	b = append(b, listMagic...)
-	b = appendField(b, strconv.Itoa(listVersion))
-	b = appendField(b, l.Name)
-	b = appendField(b, l.State.String())
-	b = appendField(b, strconv.FormatInt(l.Since.Unix(), 10))
-	b = appendOptionalText(b, l.Command)
-	return append(b, '\n')
+	w := newLine(listMagic, Version, MaxListLine)
+	if l.Command != "" {
+		w.addB64("cmd", false, []byte(l.Command))
+	}
+	w.add("name", false, l.Name)
+	w.add("since", false, strconv.FormatInt(l.Since.Unix(), 10))
+	w.add("state", false, l.State.String())
+	return w.end()
 }
 
 // ParseListLine reads one list line, LF included, refusing anything not
@@ -266,39 +281,41 @@ func MarshalListLine(l ListLine) []byte {
 // is fuzzed; everything it accepts is printable ASCII with no space, but
 // the command, which is a cmdtext.
 func ParseListLine(line []byte) (ListLine, error) {
-	if len(line) > MaxListLine {
-		return ListLine{}, badLine("list line of %d bytes", len(line))
-	}
-	n := 6
-	if hasOptionalField(line, n) {
-		n++
-	}
-	fields, err := splitFields(line, listMagic, n)
+	p, err := parseLine(line, MaxListLine, listMagic, false, listSpec)
 	if err != nil {
 		return ListLine{}, err
 	}
-	var command string
-	if n == 7 {
-		if command, err = parseText(fields[5], ValidCommand, "command"); err != nil {
+	if p.unknown != nil {
+		return ListLine{}, p.unknown
+	}
+	var l ListLine
+	if f, ok := p.known["cmd"]; ok {
+		if l.Command, err = parseText(f, ValidCommand, "command"); err != nil {
 			return ListLine{}, err
 		}
 	}
-	if string(fields[1]) != strconv.Itoa(listVersion) {
-		return ListLine{}, badLine("list line version %q", fields[1])
-	}
-	l := ListLine{Command: command}
-	if !ValidSessionName(string(fields[2])) {
-		return ListLine{}, badLine("session name %q", fields[2])
-	}
-	l.Name = string(fields[2])
-	if l.State, err = parseState(fields[3]); err != nil {
+	f, err := p.mandatory("name")
+	if err != nil {
 		return ListLine{}, err
 	}
-	if l.Since, err = parseUnix(fields[4], "since"); err != nil {
+	if !ValidSessionName(string(f)) {
+		return ListLine{}, badLine("session name %q", f)
+	}
+	l.Name = string(f)
+	if f, err = p.mandatory("state"); err != nil {
 		return ListLine{}, err
 	}
-	if !bytes.Equal(MarshalListLine(l), line) {
-		return ListLine{}, badLine("list line is not canonical")
+	if l.State, err = parseState(f); err != nil {
+		return ListLine{}, err
+	}
+	if f, err = p.mandatory("since"); err != nil {
+		return ListLine{}, err
+	}
+	if l.Since, err = parseUnix(f, "since"); err != nil {
+		return ListLine{}, err
+	}
+	if err := p.canonical(MarshalListLine(l), "list"); err != nil {
+		return ListLine{}, err
 	}
 	return l, nil
 }

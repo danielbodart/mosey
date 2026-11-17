@@ -12,6 +12,42 @@ import (
 	"unicode/utf8"
 )
 
+// fuzzLine checks what every line's fuzz target owes beyond its own
+// fields (versioning.md §7, bootstrap.md §12) for a line parse accepted:
+// that marshalling the value gives the line less its unknown fields; that
+// an unknown field added first, among, or last changes nothing; and that
+// the same field marked critical is refused as a *CriticalError naming it.
+func fuzzLine[T any](t *testing.T, line []byte, max int, tag string, anyNumber bool, spec lineSpec,
+	parse func([]byte) (T, error), marshal func(T) []byte, v T) {
+	t.Helper()
+	p, err := parseLine(line, max, tag, anyNumber, spec)
+	if err != nil {
+		t.Fatalf("accepted %q, which the grammar refuses: %v", line, err)
+	}
+	if !bytes.Equal(marshal(v), p.stripped) {
+		t.Fatalf("accepted %q, which re-marshals to %q", line, marshal(v))
+	}
+	for _, f := range []string{"a=1", "m-later=x", "zzzzzzzzzzzzzzzz=!="} {
+		k := f[:strings.IndexByte(f, '=')]
+		if _, known := spec[k]; known || strings.Contains(string(line), " "+k+"=") || strings.Contains(string(line), " !"+k+"=") {
+			continue
+		}
+		with := addField(string(line), f)
+		if len(with) > max || strings.Count(with, " ")-1 > MaxFields {
+			continue
+		}
+		got, err := parse([]byte(with))
+		if err != nil || !bytes.Equal(marshal(got), marshal(v)) {
+			t.Fatalf("an unknown %s changed %q: %v", f, line, err)
+		}
+		_, err = parse([]byte(addField(string(line), "!"+f)))
+		var ce *CriticalError
+		if !errors.As(err, &ce) || ce.Key != k {
+			t.Fatalf("an unknown !%s in %q was not refused: %v", f, line, err)
+		}
+	}
+}
+
 func FuzzParseClientLine(f *testing.F) {
 	f.Add(MarshalClientLine(sampleClientLine()))
 	r := sampleClientLine()
@@ -31,7 +67,9 @@ func FuzzParseClientLine(f *testing.F) {
 	f.Add(MarshalClientLine(r))
 	r.Attach, r.Name, r.Dir = AttachName, "work", ""
 	f.Add(MarshalClientLine(r))
-	f.Add([]byte("MOSEY-CLIENT 1 dev new no 80 24 - AAAA\n"))
+	f.Add([]byte(addField(string(MarshalClientLine(r)), "later=1")))
+	f.Add([]byte(addField(string(MarshalClientLine(r)), "!later=1")))
+	f.Add([]byte("MOSEY-CLIENT 1 !attach=new cols=80 rows=24 !public=AAAA\n"))
 	f.Add([]byte("MOSEY-CLIENT 2\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		c, err := ParseClientLine(line)
@@ -41,9 +79,7 @@ func FuzzParseClientLine(f *testing.F) {
 			}
 			return
 		}
-		if !bytes.Equal(MarshalClientLine(c), line) {
-			t.Fatalf("accepted %q, which re-marshals differently", line)
-		}
+		fuzzLine(t, line, MaxClientLine, clientMagic, false, clientSpec, ParseClientLine, MarshalClientLine, c)
 		if c.Cols == 0 || c.Rows == 0 || len(c.Public) != PublicKeySize {
 			t.Fatalf("accepted %+v", c)
 		}
@@ -105,6 +141,8 @@ func FuzzParseCredentialLine(f *testing.F) {
 	f.Add(MarshalCredentialLine(l))
 	l.Existing = true
 	f.Add(MarshalCredentialLine(l))
+	f.Add([]byte(addField(string(MarshalCredentialLine(l)), "later=1")))
+	f.Add([]byte(addField(string(MarshalCredentialLine(l)), "!later=1")))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		c, err := ParseCredentialLine(line)
 		if err != nil {
@@ -113,9 +151,7 @@ func FuzzParseCredentialLine(f *testing.F) {
 			}
 			return
 		}
-		if !bytes.Equal(MarshalCredentialLine(c), line) {
-			t.Fatalf("accepted %q, which re-marshals differently", line)
-		}
+		fuzzLine(t, line, MaxCredentialLine, credentialMagic, false, credentialSpec, ParseCredentialLine, MarshalCredentialLine, c)
 		if a := c.Addr; a.IsValid() && (addressRule(a) != "" || a.Zone() != "" || a.Is4In6()) {
 			t.Fatalf("accepted address %s", a)
 		}
@@ -126,9 +162,11 @@ func FuzzParseCredentialLine(f *testing.F) {
 }
 
 func FuzzParseErrorLine(f *testing.F) {
-	f.Add([]byte("MOSEY-ERROR 1 version 0.1.2\n"))
-	f.Add([]byte("MOSEY-ERROR 0 line -\n"))
-	f.Add([]byte("MOSEY-ERROR 99999 abcdefghijklmnop -\n"))
+	f.Add([]byte("MOSEY-ERROR 1 !code=version detail=0.1.2\n"))
+	f.Add([]byte("MOSEY-ERROR 0 !code=line\n"))
+	f.Add([]byte("MOSEY-ERROR 99999 !code=abcdefghijklmnop\n"))
+	f.Add([]byte("MOSEY-ERROR 2 !code=attach detail=2-1 later=x\n"))
+	f.Add([]byte("MOSEY-ERROR 2 !code=attach !later=x\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		e, err := ParseErrorLine(line)
 		if err != nil {
@@ -137,9 +175,10 @@ func FuzzParseErrorLine(f *testing.F) {
 			}
 			return
 		}
-		if !bytes.Equal(MarshalErrorLine(e), line) || len(line) > MaxErrorLine {
+		if len(line) > MaxErrorLine || len(e.Code) < 1 || len(e.Code) > 16 {
 			t.Fatalf("accepted %q", line)
 		}
+		fuzzLine(t, line, MaxErrorLine, errorMagic, true, errorSpec, ParseErrorLine, MarshalErrorLine, e)
 	})
 }
 
@@ -159,9 +198,9 @@ func FuzzReadCredential(f *testing.F) {
 	line := MarshalCredentialLine(sampleCredentialLine())
 	f.Add(line)
 	f.Add(append([]byte("motd\r\nMOSE\nMOSEY\n"), line...))
-	f.Add([]byte("MOSEY-ERROR 2 version -\n"))
+	f.Add([]byte("MOSEY-ERROR 2 !code=version\n"))
 	f.Add(append(bytes.Repeat([]byte("x"), 70000), line...))
-	f.Add([]byte("rc noise\nMOSEY-PROBE 1 Linux x86_64\n"))
+	f.Add([]byte("rc noise\nMOSEY-PROBE 1 machine=x86_64 system=Linux\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		r := &countingReader{r: bytes.NewReader(data)}
 		c, err := ReadCredential(r)
@@ -196,10 +235,11 @@ func FuzzReadCredential(f *testing.F) {
 }
 
 func FuzzParseProbeLine(f *testing.F) {
-	f.Add([]byte("MOSEY-PROBE 1 Linux x86_64\n"))
-	f.Add([]byte("MOSEY-PROBE 1 unknown unknown\n"))
-	f.Add([]byte("MOSEY-PROBE 2 Linux aarch64\n"))
-	f.Add([]byte("MOSEY-PROBE 1 Linux aarch64 none\n"))
+	f.Add([]byte("MOSEY-PROBE 1 machine=x86_64 system=Linux\n"))
+	f.Add([]byte("MOSEY-PROBE 1 machine=unknown system=unknown\n"))
+	f.Add([]byte("MOSEY-PROBE 2 machine=aarch64 system=Linux\n"))
+	f.Add([]byte("MOSEY-PROBE 1 machine=aarch64 os=none system=Linux\n"))
+	f.Add([]byte("MOSEY-PROBE 1 machine=aarch64 !os=none system=Linux\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		p, err := ParseProbeLine(line)
 		if err != nil {
@@ -208,9 +248,10 @@ func FuzzParseProbeLine(f *testing.F) {
 			}
 			return
 		}
-		if !bytes.Equal(MarshalProbeLine(p), line) || len(line) > MaxProbeLine {
+		if len(line) > MaxProbeLine {
 			t.Fatalf("accepted %q", line)
 		}
+		fuzzLine(t, line, MaxProbeLine, probeMagic, false, probeSpec, ParseProbeLine, MarshalProbeLine, p)
 		if len(p.System) < 1 || len(p.System) > 64 || len(p.Machine) < 1 || len(p.Machine) > 64 {
 			t.Fatalf("accepted fields %q %q", p.System, p.Machine)
 		}

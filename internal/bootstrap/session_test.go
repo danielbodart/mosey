@@ -48,18 +48,11 @@ func TestTheLongestSessionLineFitsItsBound(t *testing.T) {
 	s.State = SessionDetached
 	s.Peer = netip.MustParseAddrPort("[ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe]:65535")
 	s.Name = strings.Repeat("n", MaxSessionName)
-	line := MarshalSessionLine(s)
-	if len(line) != 169 || len(line) > MaxSessionLine {
-		t.Fatalf("%d bytes, not the 169 §9.2.1 derives, or over %d", len(line), MaxSessionLine)
-	}
-	if _, err := ParseSessionLine(line); err != nil {
-		t.Fatal(err)
-	}
-	// The optional command adds a space and at most 1366 (§9.2.1).
 	s.Command = strings.Repeat("é", MaxStartText/2)
-	line = MarshalSessionLine(s)
-	if len(line) != 1536 || len(line) > MaxSessionLine {
-		t.Fatalf("%d bytes with a command, not the 1536 §9.2.1 derives, or over %d", len(line), MaxSessionLine)
+	line := MarshalSessionLine(s)
+	// 1588 with a 5-digit number (§9.2.1); 255 is three.
+	if len(line) != 1588-2 || len(line) > MaxSessionLine {
+		t.Fatalf("%d bytes, not the 1586 §9.2.1 derives for aproto 255, or over %d", len(line), MaxSessionLine)
 	}
 	if got, err := ParseSessionLine(line); err != nil || got.Command != s.Command {
 		t.Fatalf("%+v, %v", got, err)
@@ -67,18 +60,17 @@ func TestTheLongestSessionLineFitsItsBound(t *testing.T) {
 }
 
 // A session started with a command says so in its greeting, as an
-// optional last field, so that a plain `mosey HOST COMMAND` can find it
-// again; one started without has the greeting of before commands, byte
-// for byte (§9.2.1).
+// optional critical field, so that a plain `mosey HOST COMMAND` can find
+// it again (§9.2.1).
 func TestAGreetingCarriesTheCommandOnlyWhenTheSessionHasOne(t *testing.T) {
 	s := sampleSessionLine()
 	without := string(MarshalSessionLine(s))
-	if strings.Count(without, " ") != 8 {
-		t.Fatalf("a greeting without a command has %d spaces: %q", strings.Count(without, " "), without)
+	if want := "MOSEY-SESSION 1 !holder=AQIDBAUGBwg !name=quiet-heron peer=[2001:db8::7]:50123 !sid=DzoBAgMAAAAAAAAAAAAAAA since=1794651234 started=1794650000 !state=detached\n"; without != want {
+		t.Fatalf("%q, want %q", without, want)
 	}
 	s.Command = "claude --resume\tü"
 	with := MarshalSessionLine(s)
-	if want := strings.TrimSuffix(without, "\n") + " Y2xhdWRlIC0tcmVzdW1lCcO8\n"; string(with) != want {
+	if want := addField(without, "!cmd=Y2xhdWRlIC0tcmVzdW1lCcO8"); string(with) != want {
 		t.Fatalf("%q, want %q", with, want)
 	}
 	got, err := ParseSessionLine(with)
@@ -89,34 +81,44 @@ func TestAGreetingCarriesTheCommandOnlyWhenTheSessionHasOne(t *testing.T) {
 
 func TestASessionLineThatBreaksARuleIsRefused(t *testing.T) {
 	good := string(MarshalSessionLine(sampleSessionLine()))
+	set := func(key, word string) string { return setField(t, good, key, word) }
 	cases := map[string]string{
 		"no LF":                    strings.TrimSuffix(good, "\n"),
 		"CR":                       strings.Replace(good, "\n", "\r\n", 1),
 		"double space":             strings.Replace(good, " ", "  ", 1),
-		"unknown state":            strings.Replace(good, "detached", "gone", 1),
-		"leading zero":             strings.Replace(good, " 1794650000 ", " 01794650000 ", 1),
-		"13-digit time":            strings.Replace(good, " 1794650000 ", " 1794650000000 ", 1),
-		"zoned peer":               strings.Replace(good, "[2001:db8::7]", "[fe80::1%eth0]", 1),
-		"port 0":                   strings.Replace(good, ":50123", ":0", 1),
-		"mapped peer":              strings.Replace(good, "[2001:db8::7]", "[::ffff:192.0.2.1]", 1),
-		"short session id":         strings.Replace(good, " DzoBAgM", " DzoB", 1),
+		"unknown state":            set("state", "!state=gone"),
+		"leading zero":             set("started", "started=01794650000"),
+		"13-digit time":            set("started", "started=1794650000000"),
+		"zoned peer":               set("peer", "peer=[fe80::1%eth0]:50123"),
+		"port 0":                   set("peer", "peer=[2001:db8::7]:0"),
+		"mapped peer":              set("peer", "peer=[::ffff:192.0.2.1]:50123"),
+		"a dash peer":              set("peer", "peer=-"),
+		"short session id":         set("sid", "!sid=DzoB"),
 		"another magic":            strings.Replace(good, "MOSEY-SESSION", "MOSEY-SESSIONS", 1),
-		"extra field":              strings.Replace(good, "\n", " x\n", 1),
-		"bad name":                 strings.Replace(good, "quiet-heron", "-heron", 1),
-		"short holder":             strings.Replace(good, " AQIDBAUGBwg\n", " AQID\n", 1),
+		"a positional word":        strings.Replace(good, "\n", " x\n", 1),
+		"bad name":                 set("name", "!name=-heron"),
+		"short holder":             set("holder", "!holder=AQID"),
+		"no name":                  set("name", ""),
+		"no sid":                   set("sid", ""),
+		"no state":                 set("state", ""),
+		"no since":                 set("since", ""),
+		"no started":               set("started", ""),
+		"state unmarked":           set("state", "state=detached"),
+		"holder unmarked":          set("holder", "holder=AQIDBAUGBwg"),
+		"peer marked":              set("peer", "!peer=[2001:db8::7]:50123"),
 		"no aproto":                strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION ", 1),
 		"aproto 0":                 strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 0 ", 1),
 		"aproto over 255":          strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 256 ", 1),
 		"aproto zero-led":          strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 01 ", 1),
 		"an attach range":          strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 1-1 ", 1),
-		"a swver as well":          strings.Replace(good, "MOSEY-SESSION 1 ", "MOSEY-SESSION 0.1.2 1 ", 1),
-		"a dash command":           strings.Replace(good, "\n", " -\n", 1),
-		"a command with a newline": strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("a\nb"))+"\n", 1),
-		"a command with an escape": strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("a\x1b[2J"))+"\n", 1),
-		"a command not utf-8":      strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("a\xff"))+"\n", 1),
-		"a command over 1024":      strings.Replace(good, "\n", " "+b64.EncodeToString(bytes.Repeat([]byte("a"), MaxStartText+1))+"\n", 1),
-		"a padded command":         strings.Replace(good, "\n", " YQ==\n", 1),
-		"two commands":             strings.Replace(good, "\n", " YQ YQ\n", 1),
+		"a dash command":           addField(good, "!cmd=-"),
+		"a command with a newline": addField(good, "!cmd="+b64.EncodeToString([]byte("a\nb"))),
+		"a command with an escape": addField(good, "!cmd="+b64.EncodeToString([]byte("a\x1b[2J"))),
+		"a command not utf-8":      addField(good, "!cmd="+b64.EncodeToString([]byte("a\xff"))),
+		"a command over 1024":      addField(good, "!cmd="+b64.EncodeToString(bytes.Repeat([]byte("a"), MaxStartText+1))),
+		"a padded command":         addField(good, "!cmd=YQ=="),
+		"an unmarked command":      addField(good, "cmd=YQ"),
+		"two commands":             addField(addField(good, "!cmd=YQ"), "!cmd=YQ"),
 	}
 	for name, line := range cases {
 		if _, err := ParseSessionLine([]byte(line)); !errors.Is(err, ErrBadLine) {
@@ -134,6 +136,29 @@ func TestAGreetingOfAnotherAttachProtocolStillParses(t *testing.T) {
 	got, err := ParseSessionLine(MarshalSessionLine(s))
 	if err != nil || got.AttachProtocol != 2 || got.Name != s.Name {
 		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// A greeting is open like every line (versioning.md §7): an unknown field
+// changes nothing, and an unknown critical one is refused, but with every
+// known field still read and Unknown set, so the launcher can name the
+// session it will not attach (§9.2 step 5).
+func TestAGreetingWithAnUnknownCriticalFieldIsNamedButRefused(t *testing.T) {
+	s := sampleSessionLine()
+	s.Command = "ls"
+	good := string(MarshalSessionLine(s))
+	same := func(a, b SessionLine) bool { return bytes.Equal(MarshalSessionLine(a), MarshalSessionLine(b)) }
+	for _, f := range unknownFields {
+		got, err := ParseSessionLine([]byte(addField(good, f)))
+		if err != nil || !same(got, s) || got.Unknown != "" {
+			t.Errorf("with %s: %+v, %v", f, got, err)
+		}
+		got, err = ParseSessionLine([]byte(addField(good, "!"+f)))
+		var ce *CriticalError
+		k := f[:strings.IndexByte(f, '=')]
+		if !errors.As(err, &ce) || ce.Key != k || got.Unknown != k || !same(got, s) {
+			t.Errorf("with !%s: %+v, %v", f, got, err)
+		}
 	}
 }
 
@@ -205,10 +230,7 @@ func TestAListLineRoundTripsAndFitsItsBound(t *testing.T) {
 			t.Errorf("%q: %+v, %v", line, got, err)
 		}
 	}
-	if n := len(MarshalListLine(longest)); n != 68 || n > MaxListLine {
-		t.Errorf("the longest list line is %d bytes, §9.4 says 68", n)
-	}
-	if got := string(MarshalListLine(sampleListLine())); got != "MOSEY-LIST 1 quiet-heron detached 1794651234\n" {
+	if got := string(MarshalListLine(sampleListLine())); got != "MOSEY-LIST 1 name=quiet-heron since=1794651234 state=detached\n" {
 		t.Errorf("%q", got)
 	}
 	longest.Command = strings.Repeat("é", MaxStartText/2)
@@ -216,17 +238,17 @@ func TestAListLineRoundTripsAndFitsItsBound(t *testing.T) {
 	if got, err := ParseListLine(line); err != nil || got.Command != longest.Command {
 		t.Errorf("%+v, %v", got, err)
 	}
-	if n := len(line); n != 1435 || n > MaxListLine {
-		t.Errorf("the longest list line with a command is %d bytes, §9.4 says 1435", n)
+	// 1460 with a 5-digit number (§9.4); this one has one digit.
+	if n := len(line); n != 1460-4 || n > MaxListLine {
+		t.Errorf("the longest list line is %d bytes, §9.4 says 1456 for number 1", n)
 	}
 }
 
-// A session's command is listed as an optional last field, and a session
-// without one is listed exactly as before commands (§9.4).
+// A session's command is listed as an optional field (§9.4).
 func TestAListLineCarriesTheCommandOnlyWhenTheSessionHasOne(t *testing.T) {
 	l := sampleListLine()
 	l.Command = "claude"
-	if got := string(MarshalListLine(l)); got != "MOSEY-LIST 1 quiet-heron detached 1794651234 Y2xhdWRl\n" {
+	if got := string(MarshalListLine(l)); got != "MOSEY-LIST 1 cmd=Y2xhdWRl name=quiet-heron since=1794651234 state=detached\n" {
 		t.Errorf("%q", got)
 	}
 	if got, err := ParseListLine(MarshalListLine(l)); err != nil || got != l {
@@ -238,28 +260,30 @@ func TestAListLineCarriesTheCommandOnlyWhenTheSessionHasOne(t *testing.T) {
 // on the terminal is refused (§9.4, D9).
 func TestAListLineThatBreaksARuleIsRefused(t *testing.T) {
 	good := string(MarshalListLine(sampleListLine()))
+	set := func(key, word string) string { return setField(t, good, key, word) }
 	for name, line := range map[string]string{
-		"an escape in the name":    strings.Replace(good, "quiet-heron", "quiet\x1b[2Jheron", 1),
-		"a name over 32":           strings.Replace(good, "quiet-heron", strings.Repeat("q", 33), 1),
-		"a bad state":              strings.Replace(good, "detached", "dead", 1),
+		"an escape in the name":    set("name", "name=quiet\x1b[2Jheron"),
+		"a name over 32":           set("name", "name="+strings.Repeat("q", 33)),
+		"a bad state":              set("state", "state=dead"),
 		"another version":          strings.Replace(good, "MOSEY-LIST 1", "MOSEY-LIST 2", 1),
-		"a bidi control":           strings.Replace(good, "quiet-heron", "quiet\u202eheron", 1),
-		"a version as well":        strings.Replace(good, "\n", " 0.214.20261114\n", 1),
-		"a long line":              strings.TrimSuffix(good, "\n") + strings.Repeat("9", 200) + "\n",
+		"a bidi control":           set("name", "name=quiet‮heron"),
+		"a positional word":        strings.Replace(good, "\n", " 0.214.20261114\n", 1),
+		"a long line":              addField(good, "zz="+strings.Repeat("9", MaxListLine)),
 		"no LF":                    strings.TrimSuffix(good, "\n"),
-		"a leading zero":           strings.Replace(good, " 1794651234\n", " 01794651234\n", 1),
+		"a leading zero":           set("since", "since=01794651234"),
 		"another magic":            strings.Replace(good, "MOSEY-LIST", "MOSEY-LISTS", 1),
-		"a missing field":          strings.Replace(good, " detached", "", 1),
-		"no name":                  strings.Replace(good, "quiet-heron", "-", 1),
-		"no state":                 strings.Replace(good, "detached", "-", 1),
-		"no since":                 strings.Replace(good, " 1794651234\n", " -\n", 1),
-		"a dash command":           strings.Replace(good, "\n", " -\n", 1),
-		"an escape in the command": strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("claude\x1b]0;pwned\x07"))+"\n", 1),
-		"a C1 in the command":      strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("claude\u009b2J"))+"\n", 1),
-		"a newline in the command": strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("a\rb"))+"\n", 1),
-		"a command not utf-8":      strings.Replace(good, "\n", " "+b64.EncodeToString([]byte("\xc0\xaf"))+"\n", 1),
-		"a command over 1024":      strings.Replace(good, "\n", " "+b64.EncodeToString(bytes.Repeat([]byte("a"), MaxStartText+1))+"\n", 1),
-		"a command, not canonical": strings.Replace(good, "\n", " YR\n", 1),
+		"no name":                  set("name", ""),
+		"no state":                 set("state", ""),
+		"no since":                 set("since", ""),
+		"a dash name":              set("name", "name=-"),
+		"a marked name":            set("name", "!name=quiet-heron"),
+		"a dash command":           addField(good, "cmd=-"),
+		"an escape in the command": addField(good, "cmd="+b64.EncodeToString([]byte("claude\x1b]0;pwned\x07"))),
+		"a C1 in the command":      addField(good, "cmd="+b64.EncodeToString([]byte("claude\u009b2J"))),
+		"a newline in the command": addField(good, "cmd="+b64.EncodeToString([]byte("a\rb"))),
+		"a command not utf-8":      addField(good, "cmd="+b64.EncodeToString([]byte("\xc0\xaf"))),
+		"a command over 1024":      addField(good, "cmd="+b64.EncodeToString(bytes.Repeat([]byte("a"), MaxStartText+1))),
+		"a command, not canonical": addField(good, "cmd=YR"),
 	} {
 		if _, err := ParseListLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%s: %q gave %v", name, line, err)
@@ -269,7 +293,8 @@ func TestAListLineThatBreaksARuleIsRefused(t *testing.T) {
 
 func FuzzParseListLine(f *testing.F) {
 	f.Add(MarshalListLine(sampleListLine()))
-	f.Add([]byte("MOSEY-LIST 1 - - - dev\n"))
+	f.Add([]byte("MOSEY-LIST 1 name=a since=1 state=new zz=dev\n"))
+	f.Add([]byte("MOSEY-LIST 1 name=a since=1 state=new !zz=dev\n"))
 	withCommand := sampleListLine()
 	withCommand.Command = "claude --resume\tü"
 	f.Add(MarshalListLine(withCommand))
@@ -281,14 +306,13 @@ func FuzzParseListLine(f *testing.F) {
 			}
 			return
 		}
-		if !bytes.Equal(MarshalListLine(l), line) || len(line) > MaxListLine {
-			t.Fatalf("accepted %q, which re-marshals differently", line)
+		if len(line) > MaxListLine {
+			t.Fatalf("accepted %d bytes", len(line))
 		}
-		for _, field := range []string{l.Name} {
-			for i := 0; i < len(field); i++ {
-				if field[i] <= ' ' || field[i] > '~' {
-					t.Fatalf("accepted a field with byte 0x%02x: %q", field[i], line)
-				}
+		fuzzLine(t, line, MaxListLine, listMagic, false, listSpec, ParseListLine, MarshalListLine, l)
+		for i := 0; i < len(l.Name); i++ {
+			if l.Name[i] <= ' ' || l.Name[i] > '~' {
+				t.Fatalf("accepted a name with byte 0x%02x: %q", l.Name[i], line)
 			}
 		}
 		if !ValidSessionName(l.Name) {
@@ -307,18 +331,33 @@ func FuzzParseSessionLine(f *testing.F) {
 	f.Add(MarshalSessionLine(n))
 	n.Command = "sh -c 'echo $((6*7))'\tü"
 	f.Add(MarshalSessionLine(n))
+	f.Add([]byte(addField(string(MarshalSessionLine(n)), "later=1")))
+	f.Add([]byte(addField(string(MarshalSessionLine(n)), "!later=1")))
 	f.Add([]byte("MOSEY-SESSION 1.2.3 and more\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		s, err := ParseSessionLine(line)
+		var ce *CriticalError
+		if errors.As(err, &ce) {
+			// Refused, but named: every known field read, Unknown its key.
+			if s.Unknown != ce.Key || !ValidSessionName(s.Name) {
+				t.Fatalf("refused %q as %v with %+v", line, err, s)
+			}
+			return
+		}
 		if err != nil {
 			if !errors.Is(err, ErrBadLine) {
 				t.Fatalf("an error that is not ErrBadLine: %v", err)
 			}
 			return
 		}
-		if !bytes.Equal(MarshalSessionLine(s), line) {
-			t.Fatalf("accepted %q, which re-marshals differently", line)
-		}
+		fuzzLine(t, line, MaxSessionLine, sessionMagic, true, sessionSpec,
+			func(b []byte) (SessionLine, error) {
+				s, err := ParseSessionLine(b)
+				if s.Unknown != "" && err == nil {
+					t.Fatalf("Unknown %q set on an accepted line", s.Unknown)
+				}
+				return s, err
+			}, MarshalSessionLine, s)
 		if s.Peer.IsValid() && (s.Peer.Port() == 0 || s.Peer.Addr().Zone() != "" || s.Peer.Addr().Is4In6()) {
 			t.Fatalf("accepted peer %s", s.Peer)
 		}
@@ -339,7 +378,7 @@ func FuzzParseSessionLine(f *testing.F) {
 func TestReadListKeepsOnlyListLinesThatParse(t *testing.T) {
 	good := MarshalListLine(sampleListLine())
 	out := append([]byte("motd\r\nwelcome \x1b[31mred\x1b[0m\n"), good...)
-	out = append(out, "MOSEY-LIST 1 bad\x1bname detached 1 v1\n"...)
+	out = append(out, "MOSEY-LIST 1 name=bad\x1bname since=1 state=detached\n"...)
 	out = append(out, MarshalListLine(ListLine{Name: "other", State: SessionNew, Since: time.Unix(1, 0)})...)
 	rows, dropped := ReadList(out)
 	if len(rows) != 2 || dropped != 1 || rows[0].Name != "quiet-heron" || rows[1].Name != "other" {
@@ -353,8 +392,8 @@ func TestReadListKeepsOnlyListLinesThatParse(t *testing.T) {
 
 func FuzzReadList(f *testing.F) {
 	f.Add(append([]byte("noise\n"), MarshalListLine(sampleListLine())...))
-	f.Add([]byte("MOSEY-LIST 1 a new 1 v\nMOSEY-LIST 1 - - - v"))
-	f.Add([]byte("MOSEY-LIST 1 a new 1 Y2xhdWRl\nMOSEY-LIST 1 b detached 2\n"))
+	f.Add([]byte("MOSEY-LIST 1 name=a since=1 state=new zz=v\nMOSEY-LIST 1 name=- state=- v"))
+	f.Add([]byte("MOSEY-LIST 1 cmd=Y2xhdWRl name=a since=1 state=new\nMOSEY-LIST 1 name=b since=2 state=detached\n"))
 	f.Fuzz(func(t *testing.T, out []byte) {
 		rows, _ := ReadList(out)
 		if len(rows) > MaxListed {
@@ -365,9 +404,6 @@ func FuzzReadList(f *testing.F) {
 				r.Name != "" && !ValidSessionName(r.Name) ||
 				r.Command != "" && !referenceText(r.Command, true) {
 				t.Fatalf("row %+v", r)
-			}
-			if !bytes.Contains(out, MarshalListLine(r)) {
-				t.Fatalf("row %+v is not a line of the input", r)
 			}
 		}
 	})

@@ -274,7 +274,7 @@ func probeCommand(protocol, flag string) string {
 		`if [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "` + protocol + `" ]; then exec "$f" ` + flag + `; fi; p=; fi; ` +
 		`if [ -n "$p" ]; then exec "$f" ` + flag + `; fi; ` +
 		`s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); ` +
-		`echo "` + probeMagic + ` ` + strconv.Itoa(Version) + ` ${s:-unknown} ${a:-unknown}"`)
+		`echo "` + probeMagic + ` ` + strconv.Itoa(Version) + ` machine=${a:-unknown} system=${s:-unknown}"`)
 }
 
 // uploadCommand is §4.7.6's: the binary arrives on stdin, goes to a

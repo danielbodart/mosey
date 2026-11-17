@@ -15,21 +15,23 @@ import (
 // The three lines of bootstrap.md §6. Their sizes are fixed so that every
 // reader can bound what it reads before it knows what it has.
 const (
-	// Version is the bootstrap protocol's version: the second field of
-	// every line, frozen in position forever (§6.1). 2 added the
-	// ClientLine's dir and type (§6.2, §9.2.3).
-	Version = 2
+	// Version is the bootstrap lines' protocol number: the second word of
+	// every line, frozen in position for ever (§6.1). It names only the
+	// lines' envelope, the grammar and each line's mandatory fields: a
+	// field is added without changing it (versioning.md §5). Reset from 2
+	// to 1 by Dan, 2026-11-17.
+	Version = 1
 	// MaxClientLine bounds the stdin line, LF included. The longest legal
-	// line is 5710 bytes (§6.2); this is the next power of two, so the
+	// line is 5756 bytes (§6.2); this is the next power of two, so the
 	// launcher's read bound is fixed and generous.
 	MaxClientLine = 8192
-	// MaxCredentialLine bounds the stdout line, LF included: at most 1806
+	// MaxCredentialLine bounds the stdout line, LF included: at most 1853
 	// bytes are used (§6.3).
 	MaxCredentialLine = 2048
 	// MaxErrorLine bounds an ErrorLine, LF included. It is frozen with the
 	// ErrorLine's grammar, so a client of any version can read any
-	// server's refusal (§6.4).
-	MaxErrorLine = 128
+	// server's refusal (§6.4): 112 bytes are used by its two fields.
+	MaxErrorLine = 256
 	// MaxPreamble bounds the other text a remote shell may print on stdout
 	// before the line (§6.5): far above any motd-like rc noise.
 	MaxPreamble = 64 << 10
@@ -66,9 +68,6 @@ const (
 	attachNewNamed = "new:"
 	attachName     = "name:"
 	attachResume   = "resume:"
-
-	// credentialExisting is the CredentialLine's optional last word (§6.3).
-	credentialExisting = "existing"
 )
 
 // Attach is which session a ClientLine asks for (§6.2, §9.2).
@@ -121,8 +120,8 @@ var EnvNames = []string{
 }
 
 // ClientLine is what the client writes to ssh's stdin (§6.2). Marshal
-// always writes proto = Version. No line carries a software version (D8
-// V1): the line's version is the one thing the two ends must share.
+// always writes the number Version. No line carries a software version
+// (D8 V1): the line's number is the one thing the two ends must share.
 type ClientLine struct {
 	// Attach says which session (§6.2, §9.2); Name is AttachName's, or
 	// AttachNew's when the launcher has chosen it; SessionID is
@@ -141,23 +140,23 @@ type ClientLine struct {
 	// Env holds allow-listed names only (EnvNames); Marshal sorts them.
 	Env map[string]string
 	// Dir and Type are -dir and -type (§9.2.3): where a session this line
-	// creates starts its shell, and what is typed into it. "" is none.
-	// Only a new session uses them; a resume ignores them.
+	// creates starts its shell, and what is typed into it. "" is none, and
+	// no field. Only a new session uses them; a resume ignores them.
 	Dir, Type string
 	// Public is the client's one-shot X-Wing public key (D20).
 	Public []byte
 	// Command is the command after DESTINATION (§2, §9.2.3), run as
 	// SHELL -c Command in place of the interactive shell; "" is none, and
-	// no field at all, so a line without one is the line of before
-	// commands. Only a new session uses it; a resume ignores it.
+	// no field. Only a new session uses it; a resume ignores it.
 	Command string
 }
 
 // CredentialLine is what the server prints on ssh's stdout (§6.3).
-// Marshal always writes proto = Version.
+// Marshal always writes the number Version.
 type CredentialLine struct {
 	// Addr is the server's address as SSH reached it, or the zero Addr for
-	// "-". The client checks it before using it (ChooseAddr).
+	// none, which has no field. The client checks it before using it
+	// (ChooseAddr).
 	Addr         netip.Addr
 	Port         uint16
 	CredentialID [CredentialIDSize]byte
@@ -169,21 +168,20 @@ type CredentialLine struct {
 	Public []byte
 	// Existing says the line took a session that was already running, so
 	// the ClientLine's Command was not run (§6.3, §9.2.3). A launcher sets
-	// it only in answer to a line with a Command, so a client from before
-	// commands never sees the word.
+	// it only in answer to a line with a Command.
 	Existing bool
 }
 
 // ErrorLine is a server's refusal (§6.4). Its grammar is frozen for every
-// version; Detail "" is written "-".
+// number; Detail "" is no field.
 type ErrorLine struct {
 	Proto  int
 	Code   string
 	Detail string
 }
 
-// The codes v1 defines (§6.4). A later server may send others, which a
-// client treats as CodeInternal.
+// The codes defined so far (§6.4). A later server may send others, which
+// a client treats as CodeInternal.
 const (
 	CodeLine = "line"
 	// CodeVersion is a ClientLine of another line version; the
@@ -192,7 +190,10 @@ const (
 	// CodeAttach answers name:NAME or resume:SID naming a session whose
 	// spawner speaks another attach protocol; its detail is that
 	// protocol and the launcher's, "P-N" (§9.2 step 5).
-	CodeAttach      = "attach"
+	CodeAttach = "attach"
+	// CodeUnsupported answers a ClientLine with a critical field this
+	// server does not know (a *CriticalError), or a value of one it does
+	// not yet accept; its detail is the field's key (§6.2, §6.4).
 	CodeUnsupported = "unsupported"
 	CodeSession     = "session"
 	CodeInternal    = "internal"
@@ -221,12 +222,12 @@ var (
 	ErrBadAddr = errors.New("bootstrap: no usable UDP address")
 )
 
-// VersionError is a line whose proto is not Version. errors.Is(err,
+// VersionError is a line whose number is not Version. errors.Is(err,
 // ErrBadLine) holds.
 type VersionError struct{ Got int }
 
 func (e *VersionError) Error() string {
-	return fmt.Sprintf("bootstrap: line is protocol version %d, not %d", e.Got, Version)
+	return fmt.Sprintf("bootstrap: line is protocol %d, not %d", e.Got, Version)
 }
 
 func (e *VersionError) Unwrap() error { return ErrBadLine }
@@ -238,100 +239,119 @@ func badLine(format string, args ...any) error {
 
 var b64 = base64.RawURLEncoding.Strict()
 
-// MarshalClientLine is c as one line, LF included. A ClientLine that would
-// not parse (a bad size, name or key) marshals to a line ParseClientLine
-// refuses: the far side reports it, rather than this end hiding a bug.
+// The ClientLine's fields and their critical marks (§6.2's table). Every
+// field that instructs, selects or authenticates is critical, so a server
+// that does not know it refuses the line rather than start a session
+// that does something else; cols, rows and env only describe the client.
+var clientSpec = lineSpec{
+	"agent": true, "attach": true, "cmd": true, "cols": false, "dir": true,
+	"env": false, "public": true, "rows": false, "type": true,
+}
+
+// MarshalClientLine is c as one line, LF included, its fields in key
+// order. A ClientLine that would not parse (a bad size, name or key)
+// marshals to a line ParseClientLine refuses: the far side reports it,
+// rather than this end hiding a bug.
 func MarshalClientLine(c ClientLine) []byte {
-	b := make([]byte, 0, 2048)
-	b = append(b, clientMagic...)
-	b = appendField(b, strconv.Itoa(Version))
-	b = appendField(b, c.attach())
-	b = appendField(b, yesNo(c.Agent))
-	b = appendField(b, strconv.Itoa(int(c.Cols)))
-	b = appendField(b, strconv.Itoa(int(c.Rows)))
-	b = append(b, ' ')
-	b = appendEnv(b, c.Env)
-	b = appendText(b, c.Dir)
-	b = appendText(b, c.Type)
-	b = appendField(b, b64.EncodeToString(c.Public))
-	b = appendOptionalText(b, c.Command)
-	return append(b, '\n')
-}
-
-// appendOptionalText appends a line's optional last field, a command in
-// base64url (§6.2, §9.2.1, §9.4), or nothing at all for "", so a line
-// without one is byte for byte the line of before commands.
-func appendOptionalText(b []byte, t string) []byte {
-	if t == "" {
-		return b
+	w := newLine(clientMagic, Version, 2048)
+	if c.Agent {
+		w.add("agent", true, "yes")
 	}
-	return b64.AppendEncode(append(b, ' '), []byte(t))
-}
-
-// hasOptionalField says whether line, of a grammar of n-1 fields and an
-// optional last one, has the extra space that field brings. It only picks
-// the shape to parse: every field is still checked, and the whole line
-// re-marshalled, so a line it misjudges is refused, never misread.
-func hasOptionalField(line []byte, n int) bool {
-	return bytes.Count(line, []byte(" ")) == n-1
+	w.add("attach", true, c.attach())
+	if c.Command != "" {
+		w.addB64("cmd", true, []byte(c.Command))
+	}
+	w.add("cols", false, strconv.Itoa(int(c.Cols)))
+	if c.Dir != "" {
+		w.addB64("dir", true, []byte(c.Dir))
+	}
+	if len(c.Env) > 0 {
+		w.b = appendEnv(w.key("env", false), c.Env)
+	}
+	w.addB64("public", true, c.Public)
+	w.add("rows", false, strconv.Itoa(int(c.Rows)))
+	if c.Type != "" {
+		w.addB64("type", true, []byte(c.Type))
+	}
+	return w.end()
 }
 
 // ParseClientLine reads a ClientLine, LF included, refusing anything not
-// canonical (§6.1, §6.2). Its input comes from ssh's stdin, to the
-// unsandboxed spawner, so it is fuzzed.
+// canonical (§6.1, §6.2), and a critical field it does not know as a
+// *CriticalError. Its input comes from ssh's stdin, to the unsandboxed
+// spawner, so it is fuzzed.
 func ParseClientLine(line []byte) (ClientLine, error) {
-	// The command is the one optional field, and last (§6.2): a line
-	// with one has one more space. The count only picks the shape; every
-	// field is still checked, and the whole re-marshalled.
-	n := 11
-	if hasOptionalField(line, n) {
-		n++
-	}
-	fields, err := splitLine(line, MaxClientLine, clientMagic, n)
+	p, err := parseLine(line, MaxClientLine, clientMagic, false, clientSpec)
 	if err != nil {
 		return ClientLine{}, err
 	}
+	if p.unknown != nil {
+		return ClientLine{}, p.unknown
+	}
 	var c ClientLine
-	if err := c.parseAttach(fields[2]); err != nil {
+	f, err := p.mandatory("attach")
+	if err != nil {
 		return ClientLine{}, err
 	}
-	if c.Agent, err = parseYesNo(fields[3], "agent"); err != nil {
+	if err := c.parseAttach(f); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Cols, err = parseSize(fields[4], "cols"); err != nil {
+	if f, ok := p.known["agent"]; ok {
+		if string(f) != "yes" {
+			return ClientLine{}, badLine("agent %q", f)
+		}
+		c.Agent = true
+	}
+	if f, err = p.mandatory("cols"); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Rows, err = parseSize(fields[5], "rows"); err != nil {
+	if c.Cols, err = parseSize(f, "cols"); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Env, err = parseEnv(fields[6]); err != nil {
+	if f, err = p.mandatory("rows"); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Dir, err = parseText(fields[7], ValidDir, "dir"); err != nil {
+	if c.Rows, err = parseSize(f, "rows"); err != nil {
 		return ClientLine{}, err
 	}
-	if c.Type, err = parseText(fields[8], ValidType, "type"); err != nil {
-		return ClientLine{}, err
-	}
-	if c.Public, err = decodeLen(fields[9], PublicKeySize, "public key"); err != nil {
-		return ClientLine{}, err
-	}
-	if n == 12 {
-		if c.Command, err = parseText(fields[10], ValidCommand, "command"); err != nil {
+	if f, ok := p.known["env"]; ok {
+		if c.Env, err = parseEnv(f); err != nil {
 			return ClientLine{}, err
 		}
-		if c.Type != "" {
-			// Both say what to run; typing into a command is not -type's
-			// meaning (§2).
-			return ClientLine{}, badLine("a command and a type")
-		}
 	}
-	// The last field is the empty remainder after the LF, checked by
-	// splitLine. A "-" command parses as none, and so is refused here.
-	if !bytes.Equal(MarshalClientLine(c), line) {
-		return ClientLine{}, badLine("client line is not canonical")
+	if c.Dir, err = optionalText(p, "dir", ValidDir); err != nil {
+		return ClientLine{}, err
+	}
+	if c.Type, err = optionalText(p, "type", ValidType); err != nil {
+		return ClientLine{}, err
+	}
+	if c.Command, err = optionalText(p, "cmd", ValidCommand); err != nil {
+		return ClientLine{}, err
+	}
+	if c.Command != "" && c.Type != "" {
+		// Both say what to run; typing into a command is not -type's
+		// meaning (§2).
+		return ClientLine{}, badLine("a command and a type")
+	}
+	if f, err = p.mandatory("public"); err != nil {
+		return ClientLine{}, err
+	}
+	if c.Public, err = decodeLen(f, PublicKeySize, "public key"); err != nil {
+		return ClientLine{}, err
+	}
+	if err := p.canonical(MarshalClientLine(c), "client"); err != nil {
+		return ClientLine{}, err
 	}
 	return c, nil
+}
+
+// optionalText reads an optional dir, type or command field: absent is "".
+func optionalText(p parsed, key string, valid func(string) bool) (string, error) {
+	f, ok := p.known[key]
+	if !ok {
+		return "", nil
+	}
+	return parseText(f, valid, key)
 }
 
 // attach is the line's attach field (§6.2).
@@ -394,116 +414,143 @@ func (c *ClientLine) parseAttach(f []byte) error {
 	return err
 }
 
+// The CredentialLine's fields and their critical marks (§6.3): what
+// authenticates the handshake and says where to send UDP is critical; the
+// session's name and existing only describe.
+var credentialSpec = lineSpec{
+	"addr": true, "credid": true, "existing": false, "name": false,
+	"port": true, "psk": true, "public": true, "sid": true,
+}
+
 // MarshalCredentialLine is c as one line, LF included.
 func MarshalCredentialLine(c CredentialLine) []byte {
-	b := make([]byte, 0, MaxCredentialLine)
-	b = append(b, credentialMagic...)
-	b = appendField(b, strconv.Itoa(Version))
+	w := newLine(credentialMagic, Version, MaxCredentialLine)
 	if c.Addr.IsValid() {
-		b = appendField(b, c.Addr.String())
-	} else {
-		b = appendField(b, "-")
+		w.add("addr", true, c.Addr.String())
 	}
-	b = appendField(b, strconv.Itoa(int(c.Port)))
-	// Encoded straight into b, never through a string: the PSK must be
-	// in nothing its holder cannot wipe (threat-model.md §4.10).
-	b = b64.AppendEncode(append(b, ' '), c.CredentialID[:])
-	b = b64.AppendEncode(append(b, ' '), c.SessionID[:])
-	b = appendField(b, c.Name)
-	b = b64.AppendEncode(append(b, ' '), c.PSK[:])
-	b = b64.AppendEncode(append(b, ' '), c.Public)
+	w.addB64("credid", true, c.CredentialID[:])
 	if c.Existing {
-		b = appendField(b, credentialExisting)
+		w.add("existing", false, "yes")
 	}
-	return append(b, '\n')
+	w.add("name", false, c.Name)
+	w.add("port", true, strconv.Itoa(int(c.Port)))
+	w.addB64("psk", true, c.PSK[:])
+	w.addB64("public", true, c.Public)
+	w.addB64("sid", true, c.SessionID[:])
+	return w.end()
 }
 
 // ParseCredentialLine reads a CredentialLine, LF included, refusing
-// anything not canonical (§6.1, §6.3), and any address no server could
-// legitimately have been reached on (threat-model §4.9).
+// anything not canonical (§6.1, §6.3), any address no server could
+// legitimately have been reached on (threat-model §4.9), and a critical
+// field it does not know (*CriticalError).
 func ParseCredentialLine(line []byte) (CredentialLine, error) {
-	// existing is the one optional field, and last (§6.3).
-	n := 10
-	if bytes.Count(line, []byte(" ")) == n-1 {
-		n++
-	}
-	fields, err := splitLine(line, MaxCredentialLine, credentialMagic, n)
+	p, err := parseLine(line, MaxCredentialLine, credentialMagic, false, credentialSpec)
 	if err != nil {
 		return CredentialLine{}, err
 	}
+	if p.unknown != nil {
+		return CredentialLine{}, p.unknown
+	}
 	var c CredentialLine
-	if n == 11 {
-		if string(fields[9]) != credentialExisting {
-			return CredentialLine{}, badLine("credential line ends %q", fields[9])
+	// The PSK is wiped from everything this parse made on any failure.
+	fail := func(err error) (CredentialLine, error) {
+		clear(c.PSK[:])
+		return CredentialLine{}, err
+	}
+	if f, ok := p.known["addr"]; ok {
+		if c.Addr, err = parseLineAddr(f); err != nil {
+			return fail(err)
+		}
+	}
+	if f, ok := p.known["existing"]; ok {
+		if string(f) != "yes" {
+			return fail(badLine("existing %q", f))
 		}
 		c.Existing = true
 	}
-	if c.Addr, err = parseLineAddr(fields[2]); err != nil {
-		return CredentialLine{}, err
+	f, err := p.mandatory("port")
+	if err != nil {
+		return fail(err)
 	}
-	if c.Port, err = parseSize(fields[3], "port"); err != nil {
-		return CredentialLine{}, err
+	if c.Port, err = parseSize(f, "port"); err != nil {
+		return fail(err)
 	}
-	if err := decodeFixed(c.CredentialID[:], fields[4], "credential id"); err != nil {
-		return CredentialLine{}, err
+	if f, err = p.mandatory("credid"); err != nil {
+		return fail(err)
 	}
-	if err := decodeFixed(c.SessionID[:], fields[5], "session id"); err != nil {
-		return CredentialLine{}, err
+	if err := decodeFixed(c.CredentialID[:], f, "credential id"); err != nil {
+		return fail(err)
 	}
-	if !ValidSessionName(string(fields[6])) {
-		return CredentialLine{}, badLine("session name %q", fields[6])
+	if f, err = p.mandatory("sid"); err != nil {
+		return fail(err)
 	}
-	c.Name = string(fields[6])
-	if err := decodeFixed(c.PSK[:], fields[7], "psk"); err != nil {
-		return CredentialLine{}, err
+	if err := decodeFixed(c.SessionID[:], f, "session id"); err != nil {
+		return fail(err)
 	}
-	if c.Public, err = decodeLen(fields[8], PublicKeySize, "public key"); err != nil {
-		clear(c.PSK[:])
-		return CredentialLine{}, err
+	if f, err = p.mandatory("name"); err != nil {
+		return fail(err)
+	}
+	if !ValidSessionName(string(f)) {
+		return fail(badLine("session name %q", f))
+	}
+	c.Name = string(f)
+	if f, err = p.mandatory("psk"); err != nil {
+		return fail(err)
+	}
+	if err := decodeFixed(c.PSK[:], f, "psk"); err != nil {
+		return fail(err)
+	}
+	if f, err = p.mandatory("public"); err != nil {
+		return fail(err)
+	}
+	if c.Public, err = decodeLen(f, PublicKeySize, "public key"); err != nil {
+		return fail(err)
 	}
 	canonical := MarshalCredentialLine(c)
 	defer clear(canonical)
-	if !bytes.Equal(canonical, line) {
-		clear(c.PSK[:])
-		return CredentialLine{}, badLine("credential line is not canonical")
+	defer clear(p.stripped)
+	if err := p.canonical(canonical, "credential"); err != nil {
+		return fail(err)
 	}
 	return c, nil
 }
 
+// The ErrorLine's fields (§6.4): the code decides what the client does,
+// the detail only fills in its message.
+var errorSpec = lineSpec{"code": true, "detail": false}
+
+// maxCode bounds an ErrorLine's code: a lower-case word of 1 to 16
+// letters, frozen with the grammar (§6.4).
+const maxCode = 16
+
 // MarshalErrorLine is e as one line, LF included.
 func MarshalErrorLine(e ErrorLine) []byte {
-	b := []byte(errorMagic)
-	b = appendField(b, strconv.Itoa(e.Proto))
-	b = appendField(b, e.Code)
-	if e.Detail == "" {
-		b = appendField(b, "-")
-	} else {
-		b = appendField(b, e.Detail)
+	w := newLine(errorMagic, e.Proto, MaxErrorLine)
+	w.add("code", true, e.Code)
+	if e.Detail != "" {
+		w.add("detail", false, e.Detail)
 	}
-	return append(b, '\n')
+	return w.end()
 }
 
-// ParseErrorLine reads an ErrorLine, LF included. Unlike the other two it
-// accepts any proto: its whole grammar is frozen, so a client of any
+// ParseErrorLine reads an ErrorLine, LF included. Unlike the others it
+// accepts any number: its whole grammar is frozen, so a client of any
 // version can read any server's refusal (§6.4).
 func ParseErrorLine(line []byte) (ErrorLine, error) {
-	if len(line) > MaxErrorLine {
-		return ErrorLine{}, badLine("error line of %d bytes", len(line))
-	}
-	fields, err := splitFields(line, errorMagic, 5)
+	p, err := parseLine(line, MaxErrorLine, errorMagic, true, errorSpec)
 	if err != nil {
 		return ErrorLine{}, err
 	}
-	var e ErrorLine
-	p := fields[1]
-	if len(p) > 5 {
-		return ErrorLine{}, badLine("error line protocol %q", p)
+	if p.unknown != nil {
+		return ErrorLine{}, p.unknown
 	}
-	if e.Proto, err = parseDec(p, "error line protocol"); err != nil {
+	e := ErrorLine{Proto: p.number}
+	code, err := p.mandatory("code")
+	if err != nil {
 		return ErrorLine{}, err
 	}
-	code := fields[2]
-	if len(code) < 1 || len(code) > 16 {
+	if len(code) > maxCode {
 		return ErrorLine{}, badLine("error code %q", code)
 	}
 	for _, c := range code {
@@ -512,103 +559,15 @@ func ParseErrorLine(line []byte) (ErrorLine, error) {
 		}
 	}
 	e.Code = string(code)
-	if d := fields[3]; string(d) != "-" {
+	if d, ok := p.known["detail"]; ok {
 		if e.Detail, err = parseWord(d); err != nil {
 			return ErrorLine{}, err
 		}
 	}
-	if !bytes.Equal(MarshalErrorLine(e), line) {
-		return ErrorLine{}, badLine("error line is not canonical")
+	if err := p.canonical(MarshalErrorLine(e), "error"); err != nil {
+		return ErrorLine{}, err
 	}
 	return e, nil
-}
-
-// splitLine checks the parts every versioned line shares (§6.1) and
-// returns its fields: the magic, the version, the rest, and an empty last
-// field for what follows the LF. The version is checked before anything
-// else is read, so a line from a later protocol is reported as such.
-func splitLine(line []byte, max int, magic string, n int) ([][]byte, error) {
-	// A later version may change everything after the version field, even
-	// the length, so the version is the first thing judged: it is the only
-	// thing an older reader can usefully report.
-	if v, ok := lineVersion(line, magic); ok && v != Version {
-		return nil, &VersionError{Got: v}
-	}
-	if len(line) > max {
-		return nil, badLine("%s line of %d bytes", magic, len(line))
-	}
-	fields, err := splitFields(line, magic, n)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := parseDec(fields[1], "protocol version"); err != nil {
-		return nil, err
-	}
-	return fields, nil
-}
-
-// lineVersion reads just the version field of a line that starts with
-// magic and a space, however the rest looks.
-func lineVersion(line []byte, magic string) (int, bool) {
-	rest, ok := bytes.CutPrefix(line, []byte(magic+" "))
-	if !ok {
-		return 0, false
-	}
-	if i := bytes.IndexAny(rest, " \n"); i >= 0 {
-		rest = rest[:i]
-	}
-	n, err := parseDec(rest, "")
-	return n, err == nil
-}
-
-// splitFields splits a line of printable ASCII fields separated by single
-// spaces and ended by one LF, into exactly n-1 fields plus an empty one
-// for after the LF. Every rule of §6.1 that is about bytes is checked
-// here, so no field holds a space, control or non-ASCII byte.
-func splitFields(line []byte, magic string, n int) ([][]byte, error) {
-	if len(line) == 0 || line[len(line)-1] != '\n' {
-		return nil, badLine("line does not end in LF")
-	}
-	body := line[:len(line)-1]
-	for _, c := range body {
-		if c != ' ' && (c < 0x21 || c > 0x7e) {
-			return nil, badLine("byte 0x%02x in line", c)
-		}
-	}
-	fields := bytes.Split(body, []byte(" "))
-	if len(fields) != n-1 {
-		return nil, badLine("%d fields, want %d", len(fields), n-1)
-	}
-	for _, f := range fields {
-		if len(f) == 0 {
-			return nil, badLine("empty field")
-		}
-	}
-	if string(fields[0]) != magic {
-		return nil, badLine("line starts %q, want %q", fields[0], magic)
-	}
-	return append(fields, nil), nil
-}
-
-func appendField(b []byte, f string) []byte {
-	return append(append(b, ' '), f...)
-}
-
-func yesNo(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
-}
-
-func parseYesNo(f []byte, what string) (bool, error) {
-	switch string(f) {
-	case "yes":
-		return true, nil
-	case "no":
-		return false, nil
-	}
-	return false, badLine("%s %q", what, f)
 }
 
 // parseDec reads a decimal field: "0", or a non-zero digit and digits, no
@@ -723,22 +682,10 @@ func validText(s string, tab bool) bool {
 	return true
 }
 
-// appendText appends a dir or type field: "-" for none, else the text in
-// base64url, since a path or a command holds spaces (§6.2). An invalid
-// text is written as it is encoded, and the parser refuses it.
-func appendText(b []byte, t string) []byte {
-	if t == "" {
-		return appendField(b, "-")
-	}
-	return b64.AppendEncode(append(b, ' '), []byte(t))
-}
-
-// parseText reads a dir, type or command field. The encoded length is bounded
-// before anything is decoded.
+// parseText reads a dir, type or command value: base64url, since a path
+// or a command holds spaces (§6.2). The encoded length is bounded before
+// anything is decoded.
 func parseText(f []byte, valid func(string) bool, what string) (string, error) {
-	if string(f) == "-" {
-		return "", nil
-	}
 	if len(f) > b64.EncodedLen(MaxStartText) {
 		return "", badLine("%s of %d characters", what, len(f))
 	}
@@ -765,9 +712,6 @@ func ValidEnvValue(v string) bool {
 }
 
 func appendEnv(b []byte, env map[string]string) []byte {
-	if len(env) == 0 {
-		return append(b, '-')
-	}
 	names := make([]string, 0, len(env))
 	for name := range env {
 		names = append(names, name)
@@ -783,9 +727,6 @@ func appendEnv(b []byte, env map[string]string) []byte {
 }
 
 func parseEnv(f []byte) (map[string]string, error) {
-	if string(f) == "-" {
-		return nil, nil
-	}
 	env := map[string]string{}
 	last := ""
 	for _, v := range bytes.Split(f, []byte(",")) {
@@ -808,14 +749,11 @@ func parseEnv(f []byte) (map[string]string, error) {
 	return env, nil
 }
 
-// parseLineAddr reads the CredentialLine's addr: "-", or an address in
-// exactly netip.Addr.String's form with no zone and never 4-in-6, that is
-// not one no server can have been reached on (§6.3). The last check is a
-// property of the address alone, so it belongs to the grammar.
+// parseLineAddr reads the CredentialLine's addr: an address in exactly
+// netip.Addr.String's form with no zone and never 4-in-6, that is not one
+// no server can have been reached on (§6.3). The last check is a property
+// of the address alone, so it belongs to the grammar.
 func parseLineAddr(f []byte) (netip.Addr, error) {
-	if string(f) == "-" {
-		return netip.Addr{}, nil
-	}
 	a, err := netip.ParseAddr(string(f))
 	if err != nil || a.Zone() != "" || a.Is4In6() || a.String() != string(f) {
 		return netip.Addr{}, badLine("address %q", f)

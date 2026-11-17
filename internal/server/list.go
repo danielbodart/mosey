@@ -27,8 +27,10 @@ func List(w io.Writer, getenv func(string) string) error {
 		// The lister only reads: closing after the greeting is a lister's
 		// whole exchange, and the spawner does nothing about it.
 		s.f.Close()
+		// A session whose greeting has a critical field this build does
+		// not know is listed too: listing only shows (versioning.md §3).
 		g, err := bootstrap.ParseSessionLine(s.greeting)
-		if err != nil {
+		if err != nil && g.Unknown == "" {
 			continue
 		}
 		rows = append(rows, row{started: g.Started, line: bootstrap.ListLine{
@@ -49,8 +51,8 @@ var ErrNoSuchSession = errors.New("no session of that name")
 
 // Kill is `mosey --serve=kill NAME` (bootstrap.md §9.5): it finds the
 // session called name among those that answer and asks its spawner to
-// hang the shell up. With none, it prints `MOSEY-ERROR 2 session -` on w
-// for the client and returns ErrNoSuchSession.
+// hang the shell up. With none, it prints `MOSEY-ERROR 1 !code=session`
+// on w for the client and returns ErrNoSuchSession.
 func Kill(w io.Writer, getenv func(string) string, name string) error {
 	if !bootstrap.ValidSessionName(name) {
 		return fmt.Errorf("%q is not a session name", printableASCII(name, 64))
@@ -59,13 +61,15 @@ func Kill(w io.Writer, getenv func(string) string, name string) error {
 	var other *bootstrap.SessionLine
 	for _, s := range liveSessions(sessionsDir(getenv)) {
 		g, err := bootstrap.ParseSessionLine(s.greeting)
-		if err != nil || g.Name != name || found != nil {
+		if err != nil && g.Unknown == "" || g.Name != name || found != nil {
 			s.f.Close()
 			continue
 		}
 		if !attachable(g) {
 			// Hangup is an attach protocol message: one of another
-			// protocol cannot be sent it (bootstrap.md §9.2 step 5).
+			// protocol cannot be sent it, nor one whose greeting has a
+			// critical field this build cannot judge (bootstrap.md §9.2
+			// step 5).
 			s.f.Close()
 			other = &g
 			continue

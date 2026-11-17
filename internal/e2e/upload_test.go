@@ -471,7 +471,7 @@ func TestAMoseyOnThePathIsUsedAsItIs(t *testing.T) {
 	t.Run("a mosey on PATH of another protocol fails with both numbers", func(t *testing.T) {
 		// What any later build must answer to a line it cannot read: the
 		// ErrorLine's grammar is frozen (bootstrap.md §6.4).
-		replaceWith(t, onPath, []byte("#!/bin/sh\ncat >/dev/null\necho 'MOSEY-ERROR 3 version -'\nexit 1\n"))
+		replaceWith(t, onPath, []byte("#!/bin/sh\ncat >/dev/null\necho 'MOSEY-ERROR 3 !code=version'\nexit 1\n"))
 		c := startUploadClient(t, s, client, state, "-upload=yes")
 		if status := c.wait(t); status != 1 {
 			t.Errorf("exit %d", status)
