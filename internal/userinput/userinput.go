@@ -38,10 +38,17 @@ const (
 	MaxSize = 65535
 )
 
-// The event kinds of the diff.
+// The event kinds of the diff (ssp.md §10.1). Every event is a kind, a
+// length and a body, so a receiver can step over a kind it does not know;
+// bit 7 of the kind says whether it may (versioning.md §3). Both kinds
+// defined are critical: one is the user's input, the other a size the
+// pty takes.
 const (
 	kindKeys   = 0x01
 	kindResize = 0x02
+	// kindIgnorable marks a kind a receiver that does not know it may
+	// ignore.
+	kindIgnorable = 0x80
 )
 
 // Event is one thing the user did.
@@ -52,14 +59,30 @@ type Event struct {
 	// Resize, if not zero, is the client's new window size, before the
 	// server's clamp (D23).
 	Resize Size
+	// Other is the kind of an event of a later release that this build
+	// does not know, and that its sender marked as one to ignore, and
+	// OtherLen is its body's length. It takes its index in the stream, so
+	// both ends number events alike, and does nothing (ssp.md §10.1).
+	Other    byte
+	OtherLen int
 }
 
-// encodedLen is the event's size in a diff.
-func (e Event) encodedLen() int {
-	if e.Keys != nil {
-		return 1 + uvarintLen(uint64(len(e.Keys))) + len(e.Keys)
+// EncodedLen is the event's size in a diff: its kind, its body's length
+// and its body (ssp.md §10.1), the unit input is kept, pending and
+// consumed in.
+func (e Event) EncodedLen() int {
+	n := e.bodyLen()
+	return 1 + uvarintLen(uint64(n)) + n
+}
+
+func (e Event) bodyLen() int {
+	switch {
+	case e.Keys != nil:
+		return len(e.Keys)
+	case e.Other != 0:
+		return e.OtherLen
 	}
-	return 1 + uvarintLen(uint64(e.Resize.Cols)) + uvarintLen(uint64(e.Resize.Rows))
+	return uvarintLen(uint64(e.Resize.Cols)) + uvarintLen(uint64(e.Resize.Rows))
 }
 
 // Size is a window size in cells.
@@ -123,7 +146,7 @@ func (s *Stream) Resize(size Size) {
 }
 
 func (s *Stream) append(e Event) {
-	n := e.encodedLen()
+	n := e.EncodedLen()
 	s.total += uint64(n)
 	s.kept += n
 	if s.room == nil || s.room.free == 0 || cap(s.entries)-len(s.entries) != s.room.free {
@@ -139,7 +162,7 @@ func (s *Stream) append(e Event) {
 	s.room.free--
 	drop := 0
 	for s.kept > RetainBytes && drop < len(s.entries)-1 {
-		s.kept -= s.entries[drop].encodedLen()
+		s.kept -= s.entries[drop].EncodedLen()
 		drop++
 	}
 	s.entries = s.entries[drop:]
@@ -212,12 +235,21 @@ func (s *Stream) Diff(from *Stream) []byte {
 	b := binary.AppendUvarint(nil, start)
 	b = binary.AppendUvarint(b, uint64(len(entries)))
 	for _, e := range entries {
-		if e.Keys != nil {
+		switch {
+		case e.Keys != nil:
 			b = append(b, kindKeys)
 			b = binary.AppendUvarint(b, uint64(len(e.Keys)))
 			b = append(b, e.Keys...)
-		} else {
+		case e.Other != 0:
+			// Only a stream that received such an event holds one, and
+			// nothing diffs a received stream; written as it came, its
+			// body zeros, so the sizes still agree.
+			b = append(b, e.Other)
+			b = binary.AppendUvarint(b, uint64(e.OtherLen))
+			b = append(b, make([]byte, e.OtherLen)...)
+		default:
 			b = append(b, kindResize)
+			b = binary.AppendUvarint(b, uint64(e.bodyLen()))
 			b = binary.AppendUvarint(b, uint64(e.Resize.Cols))
 			b = binary.AppendUvarint(b, uint64(e.Resize.Rows))
 		}
@@ -248,26 +280,37 @@ func (s *Stream) Apply(diff []byte) error {
 	// make no bigger allocation than its own length does.
 	events := make([]Event, 0, min(n, uint64(len(diff)/3)))
 	for range n {
-		switch r.byte() {
-		case kindKeys:
-			k := r.uvarint()
-			if r.err == nil && (k == 0 || k > MaxKeyEvent) {
-				return fmt.Errorf("userinput: key event of %d bytes is not 1 to %d", k, MaxKeyEvent)
+		kind := r.byte()
+		k := r.uvarint()
+		if r.err == nil && (k == 0 || k > MaxKeyEvent) {
+			return fmt.Errorf("userinput: an event body of %d bytes is not 1 to %d", k, MaxKeyEvent)
+		}
+		body := r.bytes(int(k))
+		if r.err != nil {
+			return r.err
+		}
+		switch {
+		case kind == kindKeys:
+			events = append(events, Event{Keys: body})
+		case kind == kindResize:
+			b := reader{b: body}
+			cols, rows := b.uvarint(), b.uvarint()
+			if b.err == nil && b.off != len(body) {
+				b.err = fmt.Errorf("userinput: a resize body with %d bytes over", len(body)-b.off)
 			}
-			events = append(events, Event{Keys: r.bytes(int(k))})
-		case kindResize:
-			cols, rows := r.uvarint(), r.uvarint()
-			if r.err == nil && (cols == 0 || cols > MaxSize || rows == 0 || rows > MaxSize) {
+			if b.err != nil {
+				return b.err
+			}
+			if cols == 0 || cols > MaxSize || rows == 0 || rows > MaxSize {
 				return fmt.Errorf("userinput: resize to %dx%d is not within 1 to %d", cols, rows, MaxSize)
 			}
 			events = append(events, Event{Resize: Size{int(cols), int(rows)}})
+		case kind&kindIgnorable != 0:
+			// A later release's event, marked as one to ignore: it keeps
+			// its index and does nothing (ssp.md §10.1).
+			events = append(events, Event{Other: kind, OtherLen: int(k)})
 		default:
-			if r.err == nil {
-				return fmt.Errorf("userinput: unknown event kind %#02x", r.b[r.off-1])
-			}
-		}
-		if r.err != nil {
-			return r.err
+			return fmt.Errorf("userinput: unknown critical event kind %#02x", kind)
 		}
 	}
 	if r.off != len(r.b) {

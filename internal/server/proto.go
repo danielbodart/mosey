@@ -1013,7 +1013,7 @@ func (s *Session) writePTY(ctx context.Context) error {
 				}
 				applied++
 				s.wrote(ep, applied)
-				unpublished += encodedLen(ev)
+				unpublished += ev.EncodedLen()
 				// Published once it has moved ConsumedStep, so ordinary
 				// typing never costs a frame of its own (ssp.md §10.1).
 				if unpublished >= userinput.ConsumedStep {
@@ -1120,24 +1120,6 @@ func (s *Session) echoOffChanged(ep *ssp.Endpoint[*screen.Grid, *userinput.Strea
 	if stale {
 		s.publish()
 	}
-}
-
-// encodedLen is an event's size in the stream's diff (ssp.md §10.1), the
-// unit consumption is published in.
-func encodedLen(ev userinput.Event) int {
-	if len(ev.Keys) > 0 {
-		return 1 + uvarintLen(uint64(len(ev.Keys))) + len(ev.Keys)
-	}
-	return 1 + uvarintLen(uint64(ev.Resize.Cols)) + uvarintLen(uint64(ev.Resize.Rows))
-}
-
-func uvarintLen(v uint64) int {
-	n := 1
-	for v >= 0x80 {
-		v >>= 7
-		n++
-	}
-	return n
 }
 
 // resize is the one resize path (server.md §7): clamped, the emulator
