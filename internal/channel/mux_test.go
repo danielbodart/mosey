@@ -332,6 +332,39 @@ func TestFramesForUnknownStreamsAreResetButResetsAreNot(t *testing.T) {
 	})
 }
 
+// A frame of an op a later release defined is dropped, touching nothing,
+// when its op says it may be ignored; with the mark clear it is malformed,
+// and the stream it names is reset (agent.md §5.1, versioning.md §3).
+func TestAFrameOfALaterOpIsDroppedUnlessCritical(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		streams := make(chan *Stream, 1)
+		r := newRawPeer(Client, func(context.Context, uint8) (func(*Stream), error) {
+			return func(s *Stream) { streams <- s }, nil
+		})
+		defer r.stop()
+		r.send(t, Frame{Stream: 1, Op: OpOpen, Type: typeAgent, Window: RecvBuffer})
+		<-streams
+		r.replies(t)
+		if err := r.end.SendChannel([]byte{1, 0, 0, 0, 0x90, 7, 7, 7}); err != nil {
+			t.Fatal(err)
+		}
+		got := r.replies(t)
+		r.m.mu.Lock()
+		ignored, dropped := r.m.ignored, r.m.dropped
+		r.m.mu.Unlock()
+		if len(got) != 0 || r.m.Live() != 1 || ignored != 1 || dropped != 0 {
+			t.Fatalf("an ignorable op: replies %+v, %d live", got, r.m.Live())
+		}
+		if err := r.end.SendChannel([]byte{1, 0, 0, 0, 0x10, 7, 7, 7}); err != nil {
+			t.Fatal(err)
+		}
+		got = r.replies(t)
+		if len(got) != 1 || got[0].Op != OpReset || got[0].Reason != ReasonProtocol || r.m.Live() != 0 {
+			t.Fatalf("a critical op: replies %+v, %d live", got, r.m.Live())
+		}
+	})
+}
+
 // Bytes past the peer's FIN, a second FIN elsewhere, or an ACK of bytes
 // never sent break the stream rules: the stream is reset, as a protocol
 // violation.

@@ -117,8 +117,10 @@ type Mux struct {
 
 	wake chan struct{}
 	done chan struct{}
-	// dropped counts frames that did not parse, for tests and the log.
-	dropped int
+	// dropped counts frames that did not parse, and ignored those of an
+	// op a later release defined that may be ignored, for tests and the
+	// log.
+	dropped, ignored int
 }
 
 // NewMux makes the streams' mux over d. Nothing moves until Run.
@@ -276,6 +278,13 @@ func (m *Mux) receive(body []byte) {
 	defer m.mu.Unlock()
 	defer m.poke()
 	if m.stopped {
+		return
+	}
+	if errors.Is(err, ErrIgnored) {
+		// A later release's op that may be ignored: dropped and counted,
+		// and no stream is touched (agent.md §5.1).
+		m.ignored++
+		m.log.Debug("dropped a channel frame of an op this build does not know", "op", body[4])
 		return
 	}
 	if err != nil {

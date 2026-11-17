@@ -25,7 +25,10 @@ const (
 	maxOffset = 1 << 62
 )
 
-// Op is a frame's operation.
+// Op is a frame's operation. Bit 7 is its critical mark (agent.md §5.1,
+// versioning.md §3): a frame of an op this build does not know is dropped
+// whole when the bit is set, and is malformed when it is clear. Every op
+// defined is critical.
 type Op uint8
 
 const (
@@ -34,6 +37,8 @@ const (
 	OpData   Op = 0x03
 	OpAck    Op = 0x04
 	OpReset  Op = 0x05
+	// opIgnorable marks an op a receiver that does not know it may drop.
+	opIgnorable Op = 0x80
 )
 
 func (o Op) String() string {
@@ -109,9 +114,15 @@ type Frame struct {
 	Reason Reason
 }
 
-// ErrMalformed is ParseFrame's only error: the body is not one this
+// ErrMalformed is ParseFrame's error for a body that is not one this
 // build would have written.
 var ErrMalformed = errors.New("channel: malformed frame")
+
+// ErrIgnored is ParseFrame's answer to a frame of an op this build does
+// not know whose op says it may be ignored (agent.md §5.1): not malformed,
+// but nothing to act on, and the mux drops it without touching the stream
+// it names.
+var ErrIgnored = errors.New("channel: a frame of an op this build does not know, which may be ignored")
 
 // fixedLen is the length of op's fields, from the stream id to the end of
 // the fixed part, or 0 for an unknown op.
@@ -220,6 +231,9 @@ func ParseFrame(b []byte) (Frame, error) {
 	}
 	f := Frame{Stream: binary.LittleEndian.Uint32(b), Op: Op(b[4])}
 	n := fixedLen(f.Op)
+	if n == 0 && f.Op&opIgnorable != 0 {
+		return Frame{}, ErrIgnored
+	}
 	if n == 0 || len(b) < n {
 		return Frame{}, ErrMalformed
 	}

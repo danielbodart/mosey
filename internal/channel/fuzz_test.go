@@ -3,6 +3,7 @@ package channel
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -22,9 +23,22 @@ func FuzzParseFrame(f *testing.F) {
 	} {
 		f.Add(Marshal(fr))
 	}
+	f.Add([]byte{1, 0, 0, 0, 0x80, 9, 9})
+	f.Add([]byte{1, 0, 0, 0, 0x7f, 9, 9})
 	f.Fuzz(func(t *testing.T, b []byte) {
 		fr, err := ParseFrame(b)
+		if errors.Is(err, ErrIgnored) {
+			// Only an op this build does not know, with bit 7 set
+			// (versioning.md §3).
+			if fixedLen(Op(b[4])) != 0 || b[4]&0x80 == 0 {
+				t.Fatalf("ignored % x", b)
+			}
+			return
+		}
 		if err != nil {
+			if !errors.Is(err, ErrMalformed) {
+				t.Fatalf("a refusal that is not ErrMalformed: %v", err)
+			}
 			return
 		}
 		if got := Marshal(fr); !bytes.Equal(got, b) {
