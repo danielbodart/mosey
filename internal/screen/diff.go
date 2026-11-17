@@ -642,7 +642,16 @@ func (e *encoder) here() {
 	e.op(opHere)
 }
 
-// state emits each other field that differs (§5.10 step 5).
+// prop emits one property op (§5.4): its opcode, its body's length and
+// the body.
+func (e *encoder) prop(code byte, body ...byte) {
+	e.out = append(e.out, code)
+	e.out = binary.AppendUvarint(e.out, uint64(len(body)))
+	e.out = append(e.out, body...)
+}
+
+// state emits each other field that differs (§5.10 step 5), as property
+// ops.
 func (e *encoder) state() {
 	from, to := e.from, e.to
 	if to.Cursor.Visible != from.Cursor.Visible || to.Cursor.Shape != from.Cursor.Shape {
@@ -650,12 +659,10 @@ func (e *encoder) state() {
 		if to.Cursor.Visible {
 			b |= 0x80
 		}
-		e.out = append(e.out, opCurStyle, b)
+		e.prop(opCurStyle, b)
 	}
 	if to.Title != from.Title {
-		e.out = append(e.out, opTitle)
-		e.out = binary.AppendUvarint(e.out, uint64(len(to.Title)))
-		e.out = append(e.out, to.Title...)
+		e.prop(opTitle, []byte(to.Title)...)
 	}
 	if to.Modes != from.Modes {
 		m := to.Modes
@@ -665,7 +672,7 @@ func (e *encoder) state() {
 				m0 |= 1 << i
 			}
 		}
-		e.out = append(e.out, opModes, m0, byte(m.Mouse), byte(m.MouseEncoding), m.KittyKeyboard)
+		e.prop(opModes, m0, byte(m.Mouse), byte(m.MouseEncoding), m.KittyKeyboard)
 	}
 	if to.EchoOff != from.EchoOff || to.EchoAck != from.EchoAck || to.EchoApplied != from.EchoApplied {
 		var f byte
@@ -680,47 +687,38 @@ func (e *encoder) state() {
 		if to.EchoApplied > to.EchoAck {
 			ahead = to.EchoApplied - to.EchoAck
 		}
-		e.out = append(e.out, opEcho, f)
-		e.out = binary.AppendUvarint(e.out, to.EchoAck)
-		e.out = binary.AppendUvarint(e.out, ahead)
+		body := binary.AppendUvarint([]byte{f}, to.EchoAck)
+		e.prop(opEcho, binary.AppendUvarint(body, ahead)...)
 	}
 	if to.Bell != from.Bell {
-		e.out = append(e.out, opBell)
-		e.out = binary.AppendUvarint(e.out, to.Bell)
+		e.prop(opBell, binary.AppendUvarint(nil, to.Bell)...)
 	}
 	if to.Clipboard.Seq != from.Clipboard.Seq || !bytes.Equal(to.Clipboard.Data, from.Clipboard.Data) {
-		e.out = append(e.out, opClip)
-		e.out = binary.AppendUvarint(e.out, to.Clipboard.Seq)
-		e.out = binary.AppendUvarint(e.out, uint64(len(to.Clipboard.Data)))
-		e.out = append(e.out, to.Clipboard.Data...)
+		e.prop(opClip, append(binary.AppendUvarint(nil, to.Clipboard.Seq), to.Clipboard.Data...)...)
 	}
 	if to.Rebuilt != from.Rebuilt {
-		e.out = append(e.out, opRebuilt)
-		e.out = binary.AppendUvarint(e.out, to.Rebuilt.Seq)
-		e.out = append(e.out, byte(to.Rebuilt.Reason))
+		e.prop(opRebuilt, append(binary.AppendUvarint(nil, to.Rebuilt.Seq), byte(to.Rebuilt.Reason))...)
 	}
 	if to.InputConsumed != from.InputConsumed {
-		e.out = append(e.out, opConsumed)
-		e.out = binary.AppendUvarint(e.out, to.InputConsumed)
+		e.prop(opConsumed, binary.AppendUvarint(nil, to.InputConsumed)...)
 	}
 	if to.Container != from.Container {
-		e.out = append(e.out, opContainer)
-		for _, v := range []string{to.Container.Name, to.Container.Runtime, to.Container.UID} {
-			e.out = binary.AppendUvarint(e.out, uint64(len(v)))
-			e.out = append(e.out, v...)
+		var body []byte
+		for _, v := range []string{to.Container.Name, to.Container.Runtime} {
+			body = binary.AppendUvarint(body, uint64(len(v)))
+			body = append(body, v...)
 		}
+		e.prop(opContainer, append(body, to.Container.UID...)...)
 	}
 	if to.Cwd != from.Cwd {
-		e.out = append(e.out, opCwd)
-		e.out = binary.AppendUvarint(e.out, uint64(len(to.Cwd)))
-		e.out = append(e.out, to.Cwd...)
+		e.prop(opCwd, []byte(to.Cwd)...)
 	}
 	if to.Root != from.Root {
 		b := byte(0)
 		if to.Root {
 			b = 1
 		}
-		e.out = append(e.out, opRoot, b)
+		e.prop(opRoot, b)
 	}
 }
 

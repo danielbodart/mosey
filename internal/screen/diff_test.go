@@ -126,7 +126,7 @@ func TestTheFirstFrameFromVersionZero(t *testing.T) {
 	to := base80x24()
 	ascii(to, 0, 0, "$", screen.Style{})
 	to.Cursor.X = 2
-	if d := roundTrip(t, screen.NewGrid(0, 0), to); !bytes.Equal(d, unhex(t, "41 50 18 00 24 50 02 00 52 80")) {
+	if d := roundTrip(t, screen.NewGrid(0, 0), to); !bytes.Equal(d, unhex(t, "41 50 18 00 24 50 02 00 E0 01 80")) {
 		t.Fatalf("got % x", d)
 	}
 }
@@ -180,14 +180,21 @@ func examples(t testing.TB) [][]byte {
 	return [][]byte{
 		unhex(t, "80 6C"), unhex(t, "45 05 51 48 01"),
 		unhex(t, "43 01 45 00 4C 09 01 02 01 00 24 50 02 17"),
-		unhex(t, "44 00 00 51 49"), unhex(t, "41 50 18 00 24 50 02 00 52 80"),
+		unhex(t, "44 00 00 51 49"), unhex(t, "41 50 18 00 24 50 02 00 E0 01 80"),
 		unhex(t, "06 02 E6 BC A2 E5 AD 97"), unhex(t, "03 05 65 CC 81"),
 		append(link, unhex(t, "4C 10 01 03 64 6F 63 73 4C 10 00")...),
-		cat([]byte{0x5a, 3}, []byte("box"), []byte{5}, []byte("flong"), []byte{4}, []byte("1000"), []byte{0x5b, 13}, []byte("file://h/home")),
+		cat([]byte{0xe5, 14, 3}, []byte("box"), []byte{5}, []byte("flong"), []byte("1000"), []byte{0xe6, 13}, []byte("file://h/home")),
 	}
 }
 
 func uv(v uint64) []byte { return binary.AppendUvarint(nil, v) }
+
+// prop is a property op (screen.md §5.4): the opcode, its body's length
+// as a varint, and the body.
+func prop(code byte, body ...[]byte) []byte {
+	b := cat(body...)
+	return cat([]byte{code}, uv(uint64(len(b))), b)
+}
 
 func cat(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
 
@@ -216,90 +223,103 @@ func refused(t *testing.T, name string, d []byte) {
 func TestEachRuleOfTheFormatRefusesWhatBreaksIt(t *testing.T) {
 	max64 := ^uint64(0)
 	for name, d := range map[string][]byte{
-		"SIZE 0 cols":                         {0x41, 0, 5},
-		"SIZE past MaxCols":                   cat([]byte{0x41}, uv(screen.MaxCols+1), uv(5)),
-		"SIZE past MaxRows":                   cat([]byte{0x41}, uv(5), uv(screen.MaxRows+1)),
-		"SIZE not first":                      {0x00, 0x41, 0x41, 10, 10},
-		"ROWS after a cell op":                {0x00, 0x41, 0x42, 0, 0, 1},
-		"ROWS overlapping":                    {0x42, 0, 0, 3, 0x42, 2, 5, 1},
-		"ROWS source past the base":           {0x42, 0, 24, 1},
-		"ROWS n 0":                            {0x42, 0, 0, 0},
-		"SCROLL whole screen":                 {0x43, 24},
-		"SCROLL 0":                            {0x43, 0},
-		"wide in the last column":             {0x45, 79, 0x01, 0x02, 0xe6, 0xbc, 0xa2},
-		"COPY cutting a wide char":            {0x44, 2, 0, 0x4b, 1, 10, 1},
-		"REPEAT before any TEXT":              {0x4a, 1},
-		"a link index past the table":         {0x4c, 0x10, 1},
-		"a non-minimal varint":                {0x45, 0x85, 0x00},
-		"CURSOR then TEXT+HERE":               {0x50, 1, 1, 0x80, 'a'},
-		"HERE twice":                          {0x51, 0x51},
-		"TITLE twice":                         {0x53, 0, 0x53, 0},
-		"the budget through ERASE 0":          cat(bytes.Repeat([]byte{0x44, 0, 0, 0x48, 0}, 2*24+1)),
-		"a stream ending inside a code point": {0x01, 0xe6, 0xbc},
-		"a stream ending inside a cluster":    {0x05, 0x04, 'e', 0xcc},
-		"a cluster length byte missing":       {0x00, 0x03},
-		"a cluster of one byte":               {0x02, 0x03, 0x01, 'a'},
-		"a control in a cluster":              {0x03, 0x04, 'a', 0x1b},
-		"C1 as a code point":                  {0x01, 0xc2, 0x9b},
-		"bidi override in a cell":             {0x02, 0xe2, 0x80, 0xae},
-		"stream byte 0x00":                    {0x00, 0x00},
-		"stream byte 0x7f":                    {0x00, 0x7f},
-		"stream byte 0xff":                    {0x00, 0xff},
-		"TEXT long of 0":                      {0x40, 0x00},
-		"TEXT longer than the diff":           {0x05, 'a'},
-		"unknown opcode 0x4e":                 {0x4e},
-		"reserved scrollback opcode":          {0x60},
-		"reserved 0xc0":                       {0xc0},
-		"TITLE with C1":                       cat([]byte{0x53}, uv(4), []byte("a\u009bb")),
-		"TITLE with bidi":                     cat([]byte{0x53}, uv(4), []byte("a‮b")),
-		"TITLE over MaxTitle":                 cat([]byte{0x53}, uv(screen.MaxTitle+1), bytes.Repeat([]byte("a"), screen.MaxTitle+1)),
-		"LINK javascript":                     cat([]byte{0x4d}, uv(13), []byte("javascript:x1")),
-		"LINK file":                           cat([]byte{0x4d}, uv(8), []byte("file:///")),
-		"LINK over MaxLink":                   cat([]byte{0x4d}, uv(screen.MaxLink+1), []byte("https:"), bytes.Repeat([]byte("x"), screen.MaxLink-5)),
-		"CLIP over MaxClipboard":              cat([]byte{0x57, 1}, uv(screen.MaxClipboard+1), make([]byte, screen.MaxClipboard+1)),
-		"CURSTYLE shape 7":                    {0x52, 0x07},
-		"CURSTYLE reserved bits":              {0x52, 0x08},
-		"MODES reserved bits":                 {0x54, 0x20, 0, 0, 0},
-		"MODES mouse 4":                       {0x54, 0, 4, 0, 0},
-		"MODES kitty 32":                      {0x54, 0, 0, 0, 32},
-		"ECHO reserved bits":                  {0x55, 0x02, 0, 0},
-		"ECHO without ahead":                  {0x55, 0x00, 0},
-		"ECHO applied past uint64":            cat([]byte{0x55, 0x00}, uv(^uint64(0)), uv(1)),
-		"REBUILT reason 4":                    {0x58, 1, 4},
-		"CONSUMED twice":                      {0x59, 1, 0x59, 2},
-		"reserved state opcode 0x5c":          {0x5c},
-		"CONTAINER name with C1":              cat([]byte{0x5a}, uv(4), []byte("a\u009cb"), []byte{0, 0}),
-		"CONTAINER name with a newline":       cat([]byte{0x5a}, uv(3), []byte("a\nb"), []byte{0, 0}),
-		"CONTAINER runtime with bidi":         cat([]byte{0x5a, 0}, uv(5), []byte("a\u202eb"), []byte{0}),
-		"CONTAINER name over the bound":       cat([]byte{0x5a}, uv(screen.MaxContainerValue+1), bytes.Repeat([]byte("a"), screen.MaxContainerValue+1), []byte{0, 0}),
-		"CONTAINER uid with a leading zero":   cat([]byte{0x5a, 0, 0}, uv(2), []byte("01")),
-		"CONTAINER uid past 2^32 - 1":         cat([]byte{0x5a, 0, 0}, uv(10), []byte("4294967296")),
-		"CONTAINER uid over 10 bytes":         cat([]byte{0x5a, 0, 0}, uv(11), []byte("10000000000")),
-		"CONTAINER truncated":                 {0x5a, 0, 0},
-		"CONTAINER twice":                     {0x5a, 0, 0, 0, 0x5a, 0, 0, 0},
-		"CWD http":                            cat([]byte{0x5b}, uv(9), []byte("http://h/")),
-		"CWD with an encoded ESC":             cat([]byte{0x5b}, uv(12), []byte("file://h/%1B")),
-		"CWD with a space":                    cat([]byte{0x5b}, uv(11), []byte("file://h/ a")),
-		"CWD over MaxCwd":                     cat([]byte{0x5b}, uv(screen.MaxCwd+1), []byte("file://h/"), bytes.Repeat([]byte("x"), screen.MaxCwd-8)),
-		"CWD twice":                           {0x5b, 0, 0x5b, 0},
-		"ROOT 2":                              {0x5c, 2},
-		"ROOT 0xff":                           {0x5c, 0xff},
-		"ROOT truncated":                      {0x5c},
-		"ROOT twice":                          {0x5c, 1, 0x5c, 1},
-		"PEN no flags":                        {0x4c, 0x00},
-		"PEN reserved flag":                   {0x4c, 0x40},
-		"PEN colour kind 3":                   {0x4c, 0x01, 0x03},
-		"PEN attrs above 9":                   cat([]byte{0x4c, 0x08}, uv(1<<10)),
-		"PEN two underlines":                  cat([]byte{0x4c, 0x08}, uv(uint64(screen.Underlined|screen.CurlyUnderline))),
-		"CURSOR outside":                      {0x50, 80, 0},
-		"POS outside":                         {0x44, 24, 0},
-		"NEXT past the last row":              {0x44, 23, 0, 0x46},
-		"SKIP 0":                              {0x47, 0},
-		"SKIP past the edge":                  {0x45, 70, 0x47, 11},
-		"HERE past the edge":                  {0x45, 79, 0x00, 'a', 0x51},
-		"truncated colour":                    {0x4c, 0x01, 0x02, 1, 2},
-		"truncated MODES":                     {0x54, 0, 0},
-		"a varint of eleven bytes":            cat([]byte{0x45}, bytes.Repeat([]byte{0x80}, 10), []byte{1}),
+		"SIZE 0 cols":                             {0x41, 0, 5},
+		"SIZE past MaxCols":                       cat([]byte{0x41}, uv(screen.MaxCols+1), uv(5)),
+		"SIZE past MaxRows":                       cat([]byte{0x41}, uv(5), uv(screen.MaxRows+1)),
+		"SIZE not first":                          {0x00, 0x41, 0x41, 10, 10},
+		"ROWS after a cell op":                    {0x00, 0x41, 0x42, 0, 0, 1},
+		"ROWS overlapping":                        {0x42, 0, 0, 3, 0x42, 2, 5, 1},
+		"ROWS source past the base":               {0x42, 0, 24, 1},
+		"ROWS n 0":                                {0x42, 0, 0, 0},
+		"SCROLL whole screen":                     {0x43, 24},
+		"SCROLL 0":                                {0x43, 0},
+		"wide in the last column":                 {0x45, 79, 0x01, 0x02, 0xe6, 0xbc, 0xa2},
+		"COPY cutting a wide char":                {0x44, 2, 0, 0x4b, 1, 10, 1},
+		"REPEAT before any TEXT":                  {0x4a, 1},
+		"a link index past the table":             {0x4c, 0x10, 1},
+		"a non-minimal varint":                    {0x45, 0x85, 0x00},
+		"CURSOR then TEXT+HERE":                   {0x50, 1, 1, 0x80, 'a'},
+		"HERE twice":                              {0x51, 0x51},
+		"TITLE twice":                             cat(prop(0xe1), prop(0xe1)),
+		"the budget through ERASE 0":              cat(bytes.Repeat([]byte{0x44, 0, 0, 0x48, 0}, 2*24+1)),
+		"a stream ending inside a code point":     {0x01, 0xe6, 0xbc},
+		"a stream ending inside a cluster":        {0x05, 0x04, 'e', 0xcc},
+		"a cluster length byte missing":           {0x00, 0x03},
+		"a cluster of one byte":                   {0x02, 0x03, 0x01, 'a'},
+		"a control in a cluster":                  {0x03, 0x04, 'a', 0x1b},
+		"C1 as a code point":                      {0x01, 0xc2, 0x9b},
+		"bidi override in a cell":                 {0x02, 0xe2, 0x80, 0xae},
+		"stream byte 0x00":                        {0x00, 0x00},
+		"stream byte 0x7f":                        {0x00, 0x7f},
+		"stream byte 0xff":                        {0x00, 0xff},
+		"TEXT long of 0":                          {0x40, 0x00},
+		"TEXT longer than the diff":               {0x05, 'a'},
+		"unknown opcode 0x4e":                     {0x4e},
+		"reserved scrollback opcode":              {0x60},
+		"reserved core opcode 0x52":               {0x52, 0},
+		"reserved core opcode 0x5c":               {0x5c, 1, 1},
+		"reserved core opcode 0x7f":               {0x7f},
+		"an unknown critical property op":         prop(0xd0, []byte("x")),
+		"the last critical property opcode":       prop(0xdf),
+		"an unknown property op over MaxProperty": cat([]byte{0xf0}, uv(screen.MaxProperty+1), make([]byte, screen.MaxProperty+1)),
+		"too many unknown property ops":           bytes.Repeat(prop(0xf0), screen.MaxUnknownProps+1),
+		"a property op longer than the diff":      {0xe1, 5, 'a'},
+		"a body one past the diff's end":          {0xe0, 1},
+		"a property length past 2^63":             cat([]byte{0xf0}, uv(1<<63)),
+		"a property op before SIZE":               cat(prop(0xf0), []byte{0x41, 10, 10}),
+		"a known property op with a byte over":    prop(0xe7, []byte{1, 0}),
+		"ECHO with a byte over":                   prop(0xc1, []byte{0, 1, 0, 0}),
+		"BELL with a byte over":                   prop(0xe2, []byte{1, 0}),
+		"MODES of five bytes":                     prop(0xc0, []byte{0, 0, 0, 0, 0}),
+		"TITLE with C1":                           prop(0xe1, []byte("a\u009bb")),
+		"TITLE with bidi":                         prop(0xe1, []byte("a‮b")),
+		"TITLE over MaxTitle":                     prop(0xe1, bytes.Repeat([]byte("a"), screen.MaxTitle+1)),
+		"LINK javascript":                         cat([]byte{0x4d}, uv(13), []byte("javascript:x1")),
+		"LINK file":                               cat([]byte{0x4d}, uv(8), []byte("file:///")),
+		"LINK over MaxLink":                       cat([]byte{0x4d}, uv(screen.MaxLink+1), []byte("https:"), bytes.Repeat([]byte("x"), screen.MaxLink-5)),
+		"CLIP over MaxClipboard":                  prop(0xe3, []byte{1}, make([]byte, screen.MaxClipboard+1)),
+		"CURSTYLE shape 7":                        prop(0xe0, []byte{0x07}),
+		"CURSTYLE reserved bits":                  prop(0xe0, []byte{0x08}),
+		"MODES reserved bits":                     prop(0xc0, []byte{0x20, 0, 0, 0}),
+		"MODES mouse 4":                           prop(0xc0, []byte{0, 4, 0, 0}),
+		"MODES kitty 32":                          prop(0xc0, []byte{0, 0, 0, 32}),
+		"ECHO reserved bits":                      prop(0xc1, []byte{0x02, 0, 0}),
+		"ECHO without ahead":                      prop(0xc1, []byte{0x00, 0}),
+		"ECHO applied past uint64":                prop(0xc1, []byte{0x00}, uv(^uint64(0)), uv(1)),
+		"REBUILT reason 4":                        prop(0xe4, []byte{1, 4}),
+		"CONSUMED twice":                          cat(prop(0xc2, []byte{1}), prop(0xc2, []byte{2})),
+		"CONTAINER name with C1":                  prop(0xe5, uv(4), []byte("a\u009cb"), []byte{0}),
+		"CONTAINER name with a newline":           prop(0xe5, uv(3), []byte("a\nb"), []byte{0}),
+		"CONTAINER runtime with bidi":             prop(0xe5, []byte{0}, uv(5), []byte("a\u202eb")),
+		"CONTAINER name over the bound":           prop(0xe5, uv(screen.MaxContainerValue+1), bytes.Repeat([]byte("a"), screen.MaxContainerValue+1), []byte{0}),
+		"CONTAINER uid with a leading zero":       prop(0xe5, []byte{0, 0}, []byte("01")),
+		"CONTAINER uid past 2^32 - 1":             prop(0xe5, []byte{0, 0}, []byte("4294967296")),
+		"CONTAINER uid over 10 bytes":             prop(0xe5, []byte{0, 0}, []byte("10000000000")),
+		"CONTAINER truncated":                     prop(0xe5, []byte{0}),
+		"CONTAINER twice":                         cat(prop(0xe5, []byte{0, 0}), prop(0xe5, []byte{0, 0})),
+		"CWD http":                                prop(0xe6, []byte("http://h/")),
+		"CWD with an encoded ESC":                 prop(0xe6, []byte("file://h/%1B")),
+		"CWD with a space":                        prop(0xe6, []byte("file://h/ a")),
+		"CWD over MaxCwd":                         prop(0xe6, []byte("file://h/"), bytes.Repeat([]byte("x"), screen.MaxCwd-8)),
+		"CWD twice":                               cat(prop(0xe6), prop(0xe6)),
+		"ROOT 2":                                  prop(0xe7, []byte{2}),
+		"ROOT 0xff":                               prop(0xe7, []byte{0xff}),
+		"ROOT truncated":                          prop(0xe7),
+		"ROOT twice":                              cat(prop(0xe7, []byte{1}), prop(0xe7, []byte{1})),
+		"PEN no flags":                            {0x4c, 0x00},
+		"PEN reserved flag":                       {0x4c, 0x40},
+		"PEN colour kind 3":                       {0x4c, 0x01, 0x03},
+		"PEN attrs above 9":                       cat([]byte{0x4c, 0x08}, uv(1<<10)),
+		"PEN two underlines":                      cat([]byte{0x4c, 0x08}, uv(uint64(screen.Underlined|screen.CurlyUnderline))),
+		"CURSOR outside":                          {0x50, 80, 0},
+		"POS outside":                             {0x44, 24, 0},
+		"NEXT past the last row":                  {0x44, 23, 0, 0x46},
+		"SKIP 0":                                  {0x47, 0},
+		"SKIP past the edge":                      {0x45, 70, 0x47, 11},
+		"HERE past the edge":                      {0x45, 79, 0x00, 'a', 0x51},
+		"truncated colour":                        {0x4c, 0x01, 0x02, 1, 2},
+		"truncated MODES":                         prop(0xc0, []byte{0, 0}),
+		"a varint of eleven bytes":                cat([]byte{0x45}, bytes.Repeat([]byte{0x80}, 10), []byte{1}),
 		// Overflow probes (§10): values near 2^64 refused, not wrapped.
 		"ROWS n 2^64-1":           {0x42, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01},
 		"ROWS dst 2^64-1":         cat([]byte{0x42}, uv(max64), uv(0), uv(1)),
@@ -324,7 +344,7 @@ func TestEachRuleOfTheFormatRefusesWhatBreaksIt(t *testing.T) {
 		"COPY n 2^63":             cat([]byte{0x4b}, uv(0), uv(0), uv(1<<63)),
 		"COPY n 2^64-x":           cat([]byte{0x45, 5, 0x4b}, uv(0), uv(0), uv(max64-4)),
 		"TEXT long length 2^64-1": cat([]byte{0x40}, uv(max64), []byte("a")),
-		"TITLE length 2^64-1":     cat([]byte{0x53}, uv(max64)),
+		"TITLE length 2^64-1":     cat([]byte{0xe1}, uv(max64)),
 		"LINK length 2^63":        cat([]byte{0x4d}, uv(1<<63)),
 		"PEN link 2^64-1":         cat([]byte{0x4c, 0x10}, uv(max64)),
 	} {
@@ -463,25 +483,26 @@ func TestAContainerMarkAndADirectoryAreTheSpecsBytes(t *testing.T) {
 	}
 	cleared := to.Clone()
 	cleared.Container = screen.Container{}
-	if d := cleared.Diff(to); !bytes.Equal(d, []byte{0x5a, 0, 0, 0}) {
+	if d := cleared.Diff(to); !bytes.Equal(d, []byte{0xe5, 2, 0, 0}) {
 		t.Fatalf("the clear is % x", d)
 	}
 }
 
-// §5.11 example 10: ROOT is one byte after its opcode, 1 to set and 0 to
-// clear, and the grid's Root is the only field it changes.
-func TestRootIsTheSpecsTwoBytesEachWay(t *testing.T) {
+// §5.11 example 10: ROOT is a one-byte body after its opcode and length,
+// 1 to set and 0 to clear, and the grid's Root is the only field it
+// changes.
+func TestRootIsTheSpecsThreeBytesEachWay(t *testing.T) {
 	from := base80x24()
 	to := from.Clone()
 	to.Root = true
-	if d := to.Diff(from); !bytes.Equal(d, []byte{0x5c, 0x01}) {
+	if d := to.Diff(from); !bytes.Equal(d, []byte{0xe7, 0x01, 0x01}) {
 		t.Fatalf("setting Root is % x", d)
 	}
-	if d := from.Diff(to); !bytes.Equal(d, []byte{0x5c, 0x00}) {
+	if d := from.Diff(to); !bytes.Equal(d, []byte{0xe7, 0x01, 0x00}) {
 		t.Fatalf("clearing Root is % x", d)
 	}
 	g := from.Clone()
-	if err := g.Apply([]byte{0x5c, 0x01}); err != nil || !g.Equal(to) {
+	if err := g.Apply([]byte{0xe7, 0x01, 0x01}); err != nil || !g.Equal(to) {
 		t.Fatalf("Apply: %v, Root %v", err, g.Root)
 	}
 }
@@ -515,16 +536,52 @@ func TestRoundTripsOfGeneratedGrids(t *testing.T) {
 	}
 }
 
+// A property op of a later release is stepped over when its opcode says it
+// may be, wherever a property op may stand, and the diff applies as if it
+// were not there; one marked critical refuses the diff (screen.md §5.4,
+// §5.11 example 11, versioning.md §7).
+func TestAPropertyOpFromALaterReleaseIsSkippedUnlessCritical(t *testing.T) {
+	from := base80x24()
+	to := from.Clone()
+	ascii(to, 0, 0, "hi", screen.Style{})
+	to.Cursor.X = 2
+	to.Title, to.Root = "work", true
+	d := roundTrip(t, from, to)
+	for _, at := range []int{0, len(d)} {
+		for _, op := range [][]byte{unhex(t, "F0 03 61 62 63"), unhex(t, "FF 00"), prop(0xe8, make([]byte, screen.MaxProperty))} {
+			g := from.Clone()
+			if err := g.Apply(cat(d[:at], op, d[at:])); err != nil || !g.Equal(to) {
+				t.Errorf("% x at %d: %v", op[:2], at, err)
+			}
+		}
+		g := from.Clone()
+		if err := g.Apply(cat(d[:at], unhex(t, "D0 03 61 62 63"), d[at:])); err == nil || !g.Equal(from) {
+			t.Errorf("a critical one at %d: %v", at, err)
+		}
+	}
+	// A property op neither ends phase 1 nor needs it ended: a row move
+	// after one is still a row move.
+	g := from.Clone()
+	if err := g.Apply(cat(prop(0xf0), []byte{0x43, 0x01}, prop(0xe2, []byte{1}), []byte{0x42, 23, 23, 1})); err != nil || g.Bell != 1 {
+		t.Errorf("row moves around property ops: %v", err)
+	}
+	// MaxUnknownProps of them are skipped; one more is refused.
+	g = from.Clone()
+	if err := g.Apply(bytes.Repeat(prop(0xf0), screen.MaxUnknownProps)); err != nil || !g.Equal(from) {
+		t.Errorf("%d unknown property ops: %v", screen.MaxUnknownProps, err)
+	}
+}
+
 func TestTheAppliedCountCostsOneByteInTheUsualCase(t *testing.T) {
 	from := base80x24()
 	to := from.Clone()
 	to.EchoAck, to.EchoApplied = 300, 300
-	if d := roundTrip(t, from, to); !bytes.Equal(d, unhex(t, "55 00 AC 02 00")) {
+	if d := roundTrip(t, from, to); !bytes.Equal(d, unhex(t, "C1 04 00 AC 02 00")) {
 		t.Fatalf("got % x", d)
 	}
 	to2 := to.Clone()
 	to2.EchoApplied = 302
-	if d := roundTrip(t, to, to2); !bytes.Equal(d, unhex(t, "55 00 AC 02 02")) {
+	if d := roundTrip(t, to, to2); !bytes.Equal(d, unhex(t, "C1 04 00 AC 02 02")) {
 		t.Fatalf("got % x", d)
 	}
 }

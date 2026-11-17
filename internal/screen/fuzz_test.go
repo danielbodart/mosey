@@ -41,17 +41,19 @@ func FuzzApply(f *testing.F) {
 		cat([]byte{0x47}, uv(^uint64(0))), cat([]byte{0x45, 5, 0x48}, uv(^uint64(0)-4)),
 		cat([]byte{0x00, 'a', 0x4a}, uv(1<<63)), cat([]byte{0x03, 0x02, 0xe6, 0xbc, 0xa2, 0x4a}, uv(1<<63)),
 		cat([]byte{0x4b}, uv(0), uv(3), uv(^uint64(0)-2)), cat([]byte{0x42}, uv(3), uv(0), uv(^uint64(0)-2)),
-		cat([]byte{0x53}, uv(10), []byte("a\u009d0;evil\u009cb")[:10]),
+		cat([]byte{0xe1, 10}, []byte("a\u009d0;evil\u009cb")[:10]),
 		{0x49, 0x49, 0x49, 0x49, 0x49},
 		// The container mark and the directory (§4.6, §4.7): good, cleared,
 		// and with an escape smuggled in.
-		cat([]byte{0x5a, 0x03}, []byte("box"), []byte{0x05}, []byte("flong"), []byte{0x04}, []byte("1000")),
-		{0x5a, 0x00, 0x00, 0x00, 0x5b, 0x00},
-		cat([]byte{0x5a, 0x04}, []byte("a\u009cb"), []byte{0x00, 0x01, '0'}),
-		cat([]byte{0x5b, 0x0d}, []byte("file://h/home")),
-		cat([]byte{0x5b, 0x0c}, []byte("file://h/%1b")),
+		cat([]byte{0xe5, 14, 0x03}, []byte("box"), []byte{0x05}, []byte("flong"), []byte("1000")),
+		{0xe5, 0x02, 0x00, 0x00, 0xe6, 0x00},
+		cat([]byte{0xe5, 0x07, 0x04}, []byte("a\u009cb"), []byte{0x00, '0'}),
+		cat([]byte{0xe6, 0x0d}, []byte("file://h/home")),
+		cat([]byte{0xe6, 0x0c}, []byte("file://h/%1b")),
+		{0xf0, 0x03, 'a', 'b', 'c', 0x80, 'x'},
+		{0xd0, 0x00, 0x80, 'x'},
 		// ROOT (§4.8): set, cleared, a byte out of range, and twice.
-		{0x5c, 0x01}, {0x5c, 0x00, 0x5b, 0x00}, {0x5c, 0x02}, {0x5c, 0x01, 0x5c, 0x00},
+		{0xe7, 0x01, 0x01}, {0xe7, 0x01, 0x00, 0xe6, 0x00}, {0xe7, 0x01, 0x02}, {0xe7, 0x01, 0x01, 0xe7, 0x01, 0x00},
 		// History (§5.6): a scrolled line, new lines, a gap, and the
 		// bounds' edges.
 		{0x43, 0x01, 0x60, 0x00, 0x62, 0x00},
@@ -84,11 +86,54 @@ func FuzzApply(f *testing.F) {
 		if err := back.Apply(g.Diff(before)); err != nil || !back.Equal(g) {
 			t.Fatalf("re-encoding what the diff made does not round-trip: %v", err)
 		}
+		mustIgnore(t, before, d, g)
 		runtime.ReadMemStats(&ms)
 		if ms.HeapAlloc > 2<<30 {
 			t.Fatalf("heap at %d MiB", ms.HeapAlloc>>20)
 		}
 	})
+}
+
+// mustIgnore checks versioning.md §7 on a diff d that took base to want: a
+// property op this decoder does not know, inserted at an op boundary where
+// a property op may stand (after any SIZE, before any HIST), changes
+// nothing when its opcode says it may be ignored, and makes the diff an
+// error, the grid unchanged, when it is critical (screen.md §5.4). It
+// tries the first, a middle and the last such boundary.
+func mustIgnore(t *testing.T, base *screen.Grid, d []byte, want *screen.Grid) {
+	t.Helper()
+	starts, skipped := screen.OpStarts(base, d)
+	if skipped == screen.MaxUnknownProps {
+		return // one more would be over the bound, and refused for that
+	}
+	starts = append(starts, len(d))
+	var at []int
+	for i, p := range starts {
+		if p < len(d) && d[p] == 0x60 {
+			at = append(at, p) // HIST: the last place a property op may go
+			break
+		}
+		if i == 0 && len(d) > 0 && d[0] == 0x41 {
+			continue // before SIZE, which must be first
+		}
+		at = append(at, p)
+	}
+	if len(at) > 3 {
+		at = []int{at[0], at[len(at)/2], at[len(at)-1]}
+	}
+	unknown := []byte{0xf3, 0x02, 0xc1, 0x00}
+	critical := []byte{0xd3, 0x00}
+	for _, p := range at {
+		with := cat(d[:p], unknown, d[p:])
+		g := base.Clone()
+		if err := g.Apply(with); err != nil || !g.Equal(want) {
+			t.Fatalf("an unknown property op at %d of % x changed the result: %v", p, d, err)
+		}
+		g = base.Clone()
+		if err := g.Apply(cat(d[:p], critical, d[p:])); err == nil || !g.Equal(base) {
+			t.Fatalf("an unknown critical property op at %d of % x was not refused cleanly: %v", p, d, err)
+		}
+	}
 }
 
 // FuzzRoundTrip builds two valid grids from the fuzz bytes, the second a
@@ -111,6 +156,7 @@ func FuzzRoundTrip(f *testing.F) {
 			if len(d) > screen.MaxDiff {
 				t.Fatalf("E3: %d bytes for %d x %d", len(d), cols, rows)
 			}
+			mustIgnore(t, from, d, b)
 		}
 	})
 }

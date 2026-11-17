@@ -1497,6 +1497,26 @@ what scrolls, and its history is that output sent once more. zsh is over
 1 alone because S2's frames, one per KiB, let lines scroll off unseen,
 which then go as text.
 
+**With property ops** (the versioning slice, `versioning.md`, [measured
+here], the same test): each property op costs one length byte more,
+but TITLE, CLIP, CONTAINER and CWD, whose last string's length is now
+the body's. In a shell that is MODES, as bracketed paste goes on and off
+around every line read, and CURSTYLE.
+
+| stream | diff bytes | diff / pty | flate / pty |
+|---|---|---|---|
+| S5 flood | 15,632 | 0.08 | 0.02 |
+| S5 less / vim | 53,500 / 27,045 | 0.75 / 0.55 | 0.38 / 0.31 |
+| S5 shell | 4,787 | **1.00** (4,787 pty bytes) | 0.54 |
+| S2 fish / zsh | 858 / 25,173 | 0.32 / 1.08 | 0.23 / 0.44 |
+| S2 unicode (not gated alone) | 1,239 | 1.15 | 0.89 |
+| S2 together | 39,665 | 0.78 | |
+
+The gate passes, S5's shell by nothing to spare: its diff is exactly its
+raw size, 13 bytes more than before. On the wire the echo frames of
+typing carry ECHO, one byte more each, inside a datagram the server
+pads to at least 64 bytes of sealed plaintext anyway (`ssp.md` §9.2).
+
 **If the gate fails, the implementer stops and reports the numbers to the
 screen owner. The format is then amended here before the code lands.** The
 gate is set on *uncompressed* bytes on purpose: the format must beat raw

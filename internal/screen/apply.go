@@ -22,35 +22,42 @@ func (e *diffError) Error() string {
 
 func (e *diffError) Unwrap() error { return ErrInvalidDiff }
 
-// The opcodes of docs/spec/screen.md §5.4.
+// The opcodes of docs/spec/screen.md §5.4: the core ops, fixed layouts
+// and all critical, then the property ops, each opcode, varint length and
+// body, whose bit 5 says whether a decoder that does not know one may skip
+// it (versioning.md §3).
 const (
-	opTextLong  = 0x40
-	opSize      = 0x41
-	opRows      = 0x42
-	opScroll    = 0x43
-	opPos       = 0x44
-	opCol       = 0x45
-	opNext      = 0x46
-	opSkip      = 0x47
-	opErase     = 0x48
-	opErased    = 0x49
-	opRepeat    = 0x4a
-	opCopy      = 0x4b
-	opPen       = 0x4c
-	opLink      = 0x4d
-	opCursor    = 0x50
-	opHere      = 0x51
-	opCurStyle  = 0x52
-	opTitle     = 0x53
-	opModes     = 0x54
-	opEcho      = 0x55
-	opBell      = 0x56
-	opClip      = 0x57
-	opRebuilt   = 0x58
-	opConsumed  = 0x59
-	opContainer = 0x5a
-	opCwd       = 0x5b
-	opRoot      = 0x5c
+	opTextLong = 0x40
+	opSize     = 0x41
+	opRows     = 0x42
+	opScroll   = 0x43
+	opPos      = 0x44
+	opCol      = 0x45
+	opNext     = 0x46
+	opSkip     = 0x47
+	opErase    = 0x48
+	opErased   = 0x49
+	opRepeat   = 0x4a
+	opCopy     = 0x4b
+	opPen      = 0x4c
+	opLink     = 0x4d
+	opCursor   = 0x50
+	opHere     = 0x51
+	// The property ops (§5.4). The critical ones change what the client
+	// sends or may show: input modes, echo-off, input consumed.
+	opProperty  = 0xc0
+	opModes     = 0xc0
+	opEcho      = 0xc1
+	opConsumed  = 0xc2
+	propIgnore  = 0x20 // set: may be ignored
+	opCurStyle  = 0xe0
+	opTitle     = 0xe1
+	opBell      = 0xe2
+	opClip      = 0xe3
+	opRebuilt   = 0xe4
+	opContainer = 0xe5
+	opCwd       = 0xe6
+	opRoot      = 0xe7
 	// The history ops of phase 3 (§2.5, §5.6).
 	opHist  = 0x60
 	opHLine = 0x61
@@ -59,6 +66,16 @@ const (
 	// stream bytes, as 0x00 + n − 1 does for TEXT.
 	opTextHere = 0x80
 	maxShort   = 64
+)
+
+// The bounds on property ops a decoder does not know (§5.4).
+const (
+	// MaxProperty bounds any property op's body: CLIP's, the largest, a
+	// 10-byte varint and MaxClipboard.
+	MaxProperty = binary.MaxVarintLen64 + MaxClipboard
+	// MaxUnknownProps bounds the property ops of one diff that a decoder
+	// skips [choice: more than are defined so far].
+	MaxUnknownProps = 16
 )
 
 // Stream bytes (§5.5). Control bytes are free to use as markers because no
@@ -148,6 +165,13 @@ type decoder struct {
 	once      uint16
 	written   int
 	budget    int
+	// skipped counts the property ops this decoder did not know and
+	// stepped over (§5.4).
+	skipped int
+	// starts, when tracing, is the offset of each op, for the tests'
+	// must-ignore check (versioning.md §7).
+	tracing bool
+	starts  []int
 
 	// Phase 3, the history (§5.6): the number of the first line, the
 	// lines so far and their cells, the line being written (nil after an
@@ -187,6 +211,9 @@ func (d *decoder) fail(format string, args ...any) error {
 
 func (d *decoder) run() error {
 	for d.pos < len(d.b) {
+		if d.tracing {
+			d.starts = append(d.starts, d.pos)
+		}
 		d.op = d.pos
 		code := d.b[d.pos]
 		d.pos++
@@ -201,6 +228,16 @@ func (d *decoder) run() error {
 }
 
 func (d *decoder) step(code byte) error {
+	if code >= opProperty {
+		// A property op touches no row and no write position, so it
+		// neither ends phase 1 nor waits for it (§5.4): one skipped
+		// leaves the decoder exactly as one known would, but for its
+		// field.
+		if d.phase == 3 {
+			return d.fail("property op %#02x after HIST", code)
+		}
+		return d.property(code)
+	}
 	if d.phase == 3 {
 		return d.historyStep(code)
 	}
@@ -273,50 +310,110 @@ func (d *decoder) step(code byte) error {
 		return d.cursorOp()
 	case opHere:
 		return d.here()
-	case opCurStyle:
-		return d.curStyle()
-	case opTitle:
-		return d.title()
-	case opModes:
-		return d.modes()
-	case opEcho:
-		return d.echo()
-	case opBell:
-		if err := d.onceOnly(onceBell, "BELL"); err != nil {
-			return err
-		}
-		n, err := d.varint("BELL", ^uint64(0))
-		d.out.Bell = n
-		return err
-	case opClip:
-		return d.clip()
-	case opRebuilt:
-		return d.rebuilt()
-	case opConsumed:
-		if err := d.onceOnly(onceConsumed, "CONSUMED"); err != nil {
-			return err
-		}
-		n, err := d.varint("CONSUMED", ^uint64(0))
-		d.out.InputConsumed = n
-		return err
-	case opContainer:
-		return d.container()
-	case opCwd:
-		return d.cwd()
-	case opRoot:
-		return d.root()
 	case opHist:
 		return d.hist()
 	}
 	return d.fail("unknown opcode %#02x", code)
 }
 
+// property is one property op (§5.4): its length, bounded before anything
+// is read, then its body, which a known op's fields must fill exactly and
+// an unknown one is stepped over, if its opcode says it may be.
+func (d *decoder) property(code byte) error {
+	// The bound is the bytes left after the length itself, so it is
+	// checked once the varint has been read: before, it would let the
+	// body run past the diff by the varint's own size.
+	n, err := d.varint("property length", MaxDiff)
+	if err != nil {
+		return err
+	}
+	if n > uint64(len(d.b)-d.pos) {
+		return d.fail("property op %#02x of %d bytes past the diff's end", code, n)
+	}
+	p, known := properties[code]
+	if !known {
+		switch {
+		case code&propIgnore == 0:
+			return d.fail("unknown critical property op %#02x", code)
+		case n > MaxProperty:
+			return d.fail("unknown property op %#02x of %d bytes", code, n)
+		case d.skipped == MaxUnknownProps:
+			return d.fail("more than %d unknown property ops", MaxUnknownProps)
+		}
+		d.skipped++
+		d.pos += int(n)
+		return nil
+	}
+	if n > uint64(p.max) {
+		return d.fail("%s of %d bytes, over %d", p.name, n, p.max)
+	}
+	if err := d.onceOnly(p.once, p.name); err != nil {
+		return err
+	}
+	// The body is read through a view that ends where it does, so no
+	// field can run past it.
+	whole, end := d.b, d.pos+int(n)
+	d.b = d.b[:end]
+	err = p.read(d)
+	d.b = whole
+	if err != nil {
+		return err
+	}
+	if d.pos != end {
+		return d.fail("%s with %d bytes left in its body", p.name, end-d.pos)
+	}
+	return nil
+}
+
+// propertyOp is how a known property op is read: its name, its once bit,
+// the most its body can be, and the reader of its fields.
+type propertyOp struct {
+	name string
+	once uint16
+	max  int
+	read func(*decoder) error
+}
+
+var properties = map[byte]propertyOp{
+	opModes:     {"MODES", onceModes, 4, (*decoder).modes},
+	opEcho:      {"ECHO", onceEcho, 1 + 2*binary.MaxVarintLen64, (*decoder).echo},
+	opConsumed:  {"CONSUMED", onceConsumed, binary.MaxVarintLen64, (*decoder).consumed},
+	opCurStyle:  {"CURSTYLE", onceCurStyle, 1, (*decoder).curStyle},
+	opTitle:     {"TITLE", onceTitle, MaxTitle, (*decoder).title},
+	opBell:      {"BELL", onceBell, binary.MaxVarintLen64, (*decoder).bell},
+	opClip:      {"CLIP", onceClip, MaxProperty, (*decoder).clip},
+	opRebuilt:   {"REBUILT", onceRebuilt, binary.MaxVarintLen64 + 1, (*decoder).rebuilt},
+	opContainer: {"CONTAINER", onceContainer, 2*(2+MaxContainerValue) + MaxContainerUID, (*decoder).container},
+	opCwd:       {"CWD", onceCwd, MaxCwd, (*decoder).cwd},
+	opRoot:      {"ROOT", onceRoot, 1, (*decoder).root},
+}
+
+// rest is the rest of a property op's body: the trailing string of TITLE,
+// CLIP, CONTAINER and CWD, whose length is the body's (§5.4).
+func (d *decoder) rest(what string, max int) (string, error) {
+	if len(d.b)-d.pos > max {
+		return "", d.fail("%s of %d bytes, over %d", what, len(d.b)-d.pos, max)
+	}
+	s := string(d.b[d.pos:])
+	d.pos = len(d.b)
+	return s, nil
+}
+
+func (d *decoder) bell() error {
+	n, err := d.varint("BELL", ^uint64(0))
+	d.out.Bell = n
+	return err
+}
+
+func (d *decoder) consumed() error {
+	n, err := d.varint("CONSUMED", ^uint64(0))
+	d.out.InputConsumed = n
+	return err
+}
+
 // container is CONTAINER: the whole mark, each value through the
 // allow-list (docs/spec/screen.md §4.6, §5.6).
 func (d *decoder) container() error {
-	if err := d.onceOnly(onceContainer, "CONTAINER"); err != nil {
-		return err
-	}
 	name, err := d.str("CONTAINER name", 0, MaxContainerValue)
 	if err != nil {
 		return err
@@ -325,7 +422,7 @@ func (d *decoder) container() error {
 	if err != nil {
 		return err
 	}
-	uid, err := d.str("CONTAINER uid", 0, MaxContainerUID)
+	uid, err := d.rest("CONTAINER uid", MaxContainerUID)
 	if err != nil {
 		return err
 	}
@@ -339,10 +436,7 @@ func (d *decoder) container() error {
 
 // cwd is CWD: the directory URI, through the allow-list (§4.7, §5.6).
 func (d *decoder) cwd() error {
-	if err := d.onceOnly(onceCwd, "CWD"); err != nil {
-		return err
-	}
-	s, err := d.str("CWD", 0, MaxCwd)
+	s, err := d.rest("CWD", MaxCwd)
 	if err != nil {
 		return err
 	}
@@ -355,9 +449,6 @@ func (d *decoder) cwd() error {
 
 // root is ROOT: one byte, 0 or 1, and nothing else (§4.8, §5.6).
 func (d *decoder) root() error {
-	if err := d.onceOnly(onceRoot, "ROOT"); err != nil {
-		return err
-	}
 	b, err := d.byte1("ROOT")
 	if err != nil {
 		return err
@@ -959,9 +1050,6 @@ func (d *decoder) here() error {
 }
 
 func (d *decoder) curStyle() error {
-	if err := d.onceOnly(onceCurStyle, "CURSTYLE"); err != nil {
-		return err
-	}
 	b, err := d.byte1("CURSTYLE")
 	if err != nil {
 		return err
@@ -975,10 +1063,7 @@ func (d *decoder) curStyle() error {
 }
 
 func (d *decoder) title() error {
-	if err := d.onceOnly(onceTitle, "TITLE"); err != nil {
-		return err
-	}
-	s, err := d.str("TITLE", 0, MaxTitle)
+	s, err := d.rest("TITLE", MaxTitle)
 	if err != nil {
 		return err
 	}
@@ -990,9 +1075,6 @@ func (d *decoder) title() error {
 }
 
 func (d *decoder) modes() error {
-	if err := d.onceOnly(onceModes, "MODES"); err != nil {
-		return err
-	}
 	if len(d.b)-d.pos < 4 {
 		return d.fail("MODES: truncated")
 	}
@@ -1015,9 +1097,6 @@ func (d *decoder) modes() error {
 }
 
 func (d *decoder) echo() error {
-	if err := d.onceOnly(onceEcho, "ECHO"); err != nil {
-		return err
-	}
 	flags, err := d.byte1("ECHO")
 	if err != nil {
 		return err
@@ -1040,14 +1119,11 @@ func (d *decoder) echo() error {
 }
 
 func (d *decoder) clip() error {
-	if err := d.onceOnly(onceClip, "CLIP"); err != nil {
-		return err
-	}
 	seq, err := d.varint("CLIP seq", ^uint64(0))
 	if err != nil {
 		return err
 	}
-	s, err := d.str("CLIP", 0, MaxClipboard)
+	s, err := d.rest("CLIP", MaxClipboard)
 	if err != nil {
 		return err
 	}
@@ -1056,9 +1132,6 @@ func (d *decoder) clip() error {
 }
 
 func (d *decoder) rebuilt() error {
-	if err := d.onceOnly(onceRebuilt, "REBUILT"); err != nil {
-		return err
-	}
 	seq, err := d.varint("REBUILT seq", ^uint64(0))
 	if err != nil {
 		return err
