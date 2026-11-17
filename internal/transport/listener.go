@@ -240,9 +240,11 @@ func (l *Listener) handleMsg1(pkt []byte, from netip.AddrPort) {
 	}
 	if pc == nil {
 		if p.Version == 0 {
-			// Answered so the client learns why (transport.md §3.6); its
-			// confirmation is refused below.
-			l.e.log.Info("answered a client of another protocol", "from", from,
+			// Answered so the client learns why (transport.md §3.6): it
+			// speaks another protocol, or its hello has a critical
+			// element this build does not know. Its confirmation is
+			// refused below.
+			l.e.log.Info("answered a client this server cannot serve", "from", from,
 				"client", p.Hello.Protocol, "server", handshake.ProtocolVersion)
 		}
 		pc = &pending{p: p, ks: newKeyset(&p.Keys, time.Now()), root: p.Keys.Root,

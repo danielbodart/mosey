@@ -98,6 +98,8 @@ func FuzzReadMsg1Hello(f *testing.F) {
 	f.Add([]byte{ProtocolVersion, 0xff, 0xff, 0xff})
 	f.Add([]byte{0, 0, 1, 0})
 	f.Add([]byte{})
+	f.Add(append(MarshalHello(terminalOnly), 0x90, 1, 0))
+	f.Add(append(MarshalHello(terminalOnly), 0x70, 1, 0))
 	f.Fuzz(func(t *testing.T, hello []byte) {
 		synctest.Test(t, func(t *testing.T) {
 			w := newWorld(t)
@@ -110,6 +112,8 @@ func FuzzReadMsg1Hello(f *testing.F) {
 			before := w.snapshot()
 			msg2, p, err := w.resp.ReadMsg1(msg1)
 			parsed, perr := ParseHello(hello)
+			var ce *CriticalElementError
+			critical := errors.As(perr, &ce)
 			if perr == nil {
 				perr = parsed.acceptable()
 			}
@@ -118,7 +122,7 @@ func FuzzReadMsg1Hello(f *testing.F) {
 				if !w.snapshot().equal(before) || len(w.drawn) != 0 {
 					t.Fatalf("a refused msg1 (%v) changed the store", err)
 				}
-				if isOther && len(msg1) <= Msg1Size(MaxChannels) && len(msg1) >= Msg1Size(1) {
+				if (isOther || critical) && len(msg1) <= Msg1Size(MaxHello) && len(msg1) >= Msg1Size(1) {
 					t.Fatalf("a genuine client of protocol %d was refused: %v", other, err)
 				}
 				if !isOther && perr == nil {
@@ -131,9 +135,16 @@ func FuzzReadMsg1Hello(f *testing.F) {
 			}
 			switch {
 			case isOther:
-				if p.Version != 0 || p.Hello.Protocol != other || len(msg2) != Msg2Size(len(terminalOnly.Channels)) {
+				if p.Version != 0 || p.Hello.Protocol != other || len(msg2) != Msg2Size(len(MarshalHello(terminalOnly))) {
 					t.Fatalf("a hello of protocol %d made a pending of version %d for protocol %d, msg2 of %d bytes",
 						other, p.Version, p.Hello.Protocol, len(msg2))
+				}
+			case critical:
+				// A later release's critical element: answered with the
+				// refusal, the protocol byte alone, by a pending that can
+				// never be confirmed (transport.md §3.6).
+				if p.Version != 0 || len(msg2) != Msg2Size(1) {
+					t.Fatalf("a hello with critical element %#02x made a pending of version %d, msg2 of %d bytes", ce.Type, p.Version, len(msg2))
 				}
 			case perr != nil:
 				t.Fatalf("a hello %x that does not parse (%v) was answered", hello, perr)

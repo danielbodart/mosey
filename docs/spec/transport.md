@@ -316,7 +316,9 @@ offset  size  field
 0       1     protocol    the protocol number this side speaks; 1..255;
                           1 in this document (§2.3)
 1       ...   elements, types strictly increasing, each:
-                type   1 byte; bit 7 set: a peer that does not know it may ignore it
+                type   1 byte, 0x01..0xFF (0x00 is never assigned, so a zeroed
+                       hello never parses); bit 7 set: a peer that does not know
+                       it may ignore it
                 len    1 byte
                 value  len bytes
 total         at most MaxHello = 34 bytes

@@ -73,12 +73,12 @@ func transcript(t *testing.T) map[string]string {
 func TestTheWireIsPinnedByAKnownAnswerTranscript(t *testing.T) {
 	want := map[string]string{
 		"credential": "98d2879c2ea90104",
-		"msg1":       "8ebb5aed30f10e95",
-		"msg2":       "7f8a6faf0d8aa684",
-		"epoch 0":    "799ea06560db97dc",
+		"msg1":       "5de7e968d00dd01c",
+		"msg2":       "7e3e6dec224a6f70",
+		"epoch 0":    "5e3ac849db9110cc",
 		"rekey init": "31e995838de0b213",
 		"rekey resp": "2a1d9c38695da5b0",
-		"epoch 1":    "931f5f0d66a1bfb0",
+		"epoch 1":    "5b14ab4af3b9ec06",
 	}
 	got := transcript(t)
 	for name, w := range want {

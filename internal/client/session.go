@@ -294,6 +294,15 @@ func dial(ctx context.Context, log *slog.Logger, pc net.PacketConn, server netip
 		}
 		return nil, fail(err, "%s's mosey speaks handshake protocol %d; this mosey speaks %d", host, ve.Remote, ve.Local)
 	}
+	if errors.Is(err, handshake.ErrHelloRefused) {
+		// A critical hello element the server does not know
+		// (transport.md §3.6, versioning.md §3).
+		host := dest
+		if host == "" {
+			host = server.String()
+		}
+		return nil, fail(err, "%s's mosey refused this client's hello: it is older and cannot do what was asked", host)
+	}
 	return nil, fail(err, "connecting to %s over UDP: %v", server, err)
 }
 

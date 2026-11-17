@@ -145,14 +145,17 @@ func TestBothSidesAgreeOnTheKeys(t *testing.T) {
 }
 
 func TestMessagesAreTheSizesTheSpecSays(t *testing.T) {
-	if Msg1Size(1) != 1170 || Msg1Size(MaxChannels) != 1185 {
-		t.Errorf("msg1 is %d to %d bytes", Msg1Size(1), Msg1Size(MaxChannels))
+	if Msg1Size(1) != 1167 || Msg1Size(MaxHello) != 1200 {
+		t.Errorf("msg1 is %d to %d bytes", Msg1Size(1), Msg1Size(MaxHello))
 	}
-	if Msg2Size(1) != 1150 || Msg2Size(MaxChannels) != 1165 {
-		t.Errorf("msg2 is %d to %d bytes", Msg2Size(1), Msg2Size(MaxChannels))
+	if Msg2Size(1) != 1147 || Msg2Size(MaxHello) != 1180 {
+		t.Errorf("msg2 is %d to %d bytes", Msg2Size(1), Msg2Size(MaxHello))
 	}
-	if Msg1Size(MaxChannels) > 1200 {
+	if Msg1Size(MaxHello) > 1200 {
 		t.Error("msg1 can exceed D5's 1200 bytes")
+	}
+	if n := len(MarshalHello(terminalOnly)); n != minHello || len(MarshalHello(terminalyAgent)) != 8 {
+		t.Errorf("today's hellos are %d and %d bytes", n, len(MarshalHello(terminalyAgent)))
 	}
 	if RekeyPartSize != 612 || RekeyRespSize != 1124 {
 		t.Errorf("rekey bodies are %d and %d", RekeyPartSize, RekeyRespSize)
@@ -160,11 +163,11 @@ func TestMessagesAreTheSizesTheSpecSays(t *testing.T) {
 
 	w := newWorld(t)
 	i := w.initiator(t, 1)
-	if len(i.Msg1()) != Msg1Size(1) {
+	if len(i.Msg1()) != Msg1Size(minHello) || len(i.Msg1()) != 1173 {
 		t.Errorf("a one-channel msg1 is %d bytes", len(i.Msg1()))
 	}
 	msg2 := must2(w.resp.ReadMsg1(i.Msg1()))
-	if len(msg2) != Msg2Size(1) {
+	if len(msg2) != Msg2Size(minHello) || len(msg2) != 1153 {
 		t.Errorf("a one-channel msg2 is %d bytes", len(msg2))
 	}
 
@@ -173,16 +176,23 @@ func TestMessagesAreTheSizesTheSpecSays(t *testing.T) {
 	for c := range MaxChannels {
 		all.Channels = append(all.Channels, ChannelType(c))
 	}
+	for f := range MaxHello - all.size() - 2 {
+		all.Features = append(all.Features, Feature(f))
+	}
 	big, err := NewInitiator(w.cred, w.key, all, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(big.Msg1()) != Msg1Size(MaxChannels) {
-		t.Errorf("a sixteen-channel msg1 is %d bytes", len(big.Msg1()))
+	if len(big.Msg1()) != Msg1Size(MaxHello) || len(big.Msg1()) != 1200 {
+		t.Errorf("the largest msg1 is %d bytes", len(big.Msg1()))
 	}
 	msg2 = must2(w.resp.ReadMsg1(big.Msg1()))
-	if len(msg2) != Msg2Size(1) {
-		t.Errorf("the server answered %d bytes; it supports one channel type", len(msg2))
+	if len(msg2) != Msg2Size(minHello) {
+		t.Errorf("the server answered %d bytes; it supports one channel type and no feature", len(msg2))
+	}
+	all.Features = append(all.Features, Feature(MaxHello))
+	if _, err := NewInitiator(w.cred, w.key, all, 3); !errors.Is(err, ErrMalformed) {
+		t.Errorf("a hello over MaxHello: %v", err)
 	}
 }
 

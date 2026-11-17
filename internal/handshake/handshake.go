@@ -22,8 +22,8 @@ const (
 	TypeMsg2 = 0x02
 	// WireVersion is the second byte of msg1 and msg2: the layout of the
 	// two messages, tied to the protocol name, so another is never
-	// answered. What changes between releases is the protocol version,
-	// one number in the hello (D8 V1, transport.md §2.3).
+	// answered. The connection's envelope is named by the protocol
+	// number, one byte in the hello (D8 V1, transport.md §2.3).
 	WireVersion = 0x01
 
 	msg1Header = 1 + 1 + 8 + 4 // type, version, cred_id, idx_C
@@ -32,16 +32,16 @@ const (
 	tagSize    = chacha20poly1305.Overhead
 )
 
-// Msg1Size is the size of a msg1 whose hello offers channels channel types:
-// 1169 + channels, so 1170 to 1185 bytes.
-func Msg1Size(channels int) int {
-	return msg1Header + EncapsulationSize + helloFixed + channels + tagSize + mac1Size
+// Msg1Size is the size of a msg1 whose hello is helloLen bytes: 1166 +
+// helloLen, so at most 1200 (transport.md §3.5).
+func Msg1Size(helloLen int) int {
+	return msg1Header + EncapsulationSize + helloLen + tagSize + mac1Size
 }
 
-// Msg2Size is the size of a msg2 whose hello names channels channel types:
-// 1149 + channels, so 1150 to 1165 bytes.
-func Msg2Size(channels int) int {
-	return msg2Header + EncapsulationSize + helloFixed + channels + tagSize
+// Msg2Size is the size of a msg2 whose hello is helloLen bytes: 1146 +
+// helloLen (transport.md §3.7).
+func Msg2Size(helloLen int) int {
+	return msg2Header + EncapsulationSize + helloLen + tagSize
 }
 
 // Errors a handshake message is refused with. The transport counts drops by
@@ -147,7 +147,7 @@ func buildMsg1(cred *Credential, clientPublic []byte, hello []byte, idxC uint32)
 	macKey := mac1Key(cred.SessionID, &cred.PSK)
 	defer clear(macKey[:])
 
-	msg := make([]byte, 0, Msg1Size(len(hello)-helloFixed))
+	msg := make([]byte, 0, Msg1Size(len(hello)))
 	msg = append(msg, TypeMsg1, WireVersion)
 	msg = append(msg, cred.ID[:]...)
 	msg = binary.LittleEndian.AppendUint32(msg, idxC)
@@ -195,7 +195,7 @@ func (i *Initiator) ReadMsg2(msg2 []byte) (Keys, Hello, error) {
 	if i.sk == nil {
 		return Keys{}, Hello{}, fmt.Errorf("%w: the initiator was wiped", ErrState)
 	}
-	if len(msg2) < Msg2Size(1) || len(msg2) > Msg2Size(MaxChannels) ||
+	if len(msg2) < Msg2Size(1) || len(msg2) > Msg2Size(MaxHello) ||
 		msg2[0] != TypeMsg2 || msg2[1] != WireVersion {
 		return Keys{}, Hello{}, ErrMalformed
 	}
@@ -229,6 +229,12 @@ func (i *Initiator) ReadMsg2(msg2 []byte) (Keys, Hello, error) {
 		// is owed both numbers, not "malformed" (transport.md §3.6).
 		if p, other := otherProtocol(plain, i.offered.Protocol); other {
 			err = &IncompatibleVersionError{Local: i.offered.Protocol, Remote: p, Client: true}
+			return
+		}
+		if len(plain) == 1 && plain[0] != 0 {
+			// The server's protocol byte alone: it refused a critical
+			// element of this hello it does not know (transport.md §3.6).
+			err = ErrHelloRefused
 			return
 		}
 		if server, err = ParseHello(plain); err != nil {
@@ -336,7 +342,7 @@ func (p *Pending) erase() {
 // A resend of a msg1 already answered returns the cached msg2 and the same
 // *Pending, creating nothing. A msg1 that fails any check changes nothing.
 func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
-	if len(msg1) < Msg1Size(1) || len(msg1) > Msg1Size(MaxChannels) ||
+	if len(msg1) < Msg1Size(1) || len(msg1) > Msg1Size(MaxHello) ||
 		msg1[0] != TypeMsg1 || msg1[1] != WireVersion {
 		return nil, nil, ErrMalformed
 	}
@@ -392,7 +398,8 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 			err = aerr
 			return
 		}
-		var answer Hello
+		var answer []byte
+		var ce *CriticalElementError
 		if p, other := otherProtocol(plain, r.hello.Protocol); other {
 			// Another protocol: the client knows the PSK, so it is the
 			// genuine client of another build. Its hello is not parsed
@@ -401,15 +408,24 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 			// why and says so, and the pending, with version 0, can never
 			// be confirmed (D8 V1: no silent lockout).
 			client = Hello{Protocol: p}
-			answer = Hello{Protocol: r.hello.Protocol, Channels: r.hello.Channels}
+			answer = MarshalHello(Hello{Protocol: r.hello.Protocol, Channels: r.hello.Channels})
+		} else if client, err = ParseHello(plain); errors.As(err, &ce) {
+			// A critical element this build does not know: the genuine
+			// client of a later release of this protocol, asking for what
+			// this server cannot do. It is answered with the refusal, the
+			// protocol byte alone, so it fails at once rather than wait,
+			// and the pending, with version 0, can never be confirmed
+			// (transport.md §3.6).
+			client, err = Hello{Protocol: plain[0]}, nil
+			answer = refusal(r.hello.Protocol)
 		} else {
-			if client, err = ParseHello(plain); err != nil {
+			if err != nil {
 				return
 			}
 			if err = client.acceptable(); err != nil {
 				return
 			}
-			answer = r.hello.answer(client)
+			answer = MarshalHello(r.hello.answer(client))
 			version = client.Protocol
 		}
 
@@ -417,7 +433,7 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 		// the transcript carry.
 		idxS := r.newIndex()
 		idxC := binary.LittleEndian.Uint32(msg1[10:])
-		out := make([]byte, 0, Msg2Size(len(client.Channels)))
+		out := make([]byte, 0, Msg2Size(len(answer)))
 		out = append(out, TypeMsg2, WireVersion)
 		out = binary.LittleEndian.AppendUint32(out, idxS)
 		out = binary.LittleEndian.AppendUint32(out, idxC)
@@ -431,7 +447,7 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 		st.mixHash(enc2)
 		st.mixKey(ss2)
 		clear(ss2)
-		out = append(out, st.encryptAndHash(MarshalHello(answer))...)
+		out = append(out, st.encryptAndHash(answer)...)
 		i2r, r2i, root := st.split()
 		keys.Send, keys.Recv, keys.Root = r2i, i2r, root
 		clear(i2r[:])

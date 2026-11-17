@@ -97,7 +97,7 @@ func TestAHelloOfAnotherProtocolIsAnsweredWhateverItsRestLooksLike(t *testing.T)
 	if p.Version != 0 || p.Hello.Protocol != 2 {
 		t.Errorf("the pending says version %d and a client of protocol %d", p.Version, p.Hello.Protocol)
 	}
-	if len(msg2) != Msg2Size(len(terminalOnly.Channels)) {
+	if len(msg2) != Msg2Size(len(MarshalHello(terminalOnly))) {
 		t.Errorf("msg2 is %d bytes: not the server's own hello", len(msg2))
 	}
 }
@@ -118,6 +118,45 @@ func TestAHelloOfProtocolZeroIsMalformedNotAMismatch(t *testing.T) {
 	}
 	if _, _, err := w.resp.ReadMsg1(msg1); !errors.Is(err, ErrMalformed) {
 		t.Errorf("the server took a hello of protocol 0: %v", err)
+	}
+}
+
+// initiatorWith is a client whose hello is encoded, so a test can offer
+// what this build's Hello cannot hold: an element of a later release.
+func initiatorWith(t *testing.T, w *world, offered Hello, encoded []byte) *Initiator {
+	t.Helper()
+	i := &Initiator{sk: w.key.take(), idxC: 1, offered: offered}
+	var err error
+	i.msg1, i.afterC1, err = buildMsg1(&w.cred, w.key.public, encoded, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return i
+}
+
+// A client hello with an element of a later release: one the server may
+// ignore changes nothing; a critical one is answered with the refusal, the
+// server's protocol byte alone, so Dial fails at once rather than wait, by
+// a pending that can never be confirmed (transport.md §3.6).
+func TestAHelloElementOfALaterReleaseIsIgnoredOrRefusedAtOnce(t *testing.T) {
+	w := newWorld(t)
+	i := initiatorWith(t, w, terminalOnly, append(MarshalHello(terminalOnly), 0x90, 2, 7, 7))
+	msg2, p, err := w.resp.ReadMsg1(i.Msg1())
+	if err != nil || p.Version != ProtocolVersion {
+		t.Fatalf("an ignorable element: %v", err)
+	}
+	if _, server, err := i.ReadMsg2(msg2); err != nil || !server.Supports(ChannelTerminal) {
+		t.Fatalf("an ignorable element: %v", err)
+	}
+
+	w.newClient(t)
+	i = initiatorWith(t, w, terminalOnly, append(MarshalHello(terminalOnly), 0x70, 1, 7))
+	msg2, p, err = w.resp.ReadMsg1(i.Msg1())
+	if err != nil || p.Version != 0 || len(msg2) != Msg2Size(1) {
+		t.Fatalf("a critical element: %v, msg2 of %d bytes", err, len(msg2))
+	}
+	if _, _, err := i.ReadMsg2(msg2); !errors.Is(err, ErrHelloRefused) || !errors.Is(err, ErrIncompatible) {
+		t.Fatalf("the client read the refusal as %v", err)
 	}
 }
 
