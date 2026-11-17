@@ -99,6 +99,8 @@ without knowing the element:
 | userinput events | bit 7 of the kind: clear is critical (`ssp.md` §10.1) |
 | channel frame ops | bit 7 of the op: clear is critical (`agent.md` §5.1) |
 | transport frame kinds | none: every unknown kind is ignored, so a kind that must not be is sent only after a feature (§4; `transport.md` §4.2) |
+| SSP datagram flags, instruction encoding | none needed: they are envelope, each bit saying which fields follow and the encoding how the body reads, so every unknown one is refused (`ssp.md` §3, §4.1) |
+| private IPC (spawner, proto, emu) | none: closed, every unknown type refused (§5) |
 
 In the binary formats the marking is a bit of the type, so a type's
 criticality is fixed when its number is chosen, never by a flag a sender
