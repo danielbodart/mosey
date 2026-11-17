@@ -57,7 +57,8 @@ func setField(t *testing.T, line, key, word string) string {
 // (versioning.md §6), as a later release would write it.
 func addField(line, word string) string {
 	words := strings.Split(strings.TrimSuffix(line, "\n"), " ")
-	k := func(w string) string { return strings.TrimPrefix(w, "!") }
+	// Keys, not whole words: "a0=0" sorts before "a=1" as words but after it as keys.
+	k := func(w string) string { w, _, _ = strings.Cut(strings.TrimPrefix(w, "!"), "="); return w }
 	i := 2
 	for i < len(words) && k(words[i]) < k(word) {
 		i++

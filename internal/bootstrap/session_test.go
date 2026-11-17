@@ -334,6 +334,7 @@ func FuzzParseSessionLine(f *testing.F) {
 	f.Add([]byte(addField(string(MarshalSessionLine(n)), "later=1")))
 	f.Add([]byte(addField(string(MarshalSessionLine(n)), "!later=1")))
 	f.Add([]byte("MOSEY-SESSION 1.2.3 and more\n"))
+	f.Add([]byte("MOSEY-SESSION 1 a0=0 !name=0 !sid=000000000000000000000A since=0 started=0 !state=new\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		s, err := ParseSessionLine(line)
 		var ce *CriticalError

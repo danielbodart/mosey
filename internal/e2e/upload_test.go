@@ -476,7 +476,7 @@ func TestAMoseyOnThePathIsUsedAsItIs(t *testing.T) {
 		if status := c.wait(t); status != 1 {
 			t.Errorf("exit %d", status)
 		}
-		if out := c.screen.String(); !strings.Contains(out, "mosey-e2e's mosey speaks protocol 3; this mosey speaks 2") {
+		if out := c.screen.String(); !strings.Contains(out, "mosey-e2e's mosey speaks protocol 3; this mosey speaks 1") {
 			t.Errorf("said %q", out)
 		}
 		if _, err := os.Lstat(filepath.Join(s.home, ".local", "bin", "mosey")); !errors.Is(err, os.ErrNotExist) {
