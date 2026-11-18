@@ -185,6 +185,39 @@ func sessionLog(state string) string {
 	return string(b)
 }
 
+// waitForLog returns the log at path once done says it has what the test
+// waits for. It waits on inotify, for each write, never on the clock, so
+// a slow machine only makes it slower (Dan, 2026-11-18); a session that
+// never writes the line is caught by go test's own -timeout.
+func waitForLog(t *testing.T, path string, done func(string) bool) string {
+	t.Helper()
+	if path == "" {
+		t.Fatal("no session log")
+	}
+	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC)
+	if err != nil {
+		t.Fatalf("inotify: %v", err)
+	}
+	defer unix.Close(fd)
+	// Watched before the first read, so no write between them is missed.
+	if _, err := unix.InotifyAddWatch(fd, path, unix.IN_MODIFY|unix.IN_CLOSE_WRITE); err != nil {
+		t.Fatalf("watching %s: %v", path, err)
+	}
+	events := make([]byte, 4096)
+	for {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading the log: %v", err)
+		}
+		if done(string(b)) {
+			return string(b)
+		}
+		if _, err := unix.Read(fd, events); err != nil && err != unix.EINTR {
+			t.Fatalf("waiting for the log: %v", err)
+		}
+	}
+}
+
 var spawnerPid = regexp.MustCompile(`role=spawner pid=(\d+)`)
 
 // killSpawner ends a session a test left running: its spawner's pid is in

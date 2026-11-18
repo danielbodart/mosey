@@ -92,10 +92,11 @@ func startIdle(t *testing.T, role string, stdin *os.File) *child {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	c := &child{role: role, cmd: cmd, born: time.Now(), done: make(chan *os.ProcessState, 1)}
+	done := make(chan *os.ProcessState, 1)
+	c := &child{role: role, cmd: cmd, born: time.Now(), done: done}
 	go func() {
 		cmd.Wait()
-		c.done <- cmd.ProcessState
+		done <- cmd.ProcessState
 	}()
 	return c
 }
@@ -136,6 +137,16 @@ func startStubSessionWith(t *testing.T, sid [16]byte, cfg SpawnerConfig, hold ti
 	}
 	proto := startIdle(t, "proto", protoR)
 	protoR.Close()
+	// The stub's end of the socket stands for the proto process's: as the
+	// kernel closes a real proto's when it exits, it is closed before the
+	// spawner hears of the exit, so lastExit reaches EOF as it would.
+	exited := proto.done
+	proto.done = make(chan *os.ProcessState, 1)
+	go func() {
+		st := <-exited
+		stub.Close()
+		proto.done <- st
+	}()
 	// The teardown's closing the master is the shell's hangup.
 	shell := startIdle(t, "shell", shellR)
 	shellR.Close()

@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
-	"time"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/emu"
@@ -25,6 +29,13 @@ import (
 // command through the pty, asks for emu to be killed on the way, and says
 // what it saw in its Exit reason, which the spawner writes to the log.
 const fakeVersion = "spawnertest"
+
+// testWaitingLine is what the stand-in proto writes to its stderr, which
+// the spawner copies into the session log as "proto pid=N ...", once the
+// shell has exited and its output is in; it then waits for SIGUSR1.
+const testWaitingLine = "the shell exited; waiting for the test's SIGUSR1"
+
+var protoWaiting = regexp.MustCompile(`proto pid=(\d+)[^\n]*` + regexp.QuoteMeta(testWaitingLine))
 
 // fakeServe is `Self --serve=ROLE` when Self is this test binary.
 func fakeServe(role string) int {
@@ -58,6 +69,10 @@ func fakeServe(role string) int {
 // killed and attaches generation 2, then types a command into the shell
 // and reports what the rebuilt emu showed.
 func fakeProto(f *os.File) error {
+	// Listening before anything happens, so the test's signal, sent only
+	// after testWaitingLine, cannot come too early.
+	goAhead := make(chan os.Signal, 1)
+	signal.Notify(goAhead, syscall.SIGUSR1)
 	ctl, err := wrapRoleSocket(f, ipc.Proto, ipc.Spawner)
 	if err != nil {
 		return err
@@ -115,20 +130,18 @@ func fakeProto(f *os.File) error {
 	if err := ctl.Send(ipc.KillEmu{Generation: 1, Why: ipc.KillViolation}); err != nil {
 		return err
 	}
-	select {
-	case l := <-links:
-		if l.Generation != 2 || l.Reason != ipc.EmuKilled {
-			return fmt.Errorf("EmuLink %d reason %d after KillEmu", l.Generation, l.Reason)
-		}
-		if err := em.attach(l); err != nil {
-			return err
-		}
-	case <-time.After(10 * time.Second):
-		return fmt.Errorf("no second emu")
+	l := <-links
+	if l.Generation != 2 || l.Reason != ipc.EmuKilled {
+		return fmt.Errorf("EmuLink %d reason %d after KillEmu", l.Generation, l.Reason)
+	}
+	if err := em.attach(l); err != nil {
+		return err
 	}
 
 	master := start.PTY
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		buf := make([]byte, ptyReadChunk)
 		for {
 			n, err := master.Read(buf)
@@ -142,14 +155,14 @@ func fakeProto(f *os.File) error {
 	}()
 	// Worked out by the shell, so the answer cannot be the echo.
 	master.Write([]byte("echo mosey-$((6*7)); exit\n"))
-	select {
-	case <-shellExit:
-	case <-time.After(10 * time.Second):
-		return fmt.Errorf("the shell did not exit")
-	}
-	// The last output, read after EIO; and long enough for the test to
-	// see the session gone from the listing before proto's Exit ends it.
-	time.Sleep(time.Second)
+	// Events, never the clock, order what follows (Dan, 2026-11-18): the
+	// shell's exit; then EIO, once no process holds the pty's other end,
+	// so all its output is in; then the test's go-ahead, once it has seen
+	// the session leave the listing, so Exit cannot end it first.
+	<-shellExit
+	<-drained
+	fmt.Fprintln(os.Stderr, testWaitingLine)
+	<-goAhead
 	g := screen.NewGrid(0, 0)
 	em.Snapshot(g)
 	saw := "nothing"
@@ -211,28 +224,22 @@ func TestTheSpawnerRunsASessionAndRebuildsEmu(t *testing.T) {
 		t.Errorf("the credential says %v port %d", cl.Addr, cl.Port)
 	}
 
-	deadline := time.Now().Add(30 * time.Second)
 	// Once the shell has exited the session is no longer listed, though
 	// proto has not yet said Exit: a launcher must not pick it to resume.
-	for !strings.Contains(sessionLog(state), "the shell exited") {
-		if time.Now().After(deadline) {
-			t.Fatalf("the shell did not exit; log:\n%s", sessionLog(state))
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if live := liveSessions(sessionsDir(l.getenv)); len(live) != 0 && !strings.Contains(sessionLog(state), "session ended") {
+	// The stand-in holds its Exit until told, so this is checked in that
+	// window every time, not only when the timing allows.
+	m := protoWaiting.FindStringSubmatch(waitForLog(t, logPath(state), protoWaiting.MatchString))
+	if live := liveSessions(sessionsDir(l.getenv)); len(live) != 0 {
 		for _, s := range live {
 			s.f.Close()
 		}
 		t.Errorf("%d session(s) still listed after the shell exited", len(live))
 	}
-	for !strings.Contains(sessionLog(state), "session ended") {
-		if time.Now().After(deadline) {
-			t.Fatalf("the session did not end; log:\n%s", sessionLog(state))
-		}
-		time.Sleep(50 * time.Millisecond)
+	pid, _ := strconv.Atoi(m[1])
+	if err := syscall.Kill(pid, syscall.SIGUSR1); err != nil {
+		t.Fatalf("telling the stand-in proto to go on: %v", err)
 	}
-	log := sessionLog(state)
+	log := waitForLog(t, logPath(state), func(s string) bool { return strings.Contains(s, "session ended") })
 	for _, want := range []string{
 		"saw mosey-42 after rebuild 1 reason 2", // RebuiltCrash: killed for a violation
 		"proto asked for emu to be killed",
@@ -245,5 +252,34 @@ func TestTheSpawnerRunsASessionAndRebuildsEmu(t *testing.T) {
 	}
 	if strings.Contains(log, "bad system call") {
 		t.Errorf("a role died of a syscall missing from its policy:\n%s", log)
+	}
+}
+
+// An Exit proto sent just before it exited still says why the session
+// ended, when supervise sees the exit first: lastExit reads what is
+// queued up to EOF. The order is set up here, not left to the scheduler,
+// so the race CI once lost is tested every run.
+func TestAnExitQueuedBehindProtosExitIsNotLost(t *testing.T) {
+	queued := func(evs ...ctlEvent) *spawner {
+		ch := make(chan ctlEvent, len(evs))
+		for _, ev := range evs {
+			ch <- ev
+		}
+		return &spawner{ctlMsgs: ch}
+	}
+	eof := ctlEvent{err: io.EOF}
+	exit := ipc.Exit{Code: ipc.ShellExited, Reason: "the shell exited"}
+
+	s := queued(ctlEvent{m: ipc.Attached{}}, ctlEvent{m: exit}, eof)
+	if m, ok := s.lastExit(); !ok || m != exit {
+		t.Errorf("an Exit behind another message: %+v %v", m, ok)
+	}
+	s = queued(ctlEvent{m: ipc.Detached{}}, eof)
+	if m, ok := s.lastExit(); ok || s.ctlMsgs != nil {
+		t.Errorf("no Exit before EOF: %+v %v, ctlMsgs %v", m, ok, s.ctlMsgs)
+	}
+	// The reader already stopped: nothing to wait for.
+	if m, ok := (&spawner{}).lastExit(); ok {
+		t.Errorf("no reader: %+v", m)
 	}
 }

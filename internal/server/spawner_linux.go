@@ -428,6 +428,31 @@ func (s *spawner) awaitCredential(ctx context.Context) ([]byte, error) {
 	}
 }
 
+// lastExit reads what proto sent before it exited, up to the reader's
+// EOF, and returns its Exit, if it sent one. supervise's select can see
+// proto's exit before the messages queued ahead of it; without this, an
+// Exit's reason is lost to that race. Anything else proto sent is moot
+// now that it is gone.
+//
+// It needs no time bound: proto has exited, and its end of the socket was
+// close-on-exec and closed here after it started (start), so no process
+// holds it and the reader is certain to reach EOF.
+func (s *spawner) lastExit() (ipc.Exit, bool) {
+	if s.ctlMsgs == nil {
+		return ipc.Exit{}, false
+	}
+	for ev := range s.ctlMsgs {
+		if ev.err != nil {
+			break
+		}
+		if m, ok := ev.m.(ipc.Exit); ok {
+			return m, true
+		}
+	}
+	s.ctlMsgs = nil
+	return ipc.Exit{}, false
+}
+
 // readCtl reads proto's messages into ctlMsgs, for the bootstrap and then
 // supervise, until the first error.
 func (s *spawner) readCtl() {
@@ -825,6 +850,12 @@ func (s *spawner) supervise(ctx context.Context) error {
 		case st := <-s.proto.done:
 			s.log.Info("proto exited", "status", describe(st), "lived", time.Since(s.proto.born).Round(time.Millisecond))
 			s.proto = nil
+			// proto's last words can still be queued behind its exit: an
+			// Exit sent just before it exited says why the session ended.
+			if m, ok := s.lastExit(); ok {
+				reason = fmt.Sprintf("proto: exit code %d %s", m.Code, m.Reason)
+				s.log.Info("session over", "code", m.Code, "reason", m.Reason)
+			}
 			s.teardown(reason)
 			return nil
 		case st := <-emuDone:
