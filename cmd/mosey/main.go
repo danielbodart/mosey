@@ -24,100 +24,32 @@ import (
 // so rather than claim a release.
 var version = "dev"
 
-const usage = `mosey -- a remote terminal for bad networks
+// usage is the -h text, in Simplified Technical English (ASD-STE100):
+// short sentences, one meaning for each word (Dan, 2026-11-18). The
+// detail is in README.md and docs/spec/bootstrap.md §2.
+const usage = `mosey: a remote terminal for bad networks.
 
-  mosey [OPTIONS] [DESTINATION]
-        Log in to DESTINATION with ssh, as your ssh config says, and stay
-        connected over UDP as the network comes and goes. Resumes your
-        most recently detached shell session there, or starts a new one;
-        it never takes a session another terminal is using, nor one
-        running a COMMAND.
-        With no DESTINATION, or localhost, the session is on this
-        machine, started without ssh: the same sessions as mosey THISHOST
-        would find, so one started here can be taken from another
-        device, and back.
+Usage:
+  mosey [OPTIONS] [HOST] [COMMAND]
 
-  mosey [-s NAME | -new] [OPTIONS] DESTINATION COMMAND [ARG...]
-        Run COMMAND in place of your shell, as ssh DESTINATION COMMAND
-        would (your shell's -c, with the words joined by spaces); when it
-        exits, so does the session, and mosey. Without -s or -new it
-        resumes your most recently detached session started with exactly
-        this COMMAND, or starts a new one running it; one another
-        terminal is using is never taken, so a second window gets a
-        second one. With -s NAME, if NAME is running already it is taken
-        as it is. Words after DESTINATION are all COMMAND's, so its own
-        flags are safe: mosey DESTINATION ls -la.
+  mosey              Open a session on this computer.
+  mosey HOST         Open a session on HOST. mosey uses ssh to connect.
+  mosey HOST CMD     Run CMD on HOST. The session stops when CMD stops.
+  mosey -s NAME      Open the session NAME. If it does not exist, make it.
+  mosey -new         Make a new session.
+  mosey -list        Show your sessions.
+  mosey -kill NAME   Stop the session NAME.
 
-  mosey -s NAME [OPTIONS] [DESTINATION]
-        Attach to the session called NAME, taking it over from wherever
-        it is attached (that client is told), or start it if there is
-        none. NAME is up to 32 letters, digits, '-', '_' and '.'.
+To detach, close the terminal. To return, run the same command again.
+To stop a session, type "exit" in its shell.
+A detached session stops after 7 days.
 
-  mosey -new [OPTIONS] [DESTINATION]
-        Start a new session, with a generated name.
-
-  mosey -list [OPTIONS] [DESTINATION]
-        List your sessions there (or here): name, attached or detached,
-        since when, and the COMMAND it runs, if any.
-
-  mosey -kill NAME [OPTIONS] [DESTINATION]
-        End the session called NAME: its shell gets SIGHUP.
-
-  OPTIONS: [-dir DIR] [-type TEXT] [-remote PATH] [-upload ask|yes|no]
-           [-ssh PROGRAM] [-A | -a] [-predict adaptive|always|never]
-           [-- SSH-OPTION...]
-
-        -dir, -type and a COMMAND apply only when a new session is
-        started, and are ignored when an existing one is resumed or
-        taken over (a COMMAND still picks which detached session a
-        plain resume finds); -type and a COMMAND exclude each other.
-        -dir DIR starts its shell in DIR, relative to your home there
-        unless absolute; if DIR is not a directory, nothing is started.
-        -type TEXT types TEXT into that shell, then Enter, so
-        mosey -s work -dir src/app -type 'claude' DESTINATION
-        opens a session in ~/src/app running claude, leaves you at its
-        shell when claude exits, and goes back to it when run again.
-        Each, and COMMAND, is at most 1024 bytes of text, with no
-        control character (but tab, in -type and COMMAND).
-
-        The server is whatever mosey DESTINATION has, of any version:
-        mosey on its PATH, or else ~/.local/bin/mosey. If it has none,
-        or ~/.local/bin/mosey speaks another protocol, mosey copies
-        itself there (or, for another platform, its own
-        version's release from GitHub), asking the first time for each
-        host; -upload=yes copies without asking, -upload=no never copies.
-        A host's mosey is upgraded with Nix or by replacing the binary,
-        never by this. -remote PATH runs that remote binary instead and
-        copies nothing.
-
-        ssh's own options go after --, before DESTINATION:
-        mosey -- -p 2222 DESTINATION.
-
-        -A and -a are ssh's own: forward the agent or don't. On this
-        machine the session's shell has this terminal's agent, unless
-        -a; -upload, -ssh and ssh options are refused, and -remote PATH
-        names the local mosey to run.
-
-        -predict says when to show your typing before the server echoes
-        it: adaptive (the default) on a slow link, always, or never.
-        Guesses not yet confirmed are underlined on a slower one.
-
-  A session lives on the server until its shell exits: exit or Ctrl-D
-  there ends it. Closing this terminal, or your own machine sleeping,
-  crashing or rebooting, only detaches; plain mosey DESTINATION picks
-  it up again. While mosey runs it rides out a dead spot, and reconnects
-  by itself (over ssh, to a DESTINATION) if it hears nothing for 15 s.
-  There is no detach key.
-  A session left detached for 7 days is ended.
-
-  mosey -completion bash|zsh|fish
-        Print that shell's completion script, which completes
-        DESTINATION from your ssh config and known hosts as ssh does,
-        the flags, and -s and -kill's sessions on localhost:
-        source <(mosey -completion bash) in ~/.bashrc.
-
-  mosey -version
-  mosey -h        this
+Options:
+  -dir DIR      Start a new session in DIR.
+  -type TEXT    Type TEXT into a new session, then Enter.
+  -a / -A       Do not send / send your ssh agent.
+  -predict M    Show your typing before the host echoes it: adaptive, always or never.
+  -- OPTIONS    Send OPTIONS to ssh. Put them before HOST.
 `
 
 func main() {
