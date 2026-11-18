@@ -37,13 +37,13 @@ shows up at once even on a slow link. If the host has been silent for
 **Like tmux: named sessions that outlive the window.**
 
 ```sh
-mosey -s work localhost        # attach to "work" on this machine, or create it; no ssh involved
-mosey -list localhost          # what's running here
-mosey -kill work localhost     # end it
+mosey -s work                  # attach to "work" on this machine, or create it; no ssh involved
+mosey -list                    # what's running here
+mosey -kill work               # end it
 ```
 
 Close the terminal window to detach; there is no detach key. Run `mosey
--s work localhost` again and you're back where you left off, with the
+-s work` again and you're back where you left off, with the
 lines that scrolled past printed into your terminal's own scrollback, so
 the mouse wheel and search just work. Typing `exit` in the shell ends the
 session.
@@ -51,7 +51,7 @@ session.
 **Both at once: one session, any device.**
 
 ```sh
-mosey -s work localhost                           # at the desk
+mosey -s work                                     # at the desk
 mosey -s work dan-desktop                         # later, from the laptop: takes "work" over
 mosey -s ai -dir Projects/x dan-desktop claude    # claude in ~/Projects/x: started the first time, returned to after
 ```
@@ -231,19 +231,19 @@ takes NAME over as it is (saying so if NAME runs something else).
 `mosey -list host` shows each session's command. `-type` and a command
 exclude each other.
 
-**`localhost` is this machine**, with no ssh at all: `mosey localhost`,
-`mosey -s work localhost`, `mosey -new localhost`, `mosey -list
-localhost`, `mosey -kill NAME localhost` and `mosey -s work -dir
-Projects/x -type claude localhost` work as above, on the machine you're
-at, the way you'd use tmux. These are the very sessions `mosey thishost`
-finds over ssh, so one you started at your desk can be taken from your
-laptop with `mosey -s work thishost`, and taken back by `mosey -s work
-localhost` at the desk. The shell starts with your environment, as under
-tmux, and has your agent (`SSH_AUTH_SOCK`) unless you pass `-a`.
-`-upload`, `-ssh` and ssh options are for ssh, and are refused here.
-Only the word `localhost` means this: `mosey 127.0.0.1` or `mosey
-me@localhost` logs in over ssh as to any other host. `mosey` on its own
-just prints the usage.
+**No host is this machine**, with no ssh at all, the way you'd use tmux:
+`mosey`, `mosey -s work`, `mosey -new`, `mosey -list`, `mosey -kill
+NAME` and `mosey -s work -dir Projects/x -type claude` work as above, on
+the machine you're at. `localhost` after any of them means the same.
+These are the very sessions `mosey thishost` finds over ssh, so one you
+started at your desk can be taken from your laptop with `mosey -s work
+thishost`, and taken back by `mosey -s work` at the desk. The shell
+starts with your environment, as under tmux, and has your agent
+(`SSH_AUTH_SOCK`) unless you pass `-a`. `-upload`, `-ssh` and ssh
+options are for ssh, and are refused here. A command needs a host before
+it (`mosey localhost htop`). Only the word `localhost` means this machine:
+`mosey 127.0.0.1` or `mosey me@localhost` logs in over ssh as to any
+other host.
 ([docs/spec/bootstrap.md §2.2](docs/spec/bootstrap.md))
 
 `-dir` and `-type` say how a session starts: its shell starts in that

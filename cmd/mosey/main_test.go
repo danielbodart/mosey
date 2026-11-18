@@ -46,7 +46,7 @@ func TestABadCommandLineIsAUsageError(t *testing.T) {
 		{"--", "-t", "far"},
 		{"-remote", "mo sey", "far"},
 		{"-remote", "-x", "far"},
-		{"--", "-p", "1", "-oProxyCommand=x"}, // no destination
+		{"--", "-p", "1", "-oProxyCommand=x"}, // no destination: localhost refuses ssh options
 		{"--", "-v", "--", "far"},
 	} {
 		_, err := parseArgs(args)
@@ -239,29 +239,41 @@ func TestLocalhostIsThisMachine(t *testing.T) {
 	}
 }
 
-// mosey alone starts nothing and is the usage, as -h is; flags with no
-// DESTINATION are a mistake that says how to name this machine
-// (bootstrap.md §2).
-func TestNoDestinationIsTheUsageOrAMistake(t *testing.T) {
-	for _, args := range [][]string{nil, {}, {"-h"}, {"-help"}} {
+// No DESTINATION is this machine, the same as localhost, as tmux is (Dan,
+// 2026-11-18; bootstrap.md §2.2); -h and -help are the usage.
+func TestNoDestinationIsThisMachine(t *testing.T) {
+	for _, args := range [][]string{{"-h"}, {"-help"}} {
 		c, err := parseArgs(args)
 		if err != nil || !c.help {
 			t.Errorf("%q: %+v %v", args, c, err)
 		}
 	}
-	for _, args := range [][]string{
-		{"-list"},
-		{"-s", "work"},
-		{"-new"},
-		{"-kill", "work"},
-		{"-a"},
-		{"--"},
-		{"--", "-p", "22"},
-		{"-dir", "src"},
+	for _, c := range []struct {
+		args   []string
+		attach bootstrap.Attach
+		list   bool
+		kill   string
+		agent  byte
+	}{
+		{args: nil, attach: bootstrap.AttachAuto},
+		{args: []string{"--"}, attach: bootstrap.AttachAuto},
+		{args: []string{"-list"}, attach: bootstrap.AttachAuto, list: true},
+		{args: []string{"-s", "work"}, attach: bootstrap.AttachName},
+		{args: []string{"-new"}, attach: bootstrap.AttachNew},
+		{args: []string{"-kill", "work"}, attach: bootstrap.AttachAuto, kill: "work"},
+		{args: []string{"-a"}, attach: bootstrap.AttachAuto, agent: 'a'},
+		{args: []string{"-dir", "src"}, attach: bootstrap.AttachAuto},
 	} {
+		got, err := parseArgs(c.args)
+		if err != nil || got.help || !got.ssh.Local() || got.ssh.Program != "" || got.attach != c.attach || got.list != c.list || got.kill != c.kill || got.ssh.Options.Agent != c.agent {
+			t.Errorf("%q: %+v %v", c.args, got, err)
+		}
+	}
+	// Flags that need ssh are still refused, as with localhost.
+	for _, args := range [][]string{{"-upload", "yes"}, {"-ssh", "ssh"}, {"--", "-p", "22"}} {
 		_, err := parseArgs(args)
 		var u *bootstrap.UsageError
-		if !errors.As(err, &u) || !strings.Contains(u.Msg, "needs a DESTINATION; use localhost for this machine") {
+		if !errors.As(err, &u) || !strings.Contains(u.Msg, "no use with localhost") {
 			t.Errorf("%q: %v", args, err)
 		}
 	}

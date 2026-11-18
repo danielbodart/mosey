@@ -26,15 +26,16 @@ var version = "dev"
 
 const usage = `mosey -- a remote terminal for bad networks
 
-  mosey [OPTIONS] DESTINATION
+  mosey [OPTIONS] [DESTINATION]
         Log in to DESTINATION with ssh, as your ssh config says, and stay
         connected over UDP as the network comes and goes. Resumes your
         most recently detached shell session there, or starts a new one;
         it never takes a session another terminal is using, nor one
         running a COMMAND.
-        DESTINATION localhost is this machine, started without ssh: the
-        same sessions as mosey THISHOST would find, so one started here
-        can be taken from another device, and back.
+        With no DESTINATION, or localhost, the session is on this
+        machine, started without ssh: the same sessions as mosey THISHOST
+        would find, so one started here can be taken from another
+        device, and back.
 
   mosey [-s NAME | -new] [OPTIONS] DESTINATION COMMAND [ARG...]
         Run COMMAND in place of your shell, as ssh DESTINATION COMMAND
@@ -47,19 +48,19 @@ const usage = `mosey -- a remote terminal for bad networks
         as it is. Words after DESTINATION are all COMMAND's, so its own
         flags are safe: mosey DESTINATION ls -la.
 
-  mosey -s NAME [OPTIONS] DESTINATION
+  mosey -s NAME [OPTIONS] [DESTINATION]
         Attach to the session called NAME, taking it over from wherever
         it is attached (that client is told), or start it if there is
         none. NAME is up to 32 letters, digits, '-', '_' and '.'.
 
-  mosey -new [OPTIONS] DESTINATION
+  mosey -new [OPTIONS] [DESTINATION]
         Start a new session, with a generated name.
 
-  mosey -list [OPTIONS] DESTINATION
+  mosey -list [OPTIONS] [DESTINATION]
         List your sessions there (or here): name, attached or detached,
         since when, and the COMMAND it runs, if any.
 
-  mosey -kill NAME [OPTIONS] DESTINATION
+  mosey -kill NAME [OPTIONS] [DESTINATION]
         End the session called NAME: its shell gets SIGHUP.
 
   OPTIONS: [-dir DIR] [-type TEXT] [-remote PATH] [-upload ask|yes|no]
@@ -92,8 +93,8 @@ const usage = `mosey -- a remote terminal for bad networks
         ssh's own options go after --, before DESTINATION:
         mosey -- -p 2222 DESTINATION.
 
-        -A and -a are ssh's own: forward the agent or don't. With
-        localhost the session's shell has this terminal's agent, unless
+        -A and -a are ssh's own: forward the agent or don't. On this
+        machine the session's shell has this terminal's agent, unless
         -a; -upload, -ssh and ssh options are refused, and -remote PATH
         names the local mosey to run.
 
@@ -116,7 +117,7 @@ const usage = `mosey -- a remote terminal for bad networks
         source <(mosey -completion bash) in ~/.bashrc.
 
   mosey -version
-  mosey -h        this, as is mosey with nothing after it
+  mosey -h        this
 `
 
 func main() {
@@ -135,7 +136,7 @@ type cli struct {
 	upload      client.UploadMode
 	predict     predict.Mode
 	showVersion bool
-	// help is mosey alone, -h or -help: the usage on stdout, and nothing
+	// help is -h or -help: the usage on stdout, and nothing
 	// started (bootstrap.md §2).
 	help bool
 	// attach and name are which session (bootstrap.md §9.2): AttachAuto
@@ -197,16 +198,10 @@ func newFlags(c *cli) (*flag.FlagSet, *clientFlags) {
 // [ARG...]]`. Every plain word belongs to the client (D7): the destination
 // is the first one, whatever it is called, and localhost is this machine,
 // with no ssh (bootstrap.md §2.2); every word after it is the command's,
-// untouched. Nothing at all is the usage.
+// untouched. No DESTINATION is localhost.
 func parseArgs(args []string) (cli, error) {
 	var c cli
 	flags, f := newFlags(&c)
-	if len(args) == 0 {
-		// A bare mosey starts nothing: this machine is asked for by name,
-		// as localhost (Dan, 2026-11-16; bootstrap.md §2).
-		c.help = true
-		return c, nil
-	}
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		c.help = true
 		return c, nil
@@ -269,7 +264,9 @@ func parseArgs(args []string) (cli, error) {
 	// is DESTINATION itself.
 	sshArgs, rest := bootstrap.SplitSSHOptions(flags.Args())
 	if len(rest) == 0 {
-		return cli{}, &bootstrap.UsageError{Msg: "mosey: needs a DESTINATION; use " + bootstrap.LocalDestination + " for this machine"}
+		// No DESTINATION is this machine, as with tmux (Dan, 2026-11-18,
+		// reversing 2026-11-16; bootstrap.md §2.2): the same as localhost.
+		rest = []string{bootstrap.LocalDestination}
 	}
 	c.ssh.Destination = rest[0]
 	if len(rest) > 1 {

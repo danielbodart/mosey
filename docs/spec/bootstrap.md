@@ -77,8 +77,7 @@ enter raw mode, run Session
 ## 2. The command line the client accepts
 
 ```
-mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-- SSH-OPTION...] DESTINATION [COMMAND [ARG...]]
-mosey
+mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-- SSH-OPTION...] [DESTINATION [COMMAND [ARG...]]]
 ```
 
 The words are read in that order, and each part ends where the next
@@ -91,12 +90,14 @@ command's own flags (`mosey far ls -la`), and the ssh options always come
 before the destination, after `--` (`mosey -s work -- -p 2222 far
 claude`), which is where they went before commands existed.
 
-A `DESTINATION` of `localhost` (any case) is this machine, and no ssh is
-run (§2.2). `mosey` with no arguments at all prints the usage on stdout
-and exits 0, starting nothing, as `-h` does; any other command line with
-no `DESTINATION` is a usage error (`mosey: needs a DESTINATION; use
-localhost for this machine`, exit 2) [D: Dan, 2026-11-16: a bare `mosey`
-opening a shell was surprising, so this machine is asked for by name].
+No `DESTINATION`, or a `DESTINATION` of `localhost` (any case), is this
+machine, and no ssh is run (§2.2): `mosey` alone resumes or starts a
+session here, and `mosey -list` lists the sessions here, as tmux does
+[D: Dan, 2026-11-18, reversing 2026-11-16's "this machine is asked for
+by name": tmux works this way, and spelling out `localhost` was a
+chore]. A COMMAND needs a `DESTINATION` before it, as the first plain
+word is always the destination. `-h` and `-help` print the usage on
+stdout and exit 0.
 
 - `DESTINATION` is passed to ssh unchanged: `host`, `user@host`, an alias
   from `~/.ssh/config`, or `ssh://user@host:port`. It must be at
@@ -223,17 +224,15 @@ usage error.
 ForwardAgent=no -A` and `ssh -A -o ForwardAgent=no` both resolve to
 `forwardagent yes`; `-t -o RequestTTY=no` resolves to `requesttty true`).
 
-### 2.2 `localhost`: this machine
+### 2.2 No `DESTINATION`, or `localhost`: this machine
 
-`mosey localhost`, `mosey -s NAME localhost`, `mosey -new localhost`,
-`mosey -list localhost` and `mosey -kill NAME localhost` act on this
-user's sessions on the machine the client runs on, with no ssh at all:
-mosey as a local terminal multiplexer, and an end-to-end test that needs
-no sshd [D: Dan, 2026-11-16]. Until Dan's second decision of that day
-this was mosey with no `DESTINATION`; the word `localhost` is the one
-every user already reads as this machine, and it makes the hint a
-session leaves (`mosey -s NAME localhost`) the same shape as any
-other's. The word is compared without regard to case, and nothing else
+`mosey`, `mosey -s NAME`, `mosey -new`, `mosey -list` and `mosey -kill
+NAME`, each with or without `localhost` after it, act on this user's
+sessions on the machine the client runs on, with no ssh at all: mosey as
+a local terminal multiplexer, as tmux is, and an end-to-end test that
+needs no sshd [D: Dan, 2026-11-16; no `DESTINATION` again, Dan,
+2026-11-18]. A hint for this machine names no host (`mosey -s NAME`).
+The word `localhost` is compared without regard to case, and nothing else
 (no `user@`, no address, no alias) is taken as this machine.
 
 **The local launcher.** Where §4.1 runs `ssh ... -- DEST "exec /bin/sh -c
@@ -289,14 +288,15 @@ attached: one taken over ssh with `-A` gets that client's agent, bound as
 
 **Flags that need ssh.** `-upload` and `-ssh` say how to reach a host or
 what to copy to it, and ssh options after `--` are for an ssh there is
-not; with `localhost` they are a usage error (`mosey: -upload has no
+not; on this machine they are a usage error (`mosey: -upload has no
 use with localhost, which runs without ssh`), not silently ignored. `-A`,
 `-a`, `-remote`, `-predict`, `-dir`, `-type` and the session flags mean
 what they mean over ssh.
 
 **Messages** name `localhost` where they name `DEST` (`no sessions on
-localhost`, `work is not a directory on localhost`), and a hint names it
-too (`resume it with: mosey -s NAME localhost`). A launcher that prints no
+localhost`, `work is not a directory on localhost`), but a hint names no
+host, as this machine is the default (`resume it with: mosey -s NAME`).
+A launcher that prints no
 line is named with its status (`SERVER exited with status N and no mosey
 line`), and one that cannot be run with `running SERVER: ERR`.
 
@@ -2667,11 +2667,11 @@ no `ssh -G`, as `--serve`, `--serve=list` or `--serve=kill NAME`, without
 the client's `SSH_CONNECTION` or `SSH_AUTH_SOCK`; the agent decision of
 §2.2 for each of `-A`, `-a` and neither, with and without
 `SSH_AUTH_SOCK`; R3's try resumes on loopback with the agent unbound; and
-the messages and hints name `localhost`. In `cmd/mosey`, every session
-command parses with `localhost`, in any case, as this machine, and
-`127.0.0.1`, `::1` and `me@localhost` as hosts for ssh; `-upload`, `-ssh`
-or ssh options with `localhost` are a usage error, as is any command
-line with flags and no `DESTINATION`; `mosey` alone is the usage, exit 0.
+the messages name `localhost` and the hints name no host. In
+`cmd/mosey`, every session command parses with `localhost`, in any case,
+or with no `DESTINATION`, as this machine, and `127.0.0.1`, `::1` and
+`me@localhost` as hosts for ssh; `-upload`, `-ssh` or ssh options on this
+machine are a usage error; `-h` is the usage, exit 0.
 The words after `DESTINATION` are the command, joined with spaces, with
 their own flags untouched (`far ls -la`), with ssh options before the
 destination after `--`; a command keeps a plain `mosey DEST` `auto`, with the `cmd`; a

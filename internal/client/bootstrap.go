@@ -371,8 +371,12 @@ func remoteMark(s bootstrap.SSH) string {
 }
 
 // again is the destination to repeat in a command the user is told to
-// run, with its leading space.
+// run, with its leading space: none for this machine, which is mosey's
+// default (bootstrap.md §2.2).
 func again(s bootstrap.SSH) string {
+	if s.Local() {
+		return ""
+	}
 	return " " + s.Destination
 }
 

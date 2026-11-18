@@ -78,16 +78,17 @@ func startLocal(t *testing.T, name, mosey string, m *thisMachine, agentSock stri
 }
 
 // localCmd runs a local mosey that does not attach (-list, -kill), with
-// localhost after args, and returns what it printed and its exit status.
+// no DESTINATION, which is this machine (bootstrap.md §2.2), and returns
+// what it printed and its exit status.
 func localCmd(t *testing.T, mosey string, m *thisMachine, args ...string) (string, int) {
 	t.Helper()
-	cmd := command(mosey, append(slices.Clone(args), "localhost")...)
+	cmd := command(mosey, args...)
 	cmd.Env = m.env(t.TempDir(), "")
 	out, err := cmd.CombinedOutput()
 	return string(out), bootstrap.ExitStatus(err)
 }
 
-var detachedHere = regexp.MustCompile(`detached from session ([A-Za-z0-9._-]+); resume it with: mosey -s ([A-Za-z0-9._-]+) localhost\r?\n`)
+var detachedHere = regexp.MustCompile(`detached from session ([A-Za-z0-9._-]+); resume it with: mosey -s ([A-Za-z0-9._-]+)\r?\n`)
 
 // mosey localhost is this machine, with no ssh at all (no sshd is
 // started; bootstrap.md §2.2), and is the same session life as over
@@ -127,7 +128,7 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 	// shell, at its prompt, in the directory it went to.
 	out, status := localCmd(t, mosey, m, "-list")
 	if status != 0 || !regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(name)+`\s+detached\s+\d{4}-\S+\s+sh\s+~/proj$`).MatchString(out) ||
-		!strings.Contains(out, "attach to one with: mosey -s NAME localhost\n") {
+		!strings.Contains(out, "attach to one with: mosey -s NAME\n") {
 		t.Fatalf("mosey -list exited %d:\n%s", status, out)
 	}
 

@@ -149,9 +149,9 @@ request). The decisions are in §2. Gaps they left:
    `screen.md` §2.5 and §8.7), with a fresh client reprinting one
    screenful of it on resume (Dan, 2026-11-16), and a flood held back
    while a client listens, so no line is cut, with a queue small enough
-   that Ctrl-C stays prompt (Dan, 2026-11-16), and `mosey localhost`
-   for a session on this machine with no ssh at all, asked for by name
-   so that `mosey` alone only prints the usage (Dan, 2026-11-16;
+   that Ctrl-C stays prompt (Dan, 2026-11-16), and `mosey`
+   alone, or `mosey localhost`, for a session on this machine with no
+   ssh at all, as tmux does (Dan, 2026-11-16 and 2026-11-18;
    `bootstrap.md` §2.2), and `mosey HOST COMMAND`, as ssh takes one (Dan,
    2026-11-16; D8, `bootstrap.md` §9.2.3), and the tab's remote and root
    marks as a protocol rather than local process detection (Dan,

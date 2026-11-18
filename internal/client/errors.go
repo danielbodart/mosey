@@ -60,7 +60,12 @@ type DetachedError struct {
 
 func (e *DetachedError) Error() string {
 	msg := "detached from session " + e.Name
-	if e.Destination != "" {
+	switch {
+	case e.Destination == "":
+	case bootstrap.SSH{Destination: e.Destination}.Local():
+		// This machine is mosey's default, so the hint names no host.
+		msg += "; resume it with: mosey -s " + e.Name
+	default:
 		msg += fmt.Sprintf("; resume it with: mosey -s %s %s", e.Name, e.Destination)
 	}
 	return msg

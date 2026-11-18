@@ -132,8 +132,8 @@ func TestALocalServerThatGivesNoLineIsNamed(t *testing.T) {
 	}
 }
 
-// -list, -kill and the end of a session name this machine localhost, and
-// so do the commands they suggest (bootstrap.md §2.2).
+// -list, -kill and the end of a session name this machine localhost; the
+// commands they suggest name no host, as it is the default (§2.2).
 func TestLocalMessagesNameLocalhost(t *testing.T) {
 	dir := t.TempDir()
 	server := localStandIn(t, dir, []byte("MOSEY-LIST 1 name=quiet-heron since=1794651234 state=detached\n"), "0")
@@ -144,7 +144,7 @@ func TestLocalMessagesNameLocalhost(t *testing.T) {
 	if argv, _ := os.ReadFile(filepath.Join(dir, "argv")); string(argv) != "--serve=list\n" {
 		t.Errorf("list ran %q", argv)
 	}
-	if !strings.Contains(out.String(), "quiet-heron") || errs.String() != "attach to one with: mosey -s NAME localhost\n" {
+	if !strings.Contains(out.String(), "quiet-heron") || errs.String() != "attach to one with: mosey -s NAME\n" {
 		t.Errorf("stdout %q, stderr %q", out.String(), errs.String())
 	}
 
@@ -164,7 +164,7 @@ func TestLocalMessagesNameLocalhost(t *testing.T) {
 	}
 
 	d := &DetachedError{Name: "quiet-heron", Destination: "localhost"}
-	if want := "detached from session quiet-heron; resume it with: mosey -s quiet-heron localhost"; d.Error() != want {
+	if want := "detached from session quiet-heron; resume it with: mosey -s quiet-heron"; d.Error() != want {
 		t.Errorf("%q", d.Error())
 	}
 }
