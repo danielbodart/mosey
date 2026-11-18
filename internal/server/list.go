@@ -35,6 +35,7 @@ func List(w io.Writer, getenv func(string) string) error {
 		}
 		rows = append(rows, row{started: g.Started, line: bootstrap.ListLine{
 			Name: g.Name, State: g.State, Since: g.Since, Command: g.Command,
+			Foreground: g.Foreground, Cwd: g.Cwd,
 		}})
 	}
 	slices.SortStableFunc(rows, func(a, b row) int { return a.started.Compare(b.started) })

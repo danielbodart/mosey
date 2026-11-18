@@ -33,21 +33,34 @@ const maxShownCommand = 60
 // The parser has already held it to cmdtext, with no control character
 // but tab, but it is a far side's words, so the table is only ever given
 // what is safe to print and cannot reorder the line it is on (D9).
-func shownCommand(s string) string {
-	var b strings.Builder
-	n := 0
-	for _, r := range s {
-		if n == maxShownCommand {
-			b.WriteRune('…')
-			break
-		}
+func shownCommand(s string) string { return shown(s, maxShownCommand, false) }
+
+// maxShownForeground and maxShownCwd are how many runes of a session's
+// foreground program and directory -list shows (bootstrap.md §9.4)
+// [choice: a program's name whole, and enough of a path's end to tell
+// sessions apart, so a row stays one line].
+const (
+	maxShownForeground = 16
+	maxShownCwd        = 32
+)
+
+// shown is s as -list shows any far-side text: every rune that is not
+// printable as ?, and cut to max runes with … where it was cut, at the
+// start when tail (a path's last parts tell it apart), else at the end.
+func shown(s string, max int, tail bool) string {
+	rs := []rune(s)
+	for i, r := range rs {
 		if r == utf8.RuneError || !unicode.IsPrint(r) {
-			r = '?'
+			rs[i] = '?'
 		}
-		b.WriteRune(r)
-		n++
 	}
-	return b.String()
+	switch {
+	case len(rs) <= max:
+		return string(rs)
+	case tail:
+		return "…" + string(rs[len(rs)-max:])
+	}
+	return string(rs[:max]) + "…"
 }
 
 // ListOptions is what List needs from cmd/mosey.
@@ -87,23 +100,42 @@ func List(ctx context.Context, o ListOptions) error {
 		fmt.Fprintf(o.Stdout, "no sessions on %s\n", where(o.SSH))
 		return nil
 	}
-	// The command is the last column, and there only when some session
-	// has one, so a host of shells lists as it did before commands.
-	commands := slices.ContainsFunc(rows, func(r bootstrap.ListLine) bool { return r.Command != "" })
+	// RUNNING, DIR and COMMAND are each there only when some session has
+	// one, so an older server's list, which has none of the first two,
+	// lays out as it did; COMMAND is last.
+	has := func(f func(bootstrap.ListLine) string) bool {
+		return slices.ContainsFunc(rows, func(r bootstrap.ListLine) bool { return f(r) != "" })
+	}
+	type column struct {
+		head string
+		show func(bootstrap.ListLine) string
+	}
+	columns := []column{
+		{"NAME", func(r bootstrap.ListLine) string { return r.Name }},
+		{"STATE", func(r bootstrap.ListLine) string { return r.State.String() }},
+		{"SINCE", func(r bootstrap.ListLine) string { return r.Since.Local().Format(takenOverTime) }},
+	}
+	if has(func(r bootstrap.ListLine) string { return r.Foreground }) {
+		columns = append(columns, column{"RUNNING", func(r bootstrap.ListLine) string { return shown(r.Foreground, maxShownForeground, false) }})
+	}
+	if has(func(r bootstrap.ListLine) string { return r.Cwd }) {
+		columns = append(columns, column{"DIR", func(r bootstrap.ListLine) string { return shown(r.Cwd, maxShownCwd, true) }})
+	}
+	if has(func(r bootstrap.ListLine) string { return r.Command }) {
+		columns = append(columns, column{"COMMAND", func(r bootstrap.ListLine) string { return shownCommand(r.Command) }})
+	}
 	var table bytes.Buffer
 	tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
-	if commands {
-		fmt.Fprintln(tw, "NAME\tSTATE\tSINCE\tCOMMAND")
-	} else {
-		fmt.Fprintln(tw, "NAME\tSTATE\tSINCE")
+	cells := make([]string, len(columns))
+	for i, c := range columns {
+		cells[i] = c.head
 	}
+	fmt.Fprintln(tw, strings.Join(cells, "\t"))
 	for _, r := range rows {
-		since := r.Since.Local().Format(takenOverTime)
-		if commands {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Name, r.State, since, shownCommand(r.Command))
-		} else {
-			fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Name, r.State, since)
+		for i, c := range columns {
+			cells[i] = c.show(r)
 		}
+		fmt.Fprintln(tw, strings.Join(cells, "\t"))
 	}
 	if err := tw.Flush(); err != nil {
 		return err

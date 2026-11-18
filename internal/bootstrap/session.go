@@ -14,7 +14,7 @@ import (
 // release reads every field it knows and skips the rest.
 const (
 	sessionMagic = "MOSEY-SESSION"
-	// MaxSessionLine bounds a greeting, LF included: at most 1588 bytes
+	// MaxSessionLine bounds a greeting, LF included: at most 1917 bytes
 	// are used (§9.2.1).
 	MaxSessionLine = 2048
 	// AttachProtocol is the one number of the attach protocol (server.md
@@ -82,6 +82,12 @@ type SessionLine struct {
 	// [COMMAND]` resumes only a session whose Command is its own (PLAN
 	// D8, option C).
 	Command string
+	// Foreground is the name of the program in the foreground of the
+	// session's terminal (the shell, or the job it runs, such as an
+	// editor), and Cwd that program's working directory, the user's home
+	// shown as ~ (§9.2.1). Each is "" when the spawner could not tell.
+	// They are read afresh for each greeting, and only describe.
+	Foreground, Cwd string
 	// Unknown is the key of a critical field this build does not know:
 	// ParseSessionLine sets it beside a *CriticalError. A session with
 	// one is never attached, but can be named (§9.2 step 5). Marshal
@@ -94,8 +100,8 @@ type SessionLine struct {
 // know such a field never takes the session on a guess; the peer and the
 // times only describe.
 var sessionSpec = lineSpec{
-	"cmd": true, "holder": true, "name": true, "peer": false, "sid": true,
-	"since": false, "started": false, "state": true,
+	"cmd": true, "cwd": false, "fg": false, "holder": true, "name": true,
+	"peer": false, "sid": true, "since": false, "started": false, "state": true,
 }
 
 // MarshalSessionLine is s as one line, LF included.
@@ -104,6 +110,7 @@ func MarshalSessionLine(s SessionLine) []byte {
 	if s.Command != "" {
 		w.addB64("cmd", true, []byte(s.Command))
 	}
+	addDescription(w, s.Foreground, s.Cwd)
 	if s.HasHolder {
 		w.addB64("holder", true, s.Holder[:])
 	}
@@ -138,6 +145,9 @@ func ParseSessionLine(line []byte) (SessionLine, error) {
 		if s.Command, err = parseText(f, ValidCommand, "command"); err != nil {
 			return SessionLine{}, err
 		}
+	}
+	if s.Foreground, s.Cwd, err = parseDescription(p); err != nil {
+		return SessionLine{}, err
 	}
 	if f, ok := p.known["holder"]; ok {
 		s.HasHolder = true
@@ -197,6 +207,39 @@ func ParseSessionLine(line []byte) (SessionLine, error) {
 	return s, nil
 }
 
+// addDescription adds a session's cwd and fg fields, each only when known.
+// Both lines put them straight after cmd, which is key order.
+func addDescription(w *lineWriter, fg, cwd string) {
+	if cwd != "" {
+		w.addB64("cwd", false, []byte(cwd))
+	}
+	if fg != "" {
+		w.addB64("fg", false, []byte(fg))
+	}
+}
+
+// parseDescription reads the cwd and fg fields, each bounded before it is
+// decoded and held to its own grammar.
+func parseDescription(p parsed) (fg, cwd string, err error) {
+	if f, ok := p.known["cwd"]; ok {
+		if len(f) > b64.EncodedLen(MaxCwd) {
+			return "", "", badLine("working directory of %d characters", len(f))
+		}
+		if cwd, err = parseText(f, ValidCwd, "working directory"); err != nil {
+			return "", "", err
+		}
+	}
+	if f, ok := p.known["fg"]; ok {
+		if len(f) > b64.EncodedLen(MaxForeground) {
+			return "", "", badLine("foreground name of %d characters", len(f))
+		}
+		if fg, err = parseText(f, ValidForeground, "foreground name"); err != nil {
+			return "", "", err
+		}
+	}
+	return fg, cwd, nil
+}
+
 // parseAttachProtocol checks a greeting's number, an aproto of
 // 1..maxAttachProtocol (§9.2.1). Any such number is read: whether this
 // launcher can attach a session of it is the launcher's to decide.
@@ -241,7 +284,7 @@ func parseUnix(f []byte, what string) (time.Time, error) {
 // the user's terminal but fields of a printable grammar (D9).
 const (
 	listMagic = "MOSEY-LIST"
-	// MaxListLine bounds a list line, LF included: at most 1460 bytes are
+	// MaxListLine bounds a list line, LF included: at most 1789 bytes are
 	// used (§9.4).
 	MaxListLine = 2048
 	// MaxListed is the most list lines the client shows [choice].
@@ -258,11 +301,14 @@ type ListLine struct {
 	// with no control character but tab, but it is still the far side's
 	// words, so the client shows it only through its own filter (D9).
 	Command string
+	// Foreground and Cwd are the greeting's (§9.2.1), held to their own
+	// grammars by the parser and shown through the same filter.
+	Foreground, Cwd string
 }
 
 // listSpec is the list line's fields (§9.4): the list is only shown, so
 // nothing in it is critical.
-var listSpec = lineSpec{"cmd": false, "name": false, "since": false, "state": false}
+var listSpec = lineSpec{"cmd": false, "cwd": false, "fg": false, "name": false, "since": false, "state": false}
 
 // MarshalListLine is l as one line, LF included.
 func MarshalListLine(l ListLine) []byte {
@@ -270,6 +316,7 @@ func MarshalListLine(l ListLine) []byte {
 	if l.Command != "" {
 		w.addB64("cmd", false, []byte(l.Command))
 	}
+	addDescription(w, l.Foreground, l.Cwd)
 	w.add("name", false, l.Name)
 	w.add("since", false, strconv.FormatInt(l.Since.Unix(), 10))
 	w.add("state", false, l.State.String())
@@ -293,6 +340,9 @@ func ParseListLine(line []byte) (ListLine, error) {
 		if l.Command, err = parseText(f, ValidCommand, "command"); err != nil {
 			return ListLine{}, err
 		}
+	}
+	if l.Foreground, l.Cwd, err = parseDescription(p); err != nil {
+		return ListLine{}, err
 	}
 	f, err := p.mandatory("name")
 	if err != nil {

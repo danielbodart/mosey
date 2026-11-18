@@ -49,12 +49,14 @@ func TestTheLongestSessionLineFitsItsBound(t *testing.T) {
 	s.Peer = netip.MustParseAddrPort("[ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe]:65535")
 	s.Name = strings.Repeat("n", MaxSessionName)
 	s.Command = strings.Repeat("é", MaxStartText/2)
+	s.Cwd = "~/" + strings.Repeat("d", MaxCwd-2)
+	s.Foreground = strings.Repeat("f", MaxForeground)
 	line := MarshalSessionLine(s)
-	// 1588 with a 5-digit number (§9.2.1); 255 is three.
-	if len(line) != 1588-2 || len(line) > MaxSessionLine {
-		t.Fatalf("%d bytes, not the 1586 §9.2.1 derives for aproto 255, or over %d", len(line), MaxSessionLine)
+	// 1917 with a 5-digit number (§9.2.1); 255 is three.
+	if len(line) != 1917-2 || len(line) > MaxSessionLine {
+		t.Fatalf("%d bytes, not the 1915 §9.2.1 derives for aproto 255, or over %d", len(line), MaxSessionLine)
 	}
-	if got, err := ParseSessionLine(line); err != nil || got.Command != s.Command {
+	if got, err := ParseSessionLine(line); err != nil || got.Command != s.Command || got.Cwd != s.Cwd || got.Foreground != s.Foreground {
 		t.Fatalf("%+v, %v", got, err)
 	}
 }
@@ -234,13 +236,15 @@ func TestAListLineRoundTripsAndFitsItsBound(t *testing.T) {
 		t.Errorf("%q", got)
 	}
 	longest.Command = strings.Repeat("é", MaxStartText/2)
+	longest.Cwd = strings.Repeat("ü", MaxCwd/2)
+	longest.Foreground = strings.Repeat("f", MaxForeground)
 	line := MarshalListLine(longest)
-	if got, err := ParseListLine(line); err != nil || got.Command != longest.Command {
+	if got, err := ParseListLine(line); err != nil || got != longest {
 		t.Errorf("%+v, %v", got, err)
 	}
-	// 1460 with a 5-digit number (§9.4); this one has one digit.
-	if n := len(line); n != 1460-4 || n > MaxListLine {
-		t.Errorf("the longest list line is %d bytes, §9.4 says 1456 for number 1", n)
+	// 1789 with a 5-digit number (§9.4); this one has one digit.
+	if n := len(line); n != 1789-4 || n > MaxListLine {
+		t.Errorf("the longest list line is %d bytes, §9.4 says 1785 for number 1", n)
 	}
 }
 
@@ -284,6 +288,13 @@ func TestAListLineThatBreaksARuleIsRefused(t *testing.T) {
 		"a command not utf-8":      addField(good, "cmd="+b64.EncodeToString([]byte("\xc0\xaf"))),
 		"a command over 1024":      addField(good, "cmd="+b64.EncodeToString(bytes.Repeat([]byte("a"), MaxStartText+1))),
 		"a command, not canonical": addField(good, "cmd=YR"),
+		"an escape in the cwd":     addField(good, "cwd="+b64.EncodeToString([]byte("~/x\x1b[2J"))),
+		"a tab in the cwd":         addField(good, "cwd="+b64.EncodeToString([]byte("~/a\tb"))),
+		"a cwd over 192":           addField(good, "cwd="+b64.EncodeToString(bytes.Repeat([]byte("a"), MaxCwd+1))),
+		"a newline in fg":          addField(good, "fg="+b64.EncodeToString([]byte("vim\n"))),
+		"an fg over 48":            addField(good, "fg="+b64.EncodeToString(bytes.Repeat([]byte("a"), MaxForeground+1))),
+		"an fg not utf-8":          addField(good, "fg="+b64.EncodeToString([]byte("\xff"))),
+		"an empty fg":              addField(good, "fg="),
 	} {
 		if _, err := ParseListLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%s: %q gave %v", name, line, err)
@@ -297,6 +308,8 @@ func FuzzParseListLine(f *testing.F) {
 	f.Add([]byte("MOSEY-LIST 1 name=a since=1 state=new !zz=dev\n"))
 	withCommand := sampleListLine()
 	withCommand.Command = "claude --resume\tü"
+	f.Add(MarshalListLine(withCommand))
+	withCommand.Foreground, withCommand.Cwd = "claude", "~/Projects/mosey"
 	f.Add(MarshalListLine(withCommand))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		l, err := ParseListLine(line)
@@ -321,6 +334,7 @@ func FuzzParseListLine(f *testing.F) {
 		if l.Command != "" && !referenceText(l.Command, true) {
 			t.Fatalf("accepted command %q", l.Command)
 		}
+		checkDescription(t, l.Foreground, l.Cwd)
 	})
 }
 
@@ -330,6 +344,8 @@ func FuzzParseSessionLine(f *testing.F) {
 	n.State, n.Peer, n.HasHolder = SessionNew, netip.AddrPort{}, false
 	f.Add(MarshalSessionLine(n))
 	n.Command = "sh -c 'echo $((6*7))'\tü"
+	f.Add(MarshalSessionLine(n))
+	n.Foreground, n.Cwd = "vim", "/srv/ü"
 	f.Add(MarshalSessionLine(n))
 	f.Add([]byte(addField(string(MarshalSessionLine(n)), "later=1")))
 	f.Add([]byte(addField(string(MarshalSessionLine(n)), "!later=1")))
@@ -371,6 +387,7 @@ func FuzzParseSessionLine(f *testing.F) {
 		if s.Command != "" && !referenceText(s.Command, true) || len(line) > MaxSessionLine {
 			t.Fatalf("accepted command %q in %d bytes", s.Command, len(line))
 		}
+		checkDescription(t, s.Foreground, s.Cwd)
 	})
 }
 
@@ -408,4 +425,40 @@ func FuzzReadList(f *testing.F) {
 			}
 		}
 	})
+}
+
+// checkDescription is the fuzz targets' check of an accepted fg and cwd
+// against the reference: no control character, tab included, and within
+// their bounds (§9.2.1).
+func checkDescription(t *testing.T, fg, cwd string) {
+	t.Helper()
+	if fg != "" && (!referenceText(fg, false) || len(fg) > MaxForeground) {
+		t.Fatalf("accepted foreground %q", fg)
+	}
+	if cwd != "" && (!referenceText(cwd, false) || len(cwd) > MaxCwd) {
+		t.Fatalf("accepted cwd %q", cwd)
+	}
+}
+
+// What runs in a session and where are optional, non-critical fields of
+// both the greeting and the list line, so an older reader skips them and
+// a newer one reads a line without them (§9.2.1, §9.4).
+func TestTheForegroundAndCwdRoundTripAndAreOptional(t *testing.T) {
+	s := sampleSessionLine()
+	s.Foreground, s.Cwd = "claude", "~/Projects/mosey"
+	line := MarshalSessionLine(s)
+	if !bytes.Contains(line, []byte(" cwd=")) || !bytes.Contains(line, []byte(" fg=Y2xhdWRl ")) {
+		t.Errorf("%q", line)
+	}
+	if got, err := ParseSessionLine(line); err != nil || got.Foreground != s.Foreground || got.Cwd != s.Cwd {
+		t.Errorf("%+v, %v", got, err)
+	}
+	l := sampleListLine()
+	l.Foreground, l.Cwd = s.Foreground, s.Cwd
+	if got, err := ParseListLine(MarshalListLine(l)); err != nil || got != l {
+		t.Errorf("%+v, %v", got, err)
+	}
+	if bytes.Contains(MarshalListLine(sampleListLine()), []byte("fg=")) || bytes.Contains(MarshalSessionLine(sampleSessionLine()), []byte("cwd=")) {
+		t.Error("an unknown foreground or cwd was written")
+	}
 }

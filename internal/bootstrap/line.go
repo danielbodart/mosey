@@ -52,6 +52,14 @@ const (
 	// tty's canonical mode holds, so typed text and its Enter are always
 	// one line the shell can read.
 	MaxStartText = 1024
+	// MaxForeground bounds a session's foreground process name, in bytes
+	// (§9.2.1) [choice: a program's name, not its arguments, for one narrow
+	// column of -list].
+	MaxForeground = 48
+	// MaxCwd bounds a session's working directory, in bytes (§9.2.1)
+	// [choice: enough of a path's tail to tell sessions apart, with the
+	// greeting still under MaxSessionLine].
+	MaxCwd = 192
 )
 
 const (
@@ -670,8 +678,19 @@ func ValidType(t string) bool { return validText(t, true) }
 // one line, is not.
 func ValidCommand(t string) bool { return validText(t, true) }
 
-func validText(s string, tab bool) bool {
-	if len(s) < 1 || len(s) > MaxStartText || !utf8.ValidString(s) {
+// ValidForeground says whether t may be a session's foreground process
+// name (§9.2.1's fgtext): 1 to MaxForeground bytes of UTF-8 with no
+// control character, tab included, so it is one cell of one line.
+func ValidForeground(t string) bool { return validTextMax(t, MaxForeground, false) }
+
+// ValidCwd says whether t may be a session's working directory (§9.2.1's
+// cwdtext): as ValidForeground, up to MaxCwd bytes.
+func ValidCwd(t string) bool { return validTextMax(t, MaxCwd, false) }
+
+func validText(s string, tab bool) bool { return validTextMax(s, MaxStartText, tab) }
+
+func validTextMax(s string, max int, tab bool) bool {
+	if len(s) < 1 || len(s) > max || !utf8.ValidString(s) {
 		return false
 	}
 	for _, r := range s {

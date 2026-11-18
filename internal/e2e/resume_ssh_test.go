@@ -212,7 +212,7 @@ func TestSessionsThroughRealSSH(t *testing.T) {
 		t.Fatalf("mosey -list exited %d:\n%s", status, out)
 	}
 	for _, n := range []string{name, other, fresh} {
-		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(n) + `\s+attached\s+\d{4}-\d\d-\d\dT\S+\s*$`).MatchString(out) {
+		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(n) + `\s+attached\s+\d{4}-\d\d-\d\dT\S+\s+bash\s+~$`).MatchString(out) {
 			t.Errorf("mosey -list does not show %s attached:\n%s", n, out)
 		}
 	}

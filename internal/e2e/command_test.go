@@ -97,8 +97,8 @@ func TestALocalCommandIsReturnedToAfterADetachAndNeverMixedWithAShell(t *testing
 	}
 
 	out, st := localCmd(t, mosey, m, "-list")
-	if st != 0 || !regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(ai)+`\s+detached\s+\S+\s+sh$`).MatchString(out) ||
-		!regexp.MustCompile(`(?m)^NAME\s+STATE\s+SINCE\s+COMMAND$`).MatchString(out) {
+	if st != 0 || !regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(ai)+`\s+detached\s+\S+\s+sh\s+~\s+sh$`).MatchString(out) ||
+		!regexp.MustCompile(`(?m)^NAME\s+STATE\s+SINCE\s+RUNNING\s+DIR\s+COMMAND$`).MatchString(out) {
 		t.Fatalf("mosey -list exited %d, without %s and its command:\n%s", st, ai, out)
 	}
 

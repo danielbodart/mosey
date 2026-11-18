@@ -11,6 +11,7 @@ import (
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/ipc"
+	"github.com/danielbodart/mosey/internal/pty"
 )
 
 // acceptBackoff is how long serveAttach waits after an accept that failed
@@ -171,6 +172,7 @@ func (s *spawner) checkResumed(line []byte) error {
 // proto last said, unless a resume's credential is out, which holds the
 // session as attached until it can no longer be confirmed.
 func (s *spawner) greeting() bootstrap.SessionLine {
+	fg, cwd := s.foreground()
 	s.greetMu.Lock()
 	defer s.greetMu.Unlock()
 	g := bootstrap.SessionLine{
@@ -178,6 +180,7 @@ func (s *spawner) greeting() bootstrap.SessionLine {
 		SessionID:      s.sid, Name: s.name,
 		Started: s.started, State: s.state, Since: s.since, Peer: s.peer,
 		Holder: s.holder, HasHolder: s.hasHolder, Command: s.command,
+		Foreground: fg, Cwd: cwd,
 	}
 	if time.Now().Before(s.holdUntil) {
 		g.State, g.Since, g.Holder, g.HasHolder = bootstrap.SessionAttached, s.holdFrom, s.hold, true
@@ -190,6 +193,34 @@ func (s *spawner) greeting() bootstrap.SessionLine {
 		}
 	}
 	return g
+}
+
+// shellRef is the running shell, for foreground.
+type shellRef struct {
+	pid  int
+	home string
+}
+
+// foreground is the greeting's fg and cwd (bootstrap.md §9.2.1): the
+// leader of the pty's foreground process group, which is the shell at its
+// prompt and the job it runs otherwise (claude, typed at the prompt or as
+// the session's command), so -list shows what the user would see. Should
+// the leader have gone while others of its group live on, or the group be
+// unreadable, the shell stands in. Read afresh for every greeting: two
+// small /proc files and a readlink, and a lister is a person at a prompt.
+func (s *spawner) foreground() (fg, cwd string) {
+	sh := s.shellOf.Load()
+	if sh == nil {
+		return "", ""
+	}
+	var p pty.Program
+	if pg, err := pty.ForegroundGroup(s.master); err == nil && pg > 0 {
+		p = pty.ProgramIn("/proc", pg)
+	}
+	if p.Name == "" {
+		p = pty.ProgramIn("/proc", sh.pid)
+	}
+	return describeProgram(p, sh.home)
 }
 
 // setAttached records that a client holds the session with credential

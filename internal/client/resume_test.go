@@ -154,6 +154,47 @@ func TestTheListShowsEachSessionsCommandAndNothingUnprintableOfIt(t *testing.T) 
 	}
 }
 
+// What runs in each session and where are columns before the command,
+// there only when some session says, filtered as the command is, a long
+// directory cut at its start so its end shows (bootstrap.md §9.4, D9).
+func TestTheListShowsWhatRunsInEachSessionAndWhere(t *testing.T) {
+	dir := t.TempDir()
+	ssh := fakeSSH(t, dir, "hostname far\n", 0)
+	server := filepath.Join(dir, "mosey")
+	b := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
+	script := "#!/bin/sh\n[ \"$1\" = --serve=list ] || exit 9\n" +
+		"printf 'MOSEY-LIST 1 cwd=" + b("~/Projects/mosey") + " fg=" + b("claude") + " name=ai since=1794651234 state=attached\\n'\n" +
+		"printf 'MOSEY-LIST 1 cwd=" + b("~") + " fg=" + b("bash") + " name=shell since=1794651234 state=detached\\n'\n" +
+		"printf 'MOSEY-LIST 1 cwd=" + b("/srv/"+strings.Repeat("d", 40)+"/end") + " fg=" + b("v\u202eim") + " name=deep since=1794651234 state=detached\\n'\n" +
+		"printf 'MOSEY-LIST 1 name=old since=1794651234 state=detached\\n'\n"
+	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	if err := List(context.Background(), ListOptions{
+		SSH:    bootstrap.SSH{Program: ssh, Destination: "far", Server: server},
+		Stdout: &out, Stderr: &errs,
+	}); err != nil {
+		t.Fatalf("%v; stderr %q", err, errs.String())
+	}
+	got := out.String()
+	since := time.Unix(1794651234, 0).Local().Format(takenOverTime)
+	for _, want := range []string{
+		"NAME   STATE     SINCE" + strings.Repeat(" ", len(since)-5+2) + "RUNNING  DIR\n",
+		"ai     attached  " + since + "  claude   ~/Projects/mosey\n",
+		"shell  detached  " + since + "  bash     ~\n",
+		"deep   detached  " + since + "  v?im     …" + strings.Repeat("d", 28) + "/end\n",
+		"old    detached  " + since + "\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the table lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "COMMAND") || strings.Contains(got, "\u202e") {
+		t.Errorf("the table shows what it should not:\n%q", got)
+	}
+}
+
 func FuzzListCommand(f *testing.F) {
 	f.Add("claude --resume")
 	f.Add("ls\tgnp.exe\u202eyes\u00a0\u200b\x1b[2J\xff")

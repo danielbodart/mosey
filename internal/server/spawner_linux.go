@@ -159,6 +159,11 @@ type spawner struct {
 	// again and -list can show it (bootstrap.md §9.2.1, §9.2.3).
 	command string
 	started time.Time
+	// shellOf is the running shell's pid and the user's home, for the
+	// greeting's fg and cwd (bootstrap.md §9.2.1), which the attach
+	// socket's goroutines read; nil before the shell starts and after it
+	// exits.
+	shellOf atomic.Pointer[shellRef]
 	attach  *attachListener
 	// hangups carries mosey -kill's Hangup from the attach socket to the
 	// supervision loop (bootstrap.md §9.5).
@@ -653,6 +658,7 @@ func (s *spawner) startShell(cl bootstrap.ClientLine, agentSock string, slave *o
 	}()
 	c.cmd = &exec.Cmd{Process: proc}
 	s.shell = c
+	s.shellOf.Store(&shellRef{pid: proc.Pid, home: home})
 	s.log.Info("shell started", "shell", path, "pid", proc.Pid, "command", cl.Command != "")
 	return nil
 }
@@ -806,6 +812,7 @@ func (s *spawner) supervise(ctx context.Context) error {
 		case st := <-shellDone:
 			shellDone = nil
 			s.shell = nil
+			s.shellOf.Store(nil)
 			// The session is ending: out of sight now, before the client
 			// hears of it, so the client's next plain `mosey HOST` cannot
 			// pick it as detached and fail to resume it.

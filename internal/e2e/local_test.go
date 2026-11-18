@@ -103,7 +103,7 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 
 	first := startLocal(t, "the first local client", mosey, m, "", []string{"-predict", "always"})
 	first.shows("$")
-	first.typeLine("M=kept-$((40+2)); echo set-$((1+1))")
+	first.typeLine("mkdir proj; cd proj; M=kept-$((40+2)); echo set-$((1+1))")
 	first.shows("set-2")
 	name := first.name()
 	// mosey localhost is this machine: the tab is not marked remote
@@ -123,8 +123,10 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 		t.Errorf("the local client predicted nothing; log:\n%s", first.log())
 	}
 
+	// -list shows what runs in it and where (bootstrap.md §9.4): the
+	// shell, at its prompt, in the directory it went to.
 	out, status := localCmd(t, mosey, m, "-list")
-	if status != 0 || !regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(name)+`\s+detached\s+\d{4}-`).MatchString(out) ||
+	if status != 0 || !regexp.MustCompile(`(?m)^`+regexp.QuoteMeta(name)+`\s+detached\s+\d{4}-\S+\s+sh\s+~/proj$`).MatchString(out) ||
 		!strings.Contains(out, "attach to one with: mosey -s NAME localhost\n") {
 		t.Fatalf("mosey -list exited %d:\n%s", status, out)
 	}
@@ -150,6 +152,12 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 	third.shows("typed-42")
 	third.shows(filepath.Join(m.home, "work"))
 	fresh := third.name()
+	// A job the shell runs is what -list shows of it.
+	third.typeLine("sleep 1000")
+	waitFor(t, "-list to show the sleep", func() bool {
+		out, _ := localCmd(t, mosey, m, "-list")
+		return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(fresh) + `\s+attached\s+\S+\s+sleep\s+~/work$`).MatchString(out)
+	})
 	if out, status := localCmd(t, mosey, m, "-kill", fresh); status != 0 || !strings.Contains(out, "ended session "+fresh+" on localhost") {
 		t.Errorf("mosey -kill %s exited %d:\n%s", fresh, status, out)
 	}

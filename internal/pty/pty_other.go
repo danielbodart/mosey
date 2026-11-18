@@ -24,4 +24,6 @@ func echoes(*os.File) (bool, error) { return false, errors.ErrUnsupported }
 
 func foregroundRoot(*os.File) (bool, error) { return false, errors.ErrUnsupported }
 
+func foregroundGroup(*os.File) (int, error) { return 0, errors.ErrUnsupported }
+
 func sessionLeader() *syscall.SysProcAttr { return &syscall.SysProcAttr{Setsid: true, Setctty: true} }

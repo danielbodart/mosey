@@ -1259,6 +1259,8 @@ b64text = base64url, no padding, of 1..1024 bytes
 dirtext = 1..1024 bytes of UTF-8, no control character (Unicode Cc)
 typetext = 1..1024 bytes of UTF-8, no control character (Unicode Cc) but TAB
 cmdtext = typetext
+fgtext  = 1..48 bytes of UTF-8, no control character (Unicode Cc)
+cwdtext = 1..192 bytes of UTF-8, no control character (Unicode Cc)
 ```
 
 | Field | Meaning |
@@ -1867,6 +1869,8 @@ aproto       = dec              ; the attach protocol the spawner speaks,
 | Field | Value | Mandatory | Critical | Why critical or not |
 |---|---|---|---|---|
 | `!cmd` | `b64text` (§6.2): the command the session was started with | optional | yes | it selects: `auto` takes only a session started with its own command (§9.2). A launcher that ignored it would resume a running command for a plain `mosey DEST` |
+| `cwd` | `b64text` of a `cwdtext` (§6.2): the foreground program's working directory | optional | no | it describes, for `-list` |
+| `fg` | `b64text` of an `fgtext` (§6.2): the foreground program's name | optional | no | it describes, for `-list` |
 | `!holder` | `b64(8)`: the credential id that holds the session | optional | yes | it restricts: R3 takes a session back only if this is its own credential (§9.2.2). Ignored, a reconnect could take a session from whoever took it over |
 | `!name` | `sname` (§6.2) | mandatory | yes | it selects: `-s NAME` and `-kill NAME` find the session by it |
 | `peer` | `addrport`: `netip.AddrPort.String()` of the last attached client, unmapped, no zone | optional | no | it describes, for the takeover message |
@@ -1891,6 +1895,23 @@ of the ClientLine that created the session, exactly as it came (§6.2,
 §9.2.3), for as long as the session lives; `auto` matches on it (§9.2)
 and `-list` shows it (§9.4).
 
+`fg` and `cwd` say what the user would find at the session's keyboard,
+read afresh for each greeting so `-list` can tell sessions apart. The
+program is the leader of the pty's foreground process group (TIOCGPGRP
+on the master): the shell at its prompt, or the job it gave the terminal
+to, such as an editor or `claude`, whether typed at the prompt or the
+session's command. Should that leader be gone or unreadable, the shell
+stands in. Its name is argv[0]'s base name less a login shell's `-`,
+which is the name a program gives itself (a Nix-wrapped `claude` has comm
+`.claude-unwrapp` but argv[0] `claude` [M] /proc on NixOS, 2026-11-18),
+else its comm; its directory is where `/proc/PID/cwd` points, the user's
+home written `~` as a prompt writes it. Both are read as the user, who
+owns the processes; one that is not readable (a `sudo` job's directory)
+is left out. The spawner fits each to its grammar: every byte that is not
+UTF-8 and every control character as `?`, cut on a rune boundary with
+`…`, a directory at its start so its end shows. Each is absent when
+unknown, and both outside Linux.
+
 **Stable** (D8 V1, `versioning.md` §5). `aproto` is the one number of the
 attach protocol (`server.md` §2.8, the greeting and the messages that
 follow it) the session's spawner speaks, and names only its envelope:
@@ -1904,8 +1925,9 @@ launcher does not know is one it cannot judge: the session is not chosen
 by `auto`, and `name:NAME` or `resume:SID` naming it is refused as for
 another attach protocol, with `attach` and its own number on both sides.
 
-`MaxSessionLine` = 2048 bytes [derived: the longest greeting is 1588
-bytes: `MOSEY-SESSION` and 5 digits 19; ` !cmd=` 1372; ` !holder=` 20;
+`MaxSessionLine` = 2048 bytes [derived: the longest greeting is 1917
+bytes: `MOSEY-SESSION` and 5 digits 19; ` !cmd=` 1372; ` cwd=` 261;
+` fg=` 68; ` !holder=` 20;
 ` !name=` 39; ` peer=` and 47, 53; ` !sid=` 28; ` since=` and
 ` started=` with the 12-digit bound on the times, 19 and 21; ` !state=`
 and `detached`, 16; LF; then the next power of two]. A seqpacket message
@@ -2176,6 +2198,8 @@ list-line = "MOSEY-LIST" SP "1" *(SP field) LF     ; §6.1, fields in key order
 | Field | Value | Mandatory | Critical | Why critical or not |
 |---|---|---|---|---|
 | `cmd` | `b64text` (§6.2): the greeting's `cmd` | optional | no | the list is only shown: every field describes |
+| `cwd` | `b64text` of a `cwdtext`: the greeting's `cwd` | optional | no | as `cmd` |
+| `fg` | `b64text` of an `fgtext`: the greeting's `fg` | optional | no | as `cmd` |
 | `name` | `sname` | mandatory | no | as `cmd` |
 | `since` | `dec`: unix seconds of the last change of state | mandatory | no | as `cmd` |
 | `state` | `new` / `attached` / `detached` | mandatory | no | as `cmd` |
@@ -2187,8 +2211,8 @@ The client reads ssh's stdout (at most 2 MiB [derived: `MaxListed` ×
 not a `MOSEY-` line (a login shell's chatter, §6.5), and parses each
 `MOSEY-LIST` line with `ParseListLine`: canonical, at most `MaxListLine` =
 2048 bytes [derived: `MOSEY-LIST` and 5 digits 16; ` cmd=` 1371;
-` name=` 38; ` since=` 19; ` state=` and `detached` 15; LF; 1460 in
-all; then the next power of two],
+` cwd=` 261; ` fg=` 68; ` name=` 38; ` since=` 19; ` state=` and
+`detached` 15; LF; 1789 in all; then the next power of two],
 and fuzzed, since a hostile server writes it. At most `MaxListed` = 1024
 lines are shown [choice]; a line that does not parse is not shown, and
 the client says how many it dropped. Every field but `cmd` is from a
@@ -2201,12 +2225,16 @@ overrides, non-ASCII spaces) as `?`, and cut to 60 runes with `…` after
 the user's own and in their shell history]. So the table the client lays
 out itself cannot carry an escape sequence, nor reorder what it shows
 (D9). It is the last column, shown only when some session has a command,
-and empty for one that has none:
+and empty for one that has none. `fg` and `cwd` are shown the same way,
+as `RUNNING` cut to 16 runes and `DIR` cut to its last 32 runes with `…`
+before [choice: a program's name whole and enough of a path's end to
+tell sessions apart, so a row stays one line], each a column only when
+some session has it, so an older server's list lays out as before:
 
 ```
-NAME          STATE     SINCE                      COMMAND
-quiet-heron   detached  2026-11-14T09:30:12+00:00
-brave-otter   attached  2026-11-16T15:02:40+00:00  claude
+NAME         STATE     SINCE                      RUNNING  DIR               COMMAND
+quiet-heron  detached  2026-11-14T09:30:12+00:00  bash     ~
+brave-otter  attached  2026-11-16T15:02:40+00:00  claude   ~/Projects/mosey  claude
 ```
 
 `SINCE` is in the client's local zone, as §9.1's times are. With no line it prints `no sessions on DEST` (`on localhost` for this machine, §2.2).
@@ -2343,6 +2371,7 @@ type SessionLine struct {
 	Peer            netip.AddrPort // the zero AddrPort is absent
 	Holder          [8]byte        // HasHolder false is absent
 	Command         string         // !cmd; "" is absent (§9.2.3)
+	Foreground, Cwd string         // fg, cwd; "" is absent
 	HasHolder       bool
 	// Unknown is the key of a critical field this build does not know;
 	// ParseSessionLine sets it beside a *CriticalError, so the launcher
@@ -2362,6 +2391,7 @@ type ListLine struct {
 	State   SessionState
 	Since   time.Time
 	Command string // cmd; "" is absent
+	Foreground, Cwd string // fg, cwd; "" is absent
 }
 
 const (
@@ -2542,7 +2572,8 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | Default size when the terminal says 0 | 80×24 | [choice]; the VT100's |
 | stderr filter line cut | 1024 B | [choice] |
 | Taken-over exit status | 3 | ours |
-| `MaxSessionLine` | 2048 B | [derived] §9.2.1: at most 1588 B used |
+| `MaxSessionLine` | 2048 B | [derived] §9.2.1: at most 1917 B used |
+| `MaxForeground`, `MaxCwd` | 48 B, 192 B | [choice] §9.2.1: a program's name; a path's tail, the greeting under `MaxSessionLine` |
 | `bootstrap.AttachProtocol` | 1 | ours (§9.2.1, `server.md` §2.8, `versioning.md` §5: reset from 2 by Dan, 2026-11-17) |
 | Greeting deadline (launcher, lister) | 2 s per socket | [choice]: the spawner answers at once; a hung one is skipped, not waited on |
 | Session name (`sname`) | 1–32 B of letters, digits, `-_.` | [choice] §6.2: safe unquoted in any shell and on any terminal |
@@ -2554,7 +2585,7 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | `ReconnectTry` (one R3 try, to the dial) | 60 s | [D] §9.2.2: twice the credential TTL |
 | `IdleTimeout` (a detached session's shell is hung up) | 7 days | [D] Dan, 2026-11-15 (D8 R4); a constant (PLAN O14) |
 | `HangupGrace` (SIGHUP, then the teardown) | 10 s | [choice] §9.3 |
-| `MaxListLine`, `MaxListed` | 2048 B, 1024 lines | [derived] §9.4: at most 1460 B used; [choice] |
+| `MaxListLine`, `MaxListed` | 2048 B, 1024 lines | [derived] §9.4: at most 1789 B used; [choice] |
 | R3: no session | exit 1 | [choice] §9.2.2 |
 
 ---
@@ -2679,16 +2710,20 @@ durations in the commit message; 10 s each in CI):
   the grammar.
 - `FuzzParseSessionLine`: no panic; anything accepted re-marshals to the
   identical bytes less its unknown fields, and its `cmd`, if any, is a
-  `cmdtext`; seeds with and without `cmd`.
+  `cmdtext`, its `fg` an `fgtext` and its `cwd` a `cwdtext`; seeds with and
+  without each.
 - `FuzzParseListLine`: no panic; anything accepted re-marshals to the
   identical bytes less its unknown fields, every field but `cmd` is
-  printable ASCII with no space, and `cmd` is a `cmdtext`; seeds with and
-  without `cmd`;
+  printable ASCII with no space, and `cmd` is a `cmdtext`, `fg` an
+  `fgtext` and `cwd` a `cwdtext`; seeds with and without each;
   `FuzzReadList` for the whole of `-list`'s output: at most
   `MaxListed` rows, none longer than its fields allow.
 - `FuzzListCommand` (`internal/client`): what `-list` shows of any
   string is at most 60 runes and `…`, every one printable
   (`unicode.IsPrint`).
+- `FuzzFitText` (`internal/server`): what the spawner makes of any
+  name or path is valid UTF-8 within its bound and an `fgtext` and
+  `cwdtext`, and one already within them is unchanged.
 
 **End to end, `internal/e2e`:**
 

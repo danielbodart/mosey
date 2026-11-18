@@ -109,7 +109,7 @@ func echoes(master *os.File) (bool, error) {
 	return on, err
 }
 
-func foregroundRoot(master *os.File) (bool, error) {
+func foregroundGroup(master *os.File) (int, error) {
 	var pgrp int
 	err := control(master, func(fd int) error {
 		var err error
@@ -117,7 +117,15 @@ func foregroundRoot(master *os.File) (bool, error) {
 		return err
 	})
 	if err != nil {
-		return false, fmt.Errorf("reading the pty's foreground process group: %w", err)
+		return 0, fmt.Errorf("reading the pty's foreground process group: %w", err)
+	}
+	return pgrp, nil
+}
+
+func foregroundRoot(master *os.File) (bool, error) {
+	pgrp, err := foregroundGroup(master)
+	if err != nil {
+		return false, err
 	}
 	if pgrp <= 0 {
 		return false, nil
