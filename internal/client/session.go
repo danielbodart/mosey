@@ -64,6 +64,10 @@ type Session struct {
 	// ErrSessionGone and *TakenOverError end the session; any other is
 	// tried again after the backoff. Nil is no reconnect.
 	Reconnect func(ctx context.Context, holder [8]byte) (*Reattach, error)
+	// CloseIfIdle, if set, is called when the client detaches cleanly on
+	// ctx cancellation or terminal EOF (local -close-if-idle), with the
+	// session id and the current link's credential id.
+	CloseIfIdle func(sid [16]byte, cred [8]byte)
 }
 
 // Reattach is what one R3 try's bootstrap gives: a new socket and
@@ -162,6 +166,9 @@ func (s *Session) Run(ctx context.Context) error {
 	if errors.Is(err, errSessionEnded) {
 		l.retire()
 		return nil
+	}
+	if err == nil && s.CloseIfIdle != nil {
+		s.CloseIfIdle(s.Credential.SessionID, l.holder)
 	}
 	// This client is going away, or failed: tell the server, which keeps
 	// the session for a resume (bootstrap.md §9.3). A revoked connection

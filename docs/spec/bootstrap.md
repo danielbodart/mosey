@@ -77,7 +77,7 @@ enter raw mode, run Session
 ## 2. The command line the client accepts
 
 ```
-mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-- SSH-OPTION...] [DESTINATION [COMMAND [ARG...]]]
+mosey [-remote PATH] [-upload ask|yes|no] [-ssh PROGRAM] [-A | -a] [-s NAME | -new | -list | -kill NAME] [-dir DIR] [-type TEXT] [-close-if-idle] [-- SSH-OPTION...] [DESTINATION [COMMAND [ARG...]]]
 ```
 
 The words are read in that order, and each part ends where the next
@@ -147,6 +147,14 @@ stdout and exit 0.
   session can open in a project and start a program there, and leave the
   user in that directory's shell, with their whole `PATH`, when the
   program exits.
+- `-close-if-idle` is for local sessions only (§2.2; a usage error with
+  any other `DESTINATION`, or with `-list` or `-kill`). When the client
+  receives `SIGHUP` or `SIGTERM` (or its terminal closes) while attached,
+  it connects to the session's attach socket and sends `HangupIfIdle`
+  with its current credential id (`server.md` §2.4, §2.6) before exiting
+  cleanly: if the shell is idle at its prompt with no other processes in
+  the session and no other client has taken over, the spawner ends the
+  session; otherwise the session stays alive and detached.
 - `SSH-OPTION`s after `--` are filtered (§2.1) and passed to both ssh
   invocations.
 - `COMMAND [ARG...]`, the words after `DESTINATION`, are a command to run
@@ -289,9 +297,9 @@ attached: one taken over ssh with `-A` gets that client's agent, bound as
 **Flags that need ssh.** `-upload` and `-ssh` say how to reach a host or
 what to copy to it, and ssh options after `--` are for an ssh there is
 not; on this machine they are a usage error (`mosey: -upload has no
-use with localhost, which runs without ssh`), not silently ignored. `-A`,
-`-a`, `-remote`, `-predict`, `-dir`, `-type` and the session flags mean
-what they mean over ssh.
+use with localhost, which runs without ssh`), not silently ignored. `-A`, `-a`, `-remote`, `-predict`, `-dir`, `-type`, `-close-if-idle`
+and the session flags mean what they mean over ssh (`-close-if-idle` is
+local only).
 
 **Messages** name `localhost` where they name `DEST` (`no sessions on
 localhost`, `work is not a directory on localhost`), but a hint names no

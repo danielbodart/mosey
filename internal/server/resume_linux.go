@@ -87,6 +87,26 @@ func (s *spawner) serveResume(f *os.File) error {
 		}
 		return nil
 	}
+	if hi, ok := m.(ipc.HangupIfIdle); ok {
+		// local mosey -close-if-idle (server.md §2.4): wait for the
+		// supervision loop to check ownership and idleness, then close.
+		req := idleHangupRequest{cred: hi.Credential, done: make(chan struct{})}
+		timeout := time.NewTimer(T2)
+		defer timeout.Stop()
+		select {
+		case s.idleHangups <- req:
+		case <-s.superviseDone:
+			return nil
+		case <-timeout.C:
+			return nil
+		}
+		select {
+		case <-req.done:
+		case <-s.superviseDone:
+		case <-timeout.C:
+		}
+		return nil
+	}
 	refuse := func(err error) error {
 		conn.Send(ipc.Failed{Text: printableASCII(err.Error(), ipc.MaxFailed)})
 		return err
@@ -257,6 +277,19 @@ func (s *spawner) holdFor(cred, requester [8]byte, hasRequester bool) {
 	now := time.Now()
 	s.hold, s.holdFrom, s.holdUntil = cred, now, now.Add(ttl)
 	s.holdOwner, s.hasHoldOwner = requester, hasRequester
+}
+
+// heldBy reports whether cred still holds (or last held) the session, with
+// no takeover by another client in flight (server.md §2.4).
+func (s *spawner) heldBy(cred [8]byte) bool {
+	s.greetMu.Lock()
+	defer s.greetMu.Unlock()
+	if time.Now().Before(s.holdUntil) {
+		if s.hold != cred && (!s.hasHoldOwner || s.holdOwner != cred) {
+			return false
+		}
+	}
+	return s.holder == cred
 }
 
 // serveAgent accepts on the agent socket until it closes, and passes each

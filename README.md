@@ -289,6 +289,10 @@ With no host, mosey uses this computer, without ssh, as tmux does:
 - mosey refuses `-upload`, `-ssh` and ssh options here, because there is
   no ssh.
 - A command needs a host before it: `mosey localhost htop`.
+- `-close-if-idle` stops a local session when you close the terminal
+  window, if the shell is at its prompt with no running or background
+  jobs. If a command runs or a job is in the background, the session
+  detaches as usual. mosey refuses `-close-if-idle` for remote hosts.
 - Only the word `localhost` is this computer. `mosey 127.0.0.1` and
   `mosey me@localhost` log in through ssh, as for all other hosts.
 
@@ -328,6 +332,8 @@ session:
 - `exit` or Ctrl-D in the **remote** shell, or a different action that
   stops that shell.
 - `mosey -kill NAME host`.
+- Closing the terminal of a local `mosey -close-if-idle` session when
+  the shell is idle, with no running or background jobs.
 
 **Events on your computer (the client) only detach the session.** These
 events do not change the session. The session waits on the host:

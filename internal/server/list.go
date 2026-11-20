@@ -106,3 +106,36 @@ func hangUp(f *os.File) error {
 	}
 	return nil
 }
+
+// CloseIfIdle connects to the local session sid's attach socket and sends
+// HangupIfIdle with cred (server.md §2.4, §2.6): if the session is still
+// held by cred and its shell is idle, the spawner hangs it up; otherwise it
+// stays alive. An older spawner that does not know HangupIfIdle closes the
+// connection and leaves the session detached.
+func CloseIfIdle(getenv func(string) string, sid [16]byte, cred [8]byte) error {
+	base := sessionsDir(getenv)
+	if err := checkPrivateDir(base); err != nil {
+		return err
+	}
+	f, greeting, err := dialAttach(sessionDir(base, sid))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	g, err := bootstrap.ParseSessionLine(greeting)
+	if err != nil || !attachable(g) {
+		return nil
+	}
+	conn, err := ipc.NewConn(f, ipc.Launcher, ipc.Spawner)
+	if err != nil {
+		return err
+	}
+	if err := conn.Send(ipc.HangupIfIdle{Credential: cred}); err != nil {
+		return fmt.Errorf("asking the session to close if idle: %w", err)
+	}
+	f.SetReadDeadline(time.Now().Add(T2))
+	if _, err := conn.Recv(); !ipc.IsEOF(err) {
+		return fmt.Errorf("the session did not answer: %v", err)
+	}
+	return nil
+}

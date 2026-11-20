@@ -133,6 +133,24 @@ func foregroundRoot(master *os.File) (bool, error) {
 	return rootIn("/proc", pgrp), nil
 }
 
+func sessionIdle(master *os.File, shellPID int) (bool, error) {
+	if shellPID <= 0 {
+		return false, fmt.Errorf("invalid shell pid %d", shellPID)
+	}
+	fg, err := foregroundGroup(master)
+	if err != nil {
+		return false, err
+	}
+	if fg != shellPID {
+		return false, nil
+	}
+	other, err := hasOtherSessionMember("/proc", shellPID)
+	if err != nil {
+		return false, err
+	}
+	return !other, nil
+}
+
 func sessionLeader() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 }

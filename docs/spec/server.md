@@ -256,6 +256,7 @@ generation.
 | the client falls silent | proto (nothing authentic from it for `SilentAfter`, 15 s, `bootstrap.md` §9.2) | **the session does not end**: proto keeps the connection, since the client may be in a dead spot, stops holding the program back (`screen.md` §2.5), and tells the spawner `Detached`, so a plain `mosey DEST` may take it (D8 R1); when the client is heard again proto says `Attached` again |
 | detached for `IdleTimeout` (7 days, D8 R4) | spawner (a timer from the last `Detached`, stopped by each `Attached`) | the spawner hangs the shell up: SIGHUP to the shell's pid and to the pty's foreground process group (`TIOCGPGRP` on its master), as a hangup does; the shell's exit is then the first row. If the shell has not exited `HangupGrace` (10 s) later, the teardown below |
 | `mosey -kill NAME` | spawner (`Hangup` on the attach socket, §2.6) | as the idle timeout |
+| local `mosey -close-if-idle` on `SIGHUP`/`SIGTERM` | spawner (`HangupIfIdle` on the attach socket, §2.6) | if the requesting credential still holds the session (or was its last holder, with no takeover in flight) and the shell is idle (foreground process group is the shell's pid and no other process in `/proc` shares its session id), as the idle timeout; otherwise nothing, and the session stays alive. Any error in the idle check fails safe and keeps the session alive |
 | another client attaches | proto (`Listener.Accept`) | **the session does not end**: the listener revokes the old connection (D26, `transport.md` §8.3) and proto serves the new one |
 | emu's restart budget is spent | spawner (§5.2) | **the session does not end.** The spawner pauses restarts for `EmuCooldown`, tells proto (`EmuPaused`), and tries again; the shell and proto live on. An emu failure never ends a session (§5.2) |
 | proto exits or dies | spawner (`wait4`) | the session ends: with proto gone nothing holds the keys or the screen, and the resume slice does not restart it (§5.4). The spawner's own reference to the pty master is kept for a later slice that does |
@@ -371,7 +372,11 @@ since it holds the keys.
   one message, not an IPC message. Peer → spawner, within T2: `ClientLine`
   (0x40), a resume, answered by `Ready` (0x41) or `Failed` (0x42), then
   close; or `Hangup` (0x43, `mosey -kill`), answered by the hangup of
-  §2.4 and then close, with nothing sent; or nothing (a lister closes).
+  §2.4 and then close, with nothing sent; or `HangupIfIdle` (0x44, local
+  `mosey -close-if-idle`), which hangs the shell up only if the
+  requesting credential still holds (or last held) the session and the
+  shell is idle (§2.4), and then closes with nothing sent; or nothing (a
+  lister closes).
   All of it is the stable attach protocol (§2.8).
   The spawner reads with `recvmsg` and closes any fd that arrives, as on B
   (§3.1).
@@ -440,8 +445,8 @@ releases that speak the same attach protocol.
 
 **The stability promise.** The attach protocol is the greeting
 (`bootstrap.md` §9.2.1) and the messages that follow it on an attach
-socket: `ClientLine` (0x40), `Ready` (0x41), `Failed` (0x42) and
-`Hangup` (0x43) (§3.3), with §3.1's framing (one seqpacket message each,
+socket: `ClientLine` (0x40), `Ready` (0x41), `Failed` (0x42),
+`Hangup` (0x43) and `HangupIfIdle` (0x44) (§3.3), with §3.1's framing (one seqpacket message each,
 type byte first). This is **attach protocol 1** (`bootstrap.AttachProtocol`,
 reset from 2 by Dan, 2026-11-17); the greeting's `aproto` says which one
 number a session's spawner speaks, and a launcher attaches it only if it
@@ -453,13 +458,13 @@ this framing. What the messages carry is open:
 - `ClientLine`, `Ready` and the greeting carry lines of
   `bootstrap.md` §6.1's grammar, which gain fields without a new number
   (`versioning.md` §6).
-- **New message types** come from 0x44 to 0x4F, and bit 3 of the type
+- **New message types** come from 0x45 to 0x4F, and bit 3 of the type
   says whether a peer that does not know one may ignore it
   (`versioning.md` §3):
 
   | types | an unknown one | why |
   |---|---|---|
-  | 0x40–0x47 | refused: the receiver closes the connection, as for a malformed message | critical, like the four defined here: each asks for or answers an action (attach, hang up) |
+  | 0x40–0x47 | refused: the receiver closes the connection, as for a malformed message | critical, like the five defined here: each asks for or answers an action (attach, hang up); an older spawner that does not know `HangupIfIdle` (0x44) closes the connection and leaves the session detached |
   | 0x48–0x4F | skipped, unread, and the receiver goes on waiting for what it was waiting for, within the same deadline | may be ignored: for a message that only adds something, such as a hint the spawner may log |
 
   A receiver skips at most 4 such messages on one connection [choice: no
@@ -586,6 +591,7 @@ deny-all and cannot open `/proc`.
 | 0x41 | Ready | spawner → launcher | 0 |
 | 0x42 | Failed | spawner → launcher | 0 |
 | 0x43 | Hangup | launcher (`--serve=kill`) → spawner | 0 |
+| 0x44 | HangupIfIdle | launcher (local `-close-if-idle`) → spawner | 0 |
 
 The high nibble names the direction, so a stray message is easy to spot
 in a trace. Unlisted types are refused, but for 0x48–0x4F on an attach
@@ -779,6 +785,16 @@ as `Credential`.
 **0x43 Hangup** (launcher → spawner, on the attach socket only): type
 only. Length 1. `mosey -kill` (`bootstrap.md` §9.5): the spawner hangs the
 shell up as for the idle timeout (§2.4) and closes the connection.
+
+**0x44 HangupIfIdle** (launcher → spawner, on the attach socket only):
+type, then credential id (8). Length 9. Local `mosey -close-if-idle`
+(`bootstrap.md` §2.2): if the session is still held by that credential
+(or was last held by it, with no takeover in flight) and the shell is
+idle (`pty.SessionIdle`: foreground process group is the shell's pid and
+no other process in `/proc` has `sid == shell_pid`), the spawner hangs
+the shell up as for the idle timeout (§2.4). Otherwise it does nothing.
+Either way it closes the connection with nothing sent. Any error in the
+idle check fails safe and keeps the session alive.
 
 ### 3.4 What the spawner accepts from proto
 

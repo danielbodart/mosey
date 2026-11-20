@@ -159,7 +159,9 @@ func startStubSessionWith(t *testing.T, sid [16]byte, cfg SpawnerConfig, hold ti
 		ctl: ctl, advertised: stubAddr, port: stubPort, master: master,
 		proto: proto, shell: shell, ready: true,
 		sid: sid, name: stubName, started: now, state: bootstrap.SessionNew, since: now,
-		resumes: make(chan resumeRequest), hangups: make(chan struct{}, 1), holdTTL: hold,
+		resumes: make(chan resumeRequest), hangups: make(chan struct{}, 1),
+		idleHangups: make(chan idleHangupRequest), superviseDone: make(chan struct{}),
+		holdTTL: hold,
 	}
 	if s.attach, err = listenAttach(filepath.Join(runtime, "mosey"), sid); err != nil {
 		t.Fatal(err)
@@ -571,6 +573,81 @@ func TestKillHangsTheShellUp(t *testing.T) {
 	}
 	if !ss.shellHungUp(30 * time.Second) {
 		t.Fatalf("the shell was not hung up\nlog:\n%s", ss.log.String())
+	}
+}
+
+// HangupIfIdle (local -close-if-idle, server.md §2.4) hangs the shell up
+// only when the requesting credential still holds (or last held) the session,
+// no takeover is in flight, and the idle check reports idle. Busy sessions,
+// idle-check errors, and taken-over sessions are kept alive.
+func TestHangupIfIdleChecksOwnershipAndIdleness(t *testing.T) {
+	sid := [16]byte{0x5e, 0x0b}
+	var mu sync.Mutex
+	var busy bool
+	var checkErr error
+	setIdle := func(b bool, err error) {
+		mu.Lock()
+		busy, checkErr = b, err
+		mu.Unlock()
+	}
+	ss := startStubSessionWith(t, sid, SpawnerConfig{
+		Version: stubVersion,
+		sessionIdle: func(*os.File, int) (bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return !busy, checkErr
+		},
+	}, 0)
+	getenv := func(k string) string {
+		if k == "XDG_RUNTIME_DIR" {
+			return ss.runtime
+		}
+		return ""
+	}
+	cred1 := [8]byte{1}
+	cred2 := [8]byte{2}
+	ss.send(ipc.Attached{Credential: cred1})
+	for g := ss.greetingOf(); g.State != bootstrap.SessionAttached; g = ss.greetingOf() {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Busy session: CloseIfIdle does not hang up.
+	setIdle(true, nil)
+	if err := CloseIfIdle(getenv, sid, cred1); err != nil {
+		t.Fatalf("CloseIfIdle (busy): %v", err)
+	}
+	if g := ss.greetingOf(); g.State != bootstrap.SessionAttached {
+		t.Fatalf("busy session changed state: %+v", g)
+	}
+
+	// Idle check error: fail safe, keep alive.
+	setIdle(false, errors.New("proc unavailable"))
+	if err := CloseIfIdle(getenv, sid, cred1); err != nil {
+		t.Fatalf("CloseIfIdle (error): %v", err)
+	}
+	if g := ss.greetingOf(); g.State != bootstrap.SessionAttached {
+		t.Fatalf("session after idle-check error changed state: %+v", g)
+	}
+
+	// Taken over by cred2: cred1's CloseIfIdle does not hang up even when idle.
+	setIdle(false, nil)
+	ss.send(ipc.Attached{Credential: cred2})
+	for g := ss.greetingOf(); g.Holder != cred2; g = ss.greetingOf() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := CloseIfIdle(getenv, sid, cred1); err != nil {
+		t.Fatalf("CloseIfIdle (taken over): %v", err)
+	}
+	if g := ss.greetingOf(); g.Holder != cred2 {
+		t.Fatalf("taken-over session was affected: %+v", g)
+	}
+
+	// Holder cred2 sends CloseIfIdle while idle: shell is hung up.
+	if err := CloseIfIdle(getenv, sid, cred2); err != nil {
+		t.Fatalf("CloseIfIdle (idle holder): %v", err)
+	}
+	if !ss.shellHungUp(30 * time.Second) {
+		t.Fatalf("idle shell was not hung up\nlog:\n%s", ss.log.String())
 	}
 }
 

@@ -96,10 +96,11 @@ const (
 	// 0x40 to 0x4F are the attach protocol, open across releases
 	// (server.md §2.8); everything else is private to one build, and
 	// closed.
-	typeClientLine = 0x40
-	typeReady      = 0x41
-	typeFailed     = 0x42
-	typeHangup     = 0x43
+	typeClientLine   = 0x40
+	typeReady        = 0x41
+	typeFailed       = 0x42
+	typeHangup       = 0x43
+	typeHangupIfIdle = 0x44
 	// attachIgnorable is the attach protocol's critical mark: a type of
 	// 0x48 to 0x4F that this build does not know may be skipped, while
 	// one of 0x40 to 0x47 is refused like any malformed message
@@ -308,29 +309,37 @@ type Failed struct{ Text string }
 // shell up: `mosey -kill` (bootstrap.md §9.5).
 type Hangup struct{}
 
-func (Start) typ() byte       { return typeStart }
-func (EmuLink) typ() byte     { return typeEmuLink }
-func (ShellExit) typ() byte   { return typeShellExit }
-func (AgentConn) typ() byte   { return typeAgentConn }
-func (Resume) typ() byte      { return typeResume }
-func (EmuPaused) typ() byte   { return typeEmuPaused }
-func (Root) typ() byte        { return typeRoot }
-func (Init) typ() byte        { return typeInit }
-func (Output) typ() byte      { return typeOutput }
-func (Resize) typ() byte      { return typeResize }
-func (Flush) typ() byte       { return typeFlush }
-func (Update) typ() byte      { return typeUpdate }
-func (Replies) typ() byte     { return typeReplies }
-func (Credential) typ() byte  { return typeCredential }
-func (Exit) typ() byte        { return typeExit }
-func (KillEmu) typ() byte     { return typeKillEmu }
-func (Attached) typ() byte    { return typeAttached }
-func (Detached) typ() byte    { return typeDetached }
-func (FirstOutput) typ() byte { return typeFirstOutput }
-func (ClientLine) typ() byte  { return typeClientLine }
-func (Ready) typ() byte       { return typeReady }
-func (Failed) typ() byte      { return typeFailed }
-func (Hangup) typ() byte      { return typeHangup }
+// HangupIfIdle asks a session's spawner, over its attach socket, to hang
+// the shell up only if Credential still holds (or last held) the session
+// and the shell is idle: local `mosey -close-if-idle` (server.md §2.4).
+type HangupIfIdle struct {
+	Credential [CredentialIDSize]byte
+}
+
+func (Start) typ() byte        { return typeStart }
+func (EmuLink) typ() byte      { return typeEmuLink }
+func (ShellExit) typ() byte    { return typeShellExit }
+func (AgentConn) typ() byte    { return typeAgentConn }
+func (Resume) typ() byte       { return typeResume }
+func (EmuPaused) typ() byte    { return typeEmuPaused }
+func (Root) typ() byte         { return typeRoot }
+func (Init) typ() byte         { return typeInit }
+func (Output) typ() byte       { return typeOutput }
+func (Resize) typ() byte       { return typeResize }
+func (Flush) typ() byte        { return typeFlush }
+func (Update) typ() byte       { return typeUpdate }
+func (Replies) typ() byte      { return typeReplies }
+func (Credential) typ() byte   { return typeCredential }
+func (Exit) typ() byte         { return typeExit }
+func (KillEmu) typ() byte      { return typeKillEmu }
+func (Attached) typ() byte     { return typeAttached }
+func (Detached) typ() byte     { return typeDetached }
+func (FirstOutput) typ() byte  { return typeFirstOutput }
+func (ClientLine) typ() byte   { return typeClientLine }
+func (Ready) typ() byte        { return typeReady }
+func (Failed) typ() byte       { return typeFailed }
+func (Hangup) typ() byte       { return typeHangup }
+func (HangupIfIdle) typ() byte { return typeHangupIfIdle }
 
 // route is who may send a type to whom, and how many fds it carries.
 type route struct {
@@ -339,29 +348,30 @@ type route struct {
 }
 
 var routes = map[byte]route{
-	typeStart:       {Spawner, Proto, 2},
-	typeEmuLink:     {Spawner, Proto, 1},
-	typeShellExit:   {Spawner, Proto, 0},
-	typeAgentConn:   {Spawner, Proto, 1},
-	typeResume:      {Spawner, Proto, 0},
-	typeEmuPaused:   {Spawner, Proto, 0},
-	typeRoot:        {Spawner, Proto, 0},
-	typeInit:        {Proto, Emu, 0},
-	typeOutput:      {Proto, Emu, 0},
-	typeResize:      {Proto, Emu, 0},
-	typeFlush:       {Proto, Emu, 0},
-	typeUpdate:      {Emu, Proto, 0},
-	typeReplies:     {Emu, Proto, 0},
-	typeCredential:  {Proto, Spawner, 0},
-	typeExit:        {Proto, Spawner, 0},
-	typeKillEmu:     {Proto, Spawner, 0},
-	typeAttached:    {Proto, Spawner, 0},
-	typeDetached:    {Proto, Spawner, 0},
-	typeFirstOutput: {Proto, Spawner, 0},
-	typeClientLine:  {Launcher, Spawner, 0},
-	typeReady:       {Spawner, Launcher, 0},
-	typeFailed:      {Spawner, Launcher, 0},
-	typeHangup:      {Launcher, Spawner, 0},
+	typeStart:        {Spawner, Proto, 2},
+	typeEmuLink:      {Spawner, Proto, 1},
+	typeShellExit:    {Spawner, Proto, 0},
+	typeAgentConn:    {Spawner, Proto, 1},
+	typeResume:       {Spawner, Proto, 0},
+	typeEmuPaused:    {Spawner, Proto, 0},
+	typeRoot:         {Spawner, Proto, 0},
+	typeInit:         {Proto, Emu, 0},
+	typeOutput:       {Proto, Emu, 0},
+	typeResize:       {Proto, Emu, 0},
+	typeFlush:        {Proto, Emu, 0},
+	typeUpdate:       {Emu, Proto, 0},
+	typeReplies:      {Emu, Proto, 0},
+	typeCredential:   {Proto, Spawner, 0},
+	typeExit:         {Proto, Spawner, 0},
+	typeKillEmu:      {Proto, Spawner, 0},
+	typeAttached:     {Proto, Spawner, 0},
+	typeDetached:     {Proto, Spawner, 0},
+	typeFirstOutput:  {Proto, Spawner, 0},
+	typeClientLine:   {Launcher, Spawner, 0},
+	typeReady:        {Spawner, Launcher, 0},
+	typeFailed:       {Spawner, Launcher, 0},
+	typeHangup:       {Launcher, Spawner, 0},
+	typeHangupIfIdle: {Launcher, Spawner, 0},
 }
 
 // ErrMalformed is wrapped by every refusal of a message: a violation by the
@@ -476,6 +486,8 @@ func Marshal(m Message) ([]byte, error) {
 		b = append(b, m.Line...)
 	case Failed:
 		b = append(b, m.Text...)
+	case HangupIfIdle:
+		b = append(b, m.Credential[:]...)
 	default:
 		return nil, fmt.Errorf("ipc: cannot marshal %T", m)
 	}
@@ -720,6 +732,11 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		return FirstOutput{}, fixed(0)
 	case typeHangup:
 		return Hangup{}, fixed(0)
+	case typeHangupIfIdle:
+		if err := fixed(CredentialIDSize); err != nil {
+			return nil, err
+		}
+		return HangupIfIdle{Credential: [CredentialIDSize]byte(body)}, nil
 	case typeClientLine:
 		if err := line(body, MaxClientLine); err != nil {
 			return nil, err

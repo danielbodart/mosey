@@ -331,3 +331,30 @@ func TestTheWordsAfterTheDestinationAreACommand(t *testing.T) {
 		}
 	}
 }
+
+func TestCloseIfIdleIsLocalOnly(t *testing.T) {
+	for _, args := range [][]string{
+		{"-close-if-idle"},
+		{"-new", "-close-if-idle"},
+		{"-s", "work", "-close-if-idle"},
+		{"-close-if-idle", "localhost"},
+		{"-new", "-close-if-idle", "LocalHost"},
+	} {
+		got, err := parseArgs(args)
+		if err != nil || !got.closeIfIdle || !got.ssh.Local() {
+			t.Errorf("%q: %+v %v", args, got, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"-close-if-idle", "far"},
+		{"-close-if-idle", "127.0.0.1"},
+		{"-close-if-idle", "-list"},
+		{"-close-if-idle", "-kill", "work"},
+	} {
+		_, err := parseArgs(args)
+		var u *bootstrap.UsageError
+		if !errors.As(err, &u) {
+			t.Errorf("%q: want UsageError, got %v", args, err)
+		}
+	}
+}

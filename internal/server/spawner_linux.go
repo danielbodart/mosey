@@ -70,6 +70,8 @@ type SpawnerConfig struct {
 
 	// prlimit sets emu's RLIMIT_DATA; a test hook.
 	prlimit func(pid int) error
+	// sessionIdle overrides pty.SessionIdle; a test hook.
+	sessionIdle func(master *os.File, shellPID int) (bool, error)
 }
 
 // execPath is the file a role is started from (server.md §2.3): the
@@ -168,6 +170,10 @@ type spawner struct {
 	// hangups carries mosey -kill's Hangup from the attach socket to the
 	// supervision loop (bootstrap.md §9.5).
 	hangups chan struct{}
+	// idleHangups carries local mosey -close-if-idle's HangupIfIdle from the
+	// attach socket to the supervision loop (server.md §2.4).
+	idleHangups   chan idleHangupRequest
+	superviseDone chan struct{}
 	// agent is the session's agent socket (server.md §2.7), or nil, and
 	// agentConns carries its connections to the supervision loop, which
 	// hands them to proto.
@@ -214,6 +220,13 @@ type resumeRequest struct {
 	requester    [8]byte
 	hasRequester bool
 	reply        chan []byte
+}
+
+// idleHangupRequest is a HangupIfIdle on its way from the attach socket to
+// the supervision loop (server.md §2.4).
+type idleHangupRequest struct {
+	cred [8]byte
+	done chan struct{}
 }
 
 type ctlEvent struct {
@@ -347,11 +360,14 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	// can resume it.
 	cred, _ := bootstrap.ParseCredentialLine(line)
 	s.sid = cred.SessionID
+	s.holder = cred.CredentialID
 	clear(cred.PSK[:])
 	s.started = time.Now()
 	s.state, s.since = bootstrap.SessionNew, s.started
 	s.resumes = make(chan resumeRequest)
 	s.hangups = make(chan struct{}, 1)
+	s.idleHangups = make(chan idleHangupRequest)
+	s.superviseDone = make(chan struct{})
 	if s.attach, err = listenAttach(sessionsDir(s.getenv), s.sid); err != nil {
 		s.log.Warn("no attach socket: this session cannot be resumed", "err", err)
 		s.attach = nil
@@ -769,6 +785,10 @@ func (s *spawner) violation(err error) {
 // supervise waits on everything a session can end on, and restarts emu
 // whenever it dies (server.md §5).
 func (s *spawner) supervise(ctx context.Context) error {
+	if s.superviseDone == nil {
+		s.superviseDone = make(chan struct{})
+	}
+	defer close(s.superviseDone)
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigs)
@@ -827,6 +847,8 @@ func (s *spawner) supervise(ctx context.Context) error {
 		case <-s.hangups:
 			s.log.Info("mosey -kill: hanging the shell up")
 			hungUp = s.hangup()
+		case req := <-s.idleHangups:
+			s.handleIdleHangup(req, &hungUp)
 		case <-hungUp:
 			hungUp = nil
 			if s.shell != nil {
@@ -997,6 +1019,37 @@ func (s *spawner) hangup() <-chan time.Time {
 		}
 	}
 	return time.After(HangupGrace)
+}
+
+// handleIdleHangup handles a local client's HangupIfIdle (server.md §2.4):
+// if req.cred still holds (or last held) the session with no takeover in
+// flight, and the shell is idle at its prompt with no other processes in its
+// session, hang the shell up; otherwise leave the session alive. Any error
+// in the idle check fails safe and keeps the session alive.
+func (s *spawner) handleIdleHangup(req idleHangupRequest, hungUp *<-chan time.Time) {
+	defer close(req.done)
+	if s.shell == nil || s.master == nil {
+		return
+	}
+	if !s.heldBy(req.cred) {
+		s.log.Info("ignoring HangupIfIdle: session is held by another client", "credential", fmt.Sprintf("%x", req.cred))
+		return
+	}
+	check := s.cfg.sessionIdle
+	if check == nil {
+		check = pty.SessionIdle
+	}
+	idle, err := check(s.master, s.shell.cmd.Process.Pid)
+	if err != nil {
+		s.log.Warn("HangupIfIdle: idle check failed, keeping session alive", "err", err)
+		return
+	}
+	if !idle {
+		s.log.Info("HangupIfIdle: session is busy, keeping alive")
+		return
+	}
+	s.log.Info("HangupIfIdle: session is idle; hanging the shell up")
+	*hungUp = s.hangup()
 }
 
 // classify is how an emu ended, for the EmuLink that tells proto.

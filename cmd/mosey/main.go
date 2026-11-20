@@ -17,6 +17,7 @@ import (
 	"github.com/danielbodart/mosey/internal/client"
 	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/predict"
+	"github.com/danielbodart/mosey/internal/server"
 	"github.com/danielbodart/mosey/internal/terminal"
 )
 
@@ -45,11 +46,12 @@ To stop a session, type "exit" in its shell.
 A detached session stops after 7 days.
 
 Options:
-  -dir DIR      Start a new session in DIR.
-  -type TEXT    Type TEXT into a new session, then Enter.
-  -a / -A       Do not send / send your ssh agent.
-  -predict M    Show your typing before the host echoes it: adaptive, always or never.
-  -- OPTIONS    Send OPTIONS to ssh. Put them before HOST.
+  -dir DIR        Start a new session in DIR.
+  -type TEXT      Type TEXT into a new session, then Enter.
+  -close-if-idle  End a local session when the terminal closes, if its shell is idle.
+  -a / -A         Do not send / send your ssh agent.
+  -predict M      Show your typing before the host echoes it: adaptive, always or never.
+  -- OPTIONS      Send OPTIONS to ssh. Put them before HOST.
 `
 
 func main() {
@@ -81,6 +83,9 @@ type cli struct {
 	// dir and typ are -dir and -type, for a session this command
 	// creates (§9.2.3).
 	dir, typ string
+	// closeIfIdle is -close-if-idle: end a local session on SIGHUP/SIGTERM
+	// if its shell is idle (bootstrap.md §2.2).
+	closeIfIdle bool
 	// command is the words after DESTINATION, joined with spaces as ssh
 	// joins them, run in place of the interactive shell of a session this
 	// command creates (§2, §9.2.3); "" is none.
@@ -121,6 +126,7 @@ func newFlags(c *cli) (*flag.FlagSet, *clientFlags) {
 	flags.StringVar(&c.kill, "kill", "", "end the session called `NAME`")
 	flags.StringVar(&c.dir, "dir", "", "start a new session's shell in `DIR`")
 	flags.StringVar(&c.typ, "type", "", "type `TEXT` and Enter into a new session's shell")
+	flags.BoolVar(&c.closeIfIdle, "close-if-idle", false, "end a local session on SIGHUP if its shell is idle")
 	flags.StringVar(&c.completion, "completion", "", "print the completion script for `SHELL`: bash, zsh or fish")
 	return flags, &f
 }
@@ -176,6 +182,9 @@ func parseArgs(args []string) (cli, error) {
 	if (c.dir != "" || c.typ != "") && (c.list || kill) {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: -dir and -type start a session, so they go with neither -list nor -kill"}
 	}
+	if c.closeIfIdle && (c.list || kill) {
+		return cli{}, &bootstrap.UsageError{Msg: "mosey: -close-if-idle goes with neither -list nor -kill"}
+	}
 	if c.dir != "" && !bootstrap.ValidDir(c.dir) {
 		return cli{}, &bootstrap.UsageError{Msg: fmt.Sprintf("mosey: -dir: at most %d bytes of text with no control character", bootstrap.MaxStartText)}
 	}
@@ -220,6 +229,8 @@ func parseArgs(args []string) (cli, error) {
 			}
 		}
 		c.ssh.Program = ""
+	} else if c.closeIfIdle {
+		return cli{}, &bootstrap.UsageError{Msg: "mosey: -close-if-idle is for local sessions only"}
 	}
 	// ssh's last-wins rule: options after -- come after mosey's own flags.
 	if opts.Agent == 0 {
@@ -347,20 +358,29 @@ func runClient(args []string) int {
 		return client.StatusFailed
 	}
 	defer tty.Close()
+	var closeIfIdle func([16]byte, [8]byte)
+	if c.closeIfIdle {
+		closeIfIdle = func(sid [16]byte, cred [8]byte) {
+			if err := server.CloseIfIdle(os.Getenv, sid, cred); err != nil {
+				log.Warn("close-if-idle", "err", err)
+			}
+		}
+	}
 	err = client.Run(ctx, client.Options{
-		SSH:      c.ssh,
-		Version:  version,
-		Terminal: tty,
-		Stderr:   os.Stderr,
-		Log:      log,
-		Getenv:   os.Getenv,
-		Attach:   c.attach,
-		Name:     c.name,
-		Dir:      c.dir,
-		Type:     c.typ,
-		Command:  c.command,
-		Upload:   c.upload,
-		Predict:  c.predict,
+		SSH:         c.ssh,
+		Version:     version,
+		Terminal:    tty,
+		Stderr:      os.Stderr,
+		Log:         log,
+		Getenv:      os.Getenv,
+		Attach:      c.attach,
+		Name:        c.name,
+		Dir:         c.dir,
+		Type:        c.typ,
+		Command:     c.command,
+		Upload:      c.upload,
+		Predict:     c.predict,
+		CloseIfIdle: closeIfIdle,
 		// The terminal is still cooked when D7 asks (bootstrap.md
 		// §4.7.5), and Open has made sure stdin is one.
 		Ask: client.AskLine(os.Stdin, os.Stderr),

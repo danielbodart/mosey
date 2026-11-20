@@ -43,6 +43,7 @@ func examples() []Message {
 		KillEmu{Generation: 1, Why: KillDeadline}, KillEmu{Generation: 0xffffffff, Why: KillViolation},
 		Attached{}, Attached{Credential: [8]byte{1, 2}, Peer: netip.MustParseAddrPort("192.0.2.7:1")},
 		Hangup{},
+		HangupIfIdle{}, HangupIfIdle{Credential: [8]byte{1, 2, 3, 4, 5, 6, 7, 8}},
 		Attached{Peer: netip.MustParseAddrPort("[2001:db8::7]:65535")},
 		Detached{},
 		FirstOutput{},
@@ -257,10 +258,10 @@ func TestAMessageOverMaxMessageIsRefusedNotCut(t *testing.T) {
 
 // The attach protocol is open (server.md §2.8, versioning.md §3): between
 // a launcher and a spawner a type of 0x48 to 0x4F this build does not
-// know is skipped, one of 0x44 to 0x47 is refused, and neither is
+// know is skipped, one of 0x45 to 0x47 is refused, and neither is
 // skipped between any other peers, whose IPC is closed.
 func TestAnUnknownAttachMessageIsSkippedOnlyWhenItMayBe(t *testing.T) {
-	for typ := byte(0x44); typ <= 0x4f; typ++ {
+	for typ := byte(0x45); typ <= 0x4f; typ++ {
 		for _, ends := range [][2]Peer{{Launcher, Spawner}, {Spawner, Launcher}} {
 			_, err := Parse(ends[0], ends[1], []byte{typ, 1, 2, 3})
 			if typ >= 0x48 && !errors.Is(err, ErrSkipped) || typ < 0x48 && !errors.Is(err, ErrMalformed) {

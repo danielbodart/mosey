@@ -41,7 +41,7 @@ decision wins.
 | `internal/render` | Draws a `Grid` on the local terminal with escape sequences it writes itself | client | **screen** | `render.go` |
 | `internal/predict` | Predictive local echo (D12, `prediction.md`): epochs over the user's own keystrokes, judged against the server's cells, drawn as an overlay on the client's copy of the screen | client | **prediction** | `doc.go`, `engine.go`, `keys.go`, `width.go`, `overlay.go` |
 | `internal/emu` | The `Emulator` interface and the tuios.dev/vt implementation (D23) | emu (tests: in process) | **screen** | `emu.go`, `tuios.go` |
-| `internal/pty` | Open ptys, set their size, read the echo-off bit and whether the foreground runs as root, start the login shell (D14) | spawner, proto | **server-proc** | `pty.go`, `pty_linux.go`, `pty_other.go` |
+| `internal/pty` | Open ptys, set their size, read the echo-off bit, whether the foreground runs as root, and whether the session is idle, start the login shell (D14) | spawner, proto | **server-proc** | `pty.go`, `pty_linux.go`, `pty_other.go`, `idle.go` |
 | `internal/sandbox` | Landlock deny-all, seccomp cBPF compiler and per-role policies, `DUMPABLE=0` (D22) | proto, emu | **server-proc** | `doc.go`, `sandbox.go`, `bpf.go`, `sandbox_linux.go`, `sandbox_other.go` |
 | `internal/nocore` | `DUMPABLE=0` and `RLIMIT_CORE=0` for every process that holds a secret (threat-model.md §4.10) | client, launcher, spawner, proto, emu | **server-proc** | `doc.go`, `nocore.go` |
 | `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | launcher, spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
@@ -431,7 +431,7 @@ fixed layouts and a fuzzed `Parse` (`server.md` §3): launcher↔spawner
 `Attached{Peer}`, `Detached`, `KillEmu`, `Exit`; proto→emu `Init`,
 `Output`, `Resize`, `Flush`; emu→proto `Update`, `Replies`; and the
 stable attach protocol (`server.md` §2.8) `ClientLine`, `Ready`,
-`Failed`, `Hangup`.
+`Failed`, `Hangup`, `HangupIfIdle`.
 
 **bootstrap.** As `bootstrap.md` §10.1: `ClientLine`, `CredentialLine`,
 `ErrorLine`, their `Marshal`/`Parse`, `ReadCredential(r)`, `Sanitize`,

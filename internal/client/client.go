@@ -73,6 +73,10 @@ type Options struct {
 	Self func() ([]byte, error)
 	// Predict is -predict: when predictive local echo is drawn (D12).
 	Predict predict.Mode
+	// CloseIfIdle, if set, is called when the client detaches cleanly on
+	// SIGHUP, SIGTERM or terminal EOF (local -close-if-idle, bootstrap.md §2.2),
+	// with the session id and the client's current credential id.
+	CloseIfIdle func(sid [16]byte, cred [8]byte)
 }
 
 // probeProtocol is what D7's probe needs ~/.local/bin/mosey's --serve=protocol
@@ -183,6 +187,7 @@ func Run(ctx context.Context, o Options) error {
 		Destination:  where(o.SSH),
 		Remote:       remoteMark(o.SSH),
 		Reconnect:    reconnector(o, line.SessionID),
+		CloseIfIdle:  o.CloseIfIdle,
 	}
 	// The Session has its own copy, which dial wipes once msg1 is built
 	// (threat-model.md §4.10).

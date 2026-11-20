@@ -26,4 +26,6 @@ func foregroundRoot(*os.File) (bool, error) { return false, errors.ErrUnsupporte
 
 func foregroundGroup(*os.File) (int, error) { return 0, errors.ErrUnsupported }
 
+func sessionIdle(*os.File, int) (bool, error) { return false, errors.ErrUnsupported }
+
 func sessionLeader() *syscall.SysProcAttr { return &syscall.SysProcAttr{Setsid: true, Setctty: true} }
