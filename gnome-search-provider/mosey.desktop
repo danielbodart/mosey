@@ -1,8 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=mosey
-Comment=Resume detached or remote mosey sessions
-Exec=kgx -- mosey -close-if-idle
+Comment=Open a new mosey session in a terminal
+Exec=kgx -- mosey -new -close-if-idle
 Icon=mosey
 Terminal=false
-NoDisplay=true
+Categories=System;TerminalEmulator;
+Keywords=mosey;terminal;shell;session;
+# Do not add NoDisplay=true. GNOME Shell skips a search provider whose
+# DesktopId fails should_show() (js/ui/remoteSearch.js), with no log.

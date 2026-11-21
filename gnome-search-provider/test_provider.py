@@ -257,5 +257,28 @@ class SearchProviderTests(unittest.TestCase):
         self.assertEqual([s.name for s in sessions], ["good"])
 
 
+class DesktopEntryTests(unittest.TestCase):
+    """The DesktopId named in the .ini must be one GNOME Shell will accept."""
+
+    def _entry(self) -> dict[str, str]:
+        path = Path(__file__).resolve().parent / "mosey.desktop"
+        fields: dict[str, str] = {}
+        for line in path.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                key, value = line.split("=", 1)
+                fields[key.strip()] = value.strip()
+        return fields
+
+    def test_desktop_entry_is_not_hidden_so_shell_loads_the_provider(self) -> None:
+        # js/ui/remoteSearch.js drops a provider whose app fails should_show(),
+        # silently; NoDisplay=true or Hidden=true makes it fail.
+        entry = self._entry()
+        self.assertNotEqual(entry.get("NoDisplay", "false").lower(), "true")
+        self.assertNotEqual(entry.get("Hidden", "false").lower(), "true")
+
+    def test_launching_the_app_opens_a_new_session(self) -> None:
+        self.assertEqual(self._entry()["Exec"], "kgx -- mosey -new -close-if-idle")
+
+
 if __name__ == "__main__":
     unittest.main()

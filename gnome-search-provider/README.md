@@ -22,6 +22,14 @@ session in a terminal.
 The service starts on demand through D-Bus and exits after 30 seconds
 with no search calls.
 
+`mosey.desktop` also puts a `mosey` launcher in the app grid. It opens a
+new session (`kgx -- mosey -new -close-if-idle`). Do not hide it with
+`NoDisplay=true`: GNOME Shell ignores a search provider whose desktop
+file is hidden, and it does not log the reason. To show the sessions
+under a different app (for example, a terminal that always runs
+`mosey`), change `DesktopId` in `mosey-search-provider.ini` to that
+app's desktop file.
+
 ## Terminal selection
 
 By default, the provider opens sessions with:
