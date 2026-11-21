@@ -46,8 +46,8 @@ install -Dm0644 gnome-search-provider/mosey.desktop \
   ~/.local/share/applications/mosey.desktop
 install -Dm0644 gnome-search-provider/mosey-search-provider.ini \
   ~/.local/share/gnome-shell/search-providers/mosey-search-provider.ini
-install -Dm0644 logo.png \
-  ~/.local/share/icons/hicolor/512x512/apps/mosey.png
+mkdir -p ~/.local/share/icons
+cp -r gnome-search-provider/icons/hicolor ~/.local/share/icons/
 sed "s|^Exec=.*|Exec=$HOME/.local/bin/mosey-search-provider|" \
   gnome-search-provider/org.mosey.SearchProvider.service \
   > ~/.local/share/dbus-1/services/org.mosey.SearchProvider.service
@@ -79,7 +79,8 @@ pkgs.stdenvNoCC.mkDerivation {
     install -Dm0644 gnome-search-provider/mosey.desktop $out/share/applications/mosey.desktop
     install -Dm0644 gnome-search-provider/mosey-search-provider.ini \
       $out/share/gnome-shell/search-providers/mosey-search-provider.ini
-    install -Dm0644 logo.png $out/share/icons/hicolor/512x512/apps/mosey.png
+    mkdir -p $out/share/icons
+    cp -r gnome-search-provider/icons/hicolor $out/share/icons/
     install -Dm0644 gnome-search-provider/org.mosey.SearchProvider.service \
       $out/share/dbus-1/services/org.mosey.SearchProvider.service
     substituteInPlace $out/share/dbus-1/services/org.mosey.SearchProvider.service \
@@ -87,6 +88,19 @@ pkgs.stdenvNoCC.mkDerivation {
     runHook postInstall
   '';
 }
+```
+
+## Icon
+
+`icons/hicolor/<N>x<N>/apps/mosey.png` are the standard hicolor theme
+sizes, resized with alpha preserved from the 1254px `icon.png` at the
+repo root. Regenerate them after changing `icon.png`:
+
+```sh
+for s in 16 22 24 32 48 64 128 256 512; do
+  magick icon.png -filter Lanczos -resize ${s}x${s} -strip \
+    PNG32:gnome-search-provider/icons/hicolor/${s}x${s}/apps/mosey.png
+done
 ```
 
 ## Tests
