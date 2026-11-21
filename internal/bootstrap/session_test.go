@@ -238,13 +238,14 @@ func TestAListLineRoundTripsAndFitsItsBound(t *testing.T) {
 	longest.Command = strings.Repeat("é", MaxStartText/2)
 	longest.Cwd = strings.Repeat("ü", MaxCwd/2)
 	longest.Foreground = strings.Repeat("f", MaxForeground)
+	longest.Peer = netip.MustParseAddrPort("[ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe]:65535")
 	line := MarshalListLine(longest)
 	if got, err := ParseListLine(line); err != nil || got != longest {
 		t.Errorf("%+v, %v", got, err)
 	}
-	// 1789 with a 5-digit number (§9.4); this one has one digit.
-	if n := len(line); n != 1789-4 || n > MaxListLine {
-		t.Errorf("the longest list line is %d bytes, §9.4 says 1785 for number 1", n)
+	// 1842 with a 5-digit number (§9.4); this one has one digit.
+	if n := len(line); n != 1842-4 || n > MaxListLine {
+		t.Errorf("the longest list line is %d bytes, §9.4 says 1838 for number 1", n)
 	}
 }
 
@@ -295,6 +296,11 @@ func TestAListLineThatBreaksARuleIsRefused(t *testing.T) {
 		"an fg over 48":            addField(good, "fg="+b64.EncodeToString(bytes.Repeat([]byte("a"), MaxForeground+1))),
 		"an fg not utf-8":          addField(good, "fg="+b64.EncodeToString([]byte("\xff"))),
 		"an empty fg":              addField(good, "fg="),
+		"a zoned peer":             addField(good, "peer=[fe80::1%eth0]:50123"),
+		"a peer port 0":            addField(good, "peer=[2001:db8::7]:0"),
+		"a mapped peer":            addField(good, "peer=[::ffff:192.0.2.1]:50123"),
+		"a dash peer":              addField(good, "peer=-"),
+		"a marked peer":            addField(good, "!peer=192.0.2.7:50000"),
 	} {
 		if _, err := ParseListLine([]byte(line)); !errors.Is(err, ErrBadLine) {
 			t.Errorf("%s: %q gave %v", name, line, err)
@@ -310,6 +316,7 @@ func FuzzParseListLine(f *testing.F) {
 	withCommand.Command = "claude --resume\tü"
 	f.Add(MarshalListLine(withCommand))
 	withCommand.Foreground, withCommand.Cwd = "claude", "~/Projects/mosey"
+	withCommand.Peer = netip.MustParseAddrPort("100.64.1.2:41234")
 	f.Add(MarshalListLine(withCommand))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		l, err := ParseListLine(line)
@@ -330,6 +337,9 @@ func FuzzParseListLine(f *testing.F) {
 		}
 		if !ValidSessionName(l.Name) {
 			t.Fatalf("accepted name %q", l.Name)
+		}
+		if l.Peer.IsValid() && (l.Peer.Port() == 0 || l.Peer.Addr().Zone() != "" || l.Peer.Addr().Is4In6() || l.Peer.Addr().IsUnspecified()) {
+			t.Fatalf("accepted peer %s", l.Peer)
 		}
 		if l.Command != "" && !referenceText(l.Command, true) {
 			t.Fatalf("accepted command %q", l.Command)
@@ -460,5 +470,23 @@ func TestTheForegroundAndCwdRoundTripAndAreOptional(t *testing.T) {
 	}
 	if bytes.Contains(MarshalListLine(sampleListLine()), []byte("fg=")) || bytes.Contains(MarshalSessionLine(sampleSessionLine()), []byte("cwd=")) {
 		t.Error("an unknown foreground or cwd was written")
+	}
+}
+
+// A session's peer is an optional, non-critical field of the list line (§9.4).
+func TestTheListLinePeerRoundTripsAndIsOptional(t *testing.T) {
+	l := sampleListLine()
+	if bytes.Contains(MarshalListLine(l), []byte("peer=")) {
+		t.Error("an unknown peer was written")
+	}
+	for _, peer := range []string{"127.0.0.1:50000", "100.64.1.2:41234", "[2001:db8::7]:50123"} {
+		l.Peer = netip.MustParseAddrPort(peer)
+		line := MarshalListLine(l)
+		if !bytes.Contains(line, []byte(" peer="+peer+" ")) {
+			t.Errorf("%q", line)
+		}
+		if got, err := ParseListLine(line); err != nil || got != l {
+			t.Errorf("%+v, %v", got, err)
+		}
 	}
 }

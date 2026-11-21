@@ -38,7 +38,7 @@ func TestCloseIfIdleEndsIdleShellAndKeepsBusyOrTakenOverSessionsAlive(t *testing
 	fg.typeLine("sleep 1000")
 	waitFor(t, "-list to show foreground sleep", func() bool {
 		out, _ := localCmd(t, mosey, m, "-list")
-		return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(fgName) + `\s+attached\s+\S+\s+sleep\b`).MatchString(out)
+		return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(fgName) + `\s+attached\s+\S+\s+127\.0\.0\.1\s+sleep\b`).MatchString(out)
 	})
 	fg.cmd.Process.Signal(syscall.SIGHUP)
 	if status := fg.exits(); status != 0 {
@@ -61,7 +61,7 @@ func TestCloseIfIdleEndsIdleShellAndKeepsBusyOrTakenOverSessionsAlive(t *testing
 	bg.shows("bg-ready-2")
 	waitFor(t, "-list to show shell back at foreground", func() bool {
 		out, _ := localCmd(t, mosey, m, "-list")
-		return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(bgName) + `\s+attached\s+\S+\s+sh\b`).MatchString(out)
+		return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(bgName) + `\s+attached\s+\S+\s+127\.0\.0\.1\s+sh\b`).MatchString(out)
 	})
 	bg.cmd.Process.Signal(syscall.SIGHUP)
 	if status := bg.exits(); status != 0 {

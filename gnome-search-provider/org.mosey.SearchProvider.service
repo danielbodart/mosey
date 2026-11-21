@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.mosey.SearchProvider
+Exec=/usr/bin/env mosey-search-provider

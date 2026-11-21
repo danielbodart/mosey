@@ -2209,6 +2209,7 @@ list-line = "MOSEY-LIST" SP "1" *(SP field) LF     ; §6.1, fields in key order
 | `cwd` | `b64text` of a `cwdtext`: the greeting's `cwd` | optional | no | as `cmd` |
 | `fg` | `b64text` of an `fgtext`: the greeting's `fg` | optional | no | as `cmd` |
 | `name` | `sname` | mandatory | no | as `cmd` |
+| `peer` | `addrport`: the greeting's `peer` | optional | no | as `cmd` |
 | `since` | `dec`: unix seconds of the last change of state | mandatory | no | as `cmd` |
 | `state` | `new` / `attached` / `detached` | mandatory | no | as `cmd` |
 
@@ -2219,8 +2220,8 @@ The client reads ssh's stdout (at most 2 MiB [derived: `MaxListed` ×
 not a `MOSEY-` line (a login shell's chatter, §6.5), and parses each
 `MOSEY-LIST` line with `ParseListLine`: canonical, at most `MaxListLine` =
 2048 bytes [derived: `MOSEY-LIST` and 5 digits 16; ` cmd=` 1371;
-` cwd=` 261; ` fg=` 68; ` name=` 38; ` since=` 19; ` state=` and
-`detached` 15; LF; 1789 in all; then the next power of two],
+` cwd=` 261; ` fg=` 68; ` name=` 38; ` peer=` 53; ` since=` 19; ` state=` and
+`detached` 15; LF; 1842 in all; then the next power of two],
 and fuzzed, since a hostile server writes it. At most `MaxListed` = 1024
 lines are shown [choice]; a line that does not parse is not shown, and
 the client says how many it dropped. Every field but `cmd` is from a
@@ -2233,16 +2234,17 @@ overrides, non-ASCII spaces) as `?`, and cut to 60 runes with `…` after
 the user's own and in their shell history]. So the table the client lays
 out itself cannot carry an escape sequence, nor reorder what it shows
 (D9). It is the last column, shown only when some session has a command,
-and empty for one that has none. `fg` and `cwd` are shown the same way,
-as `RUNNING` cut to 16 runes and `DIR` cut to its last 32 runes with `…`
-before [choice: a program's name whole and enough of a path's end to
-tell sessions apart, so a row stays one line], each a column only when
-some session has it, so an older server's list lays out as before:
+and empty for one that has none. `peer` is shown as `PEER` (the IP
+address without port, for attached sessions only), and `fg` and `cwd` are
+shown as `RUNNING` cut to 16 runes and `DIR` cut to its last 32 runes
+with `…` before [choice: a program's name whole and enough of a path's
+end to tell sessions apart, so a row stays one line], each a column only
+when some session has it, so an older server's list lays out as before:
 
 ```
-NAME         STATE     SINCE                      RUNNING  DIR               COMMAND
-quiet-heron  detached  2026-11-14T09:30:12+00:00  bash     ~
-brave-otter  attached  2026-11-16T15:02:40+00:00  claude   ~/Projects/mosey  claude
+NAME         STATE     SINCE                      PEER        RUNNING  DIR               COMMAND
+quiet-heron  detached  2026-11-14T09:30:12+00:00              bash     ~
+brave-otter  attached  2026-11-16T15:02:40+00:00  100.64.1.2  claude   ~/Projects/mosey  claude
 ```
 
 `SINCE` is in the client's local zone, as §9.1's times are. With no line it prints `no sessions on DEST` (`on localhost` for this machine, §2.2).
@@ -2593,7 +2595,7 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
 | `ReconnectTry` (one R3 try, to the dial) | 60 s | [D] §9.2.2: twice the credential TTL |
 | `IdleTimeout` (a detached session's shell is hung up) | 7 days | [D] Dan, 2026-11-15 (D8 R4); a constant (PLAN O14) |
 | `HangupGrace` (SIGHUP, then the teardown) | 10 s | [choice] §9.3 |
-| `MaxListLine`, `MaxListed` | 2048 B, 1024 lines | [derived] §9.4: at most 1789 B used; [choice] |
+| `MaxListLine`, `MaxListed` | 2048 B, 1024 lines | [derived] §9.4: at most 1842 B used; [choice] |
 | R3: no session | exit 1 | [choice] §9.2.2 |
 
 ---

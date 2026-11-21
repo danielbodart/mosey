@@ -309,8 +309,9 @@ func TestTheListShowsEachSessionAndItsState(t *testing.T) {
 	if err := List(&out, getenv); err != nil {
 		t.Fatal(err)
 	}
-	// s-ef was started with a command, which is listed (§9.4).
-	want := "MOSEY-LIST 1 name=s-ab since=1794650100 state=detached\nMOSEY-LIST 1 cmd=Y2xhdWRl name=s-ef since=1794650100 state=detached\n"
+	// s-ab has a peer in its greeting, and s-ef was started with a command;
+	// both are listed (§9.4).
+	want := "MOSEY-LIST 1 name=s-ab peer=192.0.2.7:50000 since=1794650100 state=detached\nMOSEY-LIST 1 cmd=Y2xhdWRl name=s-ef since=1794650100 state=detached\n"
 	if out.String() != want {
 		t.Errorf("the list is\n%s\nnot\n%s", out.String(), want)
 	}

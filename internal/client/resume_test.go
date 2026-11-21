@@ -190,7 +190,46 @@ func TestTheListShowsWhatRunsInEachSessionAndWhere(t *testing.T) {
 			t.Errorf("the table lacks %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "COMMAND") || strings.Contains(got, "\u202e") {
+	if strings.Contains(got, "COMMAND") || strings.Contains(got, "PEER") || strings.Contains(got, "\u202e") {
+		t.Errorf("the table shows what it should not:\n%q", got)
+	}
+}
+
+// Attached sessions with a known peer gain a PEER column showing only the
+// IP address; detached rows leave PEER empty so stale addresses are not
+// shown as active (bootstrap.md §9.4).
+func TestTheListShowsThePeerOfAttachedSessionsOnly(t *testing.T) {
+	dir := t.TempDir()
+	ssh := fakeSSH(t, dir, "hostname far\n", 0)
+	server := filepath.Join(dir, "mosey")
+	b := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
+	script := "#!/bin/sh\n[ \"$1\" = --serve=list ] || exit 9\n" +
+		"printf 'MOSEY-LIST 1 cwd=" + b("~/Projects/mosey") + " fg=" + b("claude") + " name=remote peer=100.64.1.2:41234 since=1794651234 state=attached\\n'\n" +
+		"printf 'MOSEY-LIST 1 cwd=" + b("~") + " fg=" + b("bash") + " name=local peer=127.0.0.1:50000 since=1794651234 state=attached\\n'\n" +
+		"printf 'MOSEY-LIST 1 cwd=" + b("~") + " fg=" + b("bash") + " name=gone peer=192.0.2.7:50000 since=1794651234 state=detached\\n'\n"
+	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errs bytes.Buffer
+	if err := List(context.Background(), ListOptions{
+		SSH:    bootstrap.SSH{Program: ssh, Destination: "far", Server: server},
+		Stdout: &out, Stderr: &errs,
+	}); err != nil {
+		t.Fatalf("%v; stderr %q", err, errs.String())
+	}
+	got := out.String()
+	since := time.Unix(1794651234, 0).Local().Format(takenOverTime)
+	for _, want := range []string{
+		"NAME    STATE     SINCE" + strings.Repeat(" ", len(since)-5+2) + "PEER        RUNNING  DIR\n",
+		"remote  attached  " + since + "  100.64.1.2  claude   ~/Projects/mosey\n",
+		"local   attached  " + since + "  127.0.0.1   bash     ~\n",
+		"gone    detached  " + since + "              bash     ~\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the table lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "192.0.2.7") || strings.Contains(got, ":41234") {
 		t.Errorf("the table shows what it should not:\n%q", got)
 	}
 }

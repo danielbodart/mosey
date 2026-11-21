@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+"""GNOME Shell SearchProvider2 service for local mosey sessions.
+
+Surfaces eligible local mosey sessions in GNOME Shell Overview search:
+- Detached local sessions
+- Remotely attached local sessions (so you can take them back onto this desktop)
+
+Locally attached sessions (loopback peer or unknown attached peer) and newly
+starting sessions are never returned, so searching cannot accidentally steal a
+session from another local terminal window.
+
+D-Bus activated on demand; exits automatically after IDLE_TIMEOUT_SECONDS with
+no search calls.
+"""
+
+from __future__ import annotations
+
+import base64
+from dataclasses import dataclass
+import ipaddress
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+from typing import Callable, Iterable, Mapping, Sequence
+
+BUS_NAME = "org.mosey.SearchProvider"
+OBJECT_PATH = "/org/mosey/SearchProvider"
+INTERFACE_NAME = "org.gnome.Shell.SearchProvider2"
+IDLE_TIMEOUT_SECONDS = 30
+LIST_TIMEOUT_SECONDS = 3
+DEFAULT_TERMINALS = ("kgx", "gnome-terminal", "ptyxis")
+
+INTROSPECTION_XML = f"""
+<node>
+  <interface name="{INTERFACE_NAME}">
+    <method name="GetInitialResultSet">
+      <arg type="as" name="terms" direction="in"/>
+      <arg type="as" name="results" direction="out"/>
+    </method>
+    <method name="GetSubsearchResultSet">
+      <arg type="as" name="previous_results" direction="in"/>
+      <arg type="as" name="terms" direction="in"/>
+      <arg type="as" name="results" direction="out"/>
+    </method>
+    <method name="GetResultMetas">
+      <arg type="as" name="identifiers" direction="in"/>
+      <arg type="aa{{sv}}" name="metas" direction="out"/>
+    </method>
+    <method name="ActivateResult">
+      <arg type="s" name="identifier" direction="in"/>
+      <arg type="as" name="terms" direction="in"/>
+      <arg type="u" name="timestamp" direction="in"/>
+    </method>
+    <method name="LaunchSearch">
+      <arg type="as" name="terms" direction="in"/>
+      <arg type="u" name="timestamp" direction="in"/>
+    </method>
+  </interface>
+</node>
+"""
+
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+
+@dataclass(frozen=True)
+class Session:
+    """One local mosey session parsed from `mosey --serve=list`."""
+
+    name: str
+    state: str
+    since: int = 0
+    peer_ip: IPAddress | None = None
+    fg: str = ""
+    cwd: str = ""
+    cmd: str = ""
+
+
+def _decode_b64url(value: str) -> str:
+    """Decode an unpadded base64url field from MOSEY-LIST."""
+    if not value:
+        return ""
+    padded = value + "=" * (-len(value) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+    except (ValueError, UnicodeEncodeError):
+        return ""
+    return raw.decode("utf-8", errors="replace")
+
+
+def parse_peer_ip(peer: str) -> IPAddress | None:
+    """Extract the IP address from an addrport like 100.64.1.2:41234 or [::1]:50000."""
+    if not peer:
+        return None
+    if peer.startswith("["):
+        end = peer.find("]:")
+        if end == -1:
+            return None
+        host = peer[1:end]
+    else:
+        host, sep, _port = peer.rpartition(":")
+        if not sep or not host:
+            return None
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def parse_list_line(line: str) -> Session | None:
+    """Parse one `MOSEY-LIST 1 ...` line into a Session, or None if invalid."""
+    line = line.rstrip("\r\n")
+    if not line.startswith("MOSEY-LIST 1 "):
+        return None
+    fields: dict[str, str] = {}
+    for token in line[len("MOSEY-LIST 1 "):].split(" "):
+        if not token or "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        fields[key] = value
+
+    name = fields.get("name", "")
+    state = fields.get("state", "")
+    if not name or state not in ("new", "attached", "detached"):
+        return None
+
+    try:
+        since = int(fields.get("since", "0"))
+    except ValueError:
+        since = 0
+
+    return Session(
+        name=name,
+        state=state,
+        since=since,
+        peer_ip=parse_peer_ip(fields.get("peer", "")),
+        fg=_decode_b64url(fields.get("fg", "")),
+        cwd=_decode_b64url(fields.get("cwd", "")),
+        cmd=_decode_b64url(fields.get("cmd", "")),
+    )
+
+
+def parse_list_output(output: str) -> list[Session]:
+    """Parse stdout of `mosey --serve=list` into Session records."""
+    sessions: list[Session] = []
+    for line in output.splitlines():
+        session = parse_list_line(line)
+        if session is not None:
+            sessions.append(session)
+    return sessions
+
+
+def is_eligible(session: Session) -> bool:
+    """Return True if a session may appear in GNOME Shell search results.
+
+    Detached sessions are always eligible. Attached sessions are eligible only
+    when attached from a known non-loopback address (so locally attached
+    sessions are never shown and cannot be accidentally stolen).
+    """
+    if session.state == "detached":
+        return True
+    if session.state == "attached":
+        return session.peer_ip is not None and not session.peer_ip.is_loopback
+    return False
+
+
+def match_sessions(sessions: Iterable[Session], terms: Sequence[str]) -> list[Session]:
+    """Return eligible sessions matching all search terms (case-insensitive AND)."""
+    cleaned = [t.strip().lower() for t in terms if t and t.strip()]
+    if not cleaned:
+        return []
+
+    matched: list[Session] = []
+    for session in sessions:
+        if not is_eligible(session):
+            continue
+        haystack = (
+            "mosey",
+            session.name.lower(),
+            session.fg.lower(),
+            session.cwd.lower(),
+            session.cmd.lower(),
+        )
+        if all(any(term in field for field in haystack) for term in cleaned):
+            matched.append(session)
+
+    matched.sort(key=lambda s: (-s.since, s.name))
+    return matched
+
+
+def format_meta(session: Session) -> dict[str, str]:
+    """Build the GNOME Shell SearchProvider2 metadata dict for one session."""
+    if session.fg and session.cwd:
+        title = f"{session.fg} \u00b7 {session.cwd}"
+    elif session.fg:
+        title = session.fg
+    elif session.cwd:
+        title = f"{session.name} \u00b7 {session.cwd}"
+    else:
+        title = session.name
+
+    if session.state == "detached":
+        description = f"Detached \u00b7 {session.name}"
+    else:
+        description = f"Remote ({session.peer_ip}) \u00b7 {session.name}"
+
+    return {
+        "id": session.name,
+        "name": title,
+        "description": description,
+        "gicon": "mosey",
+    }
+
+
+def build_activate_command(
+    session_name: str | None,
+    env: Mapping[str, str] | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+) -> list[str]:
+    """Build the terminal command to attach to a session (or open a local one)."""
+    env = os.environ if env is None else env
+    mosey_bin = env.get("MOSEY_BIN", "").strip() or "mosey"
+    if session_name:
+        mosey_args = [mosey_bin, "-s", session_name, "-close-if-idle"]
+    else:
+        mosey_args = [mosey_bin, "-close-if-idle"]
+
+    custom = env.get("MOSEY_TERMINAL", "").strip()
+    if custom:
+        prefix = shlex.split(custom)
+        if prefix and prefix[-1] != "--":
+            prefix.append("--")
+        return prefix + mosey_args
+
+    terminal = DEFAULT_TERMINALS[0]
+    for candidate in DEFAULT_TERMINALS:
+        if which(candidate):
+            terminal = candidate
+            break
+    return [terminal, "--", *mosey_args]
+
+
+def list_local_sessions(env: Mapping[str, str] | None = None) -> list[Session]:
+    """Query local mosey sessions without touching the network."""
+    env = os.environ if env is None else env
+    mosey_bin = env.get("MOSEY_BIN", "").strip() or shutil.which("mosey") or "mosey"
+    try:
+        proc = subprocess.run(
+            [mosey_bin, "--serve=list"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=LIST_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    return parse_list_output(proc.stdout)
+
+
+def run_service() -> int:
+    """Register the D-Bus SearchProvider2 service and run until idle timeout."""
+    from gi.repository import Gio, GLib
+
+    loop = GLib.MainLoop()
+    node_info = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION_XML)
+    interface_info = node_info.interfaces[0]
+    cache: dict[str, Session] = {}
+    idle_source_id: int | None = None
+
+    def reset_idle_timer() -> None:
+        nonlocal idle_source_id
+        if idle_source_id is not None:
+            GLib.source_remove(idle_source_id)
+        idle_source_id = GLib.timeout_add_seconds(IDLE_TIMEOUT_SECONDS, _on_idle)
+
+    def _on_idle() -> bool:
+        nonlocal idle_source_id
+        idle_source_id = None
+        loop.quit()
+        return False
+
+    def refresh_cache() -> list[Session]:
+        sessions = list_local_sessions()
+        cache.clear()
+        for session in sessions:
+            if is_eligible(session):
+                cache[session.name] = session
+        return sessions
+
+    def spawn_detached(cmd: list[str]) -> None:
+        try:
+            GLib.spawn_async(cmd, flags=GLib.SpawnFlags.SEARCH_PATH)
+        except GLib.Error as err:
+            print(f"mosey-search-provider: spawn failed: {err}", file=sys.stderr)
+
+    def on_method_call(
+        _connection: Gio.DBusConnection,
+        _sender: str,
+        _object_path: str,
+        _interface_name: str,
+        method_name: str,
+        parameters: GLib.Variant,
+        invocation: Gio.DBusMethodInvocation,
+    ) -> None:
+        reset_idle_timer()
+
+        if method_name == "GetInitialResultSet":
+            (terms,) = parameters.unpack()
+            sessions = refresh_cache()
+            ids = [s.name for s in match_sessions(sessions, terms)]
+            invocation.return_value(GLib.Variant("(as)", (ids,)))
+            return
+
+        if method_name == "GetSubsearchResultSet":
+            _previous, terms = parameters.unpack()
+            sessions = refresh_cache()
+            ids = [s.name for s in match_sessions(sessions, terms)]
+            invocation.return_value(GLib.Variant("(as)", (ids,)))
+            return
+
+        if method_name == "GetResultMetas":
+            (identifiers,) = parameters.unpack()
+            if any(ident not in cache for ident in identifiers):
+                refresh_cache()
+            metas = []
+            for ident in identifiers:
+                session = cache.get(ident)
+                if session is None:
+                    continue
+                meta = format_meta(session)
+                metas.append({k: GLib.Variant("s", v) for k, v in meta.items()})
+            invocation.return_value(GLib.Variant("(aa{sv})", (metas,)))
+            return
+
+        if method_name == "ActivateResult":
+            identifier, _terms, _timestamp = parameters.unpack()
+            if identifier:
+                spawn_detached(build_activate_command(identifier))
+            invocation.return_value(None)
+            return
+
+        if method_name == "LaunchSearch":
+            _terms, _timestamp = parameters.unpack()
+            spawn_detached(build_activate_command(None))
+            invocation.return_value(None)
+            return
+
+        invocation.return_dbus_error(
+            "org.freedesktop.DBus.Error.UnknownMethod",
+            f"Unknown method: {method_name}",
+        )
+
+    def on_bus_acquired(connection: Gio.DBusConnection, _name: str) -> None:
+        connection.register_object(
+            OBJECT_PATH,
+            interface_info,
+            on_method_call,
+            None,
+            None,
+        )
+
+    def on_name_lost(_connection: Gio.DBusConnection, _name: str) -> None:
+        loop.quit()
+
+    owner_id = Gio.bus_own_name(
+        Gio.BusType.SESSION,
+        BUS_NAME,
+        Gio.BusNameOwnerFlags.NONE,
+        on_bus_acquired,
+        None,
+        on_name_lost,
+    )
+    reset_idle_timer()
+    try:
+        loop.run()
+    finally:
+        Gio.bus_unown_name(owner_id)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(run_service())

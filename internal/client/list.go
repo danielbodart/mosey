@@ -100,11 +100,18 @@ func List(ctx context.Context, o ListOptions) error {
 		fmt.Fprintf(o.Stdout, "no sessions on %s\n", where(o.SSH))
 		return nil
 	}
-	// RUNNING, DIR and COMMAND are each there only when some session has
-	// one, so an older server's list, which has none of the first two,
-	// lays out as it did; COMMAND is last.
+	// PEER, RUNNING, DIR and COMMAND are each there only when some session
+	// has one, so an older server's list, which has none of them, lays out
+	// as it did; COMMAND is last. PEER is shown only for attached sessions
+	// so a detached row does not display a stale address.
 	has := func(f func(bootstrap.ListLine) string) bool {
 		return slices.ContainsFunc(rows, func(r bootstrap.ListLine) bool { return f(r) != "" })
+	}
+	attachedPeer := func(r bootstrap.ListLine) string {
+		if r.State == bootstrap.SessionAttached && r.Peer.IsValid() {
+			return r.Peer.Addr().String()
+		}
+		return ""
 	}
 	type column struct {
 		head string
@@ -114,6 +121,9 @@ func List(ctx context.Context, o ListOptions) error {
 		{"NAME", func(r bootstrap.ListLine) string { return r.Name }},
 		{"STATE", func(r bootstrap.ListLine) string { return r.State.String() }},
 		{"SINCE", func(r bootstrap.ListLine) string { return r.Since.Local().Format(takenOverTime) }},
+	}
+	if has(attachedPeer) {
+		columns = append(columns, column{"PEER", attachedPeer})
 	}
 	if has(func(r bootstrap.ListLine) string { return r.Foreground }) {
 		columns = append(columns, column{"RUNNING", func(r bootstrap.ListLine) string { return shown(r.Foreground, maxShownForeground, false) }})

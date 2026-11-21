@@ -164,14 +164,9 @@ func ParseSessionLine(line []byte) (SessionLine, error) {
 	}
 	s.Name = string(f)
 	if f, ok := p.known["peer"]; ok {
-		ap, err := netip.ParseAddrPort(string(f))
-		if err != nil {
-			return SessionLine{}, badLine("peer %q", f)
+		if s.Peer, err = parsePeer(f); err != nil {
+			return SessionLine{}, err
 		}
-		if a := ap.Addr(); a.Zone() != "" || a.Is4In6() || a.IsUnspecified() || ap.Port() == 0 {
-			return SessionLine{}, badLine("peer %q", f)
-		}
-		s.Peer = ap
 	}
 	if f, err = p.mandatory("sid"); err != nil {
 		return SessionLine{}, err
@@ -279,12 +274,25 @@ func parseUnix(f []byte, what string) (time.Time, error) {
 	return time.Unix(n, 0), nil
 }
 
+// parsePeer reads a peer addrport: valid, with no zone, not 4-in-6, not
+// unspecified, and a non-zero port (§9.2.1, §9.4).
+func parsePeer(f []byte) (netip.AddrPort, error) {
+	ap, err := netip.ParseAddrPort(string(f))
+	if err != nil {
+		return netip.AddrPort{}, badLine("peer %q", f)
+	}
+	if a := ap.Addr(); a.Zone() != "" || a.Is4In6() || a.IsUnspecified() || ap.Port() == 0 {
+		return netip.AddrPort{}, badLine("peer %q", f)
+	}
+	return ap, nil
+}
+
 // The lines of `mosey --serve=list` (§9.4): one per session, which the
 // client parses and lays out itself, so a hostile server can put nothing on
 // the user's terminal but fields of a printable grammar (D9).
 const (
 	listMagic = "MOSEY-LIST"
-	// MaxListLine bounds a list line, LF included: at most 1789 bytes are
+	// MaxListLine bounds a list line, LF included: at most 1842 bytes are
 	// used (§9.4).
 	MaxListLine = 2048
 	// MaxListed is the most list lines the client shows [choice].
@@ -296,6 +304,9 @@ type ListLine struct {
 	Name  string
 	State SessionState
 	Since time.Time
+	// Peer is the greeting's (§9.2.1): the last attached client's address,
+	// or the zero AddrPort if none is known.
+	Peer netip.AddrPort
 	// Command is the greeting's (§9.2.1): what the session was started
 	// with, or "" for none. The parser holds it to cmdtext, valid UTF-8
 	// with no control character but tab, but it is still the far side's
@@ -308,7 +319,7 @@ type ListLine struct {
 
 // listSpec is the list line's fields (§9.4): the list is only shown, so
 // nothing in it is critical.
-var listSpec = lineSpec{"cmd": false, "cwd": false, "fg": false, "name": false, "since": false, "state": false}
+var listSpec = lineSpec{"cmd": false, "cwd": false, "fg": false, "name": false, "peer": false, "since": false, "state": false}
 
 // MarshalListLine is l as one line, LF included.
 func MarshalListLine(l ListLine) []byte {
@@ -318,6 +329,9 @@ func MarshalListLine(l ListLine) []byte {
 	}
 	addDescription(w, l.Foreground, l.Cwd)
 	w.add("name", false, l.Name)
+	if l.Peer.IsValid() {
+		w.add("peer", false, l.Peer.String())
+	}
 	w.add("since", false, strconv.FormatInt(l.Since.Unix(), 10))
 	w.add("state", false, l.State.String())
 	return w.end()
@@ -352,6 +366,11 @@ func ParseListLine(line []byte) (ListLine, error) {
 		return ListLine{}, badLine("session name %q", f)
 	}
 	l.Name = string(f)
+	if f, ok := p.known["peer"]; ok {
+		if l.Peer, err = parsePeer(f); err != nil {
+			return ListLine{}, err
+		}
+	}
 	if f, err = p.mandatory("state"); err != nil {
 		return ListLine{}, err
 	}

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=mosey
+Comment=Resume detached or remote mosey sessions
+Exec=kgx -- mosey -close-if-idle
+Icon=mosey
+Terminal=false
+NoDisplay=true

@@ -157,7 +157,7 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 	third.typeLine("sleep 1000")
 	waitFor(t, "-list to show the sleep", func() bool {
 		out, _ := localCmd(t, mosey, m, "-list")
-		return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(fresh) + `\s+attached\s+\S+\s+sleep\s+~/work$`).MatchString(out)
+		return regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(fresh) + `\s+attached\s+\S+\s+127\.0\.0\.1\s+sleep\s+~/work$`).MatchString(out)
 	})
 	if out, status := localCmd(t, mosey, m, "-kill", fresh); status != 0 || !strings.Contains(out, "ended session "+fresh+" on localhost") {
 		t.Errorf("mosey -kill %s exited %d:\n%s", fresh, status, out)
