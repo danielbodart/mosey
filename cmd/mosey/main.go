@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"slices"
 	"strings"
 	"syscall"
@@ -55,13 +56,14 @@ Options:
 `
 
 func main() {
-	if len(os.Args) > 1 {
-		if role, ok := serveRole(os.Args[1]); ok {
-			runServer(role)
+	args := programArgs(runtime.GOOS, os.Args)
+	if len(args) > 1 {
+		if role, ok := serveRole(args[1]); ok {
+			runServer(role, args)
 			return
 		}
 	}
-	os.Exit(runClient(os.Args[1:]))
+	os.Exit(runClient(args[1:]))
 }
 
 // cli is the client's command line, parsed (bootstrap.md §2).

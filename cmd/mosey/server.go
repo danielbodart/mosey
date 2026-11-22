@@ -53,12 +53,12 @@ func serveRole(arg string) (role string, ok bool) {
 	return "", false
 }
 
-// runServer runs `mosey --serve[=role]`.
-func runServer(role string) {
+// runServer runs `mosey --serve[=role]`, with args as programArgs gives them.
+func runServer(role string, args []string) {
 	if role == "protocol" || role == "install" {
 		// Neither needs the executable's path, and install runs from a
 		// file that is about to be renamed.
-		runOneShot(role)
+		runOneShot(role, args)
 		return
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
@@ -104,11 +104,11 @@ func runServer(role string) {
 	case "kill":
 		// mosey -kill NAME (bootstrap.md §9.5): the name is the next
 		// argument. No such session has been said on stdout already.
-		if len(os.Args) != 3 {
+		if len(args) != 3 {
 			fmt.Fprintln(os.Stderr, "mosey --serve=kill: one session name, please")
 			os.Exit(2)
 		}
-		err := server.Kill(os.Stdout, os.Getenv, os.Args[2])
+		err := server.Kill(os.Stdout, os.Getenv, args[2])
 		if errors.Is(err, server.ErrNoSuchSession) {
 			os.Exit(1)
 		}
@@ -130,7 +130,7 @@ func runServer(role string) {
 
 // runOneShot runs the roles the probe and the upload run (D7,
 // bootstrap.md §4.7): they start nothing and hold no secret.
-func runOneShot(role string) {
+func runOneShot(role string, args []string) {
 	switch role {
 	case "protocol":
 		// The probe's question of ~/.local/bin/mosey: does it speak the
@@ -140,7 +140,7 @@ func runOneShot(role string) {
 	case "install":
 		// Run from the copy the client just uploaded, which puts itself
 		// at ~/.local/bin/mosey (bootstrap.md §4.7.7).
-		if err := install.Run(os.Args[2:], os.Getenv, os.Getuid()); err != nil {
+		if err := install.Run(args[2:], os.Getenv, os.Getuid()); err != nil {
 			fmt.Fprintln(os.Stderr, "mosey --serve=install:", err)
 			os.Exit(1)
 		}
