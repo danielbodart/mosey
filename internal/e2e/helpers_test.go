@@ -105,20 +105,35 @@ func openPTY(t *testing.T) (master, slave *os.File) {
 	if err != nil {
 		t.Skipf("no pty: %v", err)
 	}
-	if err := unix.IoctlSetPointerInt(int(m.Fd()), unix.TIOCSPTLCK, 0); err != nil {
-		t.Fatal(err)
+	// The ioctls go through Control, never m.Fd(): Fd puts the file in
+	// blocking mode, and then Close cannot close it while screenLog's
+	// Read is blocked on it -- the close(2) waits for that read, which
+	// waits for output that may never come, so a test that closes the
+	// master to hang the client up would hang instead.
+	ioctl := func(f func(fd int) error) {
+		t.Helper()
+		rc, err := m.SyscallConn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ierr error
+		if err := rc.Control(func(fd uintptr) { ierr = f(int(fd)) }); err != nil {
+			t.Fatal(err)
+		}
+		if ierr != nil {
+			t.Fatal(ierr)
+		}
 	}
-	n, err := unix.IoctlGetInt(int(m.Fd()), unix.TIOCGPTN)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ioctl(func(fd int) error { return unix.IoctlSetPointerInt(fd, unix.TIOCSPTLCK, 0) })
+	var n int
+	ioctl(func(fd int) (err error) { n, err = unix.IoctlGetInt(fd, unix.TIOCGPTN); return err })
 	s, err := os.OpenFile("/dev/pts/"+strconv.Itoa(n), os.O_RDWR|syscall.O_NOCTTY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := unix.IoctlSetWinsize(int(m.Fd()), unix.TIOCSWINSZ, &unix.Winsize{Col: 100, Row: 30}); err != nil {
-		t.Fatal(err)
-	}
+	ioctl(func(fd int) error {
+		return unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, &unix.Winsize{Col: 100, Row: 30})
+	})
 	t.Cleanup(func() { s.Close(); m.Close() })
 	return m, s
 }
