@@ -129,6 +129,13 @@ func (s *Session) Run(ctx context.Context) error {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
+	if err := ctx.Err(); err != nil {
+		// Told to go (SIGHUP, SIGTERM) before the handshake: starting one
+		// now could leave the server holding a client that will never
+		// speak, and only an END, which needs the handshake's keys, would
+		// free it before SilentAfter.
+		return err
+	}
 	conn, err := dial(ctx, log, s.Conn, s.Server, s.Destination, &s.Credential, s.Key, s.Agent != nil)
 	if err != nil {
 		return err
@@ -138,6 +145,14 @@ func (s *Session) Run(ctx context.Context) error {
 	first := s.newLink(ctx, conn, s.Agent, log)
 
 	if err := s.Terminal.Raw(); err != nil {
+		// Most often the window closed while the session was coming up.
+		// Leave as any detach does: -close-if-idle's check, then END, so
+		// the server neither keeps the session as attached until
+		// SilentAfter nor keeps an idle shell nobody will come back to.
+		if s.CloseIfIdle != nil {
+			s.CloseIfIdle(s.Credential.SessionID, first.holder)
+		}
+		first.end(transport.EndDetached)
 		first.retire()
 		return fail(err, "putting the terminal in raw mode: %v", err)
 	}

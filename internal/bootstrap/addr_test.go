@@ -29,8 +29,6 @@ var dns = resolver{
 	"nothing":   {"0.0.0.0", "255.255.255.255"},
 }
 
-var lan = []netip.Prefix{netip.MustParsePrefix("10.1.2.3/24"), netip.MustParsePrefix("192.168.7.1/31")}
-
 func lineWith(addr string) CredentialLine {
 	l := sampleCredentialLine()
 	l.Addr = netip.Addr{}
@@ -46,7 +44,7 @@ func choose(t *testing.T, addr, hostname string) (string, error) {
 	if hostname != "" {
 		c["hostname"] = []string{hostname}
 	}
-	a, err := ChooseAddr(context.Background(), lineWith(addr), c, dns.lookup, lan)
+	a, err := ChooseAddr(context.Background(), lineWith(addr), c, dns.lookup)
 	if err != nil {
 		return "", err
 	}
@@ -63,9 +61,7 @@ func TestTheUDPAddressIsChosenByTheRules(t *testing.T) {
 		{"::1", "far", "198.51.100.9"},              //
 		{"127.0.0.1", "localhost", "127.0.0.1"},     // loopback addr, loopback destination: kept
 		{"127.0.0.1", "127.0.0.1", "127.0.0.1"},     // a literal hostname is its own result
-		{"10.1.2.255", "far", "198.51.100.9"},       // a local directed broadcast
-		{"10.1.3.255", "far", "10.1.3.255"},         // someone else's subnet: not ours to judge
-		{"192.168.7.1", "far", "192.168.7.1"},       // a /31 has no broadcast
+		{"10.1.2.255", "far", "10.1.2.255"},         // a subnet broadcast: the kernel refuses it (§7.2)
 		{"fe80::1", "far", "198.51.100.9"},          // link-local with no zone
 		{"fe80::1", "fe80::1%eth0", "fe80::1%eth0"}, // link-local, zoned by the user's hostname
 		{"fe80::1", "fe80::2%eth0", "fe80::2%eth0"}, // another address: hostname's own result
@@ -101,21 +97,8 @@ func TestAUsableAddressNeedsNoLookup(t *testing.T) {
 		t.Error("looked up")
 		return nil, nil
 	}
-	a, err := ChooseAddr(context.Background(), lineWith("203.0.113.5"), Config{"hostname": {"far"}}, fail, nil)
+	a, err := ChooseAddr(context.Background(), lineWith("203.0.113.5"), Config{"hostname": {"far"}}, fail)
 	if err != nil || a.String() != "203.0.113.5" {
 		t.Errorf("%v %v", a, err)
-	}
-}
-
-func TestLastAddrIsTheDirectedBroadcast(t *testing.T) {
-	for p, want := range map[string]string{
-		"10.1.2.3/24":   "10.1.2.255",
-		"10.0.0.0/8":    "10.255.255.255",
-		"192.0.2.9/30":  "192.0.2.11",
-		"172.16.5.4/12": "172.31.255.255",
-	} {
-		if got := lastAddr(netip.MustParsePrefix(p)).String(); got != want {
-			t.Errorf("%s: %s", p, got)
-		}
 	}
 }

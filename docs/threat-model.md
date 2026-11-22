@@ -616,7 +616,9 @@ size (it comes from the client, an authenticated but untrusted peer).
   msg1 at a third party. The client retransmits msg1 with backoff and
   gives up when the credential expires (30 s), so the most it sends is a
   few dozen 1200-byte datagrams [derived]. Requirement: the client refuses
-  unspecified, multicast and broadcast addresses.
+  unspecified, multicast and limited-broadcast addresses; a directed
+  broadcast of the client's own subnet is refused by the kernel, since the
+  client clears `SO_BROADCAST` on its socket (bootstrap.md §7.2).
 - **Secrets never in argv or the environment** (T13, B8). Keys travel over
   stdin, stdout and the IPC socket only. Roles are selected by
   `--serve=proto|emu`, which carries nothing secret.

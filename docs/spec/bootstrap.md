@@ -149,7 +149,10 @@ stdout and exit 0.
   program exits.
 - `-close-if-idle` is for local sessions only (§2.2; a usage error with
   any other `DESTINATION`, or with `-list` or `-kill`). When the client
-  receives `SIGHUP` or `SIGTERM` (or its terminal closes) while attached,
+  receives `SIGHUP` or `SIGTERM` or its terminal closes while attached
+  (a read that ends with EOF or fails with `EIO`, the hangup a closed
+  window gives, which often arrives before its `SIGHUP`; or the terminal
+  refusing raw mode just after Dial, a window closed during start-up),
   it connects to the session's attach socket and sends `HangupIfIdle`
   with its current credential id (`server.md` §2.4, §2.6) before exiting
   cleanly: if the shell is idle at its prompt with no other processes in
@@ -1535,7 +1538,6 @@ An address is **usable** unless one of these holds:
 | unspecified (`0.0.0.0`, `::`) | "send to this host", never a server | grammar (§6.3) for `addr`; checked here for `hostname`'s results |
 | multicast (`224.0.0.0/4`, `ff00::/8`) | would spray every listener on the segment | same |
 | IPv4 limited broadcast `255.255.255.255` | same | same |
-| the directed broadcast of one of the client's own IPv4 interfaces (the last address of a prefix of length 30 or less, from `net.InterfaceAddrs`) | the only subnet broadcast the client can recognise, and the one that would reach its neighbours | here |
 | loopback (`127.0.0.0/8`, `::1`) while the **destination is not loopback** | sshd reached over a local forward or tunnel (a `ProxyCommand` to socat or cloudflared, a container port mapping) reports a loopback `SSH_CONNECTION`; sending there reaches the client's own host | here |
 | link-local (`fe80::/10`) with no zone the client can supply | the server's zone means nothing here | here: usable only if `hostname` parses as the same address *with* a zone, which is then used |
 
@@ -1545,15 +1547,31 @@ loopback `addr` is used when the user really did ssh to their own host,
 and otherwise skipped in favour of `hostname`; server.md binds the wildcard
 for a loopback `SSH_CONNECTION` (§4.4) so that fallback is reachable.
 
-A refused `addr` that is not a grammar violation (rows 4–6) is not fatal by
+A refused `addr` that is not a grammar violation (rows 4–5) is not fatal by
 itself: it is logged (warn) and the client goes on to `hostname`. A
 grammar violation is `ErrBadLine` before §7.2 runs, because no honest server
 sends one. `hostname`'s results are the user's own config and DNS, so a
 refused one is skipped, not reported as hostile.
 
-The rules are a pure function, `ChooseAddr` (§10.1), with the resolver and
-the interface list injected, so the unit tests and the fuzzer reach every
-row without a network.
+The rules are a pure function, `ChooseAddr` (§10.1), with the resolver
+injected, so the unit tests and the fuzzer reach every row without a
+network.
+
+A **directed broadcast** of one of the client's own subnets (`10.0.0.255`
+on `10.0.0.0/24`) is not in the table: the kernel refuses it. Linux and
+macOS fail a send to any address their routing table marks as broadcast
+with `EACCES` unless the socket set `SO_BROADCAST` [Linux ip(7), BSD
+`ip_output`]. Go's `net` sets it on every IPv4 UDP socket [M: Go 1.27,
+a send to the desktop's `10.0.0.255` went out], so the client clears it
+on its socket (below), and a hostile `addr`
+naming one fails the handshake's first send instead of reaching the
+neighbours. The client once checked this itself, from `net.InterfaceAddrs`
+on every attach and reconnect; that is a netlink dump under the kernel's
+global `rtnl_lock`, which a misbehaving network driver held for 5–25 s at
+a time on Dan's desktop [M, 21 November 2026], leaving every new terminal
+blank for as long, to duplicate a rule the kernel already enforces. A test
+(`TestTheKernelRefusesALocalDirectedBroadcast`) sends to one from the
+client's own kind of socket, so a platform without the rule fails loudly.
 
 If `ssh -G` shows a `proxyjump` or `proxycommand`, the client prints a
 one-line notice on stderr, before Dial while the terminal is still cooked
@@ -1565,8 +1583,10 @@ problem and offers a choice of address sources [mosh-man,
 question 6); slice 1 tries `addr` and, if the handshake times out, says
 which address it tried.
 
-The client's socket is `net.ListenUDP` on the wildcard address of the
-chosen address's family, unconnected, so roaming (D21) needs no new socket.
+The client's socket is bound to the wildcard address of the chosen
+address's family, unconnected, so roaming (D21) needs no new socket. An
+IPv4 one has `SO_BROADCAST` cleared, which is what makes the kernel refuse
+a directed broadcast (above).
 
 ### 7.3 Dialling and the terminal
 
@@ -1577,7 +1597,12 @@ over UDP: is UDP port PORT open?` (the classic firewall case). Then
 `key.Wipe()` either way.
 
 Only after Dial succeeds does the client put the terminal in raw mode and
-start `client.Session` (§4.3: ssh's prompts need a cooked terminal). The
+start `client.Session` (§4.3: ssh's prompts need a cooked terminal). A
+client told to go (`SIGHUP`, `SIGTERM`) before Dial does not start it: a
+handshake begun then could leave the server holding a client that never
+speaks until `SilentAfter`. If raw mode fails after Dial, the client
+leaves as any detach does (§2's `-close-if-idle`, then END), never by
+just closing the connection. The
 Hello it sends: `Protocol` = `handshake.ProtocolVersion`, `Channels` = `{Terminal}`,
 plus `Agent` when §5 says on and §8 captured and pinned a bind, `Attach` =
 `Exclusive` (D26: the only mode in v1). So with the agent on, Dial waits
@@ -2522,8 +2547,7 @@ func AgentSocket(c Config, getenv func(string) string) (path string, ok bool)
 
 // ChooseAddr is §7.2.
 func ChooseAddr(ctx context.Context, line CredentialLine, c Config,
-	lookup func(ctx context.Context, host string) ([]netip.Addr, error),
-	local []netip.Prefix) (netip.Addr, error)
+	lookup func(ctx context.Context, host string) ([]netip.Addr, error)) (netip.Addr, error)
 ```
 
 `ReadCredential` returns `ErrNoServer` only as a `*NoServerError`, for a
@@ -2630,10 +2654,10 @@ lookup error, for §7.2's message), `Config.Has` (the keyword test of §3),
   `internal` in the client); a 17-letter code, an upper-case code, a
   6-digit or zero-led number, and a line over 256 bytes are refused; a
   number other than 1 is accepted.
-- `ChooseAddr`, each row of §7.2's table with an injected resolver and
-  interface list: a usable `addr`; a loopback `addr` with a non-loopback
-  `hostname` (falls back), and with `localhost` (kept); a local directed
-  broadcast (falls back); link-local with and without a zoned `hostname`;
+- `ChooseAddr`, each row of §7.2's table with an injected resolver: a
+  usable `addr`; a loopback `addr` with a non-loopback `hostname` (falls
+  back), and with `localhost` (kept); a subnet broadcast (taken: the
+  kernel refuses it, §7.2); link-local with and without a zoned `hostname`;
   `-` with a `hostname` resolving to `[::, 224.0.0.1, 192.0.2.7]` (picks
   the last); nothing usable (`ErrBadAddr`).
 - `ReadCredential`: noise then the line; the line first; a `MOSEY-` line

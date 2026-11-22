@@ -40,14 +40,15 @@ func (e *AddrError) Unwrap() error { return ErrBadAddr }
 // (threat-model §4.9).
 //
 // lookup resolves a host name (net.DefaultResolver.LookupNetIP in the
-// client); local is the client's own interface prefixes, for their
-// directed broadcasts. Both are injected so every rule is tested without
-// a network.
+// client), injected so every rule is tested without a network.
+//
+// A directed broadcast of one of the client's own subnets is not checked
+// here: the kernel refuses a send to it without SO_BROADCAST, which the
+// client clears on its socket, and finding the client's subnets means a netlink dump
+// that can block for seconds behind the kernel's rtnl_lock (§7.2).
 func ChooseAddr(ctx context.Context, line CredentialLine, c Config,
-	lookup func(ctx context.Context, host string) ([]netip.Addr, error),
-	local []netip.Prefix) (netip.Addr, error) {
+	lookup func(ctx context.Context, host string) ([]netip.Addr, error)) (netip.Addr, error) {
 	hostname := c.Get("hostname")
-	r := addrRules{local: local}
 	// What hostname names is resolved once, and only when needed: a usable
 	// non-loopback addr needs no lookup at all.
 	var (
@@ -85,7 +86,7 @@ func ChooseAddr(ctx context.Context, line CredentialLine, c Config,
 
 	if a := line.Addr; a.IsValid() {
 		a = a.Unmap()
-		rule := r.refuse(a)
+		rule := addressRule(a)
 		switch {
 		case rule == "" && a.IsLoopback() && !destLoopback():
 			rule = "loopback, and " + hostname + " is not"
@@ -107,7 +108,7 @@ func ChooseAddr(ctx context.Context, line CredentialLine, c Config,
 	loop := destLoopback()
 	for _, a := range resolved {
 		a = a.Unmap()
-		if r.refuse(a) != "" {
+		if addressRule(a) != "" {
 			continue
 		}
 		if a.IsLoopback() && !loop {
@@ -120,34 +121,4 @@ func ChooseAddr(ctx context.Context, line CredentialLine, c Config,
 	}
 	fail.Lookup = lookupErr
 	return netip.Addr{}, fail
-}
-
-type addrRules struct{ local []netip.Prefix }
-
-// refuse is why a may not be a server's address whoever names it, or "":
-// the grammar's rules (unspecified, multicast, limited broadcast) and the
-// directed broadcast of one of the client's own IPv4 interfaces, the one
-// subnet broadcast the client can recognise.
-func (r addrRules) refuse(a netip.Addr) string {
-	if rule := addressRule(a); rule != "" {
-		return rule
-	}
-	if a.Is4() {
-		for _, p := range r.local {
-			if p.Addr().Is4() && p.Bits() <= 30 && p.Bits() > 0 && a == lastAddr(p) {
-				return "the broadcast address of " + p.Masked().String()
-			}
-		}
-	}
-	return ""
-}
-
-// lastAddr is the highest address in an IPv4 prefix: its directed
-// broadcast.
-func lastAddr(p netip.Prefix) netip.Addr {
-	b := p.Masked().Addr().As4()
-	host := uint32(1)<<(32-p.Bits()) - 1
-	v := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
-	v |= host
-	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 }

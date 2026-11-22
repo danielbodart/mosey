@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/danielbodart/mosey/internal/terminal"
@@ -419,7 +420,11 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 			}
 			return fail(err, "the session failed: %v", err)
 		case err := <-readErr:
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) || errors.Is(err, syscall.EIO) {
+				// EIO is a terminal hung up: its window closed. That is
+				// the same detach as the SIGHUP that comes with it, which
+				// it often beats, so -close-if-idle must not depend on
+				// which arrives first.
 				return nil
 			}
 			return fail(err, "reading the terminal: %v", err)

@@ -31,6 +31,20 @@ func TestCloseIfIdleEndsIdleShellAndKeepsBusyOrTakenOverSessionsAlive(t *testing
 		return !strings.Contains(out, idleName)
 	})
 
+	// 1b. The window closes and the client's read fails with EIO, with no
+	// SIGHUP at all: the same detach, so the idle shell still ends.
+	hung := startLocalTTY(t, false, "hung-up -close-if-idle client", mosey, m, "", []string{"-new", "-close-if-idle"})
+	hung.shows("$")
+	hungName := hung.name()
+	hung.master.Close()
+	if status := hung.exits(); status != 0 {
+		t.Fatalf("hung-up client exited %d after EIO, not 0", status)
+	}
+	waitFor(t, "hung-up session to disappear from -list", func() bool {
+		out, _ := localCmd(t, mosey, m, "-list")
+		return !strings.Contains(out, hungName)
+	})
+
 	// 2. Foreground command running: SIGHUP detaches; session stays alive and resumable.
 	fg := startLocal(t, "foreground-busy -close-if-idle client", mosey, m, "", []string{"-new", "-close-if-idle"})
 	fg.shows("$")

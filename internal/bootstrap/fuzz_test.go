@@ -345,10 +345,10 @@ func FuzzSSHOptions(f *testing.F) {
 }
 
 func FuzzChooseAddr(f *testing.F) {
-	f.Add([]byte{127, 0, 0, 1}, "far", []byte{198, 51, 100, 9}, []byte{10, 1, 2, 3, 24})
-	f.Add([]byte{}, "fe80::1%eth0", []byte{}, []byte{})
-	f.Add(netip.MustParseAddr("fe80::1").AsSlice(), "x", netip.MustParseAddr("::1").AsSlice(), []byte{})
-	f.Fuzz(func(t *testing.T, addr []byte, hostname string, resolved []byte, local []byte) {
+	f.Add([]byte{127, 0, 0, 1}, "far", []byte{198, 51, 100, 9})
+	f.Add([]byte{}, "fe80::1%eth0", []byte{})
+	f.Add(netip.MustParseAddr("fe80::1").AsSlice(), "x", netip.MustParseAddr("::1").AsSlice())
+	f.Fuzz(func(t *testing.T, addr []byte, hostname string, resolved []byte) {
 		line := sampleCredentialLine()
 		line.Addr, _ = netip.AddrFromSlice(addr)
 		if line.Addr.IsValid() && addressRule(line.Addr) != "" {
@@ -364,24 +364,16 @@ func FuzzChooseAddr(f *testing.F) {
 			res = append(res, a)
 			resolved = resolved[n:]
 		}
-		var prefixes []netip.Prefix
-		for len(local) >= 5 {
-			a, _ := netip.AddrFromSlice(local[:4])
-			if p, err := a.Prefix(int(local[4] % 33)); err == nil {
-				prefixes = append(prefixes, p)
-			}
-			local = local[5:]
-		}
 		lookup := func(context.Context, string) ([]netip.Addr, error) { return res, nil }
 		c := Config{"hostname": {hostname}}
-		a, err := ChooseAddr(context.Background(), line, c, lookup, prefixes)
+		a, err := ChooseAddr(context.Background(), line, c, lookup)
 		if err != nil {
 			if !errors.Is(err, ErrBadAddr) {
 				t.Fatalf("%v", err)
 			}
 			return
 		}
-		if why := (addrRules{local: prefixes}).refuse(a); why != "" {
+		if why := addressRule(a); why != "" {
 			t.Fatalf("chose %s, which is %s", a, why)
 		}
 		if a.Is6() && a.IsLinkLocalUnicast() && a.Zone() == "" {

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/netip"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -91,6 +93,7 @@ func (p *fakePaint) Resize(cols, rows int) { p.size = [2]int{cols, rows} }
 type fakeTerm struct {
 	keys       chan []byte
 	closed     bool
+	endErr     error // what Read says once closed; io.EOF if nil
 	cols, rows int
 	resized    chan struct{}
 	out        strings.Builder
@@ -103,6 +106,9 @@ func newFakeTerm(cols, rows int) *fakeTerm {
 func (t *fakeTerm) Read(p []byte) (int, error) {
 	k, ok := <-t.keys
 	if !ok {
+		if t.endErr != nil {
+			return 0, t.endErr
+		}
 		return 0, io.EOF
 	}
 	return copy(p, k), nil
@@ -380,6 +386,32 @@ func TestTheEndOfTheTerminalEndsTheSession(t *testing.T) {
 		synctest.Wait()
 		if err := <-h.done; err != nil {
 			t.Errorf("%v", err)
+		}
+	})
+}
+
+// Closing the window can make the terminal's read fail with EIO before
+// the SIGHUP arrives; it is the same detach, so -close-if-idle still runs.
+func TestAHungUpTerminalEndsTheSessionLikeItsEnd(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := start(t)
+		h.term.endErr = &fs.PathError{Op: "read", Path: "/dev/stdin", Err: syscall.EIO}
+		h.term.close()
+		synctest.Wait()
+		if err := <-h.done; err != nil {
+			t.Errorf("%v", err)
+		}
+	})
+}
+
+func TestAnyOtherTerminalErrorFailsTheSession(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := start(t)
+		h.term.endErr = &fs.PathError{Op: "read", Path: "/dev/stdin", Err: syscall.EBADF}
+		h.term.close()
+		synctest.Wait()
+		if err := <-h.done; err == nil {
+			t.Error("an EBADF read ended the session cleanly")
 		}
 	})
 }

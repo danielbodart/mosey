@@ -3,7 +3,6 @@ package client
 import (
 	"bytes"
 	"errors"
-	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -126,16 +125,4 @@ func TestTheLineCarriesTheCredentialExactly(t *testing.T) {
 	if c.ServerPublic[0] != 0x5a {
 		t.Error("the credential shares the line's key bytes")
 	}
-}
-
-func TestTheLocalPrefixesAreTheMachinesOwn(t *testing.T) {
-	for _, p := range localPrefixes(slog.New(slog.DiscardHandler)) {
-		if !p.IsValid() || p.Addr().Is4In6() || p.Bits() < 0 {
-			t.Errorf("%v", p)
-		}
-		if p.Addr().Is4() && p.Bits() > 32 {
-			t.Errorf("%v", p)
-		}
-	}
-
 }

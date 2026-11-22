@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
@@ -207,7 +208,7 @@ func Run(ctx context.Context, o Options) error {
 // udpTo is where the session's UDP goes, checked as bootstrap.md §7.2
 // says, and a socket to send it from.
 func udpTo(ctx context.Context, line bootstrap.CredentialLine, cfg bootstrap.Config, log *slog.Logger) (netip.AddrPort, *net.UDPConn, error) {
-	addr, err := bootstrap.ChooseAddr(ctx, line, cfg, lookupIP, localPrefixes(log))
+	addr, err := bootstrap.ChooseAddr(ctx, line, cfg, lookupIP)
 	if err != nil {
 		return netip.AddrPort{}, nil, fmt.Errorf("don't know where to send UDP: %w", err)
 	}
@@ -298,48 +299,36 @@ func credentialFrom(l bootstrap.CredentialLine) handshake.Credential {
 
 // listenFor is the client's UDP socket: the wildcard address of the
 // server's family, unconnected, so roaming (D21) needs no new socket.
+//
+// An IPv4 one has SO_BROADCAST cleared. Go sets it on every IPv4 UDP
+// socket, and without it the kernel refuses a send to any broadcast
+// address it knows, the client's own subnets' included: that refusal is
+// what keeps a hostile server's addr from aiming msg1 at the client's
+// neighbours (bootstrap.md §7.2).
 func listenFor(server netip.Addr) (*net.UDPConn, error) {
-	if server.Is4() {
-		return net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
+	if !server.Is4() {
+		return net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6unspecified})
 	}
-	return net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6unspecified})
+	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
+		var serr error
+		if err := c.Control(func(fd uintptr) {
+			serr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_BROADCAST, 0)
+		}); err != nil {
+			return err
+		}
+		if serr != nil {
+			return fmt.Errorf("clearing SO_BROADCAST: %w", serr)
+		}
+		return nil
+	}}
+	pc, err := lc.ListenPacket(context.Background(), "udp4", "0.0.0.0:0")
+	if err != nil {
+		return nil, err
+	}
+	return pc.(*net.UDPConn), nil
 }
 
 // lookupIP resolves a host name with the system's resolver.
 func lookupIP(ctx context.Context, host string) ([]netip.Addr, error) {
 	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-}
-
-// localPrefixes is the client's own interface prefixes, whose directed
-// broadcasts the server may not name (bootstrap.md §7.2).
-func localPrefixes(log *slog.Logger) []netip.Prefix {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		log.Warn("listing interfaces", "err", err)
-		return nil
-	}
-	var out []netip.Prefix
-	for _, a := range addrs {
-		n, ok := a.(*net.IPNet)
-		if !ok {
-			continue
-		}
-		ip, ok := netip.AddrFromSlice(n.IP)
-		if !ok {
-			continue
-		}
-		ones, bits := n.Mask.Size()
-		if ip.Is4In6() {
-			// net keeps IPv4 addresses in 16 bytes, sometimes with a
-			// 16-byte mask.
-			ip = ip.Unmap()
-			if bits == 128 {
-				ones -= 96
-			}
-		}
-		if p := netip.PrefixFrom(ip, ones); p.IsValid() {
-			out = append(out, p)
-		}
-	}
-	return out
 }

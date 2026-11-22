@@ -51,11 +51,20 @@ func (m *thisMachine) env(state, agentSock string) []string {
 // machine runs it.
 func startLocal(t *testing.T, name, mosey string, m *thisMachine, agentSock string, flags []string, words ...string) *realClient {
 	t.Helper()
+	return startLocalTTY(t, true, name, mosey, m, agentSock, flags, words...)
+}
+
+// startLocalTTY is startLocal with the pty its controlling terminal or
+// not. Without one, closing the master reaches the client only as EIO on
+// its reads, never as SIGHUP, which pins the path a closed window takes
+// when its EIO beats its SIGHUP.
+func startLocalTTY(t *testing.T, ctty bool, name, mosey string, m *thisMachine, agentSock string, flags []string, words ...string) *realClient {
+	t.Helper()
 	master, slave := openPTY(t)
 	c := &realClient{t: t, label: name, master: master, screen: &screenLog{}, exited: make(chan error, 1), state: t.TempDir()}
 	c.cmd = command(mosey, append(append(slices.Clone(flags), "localhost"), words...)...)
 	c.cmd.Stdin, c.cmd.Stdout, c.cmd.Stderr = slave, slave, slave
-	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: ctty}
 	c.cmd.Env = m.env(c.state, agentSock)
 	if err := c.cmd.Start(); err != nil {
 		t.Fatal(err)
