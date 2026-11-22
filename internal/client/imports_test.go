@@ -13,11 +13,12 @@ import (
 var clientPath = []string{
 	"client", "render", "screen", "terminal", "userinput", "predict",
 	"ssp", "transport", "handshake", "bootstrap", "nocore", "channel", "agent",
+	"startup",
 }
 
 // The client never parses a remote escape sequence (D9), so nothing on its
 // path may depend on a VT parser, directly or not (screen.md §9 item 1,
-// §10). Checked two ways, for both operating systems the client ships for:
+// §10). Checked two ways, for every operating system the client ships for:
 // no dependency on a known parser, and no dependency from outside the
 // standard library, mosey's own client-path packages and the x/ modules,
 // so a new escape parser cannot slip in under a name nobody listed.
@@ -44,7 +45,7 @@ func TestTheClientPathImportsNoEscapeParser(t *testing.T) {
 		"golang.org/x/text/width", "golang.org/x/text/transform",
 		"vendor/golang.org/x/",
 	}, pkgs...)
-	for _, goos := range []string{"linux", "darwin"} {
+	for _, goos := range []string{"linux", "darwin", "android"} {
 		cmd := exec.Command(gobin, append([]string{"list", "-deps"}, pkgs...)...)
 		cmd.Env = append(os.Environ(), "GOOS="+goos)
 		out, err := cmd.CombinedOutput()

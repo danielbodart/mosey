@@ -19,6 +19,7 @@ import (
 	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/predict"
 	"github.com/danielbodart/mosey/internal/server"
+	"github.com/danielbodart/mosey/internal/startup"
 	"github.com/danielbodart/mosey/internal/terminal"
 )
 
@@ -56,14 +57,17 @@ Options:
 `
 
 func main() {
-	args := programArgs(runtime.GOOS, os.Args)
+	// Once, here, and handed to whatever starts a program or reads mosey's
+	// own file: on Android a linker may stand in front of mosey
+	// (internal/startup).
+	self, args := startup.Detect(runtime.GOOS, os.Args)
 	if len(args) > 1 {
 		if role, ok := serveRole(args[1]); ok {
-			runServer(role, args)
+			runServer(role, self, args[1:])
 			return
 		}
 	}
-	os.Exit(runClient(args[1:]))
+	os.Exit(runClient(self, args[1:]))
 }
 
 // cli is the client's command line, parsed (bootstrap.md §2).
@@ -299,7 +303,7 @@ func (a agentLetter) Set(v string) error {
 	return nil
 }
 
-func runClient(args []string) int {
+func runClient(self startup.Process, args []string) int {
 	c, err := parseArgs(args)
 	if err != nil {
 		var u *bootstrap.UsageError
@@ -309,6 +313,7 @@ func runClient(args []string) int {
 		fmt.Fprint(os.Stderr, usage)
 		return client.StatusUsage
 	}
+	c.ssh.Self = self
 	if c.help {
 		fmt.Print(usage)
 		return 0

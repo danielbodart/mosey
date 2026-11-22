@@ -62,6 +62,9 @@ var localEnvDrop = map[string]bool{
 func (s SSH) localCommand(ctx context.Context) *exec.Cmd {
 	path, err := s.Server, error(nil)
 	if path == "" {
+		path = s.Self.Path
+	}
+	if path == "" {
 		path, err = os.Executable()
 	}
 	cmd := exec.CommandContext(ctx, path, strings.Fields(s.flag())...)
@@ -69,6 +72,7 @@ func (s SSH) localCommand(ctx context.Context) *exec.Cmd {
 		// Start returns it: there is no binary to run.
 		cmd.Err = fmt.Errorf("finding this mosey's own file: %w", err)
 	}
+	s.Self.Prepare(cmd)
 	cmd.WaitDelay = time.Second
 	cmd.Env = localEnv(os.Environ())
 	return cmd

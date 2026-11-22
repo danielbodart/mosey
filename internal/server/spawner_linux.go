@@ -26,6 +26,7 @@ import (
 	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/pty"
 	"github.com/danielbodart/mosey/internal/screen"
+	"github.com/danielbodart/mosey/internal/startup"
 )
 
 // Teardown grace periods (server.md §8) [derived].
@@ -48,8 +49,9 @@ const (
 // SpawnerConfig is how the spawner is set up; the zero values of the
 // optional fields are production's.
 type SpawnerConfig struct {
-	// Self is this binary, re-executed as proto and emu.
-	Self string
+	// Self is this mosey, re-executed as proto and emu, and how the login
+	// shell is started.
+	Self startup.Process
 	// Version is this binary's, for the session log alone: nothing
 	// compares it (D8 V1).
 	Version string
@@ -72,19 +74,6 @@ type SpawnerConfig struct {
 	prlimit func(pid int) error
 	// sessionIdle overrides pty.SessionIdle; a test hook.
 	sessionIdle func(master *os.File, shellPID int) (bool, error)
-}
-
-// execPath is the file a role is started from (server.md §2.3): the
-// spawner's own image, /proc/self/exe, never self's path, which D7 may
-// have replaced since with a build of another protocol
-// (bootstrap.md §4.7.7). self stays argv[0], so ps and the tests still
-// see which file it came from. An empty self, a test's way of saying
-// there is nothing to start, stays empty.
-func execPath(self string) string {
-	if self == "" {
-		return ""
-	}
-	return "/proc/self/exe"
 }
 
 // RunSpawner is `mosey --serve=spawner`: the unsandboxed role that binds
@@ -521,18 +510,15 @@ func (s *spawner) startRole(role string, sock *os.File, gen uint32) (*child, err
 		return nil, err
 	}
 	defer w.Close()
-	cmd := &exec.Cmd{
-		Path: execPath(s.cfg.Self),
-		Args: []string{s.cfg.Self, "--serve=" + role},
-		// Nothing a confused role could follow: no HOME, no SSH_AUTH_SOCK,
-		// no bus address (S4).
-		Env:        roleEnv(s.cfg.Environ),
-		Stderr:     w,
-		ExtraFiles: []*os.File{sock},
-		// A spawner that is SIGKILLed takes its roles with it; EOF on the
-		// socket is the primary signal, this the backstop.
-		SysProcAttr: &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL},
-	}
+	cmd := selfCommand(s.cfg.Self, "--serve="+role)
+	// Nothing a confused role could follow: no HOME, no SSH_AUTH_SOCK, no
+	// bus address (S4).
+	cmd.Env = roleEnv(s.cfg.Environ)
+	cmd.Stderr = w
+	cmd.ExtraFiles = []*os.File{sock}
+	// A spawner that is SIGKILLed takes its roles with it; EOF on the
+	// socket is the primary signal, this the backstop.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	if err := s.start.run(cmd.Start); err != nil {
 		r.Close()
 		return nil, err
@@ -638,6 +624,7 @@ func (s *spawner) scope(pid int, gen uint32) string {
 		"MemorySwapMax", "t", "0",
 		"CollectMode", "s", "inactive-or-failed",
 		"0")
+	s.cfg.Self.Prepare(cmd)
 	cmd.Env = s.cfg.Environ
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if gen == 1 {
@@ -684,11 +671,11 @@ func (s *spawner) startShell(cl bootstrap.ClientLine, agentSock string, slave *o
 	if err != nil {
 		return fmt.Errorf("the shell's directory: %w", err)
 	}
-	hop := hopDir(s.cfg.Environ, "/proc/self/exe")
+	hop := hopDir(s.cfg.Environ, s.cfg.Self.Executable())
 	if hop != "" {
 		s.log.Info("the server is ~/.local/bin/mosey: putting ~/.local/bin on the shell's PATH", "dir", hop)
 	}
-	proc, err := pty.Shell{Path: path, Dir: dir, Env: shellEnv(s.cfg.Environ, cl.Env, agentSock, hop, s.log), Command: cl.Command}.Start(slave)
+	proc, err := pty.Shell{Self: s.cfg.Self, Path: path, Dir: dir, Env: shellEnv(s.cfg.Environ, cl.Env, agentSock, hop, s.log), Command: cl.Command}.Start(slave)
 	if err != nil {
 		return fmt.Errorf("starting the shell %s: %w", path, err)
 	}

@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/danielbodart/mosey/internal/startup"
 )
 
 // SSH is how the client runs the system ssh for a bootstrap (D6): the
@@ -31,12 +33,15 @@ type SSH struct {
 	Destination string
 	// Options are the user's own ssh options, filtered (§2.1).
 	Options SSHOptions
+	// Self is how this mosey was started: ssh and a local server are
+	// started the same way, and a local server is Self.Path unless Server
+	// says otherwise (internal/startup).
+	Self startup.Process
 	// Server is the remote mosey binary, run as `Server --serve`: -remote's
 	// path. Empty is D7's probe (§4.7.2), which runs mosey on the remote
 	// PATH, of whatever version, or else ~/.local/bin/mosey if it
 	// answers Protocol, and otherwise says what the host is. Locally it is
-	// the binary run with no shell between, and empty is this one
-	// (os.Executable).
+	// the binary run with no shell between, and empty is Self.Path.
 	Server string
 	// Protocol is what the probe needs ~/.local/bin/mosey's --serve=protocol
 	// to say: ProtocolAnswer, this client's protocol numbers. Only the
@@ -172,6 +177,7 @@ func (s SSH) Resolve(ctx context.Context) (Config, error) {
 	}
 	args = append(args, "--", s.Destination)
 	cmd := exec.CommandContext(ctx, s.program(), args...)
+	s.Self.Prepare(cmd)
 	var stdout, stderr limitedBuffer
 	stdout.max, stderr.max = MaxConfig+1, 64<<10
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -356,6 +362,7 @@ func (s SSH) command(ctx context.Context, c Config, remote string) *exec.Cmd {
 	args = append(args, s.Options.Args...)
 	args = append(args, "--", s.Destination, remote)
 	cmd := exec.CommandContext(ctx, s.program(), args...)
+	s.Self.Prepare(cmd)
 	cmd.WaitDelay = time.Second
 	if s.Batch {
 		// BatchMode stops ssh's own questions but not those of what ssh

@@ -8,10 +8,10 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"runtime"
 	"time"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
+	"github.com/danielbodart/mosey/internal/startup"
 )
 
 // releaseDeadline bounds the whole download of a release asset
@@ -104,15 +104,14 @@ func get(ctx context.Context, hc *http.Client, url string, max int64) ([]byte, e
 }
 
 // readSelf is this client's own file, the very bytes it is running
-// (bootstrap.md §4.7.4): on Linux through /proc/self/exe, which is the
-// running image even if an upgrade has replaced the path since.
-func readSelf() ([]byte, error) {
-	path := "/proc/self/exe"
-	if runtime.GOOS != "linux" {
-		var err error
-		if path, err = os.Executable(); err != nil {
-			return nil, err
-		}
+// (bootstrap.md §4.7.4), from self.Executable(): on Linux /proc/self/exe,
+// which is the running image even if an upgrade has replaced the path
+// since, and on Android under a linker the file the linker ran
+// (internal/startup).
+func readSelf(self startup.Process) ([]byte, error) {
+	path := self.Executable()
+	if path == "" {
+		return nil, errors.New("cannot find this mosey's own file")
 	}
 	f, err := os.Open(path)
 	if err != nil {

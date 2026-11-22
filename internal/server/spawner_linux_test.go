@@ -19,6 +19,7 @@ import (
 	"github.com/danielbodart/mosey/internal/emu"
 	"github.com/danielbodart/mosey/internal/ipc"
 	"github.com/danielbodart/mosey/internal/screen"
+	"github.com/danielbodart/mosey/internal/startup"
 )
 
 // The spawner test runs the launcher in process and everything after it
@@ -46,7 +47,7 @@ func fakeServe(role string) int {
 	case "spawner":
 		self, _ := os.Executable()
 		err = RunSpawner(ctx, os.NewFile(3, "ipc"), SpawnerConfig{
-			Self:     self,
+			Self:     startup.Process{Path: self},
 			Version:  fakeVersion,
 			BindAddr: netip.MustParseAddr("127.0.0.1"),
 		})
@@ -203,7 +204,7 @@ func TestTheSpawnerRunsASessionAndRebuildsEmu(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	l := &Launcher{
 		Stdin: bytes.NewReader(line), Stdout: &stdout, Stderr: &stderr,
-		Self: self,
+		Self: startup.Process{Path: self},
 		Env: []string{
 			"PATH=" + os.Getenv("PATH"),
 			"HOME=" + home,

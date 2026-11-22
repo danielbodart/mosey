@@ -7,11 +7,13 @@ import (
 	"errors"
 	"net/netip"
 	"os"
+
+	"github.com/danielbodart/mosey/internal/startup"
 )
 
 // SpawnerConfig is how the spawner is set up (see spawner_linux.go).
 type SpawnerConfig struct {
-	Self                string
+	Self                startup.Process
 	Version             string
 	FirstPort, LastPort uint16
 	BindAddr            netip.Addr
@@ -24,7 +26,3 @@ type SpawnerConfig struct {
 func RunSpawner(context.Context, *os.File, SpawnerConfig) error {
 	return errors.ErrUnsupported
 }
-
-// execPath is self: there is no server here yet (D22), and no
-// /proc/self/exe to start roles from.
-func execPath(self string) string { return self }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/ipc"
 	"github.com/danielbodart/mosey/internal/nocore"
+	"github.com/danielbodart/mosey/internal/startup"
 )
 
 // Launcher timeouts (server.md §8).
@@ -40,8 +40,8 @@ type Launcher struct {
 	// Stdin, Stdout and Stderr are ssh's.
 	Stdin          io.Reader
 	Stdout, Stderr io.Writer
-	// Self is this binary, started as `Self --serve=spawner`.
-	Self string
+	// Self is this mosey, started again as `--serve=spawner`.
+	Self startup.Process
 	// Env is the spawner's environment: the launcher's own, unchanged.
 	Env []string
 	// Trigger opens sshd's forwarded agent to make the client's ssh send
@@ -165,17 +165,12 @@ func (l *Launcher) start(ctx context.Context, line []byte, cl bootstrap.ClientLi
 		return err
 	}
 	defer conn.Close()
-	cmd := &exec.Cmd{
-		// This very image, not whatever is at l.Self's path by now
-		// (server.md §2.3).
-		Path: execPath(l.Self),
-		Args: []string{l.Self, "--serve=spawner"},
-		Env:  l.Env,
-		// No copy of ssh's pipes, or ssh would wait for the spawner: stdio
-		// is /dev/null, and the spawner opens its own log.
-		ExtraFiles:  []*os.File{theirs},
-		SysProcAttr: &syscall.SysProcAttr{Setsid: true},
-	}
+	cmd := selfCommand(l.Self, "--serve=spawner")
+	cmd.Env = l.Env
+	// No copy of ssh's pipes, or ssh would wait for the spawner: stdio is
+	// /dev/null, and the spawner opens its own log.
+	cmd.ExtraFiles = []*os.File{theirs}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		theirs.Close()
 		return fmt.Errorf("starting the spawner: %w", err)

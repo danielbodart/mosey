@@ -44,6 +44,7 @@ decision wins.
 | `internal/pty` | Open ptys, set their size, read the echo-off bit, whether the foreground runs as root, and whether the session is idle, start the login shell (D14) | spawner, proto | **server-proc** | `pty.go`, `pty_linux.go`, `pty_other.go`, `idle.go` |
 | `internal/sandbox` | Landlock deny-all, seccomp cBPF compiler and per-role policies, `DUMPABLE=0` (D22) | proto, emu | **server-proc** | `doc.go`, `sandbox.go`, `bpf.go`, `sandbox_linux.go`, `sandbox_other.go` |
 | `internal/nocore` | `DUMPABLE=0` and `RLIMIT_CORE=0` for every process that holds a secret (threat-model.md §4.10) | client, launcher, spawner, proto, emu | **server-proc** | `doc.go`, `nocore.go` |
+| `internal/startup` | How this mosey was started: its arguments, its own file, and starting a program the same way, so an Android linker in front of a static mosey is undone in one place | client, all server roles | **bootstrap-client** | `doc.go`, `startup.go` |
 | `internal/ipc` | Seqpacket messages and SCM_RIGHTS between the roles | launcher, spawner, proto, emu | **server-proc** | `ipc.go`, `message.go` |
 | `internal/server` | The four roles (launcher, spawner, proto, emu); proto's `Session`, runnable in process for tests; the emu reply grammar | all server roles | **server-proc** | `doc.go`, `proto.go`, `launcher.go`, `spawner_linux.go`, `startdir.go`, `protorole.go`, `emurole.go`, `ipcemu.go`, `reply.go` |
 | `internal/bootstrap` | The SSH command line, the stdin and stdout lines (D6, D20, D25); D7's probe line, upload command and release rules; the local launcher of `mosey localhost` (`bootstrap.md` §2.2) | client, spawner | **bootstrap-client** | `doc.go`, `line.go`, `ssh.go`, `probe.go`, `upload.go` |
@@ -81,13 +82,15 @@ screen                          ()              -- satisfies ssp.State structura
 render                          (screen)
 predict                         (screen; golang.org/x/text/width) -- never parses remote output (D9)
 emu                             (screen)
-bootstrap                       ()              -- raw bytes; never handshake
-pty, sandbox, ipc, nocore       ()
+startup                         ()
+bootstrap                       (startup)       -- raw bytes; never handshake
+pty                             (startup)
+sandbox, ipc, nocore            ()
 install                         (bootstrap)     -- the size bound and InstallPath only
 terminal                        ()
 server                          (all of the above but client, terminal, render)
 client                          (all of the above but server, pty, sandbox, ipc, emu)
-cmd/mosey                       (client, server, install, bootstrap, terminal, nocore, predict)
+cmd/mosey                       (client, server, install, bootstrap, terminal, nocore, predict, startup)
 e2e                             (everything; tests only)
 ```
 

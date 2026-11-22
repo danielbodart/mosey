@@ -33,6 +33,7 @@ import (
 	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/install"
 	"github.com/danielbodart/mosey/internal/server"
+	"github.com/danielbodart/mosey/internal/startup"
 )
 
 // ipcFD is the fd a role's IPC socket arrives on: the first of exec.Cmd.ExtraFiles.
@@ -53,8 +54,9 @@ func serveRole(arg string) (role string, ok bool) {
 	return "", false
 }
 
-// runServer runs `mosey --serve[=role]`, with args as programArgs gives them.
-func runServer(role string, args []string) {
+// runServer runs `mosey --serve[=role]`: args are the arguments, the
+// --serve flag first.
+func runServer(role string, self startup.Process, args []string) {
 	if role == "protocol" || role == "install" {
 		// Neither needs the executable's path, and install runs from a
 		// file that is about to be renamed.
@@ -67,10 +69,10 @@ func runServer(role string, args []string) {
 	// session log with a prefix of its own (server.md §6.4).
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
-	self, err := os.Executable()
-	if err != nil && (role == "" || role == "spawner") {
-		failServer(err)
+	if self.Path == "" && (role == "" || role == "spawner") {
+		failServer(errors.New("cannot find this mosey's own file"))
 	}
+	var err error
 	switch role {
 	case "":
 		err = (&server.Launcher{
@@ -104,11 +106,11 @@ func runServer(role string, args []string) {
 	case "kill":
 		// mosey -kill NAME (bootstrap.md §9.5): the name is the next
 		// argument. No such session has been said on stdout already.
-		if len(args) != 3 {
+		if len(args) != 2 {
 			fmt.Fprintln(os.Stderr, "mosey --serve=kill: one session name, please")
 			os.Exit(2)
 		}
-		err := server.Kill(os.Stdout, os.Getenv, args[2])
+		err := server.Kill(os.Stdout, os.Getenv, args[1])
 		if errors.Is(err, server.ErrNoSuchSession) {
 			os.Exit(1)
 		}
@@ -140,7 +142,7 @@ func runOneShot(role string, args []string) {
 	case "install":
 		// Run from the copy the client just uploaded, which puts itself
 		// at ~/.local/bin/mosey (bootstrap.md §4.7.7).
-		if err := install.Run(args[2:], os.Getenv, os.Getuid()); err != nil {
+		if err := install.Run(args[1:], os.Getenv, os.Getuid()); err != nil {
 			fmt.Fprintln(os.Stderr, "mosey --serve=install:", err)
 			os.Exit(1)
 		}

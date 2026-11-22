@@ -48,7 +48,7 @@ func newCopier(o Options, s bootstrap.SSH, cfg bootstrap.Config) *copier {
 		c.http = releaseClient()
 	}
 	if c.self == nil {
-		c.self = readSelf
+		c.self = func() ([]byte, error) { return readSelf(s.Self) }
 	}
 	return c
 }

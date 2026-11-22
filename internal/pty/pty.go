@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/danielbodart/mosey/internal/startup"
 )
 
 // Size is a window size in cells.
@@ -105,6 +107,9 @@ func effectiveUID(status []byte) (uint32, bool) {
 
 // Shell is how to start the user's login shell (D14, server.md §2.5).
 type Shell struct {
+	// Self is how this mosey was started; the shell is started the same
+	// way (internal/startup).
+	Self startup.Process
 	// Path is the shell to run; LoginShell finds the user's.
 	Path string
 	// Dir is the directory it starts in.
@@ -133,6 +138,7 @@ func (s Shell) Start(slave *os.File) (*os.Process, error) {
 		Stderr: slave,
 	}
 	cmd.SysProcAttr = sessionLeader()
+	s.Self.Prepare(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
