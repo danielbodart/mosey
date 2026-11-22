@@ -636,7 +636,8 @@ exactly this [choice]:
   of the others, which it cannot run, contains `V`'s bytes.
 - **The binaries.** One asset per platform, named
   `mosey-<V>-<os>-<arch>`, with `os` ∈ {`linux`, `darwin`} and `arch` ∈
-  {`amd64`, `arm64`}: Go's `GOOS` and `GOARCH` names, so the client's own
+  {`amd64`, `arm64`}, and `android-arm64` (D10 as amended 2026-11-22; no
+  `android-amd64`, which Go links only with cgo): Go's `GOOS` and `GOARCH` names, so the client's own
   is `runtime.GOOS` and `runtime.GOARCH`. Each is the bare static
   executable `scripts/build.sh` made (CGO off, `-trimpath`, linux with
   `GOEXPERIMENT=runtimesecret`, D1, D20), not an archive.
@@ -705,7 +706,10 @@ a downloaded file says what it is.
 Mapping the remote's `uname -s` and `uname -m` to `os` and `arch`
 (`Linux` → `linux`, `Darwin` → `darwin`, `x86_64` → `amd64`, `aarch64`
 and `arm64` → `arm64`; anything else has no asset) is the auto-upload
-slice's, as is the download itself. `SHA256SUMS` comes over HTTPS from
+slice's, as is the download itself. An Android host says `Linux`, so it
+is sent `linux-<arch>`, which runs there; the `android-arm64` asset is
+for a person installing a client on a phone, and an Android client,
+whose `runtime.GOOS` is `android`, never sends itself to a `linux` host. `SHA256SUMS` comes over HTTPS from
 the same release, so it catches corruption and a wrong file, not a
 compromised GitHub account or CI; the client checking the build
 attestation too is §14 question C, parked. A client of a development build (`dev`, or a local build's timestamp

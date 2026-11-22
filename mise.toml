@@ -17,17 +17,17 @@ CGO_ENABLED = "0"
 description = "Lint, unit tests, the runtimesecret build's checks, shellcheck, actionlint and the scripts' tests: the dev loop and CI's fast job"
 depends = ["lint", "test", "secret", "shellcheck", "actionlint", "actions-pinned", "scripts-test"]
 
-# Vetted for both operating systems and both architectures every release
-# ships for (D10), so a Linux-only call outside a _linux.go file fails here
-# and not in the build job. The spikes are records with their own modules,
-# and are neither formatted nor vetted.
+# Vetted for every platform a release ships for (D10), so a Linux-only call
+# outside a _linux.go file fails here and not in the build job. The spikes
+# are records with their own modules, and are neither formatted nor vetted.
 [tasks.lint]
-description = "gofmt, and go vet for linux and darwin on amd64 and arm64"
+description = "gofmt, and go vet for linux and darwin on amd64 and arm64, and android/arm64"
 sources = ["cmd/**/*.go", "internal/**/*.go", "go.mod", "go.sum"]
 outputs = { auto = true }
 run = [
   'test -z "$(gofmt -l cmd internal)" || { gofmt -l cmd internal >&2; echo "not gofmt-ed" >&2; exit 1; }',
   'for os in linux darwin; do for arch in amd64 arm64; do GOOS=$os GOARCH=$arch go vet ./... || exit 1; done; done',
+  'GOOS=android GOARCH=arm64 go vet ./...',
 ]
 
 # Linux releases are built with GOEXPERIMENT=runtimesecret (D20,
@@ -90,7 +90,7 @@ outputs = { auto = true }
 run = "scripts/actions-pinned.sh"
 
 [tasks.build]
-description = "The static mosey binary for linux and darwin on amd64 and arm64, in dist/"
+description = "The static mosey binary for linux and darwin on amd64 and arm64, and android/arm64, in dist/"
 run = "scripts/build.sh"
 
 # What counts as a release's input (the source, the Go pin, the build and

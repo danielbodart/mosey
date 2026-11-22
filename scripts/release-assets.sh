@@ -34,7 +34,7 @@ if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 # The platforms every release ships for (D10), in Go's GOOS-GOARCH names.
-platforms=(darwin-amd64 darwin-arm64 linux-amd64 linux-arm64)
+platforms=(android-arm64 darwin-amd64 darwin-arm64 linux-amd64 linux-arm64)
 
 # This machine's platform, mapped from uname as §4.6 maps a remote's.
 host_os=$(uname -s)

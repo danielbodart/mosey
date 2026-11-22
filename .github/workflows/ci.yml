@@ -270,7 +270,7 @@ jobs:
 
   # Static binaries for every platform a release ships for (D1, D10), kept
   # as the run's artifacts whether or not the commit is released: one job
-  # cross-compiles all four (each took longer to start than to build), and
+  # cross-compiles all five (each took longer to start than to build), and
   # uploads each as the artifact it was when each had a job of its own,
   # mosey-<os>-<arch> holding <os>-<arch>/mosey, which is what the release
   # job and scripts/release-assets.sh look for.
@@ -300,10 +300,10 @@ jobs:
           restore-keys: |
             go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-build-
             go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
-      - name: Build all four
+      - name: Build all five
         run: |
           mise exec -- scripts/build.sh
-          for p in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+          for p in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 android-arm64; do
             mkdir -p "upload/mosey-$p"
             mv "dist/$p" "upload/mosey-$p/"
           done
@@ -326,6 +326,11 @@ jobs:
         with:
           name: mosey-darwin-arm64
           path: upload/mosey-darwin-arm64/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mosey-android-arm64
+          path: upload/mosey-android-arm64/
           if-no-files-found: error
 
   # What needs Nix to check, split across runners as in chase and quoin.
@@ -434,8 +439,9 @@ jobs:
   #
   #   tag      v<V>, V = scripts/version.sh (major.commit-count.run-number),
   #            on a commit of its own (below)
-  #   binary   mosey-<V>-<os>-<arch>, os in linux/darwin, arch in amd64/arm64
-  #            (Go's names), the bare static executable the build job made
+  #   binary   mosey-<V>-<os>-<arch>, os in linux/darwin, arch in amd64/arm64,
+  #            and android-arm64 (Go's names), the bare static executable
+  #            the build job made
   #   sums     SHA256SUMS, sha256sum(1) format, one line per binary
   #
   # i.e. https://github.com/danielbodart/mosey/releases/download/v<V>/mosey-<V>-<os>-<arch>.
@@ -529,7 +535,7 @@ jobs:
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         if: ${{ !failure() }}
 
-      # The build job's four binaries, one directory per artifact.
+      # The build job's five binaries, one directory per artifact.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ !failure() }}
         with:
@@ -600,6 +606,11 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: release/mosey-${{ steps.due.outputs.version }}-darwin-arm64
+      - name: Attest android/arm64
+        if: ${{ !failure() && steps.due.outputs.version != '' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/mosey-${{ steps.due.outputs.version }}-android-arm64
 
       # Notes from the COMMITS since the last release, written before this
       # release's tag exists, so the last release is the one before it.
@@ -617,7 +628,7 @@ jobs:
           fi
           {
             echo
-            echo "Static binaries for linux and darwin on amd64 and arm64, each with a GitHub build attestation."
+            echo "Static binaries for linux and darwin on amd64 and arm64, and android/arm64, each with a GitHub build attestation."
             echo "To check what you downloaded: sha256sum --ignore-missing -c SHA256SUMS, and gh attestation verify FILE --repo danielbodart/mosey"
             echo "With Nix: nix run github:danielbodart/mosey/v$V -- HOST"
           } >> notes.md

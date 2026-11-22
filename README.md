@@ -151,7 +151,8 @@ are its goals:
   `session-bind` that OpenSSH made. Thus destination-constrained keys
   (`ssh-add -h`) operate as they do with `ssh -A`.
 - **A release for each commit.** Each commit on trunk that passes all
-  tests is a release, for linux and darwin on amd64 and arm64.
+  tests is a release, for linux and darwin on amd64 and arm64, and for
+  android on arm64.
 
 mosey is clean-room: it contains no Mosh code. The rules are in
 [PLAN.md](PLAN.md#4-clean-room-rules-d3).
@@ -182,8 +183,9 @@ install -m 0755 "mosey-$V-linux-amd64" ~/.local/bin/mosey
 - When mosey downloads a release, it checks only `SHA256SUMS` (refer to
   [Zero install](#zero-install)). You check the attestation manually.
 
-The platforms are `linux-amd64`, `linux-arm64`, `darwin-amd64` and
-`darwin-arm64`. The names do not change
+The platforms are `linux-amd64`, `linux-arm64`, `darwin-amd64`,
+`darwin-arm64` and `android-arm64`. Use `android-arm64` on a phone, in a
+terminal app such as Termux, with its `openssh` package. The names do not change
 ([docs/spec/bootstrap.md §4.6](docs/spec/bootstrap.md)). mosey downloads
 these files itself when it copies itself to a host of a different
 platform.
@@ -514,7 +516,7 @@ With [mise](https://mise.jdx.dev):
 
 ```sh
 mise run check    # gofmt, vet, tests, shellcheck, actionlint.
-mise run build    # The static mosey binary for linux and darwin, amd64 and arm64.
+mise run build    # The static mosey binary for linux and darwin, amd64 and arm64, and android/arm64.
 mise run race     # The tests with the race detector. This needs a C compiler.
 ```
 
