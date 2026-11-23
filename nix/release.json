@@ -1,0 +1,21 @@
+{
+  "version": "0.317.245",
+  "assets": {
+    "x86_64-linux": {
+      "url": "https://github.com/danielbodart/mosey/releases/download/v0.317.245/mosey-0.317.245-linux-amd64",
+      "hash": "sha256-BXQtnM+5YIhf9VL3m69R9dRbuXMLWN1rhvQnrGkDOdI="
+    },
+    "aarch64-linux": {
+      "url": "https://github.com/danielbodart/mosey/releases/download/v0.317.245/mosey-0.317.245-linux-arm64",
+      "hash": "sha256-UFfNgiX48VOTlijs/5qXmGAfv8KjdcQxLqgzG1hU78g="
+    },
+    "x86_64-darwin": {
+      "url": "https://github.com/danielbodart/mosey/releases/download/v0.317.245/mosey-0.317.245-darwin-amd64",
+      "hash": "sha256-g1LYzUFn9aAi3BVCWF+eVT/aF4y7QgiI7iqp1Leie7Y="
+    },
+    "aarch64-darwin": {
+      "url": "https://github.com/danielbodart/mosey/releases/download/v0.317.245/mosey-0.317.245-darwin-arm64",
+      "hash": "sha256-AtEoydbM/aJruiqfcdNRMa03l+t/gFCDZ5Vm3XCVcIo="
+    }
+  }
+}
