@@ -43,8 +43,10 @@ func RunProto(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 	}
 	defer ctl.Close()
 
-	ctl.File().SetReadDeadline(time.Now().Add(T3))
-	m, err := ctl.Recv()
+	// Start and the first EmuLink within T3 together; SIGTERM ends the
+	// wait at once.
+	startBy := time.Now().Add(T3)
+	m, err := ctl.RecvUntil(ctx, startBy)
 	if err != nil {
 		return fmt.Errorf("waiting for Start: %w", err)
 	}
@@ -52,15 +54,15 @@ func RunProto(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 	if !ok {
 		return fmt.Errorf("the spawner's first message is %T, not Start", m)
 	}
-	m, err = ctl.Recv()
+	m, err = ctl.RecvUntil(ctx, startBy)
 	if err != nil {
+		ipc.CloseFiles(start)
 		return fmt.Errorf("waiting for EmuLink: %w", err)
 	}
 	link, ok := m.(ipc.EmuLink)
 	if !ok || link.Generation != 1 {
 		return fmt.Errorf("the spawner's second message is %T, not the first EmuLink", m)
 	}
-	ctl.File().SetReadDeadline(time.Time{})
 
 	// net.FilePacketConn needs getsockopt, getsockname and getpeername,
 	// which the policy does not have: wrap the socket now (S4 §3.3).

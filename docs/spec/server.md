@@ -146,7 +146,30 @@ ssh ──stdin──► launcher                       spawner                p
       it again (the spawner trusts no other process's parse). Clamp the
       size with `screen.ClampSize`.
    2. `chdir("/")` so the spawner pins no mount, ignore SIGHUP and
-      SIGPIPE, and open the session log (§6.4).
+      SIGPIPE, and open the session log (§6.4). Then, if the user's
+      systemd manager lives at least as long as where the spawner already
+      is, move the spawner into a transient scope of its own,
+      `mosey-session-<spawner pid>.scope` (`busctl --user --timeout=2 call
+      … StartTransientUnit 'ssa(sv)a(sa(sv))' mosey-session-<pid>.scope
+      fail 2 PIDs au 1 <pid> CollectMode s inactive-or-failed 0`, as
+      §6.3's), so proto, emu, the shell and all it runs start there.
+      Stopping the manager, at shutdown or logout, then sends SIGTERM to
+      the whole session, the spawner's included, and the session ends by
+      the last row of §2.4. Without it the spawner stays in whatever unit
+      started it, and a terminal's unit may be `KillMode=process`, as GNOME
+      Console's is (so a window can close while its programs live on):
+      then nothing stops the session and a reboot waits for the stop
+      timeout's SIGKILL [M: 90 s, 2026-11-23]. *Lives at least as long*:
+      the spawner's cgroup is already under `user@<uid>.service` (a
+      terminal on the desktop), or logind marks the user as lingering
+      (`/var/lib/systemd/linger/$USER`), so the manager runs until
+      shutdown. An ssh login's spawner without linger stays in logind's
+      `session-N.scope` for that login, which outlives the login while it
+      holds processes and keeps the manager up with it; moved into the
+      manager, the session would die with it once the login ended
+      [logind.conf(5), `UserStopDelaySec`]. Best effort: no
+      `XDG_RUNTIME_DIR`, no `busctl` or a failed call is logged and the
+      session goes on where it is.
    3. Bind the UDP socket (§2.2).
    4. Open the pty at the clamped size (`pty.Open`).
    5. Start emu (§2.3) and limit its memory (§6.3). If `RLIMIT_DATA`
@@ -260,7 +283,18 @@ generation.
 | another client attaches | proto (`Listener.Accept`) | **the session does not end**: the listener revokes the old connection (D26, `transport.md` §8.3) and proto serves the new one |
 | emu's restart budget is spent | spawner (§5.2) | **the session does not end.** The spawner pauses restarts for `EmuCooldown`, tells proto (`EmuPaused`), and tries again; the shell and proto live on. An emu failure never ends a session (§5.2) |
 | proto exits or dies | spawner (`wait4`) | the session ends: with proto gone nothing holds the keys or the screen, and the resume slice does not restart it (§5.4). The spawner's own reference to the pty master is kept for a later slice that does |
-| SIGTERM or SIGINT to the spawner | spawner | as for proto exiting |
+| SIGTERM or SIGINT to the spawner | spawner | as for proto exiting. Its own session scope (§2.1 step 4.2) being stopped is this row: the scope sends SIGTERM to all of it at once, and the spawner tears down as usual |
+
+**Every wait gives way to SIGTERM.** Every server role takes SIGTERM
+as "stop now", and no wait in any of them sits it out: each timeout
+(T1–T4 and the rest, §8) bounds how long a slow or hung *peer* is
+given, never how long a process told to stop goes on. A read on an IPC
+socket ends at its deadline or at SIGTERM, whichever comes first
+(`ipc.Conn.RecvUntil`), and emu, which waits for proto with no deadline
+at all, closes its socket on SIGTERM and exits 0 (it holds nothing to
+save). Waits that end on another process's step, not on a peer, are
+not timeouts in this sense: proto's wait for the spawner to close C
+after `Exit` lasts as long as the spawner's teardown takes to begin.
 
 Teardown, always in this order, by the spawner, and only for the
 triggers above (nothing emu does is one of them):
@@ -1418,7 +1452,15 @@ cell, gigabytes at the clamp):
   'ssa(sv)a(sa(sv))' mosey-emu-<spawner pid>-<generation>.scope fail 4
   PIDs au 1 <pid> MemoryMax t 536870912 MemorySwapMax t 0 CollectMode s
   inactive-or-failed 0`. 512 MiB is D23's `MemoryMax`; `MemorySwapMax=0`
-  [derived] so swap cannot postpone the limit. busctl, not a D-Bus
+  [derived] so swap cannot postpone the limit. When the session has
+  its own scope (§2.1 step 4.2), two more properties, so the count is
+  6: `PartOf as 1 mosey-session-<pid>.scope`, so stopping the session
+  stops emu, and `Before as 1 mosey-session-<pid>.scope`, so that when
+  both stop together, as at shutdown, the session's stops first
+  [systemd.unit(5): stopping reverses the start order] and the
+  spawner's teardown ends emu by closing E; otherwise emu's own scope
+  could SIGTERM it first, and the spawner, still running, would take
+  that for a death and restart it. busctl, not a D-Bus
   library (D19). Before handing proto the new E the spawner waits for
   the call to return, so emu has parsed nothing outside its scope. No
   `busctl`, no `XDG_RUNTIME_DIR`, or a failed call: logged once, and the

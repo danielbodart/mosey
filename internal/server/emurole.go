@@ -105,8 +105,22 @@ var errEmuProtocol = errors.New("emu: protocol error from proto")
 // serveEmu is emu's loop: strictly request and response, never speaking
 // unasked. Each answer is at most one Replies, then the diff from the last
 // screen it sent to now, in Update fragments.
-func serveEmu(ctx context.Context, conn *ipc.Conn, newEmu func(ipc.Init) (emu.Emulator, error), log *slog.Logger) error {
+//
+// It ends cleanly the moment ctx is cancelled, which cmd/mosey does on
+// SIGTERM: closing the socket wakes a Recv or Send blocked on it, and with
+// nothing to save, emu just goes (server.md §2.4, "Every wait gives way to
+// SIGTERM"). Otherwise a stopped emu scope, at reboot, waits out systemd's
+// stop timeout for the SIGKILL. Closing the socket needs only close and
+// epoll_ctl, both in emu's policy.
+func serveEmu(ctx context.Context, conn *ipc.Conn, newEmu func(ipc.Init) (emu.Emulator, error), log *slog.Logger) (err error) {
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	defer func() {
+		if ctx.Err() != nil {
+			err = nil
+		}
+	}()
 	first, err := conn.Recv()
 	if err != nil {
 		if ipc.IsEOF(err) {

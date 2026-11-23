@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -273,6 +274,33 @@ func TestADeadlineEndsAWaitingRecv(t *testing.T) {
 	emu.File().SetReadDeadline(time.Now().Add(20 * time.Millisecond))
 	if _, err := emu.Recv(); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRecvUntilGivesWayToACancelledContext(t *testing.T) {
+	_, emu := pairOf(t, Proto, Emu)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	stopped := errors.New("SIGTERM")
+	time.AfterFunc(20*time.Millisecond, func() { cancel(stopped) })
+	start := time.Now()
+	if _, err := emu.RecvUntil(ctx, time.Now().Add(time.Hour)); !errors.Is(err, stopped) {
+		t.Fatalf("got %v, want the context's cause", err)
+	}
+	if waited := time.Since(start); waited > 10*time.Second {
+		t.Fatalf("waited %v for an hour's deadline", waited)
+	}
+}
+
+func TestRecvUntilStillTimesOutAndThenReadsAgain(t *testing.T) {
+	proto, emu := pairOf(t, Proto, Emu)
+	if _, err := emu.RecvUntil(context.Background(), time.Now().Add(20*time.Millisecond)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("got %v, want the deadline", err)
+	}
+	// The deadline is cleared on return: a later Recv waits as long as it
+	// takes, here for a message sent after it would have expired.
+	time.AfterFunc(50*time.Millisecond, func() { proto.Send(Flush{}) })
+	if _, err := emu.Recv(); err != nil {
+		t.Fatalf("a Recv after RecvUntil: %v", err)
 	}
 }
 

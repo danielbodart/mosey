@@ -183,8 +183,7 @@ func (l *Launcher) start(ctx context.Context, line []byte, cl bootstrap.ClientLi
 		abandon()
 		return fmt.Errorf("the server did not start: %w", err)
 	}
-	conn.File().SetReadDeadline(time.Now().Add(T2))
-	m, err := conn.Recv()
+	m, err := conn.RecvUntil(ctx, time.Now().Add(T2))
 	if err != nil {
 		abandon()
 		return fmt.Errorf("the server did not start")

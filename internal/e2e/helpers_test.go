@@ -184,6 +184,10 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 var userSessionVars = []string{
 	"SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY",
 	"SSH_ASKPASS", "SSH_ASKPASS_REQUIRE",
+	// The user's bus: without it, busctl --user looks in the test's own
+	// XDG_RUNTIME_DIR, finds no bus, and a test session asks the user's
+	// real systemd manager for no scope (server.md §2.1 step 4.2, §6.3).
+	"DBUS_SESSION_BUS_ADDRESS",
 }
 
 // childEnv is the environment for every process a test starts: the test's

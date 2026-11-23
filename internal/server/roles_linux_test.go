@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -74,8 +75,11 @@ func childAction() sandbox.Action {
 func childLog() *slog.Logger { return slog.New(slog.NewTextHandler(os.Stderr, nil)) }
 
 // childEmu is RunEmu with the action and the runtime churn chosen by the
-// test rather than by the build.
+// test rather than by the build. SIGTERM cancels its context, as
+// cmd/mosey's does.
 func childEmu() error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+	defer stop()
 	if err := nocore.Process(); err != nil {
 		return err
 	}
@@ -90,7 +94,7 @@ func childEmu() error {
 	if os.Getenv("MOSEY_SERVER_TEST_CHURN") != "" {
 		testChurn()
 	}
-	return serveEmu(context.Background(), conn, newEmulator, childLog())
+	return serveEmu(ctx, conn, newEmulator, childLog())
 }
 
 // childProtoRestart is proto's side of an emu restart after its sandbox is
@@ -363,6 +367,75 @@ func TestTheEmuRoleRunsTuiosUnderKill(t *testing.T) {
 	child.alive(t)
 	e.Close()
 	child.wait(t)
+}
+
+// TestEmuEndsAtOnceOnSIGTERM (server.md §2.4, "Every wait gives way to
+// SIGTERM"): at reboot systemd stops emu's scope with SIGTERM, and an emu
+// blocked reading its socket used to sit out the stop timeout until the
+// SIGKILL. Both waits are covered, for Init and between requests, under
+// Kill, so closing the socket from the signal is shown to be in policy.
+func TestEmuEndsAtOnceOnSIGTERM(t *testing.T) {
+	t.Run("waiting for Init", func(t *testing.T) {
+		requireSeccomp(t)
+		_, theirs, err := ipc.Pair()
+		if err != nil {
+			t.Fatal(err)
+		}
+		child := startRoleChild(t, "emu", theirs)
+		sigtermWhenWaiting(t, child)
+	})
+	t.Run("between requests", func(t *testing.T) {
+		_, child, _ := emuUnderTest(t, 80, 24)
+		sigtermWhenWaiting(t, child)
+	})
+}
+
+// sigtermWhenWaiting sends child SIGTERM once it is blocked in a read, and
+// fails unless it exits 0 well inside a stop timeout.
+func sigtermWhenWaiting(t *testing.T, child *roleChild) {
+	t.Helper()
+	waitForState(t, child.cmd.Process.Pid, 'S')
+	start := time.Now()
+	child.cmd.Process.Signal(syscall.SIGTERM)
+	child.wait(t)
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("emu took %v to end on SIGTERM", took)
+	}
+}
+
+// waitForState waits for every thread of pid to be in state, from
+// /proc/PID/task/*/stat: 'S' is every thread asleep, so a read is blocked
+// and the signal is not won by a race with the role's start-up.
+func waitForState(t *testing.T, pid int, state byte) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if allThreadsIn(pid, state) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("pid %d never settled in state %c", pid, state)
+}
+
+func allThreadsIn(pid int, state byte) bool {
+	tasks, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
+	if err != nil || len(tasks) == 0 {
+		return false
+	}
+	for _, task := range tasks {
+		b, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%s/stat", pid, task.Name()))
+		if err != nil {
+			return false
+		}
+		// The state follows the command, which is in parentheses and may
+		// itself hold spaces or parentheses.
+		i := bytes.LastIndexByte(b, ')')
+		if i < 0 || i+2 >= len(b) || b[i+2] != state {
+			return false
+		}
+	}
+	return true
 }
 
 // TestRestartUnderKill (server.md §12): proto, sandboxed under Kill,

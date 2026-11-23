@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,6 +73,14 @@ type SpawnerConfig struct {
 	prlimit func(pid int) error
 	// sessionIdle overrides pty.SessionIdle; a test hook.
 	sessionIdle func(master *os.File, shellPID int) (bool, error)
+	// busctl runs `busctl ARGS...`; a test hook, so no test asks the
+	// user's own systemd manager for a unit.
+	busctl func(args []string) ([]byte, error)
+	// lingerDir is where logind marks lingering users; a test hook.
+	lingerDir string
+	// selfCgroup is read for the spawner's own cgroup instead of
+	// /proc/self/cgroup; a test hook.
+	selfCgroup string
 }
 
 // RunSpawner is `mosey --serve=spawner`: the unsandboxed role that binds
@@ -93,6 +100,12 @@ func RunSpawner(ctx context.Context, ipcFD *os.File, cfg SpawnerConfig) error {
 	}
 	if cfg.prlimit == nil {
 		cfg.prlimit = limitData
+	}
+	if cfg.lingerDir == "" {
+		cfg.lingerDir = lingerDir
+	}
+	if cfg.selfCgroup == "" {
+		cfg.selfCgroup = "/proc/self/cgroup"
 	}
 	if cfg.FirstPort == 0 && cfg.LastPort == 0 {
 		cfg.FirstPort, cfg.LastPort = FirstPort, LastPort
@@ -132,13 +145,16 @@ type spawner struct {
 	advertised netip.Addr
 	port       uint16
 	master     *os.File
-	proto      *child
-	emu        *child
-	shell      *child
-	gen        uint32
-	killAsked  map[uint32]bool
-	restarts   restarts
-	ready      bool
+	// sessionScope is the unit the spawner moved itself into, or "" if
+	// it stayed where it started (§2.1 step 4.2).
+	sessionScope string
+	proto        *child
+	emu          *child
+	shell        *child
+	gen          uint32
+	killAsked    map[uint32]bool
+	restarts     restarts
+	ready        bool
 
 	// The session's id, from proto's first credential, its name, from the
 	// launcher's line, and its attach socket (server.md §2.6), or nil if
@@ -253,8 +269,7 @@ func (s *spawner) run(ctx context.Context, ipcFD *os.File) error {
 // bootstrap is server.md §2.1 step 4: each failure is reported to the
 // launcher, and whatever started is torn down.
 func (s *spawner) bootstrap(ctx context.Context) error {
-	s.launcher.File().SetReadDeadline(time.Now().Add(T2))
-	m, err := s.launcher.Recv()
+	m, err := s.launcher.RecvUntil(ctx, time.Now().Add(T2))
 	if err != nil {
 		return fmt.Errorf("waiting for the client's line: %w", err)
 	}
@@ -282,6 +297,9 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	if err := s.openLog(); err != nil {
 		return err
 	}
+	// Before anything else starts, so proto, emu and the shell all begin
+	// in the session's own scope (§2.1 step 4.2).
+	s.joinSessionScope()
 
 	// The address the client's ssh reached is advertised and, unless it
 	// is loopback or link-local, bound (server.md §2.2).
@@ -592,56 +610,13 @@ func (s *spawner) startEmu() (*os.File, error) {
 		s.log.Error("cannot limit the emulator's memory", "err", err)
 		return nil, errors.New("cannot limit the emulator's memory")
 	}
-	c.cgroup = s.scope(c.cmd.Process.Pid, gen)
+	c.cgroup = s.emuScope(c.cmd.Process.Pid, gen)
 	return local, nil
 }
 
 func limitData(pid int) error {
 	lim := unix.Rlimit{Cur: emuDataLimit, Max: emuDataLimit}
 	return unix.Prlimit(pid, unix.RLIMIT_DATA, &lim, nil)
-}
-
-// scope moves emu into a transient systemd scope with D23's MemoryMax,
-// when the user has a manager; best effort, since RLIMIT_DATA is the
-// limit every host has (server.md §6.3). It returns the scope's cgroup
-// directory, for reading its OOM count.
-func (s *spawner) scope(pid int, gen uint32) string {
-	if s.getenv("XDG_RUNTIME_DIR") == "" {
-		return ""
-	}
-	busctl, err := exec.LookPath("busctl")
-	if err != nil {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	unit := fmt.Sprintf("mosey-emu-%d-%d.scope", os.Getpid(), gen)
-	cmd := exec.CommandContext(ctx, busctl, "--user", "--timeout=2", "call",
-		"org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager",
-		"StartTransientUnit", "ssa(sv)a(sa(sv))", unit, "fail", "4",
-		"PIDs", "au", "1", strconv.Itoa(pid),
-		"MemoryMax", "t", strconv.Itoa(emuMemoryMax),
-		"MemorySwapMax", "t", "0",
-		"CollectMode", "s", "inactive-or-failed",
-		"0")
-	s.cfg.Self.Prepare(cmd)
-	cmd.Env = s.cfg.Environ
-	if out, err := cmd.CombinedOutput(); err != nil {
-		if gen == 1 {
-			s.log.Info("no memory cgroup for emu; RLIMIT_DATA alone", "err", err, "busctl", SanitizeLogLine(out))
-		}
-		return ""
-	}
-	cg, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
-	if err != nil {
-		return ""
-	}
-	for _, l := range strings.Split(string(cg), "\n") {
-		if p, ok := strings.CutPrefix(l, "0::"); ok {
-			return "/sys/fs/cgroup" + p
-		}
-	}
-	return ""
 }
 
 // oomKilled says whether emu's scope saw the kernel kill it for memory.

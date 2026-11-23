@@ -615,10 +615,18 @@ the bootstrap connection, so the spawner never passes it to the shell; with
 `!agent=yes` the shell gets mosey's own socket instead (`agent.md` §4.1). Other session
 variables are `server.md`'s concern.
 
-**Known hazard (not ours to fix in slice 1).** With systemd-logind's
+**Known hazard (fixed where the user lingers).** With systemd-logind's
 `KillUserProcesses=yes` the detached session is killed when the SSH login
 ends, as Mosh's server is. [S4] §3.10 ran it under `systemd-run --user`,
-which survives; adopting that is a later decision (open question 8).
+which survives. Decided (2026-11-23): the spawner moves itself into a
+scope in the user's manager, `mosey-session-<pid>.scope`, whenever that
+manager lives at least as long as the login (`server.md` §2.1 step 4.2):
+for an ssh login, only when the user lingers (`loginctl enable-linger`),
+since otherwise the manager stops soon after the login ends and would take
+the session with it. So with linger a session survives
+`KillUserProcesses=yes`; without it the hazard stands, and enabling
+linger is the user's remedy. mosey does not enable linger itself: it keeps
+the user's whole manager running from boot.
 
 ### 4.6 Release assets: the files D7's upload sends
 
@@ -2211,9 +2219,9 @@ back) leaves the session `attached` until proto has heard nothing for
 `SilentAfter`, and then `detached`, so the next plain `mosey DEST` takes
 it (§9.2).
 
-The hazards of §4.5 ("Known hazard") apply unchanged: with logind's
+The hazards of §4.5 ("Known hazard") apply: with logind's
 `KillUserProcesses=yes` the session dies with the SSH login that started
-it.
+it, unless the user lingers.
 
 ### 9.4 Listing sessions
 

@@ -1,12 +1,14 @@
 package ipc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"runtime"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -148,6 +150,32 @@ func (c *Conn) Recv() (Message, error) {
 			return nil, malformed("more than %d attach messages this build does not know", MaxSkipped)
 		}
 	}
+}
+
+// RecvUntil is Recv bounded twice: by deadline, the time a slow or hung
+// peer is given, and by ctx, which cmd/mosey cancels on SIGTERM. Whichever
+// comes first ends the wait, and a cancelled ctx returns its cause, so a
+// process told to stop never sits out a timeout meant for its peer
+// (server.md §2.4, "Every wait gives way to SIGTERM"). The deadline is
+// cleared on return, unless ctx was cancelled: the wake can then land at
+// any moment, so the deadline is left in the past rather than cleared
+// under it. A message received as ctx was cancelled is dropped, fds and
+// all. Waking a read is only a deadline, so this makes no syscall a
+// sandboxed role is denied.
+func (c *Conn) RecvUntil(ctx context.Context, deadline time.Time) (Message, error) {
+	if err := c.f.SetReadDeadline(deadline); err != nil {
+		return nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { c.f.SetReadDeadline(time.Unix(1, 0)) })
+	m, err := c.Recv()
+	if !stop() {
+		if m != nil {
+			CloseFiles(m)
+		}
+		return nil, context.Cause(ctx)
+	}
+	c.f.SetReadDeadline(time.Time{})
+	return m, err
 }
 
 func (c *Conn) recv() (Message, error) {
