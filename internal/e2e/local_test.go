@@ -158,9 +158,11 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(m.home, "work"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	third := startLocal(t, "the third local client", mosey, m, "", []string{"-new", "-dir", "work", "-type", "echo typed-$((6*7)); pwd"})
+	// The shell says where it is relative to its home: the home's own
+	// path, under a TMPDIR as long as CI's, is wider than the screen.
+	third := startLocal(t, "the third local client", mosey, m, "", []string{"-new", "-dir", "work", "-type", `echo typed-$((6*7)); echo "in ~${PWD#"$HOME"}"`})
 	third.shows("typed-42")
-	third.shows(filepath.Join(m.home, "work"))
+	third.showsLine("in ~/work")
 	fresh := third.name()
 	// A job the shell runs is what -list shows of it.
 	third.typeLine("sleep 1000")
