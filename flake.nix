@@ -100,6 +100,17 @@
     {
       packages = if release == null then { } else releasePackages;
 
+      # programs.mosey (nix/module.nix): mosey on PATH and its UDP ports
+      # open, and the GNOME search provider as an option, off by default.
+      # The key lets a configuration import it from more than one place
+      # (a flake-parts module per feature, say) and still get it once.
+      nixosModules.default = {
+        key = "github:danielbodart/mosey#nixosModules.default";
+        _file = ./nix/module.nix;
+        imports = [ (import ./nix/module.nix self) ];
+      };
+      nixosModules.mosey = self.nixosModules.default;
+
       devShells = forAllSystems (system:
         let pkgs = nixpkgs.legacyPackages.${system}; in
         {
@@ -116,14 +127,19 @@
           };
         });
 
-      # Only what needs Nix to check: D7's install path on real machines, a
-      # client VM running mosey against one server that has it and one that
-      # does not, which it copies itself to (tests/install.nix). It tests
-      # the release package, so it exists where nix/release.json does: on a
-      # release tag, and in CI's nix job, which writes one for the binaries
-      # its own run built. The tests, gofmt and vet are mise run check's.
+      # Only what needs Nix to check. The NixOS module (tests/module.nix).
+      # And D7's install path on real machines: a client VM running mosey
+      # against one server that has it and one that does not, which it
+      # copies itself to (tests/install.nix). That tests the release
+      # package, so it exists where nix/release.json does: on a release
+      # tag, and in CI's nix job, which writes one for the binaries its own
+      # run built. The tests, gofmt and vet are mise run check's.
       checks = forLinux (system:
-        lib.optionalAttrs (self.packages ? ${system}) {
+        {
+          # The module evaluates, with and without the search provider, and
+          # the provider builds. A stand-in mosey, so this runs on trunk too.
+          module = import ./tests/module.nix { inherit self nixpkgs system; };
+        } // lib.optionalAttrs (self.packages ? ${system}) {
           vm-install = nixpkgs.legacyPackages.${system}.testers.runNixOSTest
             (import ./tests/install.nix { mosey = self.packages.${system}.mosey; });
         });

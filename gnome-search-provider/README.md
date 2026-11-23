@@ -65,38 +65,44 @@ Log out and log in again so GNOME Shell loads the new search provider.
 
 ## NixOS
 
-Install the files into a package derivation with a Python environment
-that includes `pygobject3` and `glib` (for `Gio` and `GLib` typelibs),
-replace `Exec=` in `org.mosey.SearchProvider.service` with
-`$out/bin/mosey-search-provider`, and add the package to
-`environment.systemPackages`:
+mosey's flake has a NixOS module. Import it, turn on mosey, and turn on
+the search provider:
 
 ```nix
-pkgs.stdenvNoCC.mkDerivation {
-  pname = "mosey-gnome-search-provider";
-  version = "0.1.0";
-  src = ./.; # mosey repo root
-  nativeBuildInputs = [ pkgs.wrapGAppsNoGuiHook ];
-  buildInputs = [
-    (pkgs.python3.withPackages (ps: [ ps.pygobject3 ]))
-    pkgs.glib
-  ];
-  installPhase = ''
-    runHook preInstall
-    install -Dm0755 gnome-search-provider/mosey-search-provider $out/bin/mosey-search-provider
-    install -Dm0644 gnome-search-provider/mosey.desktop $out/share/applications/mosey.desktop
-    install -Dm0644 gnome-search-provider/mosey-search-provider.ini \
-      $out/share/gnome-shell/search-providers/mosey-search-provider.ini
-    mkdir -p $out/share/icons
-    cp -r gnome-search-provider/icons/hicolor $out/share/icons/
-    install -Dm0644 gnome-search-provider/org.mosey.SearchProvider.service \
-      $out/share/dbus-1/services/org.mosey.SearchProvider.service
-    substituteInPlace $out/share/dbus-1/services/org.mosey.SearchProvider.service \
-      --replace-fail "Exec=/usr/bin/env mosey-search-provider" "Exec=$out/bin/mosey-search-provider"
-    runHook postInstall
-  '';
+{
+  inputs.mosey.url = "github:danielbodart/mosey/vX.Y.Z"; # a release tag
+
+  # in your NixOS configuration:
+  imports = [ inputs.mosey.nixosModules.default ];
+  programs.mosey.enable = true;
+  programs.mosey.gnome.searchProvider.enable = true;
 }
 ```
+
+`programs.mosey.enable` installs `mosey` and opens UDP 60000-61000
+(`programs.mosey.openFirewall`, on by default, as for mosh). It changes
+nothing else. The search provider is off until you turn it on.
+
+Two options change how the provider opens and lists sessions:
+
+- `programs.mosey.gnome.searchProvider.terminal` is the terminal
+  command. The default (`null`) uses the order in "Terminal selection".
+- `programs.mosey.gnome.searchProvider.desktopId` is the app that the
+  results show under. The default is `mosey.desktop`, which the module
+  installs. If you give a different app, the module does not install
+  `mosey.desktop`.
+
+For example, for a GNOME Console that always runs mosey:
+
+```nix
+programs.mosey.gnome.searchProvider = {
+  enable = true;
+  terminal = "kgx";
+  desktopId = "org.gnome.Console.desktop";
+};
+```
+
+Log out and log in again so GNOME Shell loads the new search provider.
 
 ## Icon
 

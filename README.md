@@ -202,6 +202,20 @@ is the file that `SHA256SUMS` and the attestation identify. Trunk has no
 package, because trunk has no release. Always use a tag. The package
 installs the shell completions below for bash, zsh and fish.
 
+On NixOS, use the NixOS module of the flake:
+
+```nix
+imports = [ inputs.mosey.nixosModules.default ];
+programs.mosey.enable = true;
+```
+
+- `programs.mosey.enable` installs mosey and opens UDP 60000-61000 in the
+  firewall, as `programs.mosh.enable` does. It changes nothing else.
+- `programs.mosey.openFirewall = false;` keeps the ports closed.
+- `programs.mosey.gnome.searchProvider.enable = true;` shows your
+  sessions in GNOME Shell search. It is off by default. Refer to
+  [gnome-search-provider/README.md](gnome-search-provider/README.md).
+
 ### Shell completion
 
 `mosey -completion bash|zsh|fish` writes a completion script for that
@@ -343,6 +357,13 @@ events do not change the session. The session waits on the host:
 - You close the terminal window.
 - You log out of your laptop.
 - Your laptop sleeps, reboots, crashes or loses its network.
+
+**A host that shuts down or logs you out stops its sessions.** The
+server gets SIGTERM and stops the session at once: the shell gets a
+hangup, as at the end of an ssh login. A session that you start over ssh
+stays alive after that ssh login stops. On a host with
+`KillUserProcesses=yes` in `logind.conf`, it stays alive only if you
+enable linger (`loginctl enable-linger`). mosey does not enable linger.
 
 There is no detach key. To detach, close the terminal of the client. To
 return, run `mosey host` again, from this computer or from a different
@@ -493,7 +514,8 @@ Then the session starts. In the session, `mosey otherhost` finds the same
 copy. Thus you can go to a different host from there. `~/.local/bin` is
 on the `PATH` where the login profile puts it there (Debian, Ubuntu,
 Fedora). mosey does not change rc files. On NixOS, install mosey with Nix
-to go to other hosts.
+to go to other hosts: the flake's NixOS module does this
+(`programs.mosey.enable`, see below).
 
 The client never upgrades the mosey on a host. It replaces only
 `~/.local/bin/mosey`, and only if that file uses a different protocol.
