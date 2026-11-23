@@ -4,7 +4,7 @@
 # flake.nix's dev shell offers to anyone without mise. The weekly update moves each tool's patch; a new minor moves by
 # hand, with the nixpkgs attribute.
 [tools]
-go = "1.27.3"
+go = "1.27.4"
 shellcheck = "0.11.0"
 actionlint = "1.7.12"
 
