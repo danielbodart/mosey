@@ -37,13 +37,21 @@ func startClient(t *testing.T, name, mosey string, s *sshd, flags ...string) *re
 // (bootstrap.md §2, §9.2.3).
 func startCommand(t *testing.T, name, mosey string, s *sshd, flags []string, words ...string) *realClient {
 	t.Helper()
+	args := append(append(append([]string{}, flags...), "-remote", mosey, "--", "-F", s.config, s.host), words...)
+	return startArgs(t, name, mosey, args)
+}
+
+// startArgs is the real mosey client given exactly args, with env added to
+// its environment, on a pty of its own whose session it leads, as a
+// terminal starts it.
+func startArgs(t *testing.T, name, mosey string, args []string, env ...string) *realClient {
+	t.Helper()
 	master, slave := openPTY(t)
 	c := &realClient{t: t, label: name, master: master, screen: &screenLog{}, exited: make(chan error, 1), state: t.TempDir()}
-	args := append(append(append([]string{}, flags...), "-remote", mosey, "--", "-F", s.config, s.host), words...)
 	c.cmd = command(mosey, args...)
 	c.cmd.Stdin, c.cmd.Stdout, c.cmd.Stderr = slave, slave, slave
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-	c.cmd.Env = childEnv("XDG_STATE_HOME="+c.state, "TERM=xterm-256color", "LANG=C.UTF-8")
+	c.cmd.Env = childEnv(append([]string{"XDG_STATE_HOME=" + c.state, "TERM=xterm-256color", "LANG=C.UTF-8"}, env...)...)
 	if err := c.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

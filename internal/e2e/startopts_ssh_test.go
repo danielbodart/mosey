@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,4 +116,49 @@ func TestTypedTextShowsOnceAfterTheFirstPrompt(t *testing.T) {
 		t.Errorf("the client exited %d after exit, not 0; log:\n%s", status, c.log())
 	}
 	waitFor(t, "the session to end", func() bool { return len(spawners(mosey)) == 0 })
+}
+
+// A window Console opens from a tab on another host carries that tab's
+// OSC 7 URI in MOSEY_FROM (bootstrap.md §9.2.4). The client, given no
+// DESTINATION, goes to that host through the real sshd, with the flags it
+// was given, and starts the shell in the tab's directory. The shell does
+// not get MOSEY_FROM. A directory that is not there starts the shell in
+// home, through a second login, and the command does not fail.
+func TestMoseyFromOpensANewSessionOnTheTabsHostInItsDirectory(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	s := startSSHD(t)
+	mosey := buildMosey(t, "e2e")
+	if err := os.Mkdir(filepath.Join(s.home, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	from := func(dir string) string {
+		return "MOSEY_FROM=file://" + s.host + (&url.URL{Path: filepath.Join(s.home, dir)}).EscapedPath()
+	}
+	// Console's command for a new window, with what the throwaway sshd
+	// needs after the --.
+	args := []string{"-remote", mosey, "-new", "-close-if-idle", "--", "-F", s.config}
+
+	there := startArgs(t, "a window from ~/sub on the far host", mosey, args, from("sub"))
+	there.shows("$")
+	there.typeLine(`echo at-${PWD#"$HOME"} from-${MOSEY_FROM-unset}`)
+	there.showsLine(`at-/sub from-unset`)
+	if mark := "\x1b]666;vte.ext.mosey.remote=" + s.host + "\x1b\\"; !strings.Contains(there.screen.String(), mark) {
+		t.Errorf("the tab is not marked remote with %s", s.host)
+	}
+
+	gone := startArgs(t, "a window from a directory that is gone", mosey, args, from("gone"))
+	gone.shows("$")
+	gone.typeLine(`echo at-${PWD#"$HOME"}-home`)
+	gone.showsLine(`at--home`)
+	if !strings.Contains(gone.log(), "the implicit directory is not there") {
+		t.Errorf("the shell is in home, but not by the retry; log:\n%s", gone.log())
+	}
+
+	for _, c := range []*realClient{there, gone} {
+		c.typeLine("exit")
+		if status := c.exits(); status != 0 {
+			t.Errorf("%s exited %d after exit, not 0; log:\n%s", c.label, status, c.log())
+		}
+	}
+	waitFor(t, "the sessions to end", func() bool { return len(spawners(mosey)) == 0 })
 }

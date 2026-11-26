@@ -324,6 +324,11 @@ Refer to [docs/spec/bootstrap.md §2.2](docs/spec/bootstrap.md).
   where you started mosey, as with tmux. Thus a new terminal window
   opens in the directory of the window that you opened it from. If that
   directory does not exist, the shell starts in your home directory.
+- A terminal can open a new window on the same host as a remote
+  session. To do this, the terminal starts mosey with no host, and sets
+  `MOSEY_FROM` to the OSC 7 URI of the tab (`file://HOST/PATH`). mosey
+  then connects to HOST and starts the shell in PATH. HOST is the
+  hostname that the remote shell writes. Thus `ssh HOST` must reach it.
 - mosey types the text of `-type` into the shell, then Enter. This is
   the same as `tmux new-session -c DIR` and `tmux send-keys TEXT Enter`.
 - mosey types the text after the shell shows its prompt, or after 2

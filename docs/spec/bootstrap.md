@@ -2201,6 +2201,48 @@ working directory. A session that starts in `$HOME` loses it.
   If `os.Getwd` fails, or `ValidDir` refuses the result, the client
   sends no `dir`. Like any `dir`, it applies only when the line creates
   a session (§9.2.3). `-list` and `-kill` send none.
+- **Remote: `MOSEY_FROM`.** A window that shows a remote session has an
+  OSC 7 URI whose host is the remote one. The terminal starts the new
+  client in a local directory, so the client cannot know the host. A
+  terminal that wants the new window on the same host sets
+  `MOSEY_FROM` in the new child's environment to the OSC 7 URI of the
+  tab it came from, `file://HOST/PATH` [D: Dan, 2026-11-26: an
+  environment variable, which no other command takes as an argument].
+  No standard carries this: ssh reads no destination from its
+  environment, and VTE ignores iTerm2's `OSC 1337 ; RemoteHost` ([M]
+  VTE 0.84.1 `vteseq.cc`). The client reads the variable and removes it
+  from its own environment before anything else, so no session's shell,
+  no ssh and no later mosey gets it. It applies only if all of these
+  are true; otherwise the client ignores it:
+  1. the client is the leader of its session (`getsid(0)` is its own
+     pid). A terminal starts its command so; a shell starts a command
+     that it runs in a process group of the shell's session. Thus a
+     `MOSEY_FROM` that a plain shell kept in its environment never
+     changes a `mosey` typed there;
+  2. the command has no DESTINATION, no `-dir`, and no `-list` or
+     `-kill`;
+  3. `ParseFrom` accepts the value: the scheme `file` (any case), then
+     `//`, then a host, then a path that starts with `/`. The host is
+     empty, or a hostname: 1 to 253 bytes of dot-separated labels, each
+     1 to 63 letters, digits and `-`, not starting or ending with `-`.
+     So a host never starts with `-`, and the remote shell, which writes
+     the host, cannot give ssh an option. The path percent-decodes
+     (RFC 3986 §2.1) to a `ValidDir`; a `?` or `#`, which would start a
+     query or a fragment, is refused;
+  4. the host is not this machine: not empty, not `localhost`, and its
+     first label is not that of `os.Hostname()`, compared without
+     regard to case. A host that is this machine gives the local rule
+     above, from the working directory.
+
+  Then the client acts as if HOST were its DESTINATION and the path its
+  `-dir`, implicit. Its other flags apply to HOST: `-new`, `-s`,
+  `-A`, `-remote` and ssh options after `--`. `-close-if-idle` is
+  ignored, not refused, because it is for local sessions only. The host
+  is the remote's hostname, as its shell wrote it, not the destination
+  the user typed: it has no `user@`, port or ssh alias. A remote can so
+  choose the host that the next new window logs in to. The terminal's
+  title bar shows that directory and host before the user opens the
+  window, and ssh still checks the host key [D: Dan, 2026-11-26].
 - **Implicit, so never an error.** A `-dir` that the user typed and that
   names no directory is refused (§9.2.3). A directory that the client
   chose is not the user's mistake. So if the launcher answers
@@ -2208,7 +2250,10 @@ working directory. A session that starts in `$HOME` loses it.
   same line less its `dir`, and the shell starts in home. The launcher's
   stderr line about the directory still shows. The same one-shot key is
   sent again, as in §4.7.8: the launcher started nothing, so nothing
-  was sealed to the key, and the key is public anyway.
+  was sealed to the key, and the key is public anyway. Over ssh this is a
+  second ssh login. It happens only when the directory is gone, or when
+  the name HOST reaches another machine than the one whose shell wrote
+  it.
 
 ### 9.3 How long a session lives (D8 R4)
 
@@ -2865,6 +2910,20 @@ durations in the commit message; 10 s each in CI):
   third exits 3; `-new` starts a third session; `-list` shows every name
   and state; `-kill NAME` ends one, whose client exits 0; and `exit` in
   the last ends it, after which nothing of it is running.
+- **The implicit directory** (§9.2.4). `parseArgs` is given the origin,
+  so the rules are table tests (`cmd/mosey`): with no `-dir` a local
+  session gets the working directory; `MOSEY_FROM` names the host and
+  directory only for a session leader with no DESTINATION, `-dir`,
+  `-list` or `-kill`, and only for another host. `FuzzParseFrom` holds
+  that an accepted host is a hostname and an accepted directory an
+  absolute `ValidDir`, and that the URI made again parses the same.
+  End to end: a local client started in `~/proj/sub` gets a shell there,
+  and one given `-dir other` gets `~/other`
+  (`TestANewLocalSessionStartsInTheClientsDirectory`). Through the real
+  sshd, Console's command with `MOSEY_FROM` gets a shell in that
+  directory on that host, without `MOSEY_FROM` in its environment; a
+  directory that is gone gives a shell in home through the retry
+  (`TestMoseyFromOpensANewSessionOnTheTabsHostInItsDirectory`).
 - **Start options through real sshd** (§9.2.3), same harness
   (`TestDirAndTypeStartASessionAndAreIgnoredOnResume`): `-s work -dir
   sub -type 'echo hi'` creates session `work` whose shell is in

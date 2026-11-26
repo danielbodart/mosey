@@ -218,6 +218,14 @@ func parseArgs(args []string, o origin) (cli, error) {
 		// No DESTINATION is this machine, as with tmux (Dan, 2026-11-18,
 		// reversing 2026-11-16; bootstrap.md §2.2): the same as localhost.
 		rest = []string{bootstrap.LocalDestination}
+		// Unless the terminal opened this window from a tab on another
+		// host, and said so in MOSEY_FROM (§9.2.4): then that host, in
+		// that tab's directory. -close-if-idle, for local sessions only,
+		// is ignored there rather than refused.
+		if host, dir, ok := o.remote(); ok && c.dir == "" && !c.list && !kill {
+			rest = []string{host}
+			c.dir, c.dirImplicit, c.closeIfIdle = dir, true, false
+		}
 	}
 	c.ssh.Destination = rest[0]
 	if len(rest) > 1 {

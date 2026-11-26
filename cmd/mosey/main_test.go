@@ -206,6 +206,48 @@ func TestALocalSessionWithNoDirStartsInTheClientsDirectory(t *testing.T) {
 	}
 }
 
+// A window that Console opens from a tab on another host carries that
+// tab's OSC 7 URI in MOSEY_FROM (bootstrap.md §9.2.4): the client goes to
+// that host, in that directory, as if typed with -dir. It does so only
+// when the terminal started it, with no DESTINATION, -dir, -list or
+// -kill, and only for a host that is not this machine.
+func TestMoseyFromOpensTheNewWindowOnTheTabsHost(t *testing.T) {
+	from := func(uri string) origin {
+		return origin{wd: "/home/u", from: uri, leader: true, hostname: "desk"}
+	}
+	blade := from("file://blade/home/u/x")
+	for _, c := range []struct {
+		args     []string
+		o        origin
+		dest     string
+		dir      string
+		implicit bool
+		idle     bool
+	}{
+		{[]string{"-new", "-close-if-idle"}, blade, "blade", "/home/u/x", true, false},
+		{nil, blade, "blade", "/home/u/x", true, false},
+		{[]string{"-remote", "/opt/mosey", "-new", "--", "-F", "cfg"}, blade, "blade", "/home/u/x", true, false},
+		// This machine: the working directory, as with no MOSEY_FROM.
+		{[]string{"-new", "-close-if-idle"}, from("file://desk.lan/srv"), "localhost", "/home/u", true, true},
+		{[]string{"-new"}, from("file:///srv"), "localhost", "/home/u", true, false},
+		// Not started by the terminal: a shell kept the variable.
+		{[]string{"-new"}, origin{wd: "/home/u", from: "file://blade/x", hostname: "desk"}, "localhost", "/home/u", true, false},
+		// What the user typed wins.
+		{[]string{"far"}, blade, "far", "", false, false},
+		{[]string{"-dir", "src"}, blade, "localhost", "src", false, false},
+		{[]string{"-list"}, blade, "localhost", "", false, false},
+		// A host that could be an ssh option, or no URI at all.
+		{[]string{"-new"}, from("file://-oProxyCommand=x/tmp"), "localhost", "/home/u", true, false},
+		{[]string{"-new"}, from("/home/u/x"), "localhost", "/home/u", true, false},
+	} {
+		got, err := parseArgs(c.args, c.o)
+		if err != nil || got.ssh.Destination != c.dest || got.dir != c.dir || got.dirImplicit != c.implicit || got.closeIfIdle != c.idle {
+			t.Errorf("%q from %+v: dest %q, dir %q, implicit %v, close-if-idle %v, %v",
+				c.args, c.o, got.ssh.Destination, got.dir, got.dirImplicit, got.closeIfIdle, err)
+		}
+	}
+}
+
 // localhost is this machine, with no ssh (bootstrap.md §2.2): every
 // session command works, -A and -a still say whether the shell gets the
 // agent, and -remote names the local binary, which needs no quoting.
