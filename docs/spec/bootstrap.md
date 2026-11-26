@@ -282,7 +282,8 @@ consequences follow:
   client's environment, as under tmux, where under ssh it would have
   sshd's.
 - A local `-dir` is relative to `$HOME`, as over ssh, not to the client's
-  working directory.
+  working directory. With no `-dir`, a new local session starts in the
+  client's working directory (§9.2.4).
 
 **The agent.** There is no ssh, so no session-bind to capture (§8), and no
 far host for one to name: the shell is a process of the same user on the
@@ -2181,6 +2182,33 @@ attached with: a tmux user's `tmux new-session -c DIR` followed by
   does: that command is the one running. The launcher adds `existing`
   to no line in answer to one without a `cmd`, so no older client sees
   it.
+
+#### 9.2.4 The implicit directory: where the terminal started the client
+
+A terminal that opens a new window or tab "here" starts its command in
+the directory of the tab it came from. It knows that directory from OSC 7
+(`screen.md` §4.7). GNOME Console does this for Ctrl+Shift+N and
+Ctrl+Shift+T ([M] Console 50.0 source, `kgx-window.c` `new_activated`,
+read 2026-11-26). If the command is mosey, the directory is the client's
+working directory. A session that starts in `$HOME` loses it.
+
+- **Local.** The destination is this machine (§2.2), and the command
+  has no `-dir`. Then the client sends its own working directory as
+  `dir`. This is tmux's rule: `new-session` starts in the client's
+  directory unless `-c` gives another [D: Dan, 2026-11-26]. The client
+  uses `os.Getwd`, which gives `$PWD` if `$PWD` names the same
+  directory. Thus a path through a symlink stays as the shell showed it.
+  If `os.Getwd` fails, or `ValidDir` refuses the result, the client
+  sends no `dir`. Like any `dir`, it applies only when the line creates
+  a session (§9.2.3). `-list` and `-kill` send none.
+- **Implicit, so never an error.** A `-dir` that the user typed and that
+  names no directory is refused (§9.2.3). A directory that the client
+  chose is not the user's mistake. So if the launcher answers
+  `!code=dir` to such a line, the client starts once more, with the
+  same line less its `dir`, and the shell starts in home. The launcher's
+  stderr line about the directory still shows. The same one-shot key is
+  sent again, as in §4.7.8: the launcher started nothing, so nothing
+  was sealed to the key, and the key is public anyway.
 
 ### 9.3 How long a session lives (D8 R4)
 

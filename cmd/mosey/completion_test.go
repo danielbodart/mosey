@@ -39,14 +39,14 @@ func TestEveryShellsCompletionScriptCompletesEveryFlag(t *testing.T) {
 
 func TestCompletionNeedsAShellItKnows(t *testing.T) {
 	for _, args := range [][]string{{"-completion"}, {"-completion", ""}, {"-completion", "tcsh"}, {"-completion=powershell"}} {
-		_, err := parseArgs(args)
+		_, err := parseArgs(args, origin{})
 		var u *bootstrap.UsageError
 		if !errors.As(err, &u) {
 			t.Errorf("%q: %v", args, err)
 		}
 	}
 	for _, shell := range completionShells {
-		c, err := parseArgs([]string{"-completion", shell})
+		c, err := parseArgs([]string{"-completion", shell}, origin{})
 		if err != nil || c.completion != shell {
 			t.Errorf("-completion %s: %+v %v", shell, c, err)
 		}

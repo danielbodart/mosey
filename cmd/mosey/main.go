@@ -89,6 +89,9 @@ type cli struct {
 	// dir and typ are -dir and -type, for a session this command
 	// creates (§9.2.3).
 	dir, typ string
+	// dirImplicit says dir is the client's own choice, not -dir
+	// (bootstrap.md §9.2.4).
+	dirImplicit bool
 	// closeIfIdle is -close-if-idle: end a local session on SIGHUP/SIGTERM
 	// if its shell is idle (bootstrap.md §2.2).
 	closeIfIdle bool
@@ -142,8 +145,9 @@ func newFlags(c *cli) (*flag.FlagSet, *clientFlags) {
 // [ARG...]]`. Every plain word belongs to the client (D7): the destination
 // is the first one, whatever it is called, and localhost is this machine,
 // with no ssh (bootstrap.md §2.2); every word after it is the command's,
-// untouched. No DESTINATION is localhost.
-func parseArgs(args []string) (cli, error) {
+// untouched. No DESTINATION is localhost. o is where the terminal started
+// the client, for the directory of a session it creates (§9.2.4).
+func parseArgs(args []string, o origin) (cli, error) {
 	var c cli
 	flags, f := newFlags(&c)
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
@@ -235,6 +239,11 @@ func parseArgs(args []string) (cli, error) {
 			}
 		}
 		c.ssh.Program = ""
+		// With no -dir, a new local session starts where the client was
+		// started, as tmux's new-session does (§9.2.4).
+		if c.dir == "" && !c.list && !kill && o.wd != "" {
+			c.dir, c.dirImplicit = o.wd, true
+		}
 	} else if c.closeIfIdle {
 		return cli{}, &bootstrap.UsageError{Msg: "mosey: -close-if-idle is for local sessions only"}
 	}
@@ -304,7 +313,7 @@ func (a agentLetter) Set(v string) error {
 }
 
 func runClient(self startup.Process, args []string) int {
-	c, err := parseArgs(args)
+	c, err := parseArgs(args, currentOrigin())
 	if err != nil {
 		var u *bootstrap.UsageError
 		if errors.As(err, &u) {
@@ -383,6 +392,7 @@ func runClient(self startup.Process, args []string) int {
 		Attach:      c.attach,
 		Name:        c.name,
 		Dir:         c.dir,
+		DirImplicit: c.dirImplicit,
 		Type:        c.typ,
 		Command:     c.command,
 		Upload:      c.upload,

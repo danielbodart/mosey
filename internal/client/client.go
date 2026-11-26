@@ -49,6 +49,11 @@ type Options struct {
 	// into it. A session that is resumed ignores them; R3's reconnect
 	// never sends them.
 	Dir, Type string
+	// DirImplicit says that Dir is the client's own choice, not the
+	// user's -dir (bootstrap.md §9.2.4): if the launcher finds no such
+	// directory, Run starts once more with none, so the shell starts in
+	// home instead of the command failing.
+	DirImplicit bool
 	// Command is the command after the host (bootstrap.md §2, §9.2.3), run
 	// in place of the interactive shell of a session this command
 	// creates; "" is none. With AttachAuto it also picks the detached
@@ -150,6 +155,15 @@ func Run(ctx context.Context, o Options) error {
 		if errors.As(err, &ns) {
 			return fail(err, "copied mosey to %s, but it is still not found there", o.SSH.Destination)
 		}
+	}
+	var re *bootstrap.RemoteError
+	if o.DirImplicit && errors.As(err, &re) && re.Code == bootstrap.CodeDir {
+		// A directory the client chose is not there (bootstrap.md
+		// §9.2.4). The launcher started nothing, so nothing was sealed to
+		// the one-shot key, and the same line less its dir goes once more.
+		o.Log.Info("the implicit directory is not there; starting in home", "dir", b.line.Dir)
+		b.line.Dir = ""
+		line, cfg, err = b.run(ctx)
 	}
 	if err != nil {
 		return err

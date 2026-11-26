@@ -60,12 +60,22 @@ func startLocal(t *testing.T, name, mosey string, m *thisMachine, agentSock stri
 // when its EIO beats its SIGHUP.
 func startLocalTTY(t *testing.T, ctty bool, name, mosey string, m *thisMachine, agentSock string, flags []string, words ...string) *realClient {
 	t.Helper()
+	return startLocalAt(t, ctty, m.home, name, mosey, m, agentSock, flags, words...)
+}
+
+// startLocalAt is startLocalTTY with the client started in dir. A new
+// session with no -dir starts its shell there (bootstrap.md §9.2.4), so
+// the other helpers start in the machine's home, never in the package
+// directory the test runs in.
+func startLocalAt(t *testing.T, ctty bool, dir, name, mosey string, m *thisMachine, agentSock string, flags []string, words ...string) *realClient {
+	t.Helper()
 	master, slave := openPTY(t)
 	c := &realClient{t: t, label: name, master: master, screen: &screenLog{}, exited: make(chan error, 1), state: t.TempDir()}
 	c.cmd = command(mosey, append(append(slices.Clone(flags), "localhost"), words...)...)
 	c.cmd.Stdin, c.cmd.Stdout, c.cmd.Stderr = slave, slave, slave
 	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: ctty}
 	c.cmd.Env = m.env(c.state, agentSock)
+	c.cmd.Dir = dir
 	if err := c.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +195,39 @@ func TestALocalSessionStartsDetachesListsAndReattachesWithNoSSH(t *testing.T) {
 	if out, _ := localCmd(t, mosey, m, "-list"); !strings.Contains(out, "no sessions on localhost") {
 		t.Errorf("mosey -list after the end:\n%s", out)
 	}
+}
+
+// A terminal that opens a new window "here" starts the client in the
+// directory of the tab it came from (bootstrap.md §9.2.4). A new local
+// session with no -dir starts its shell there, as tmux's new-session
+// does; a -dir still wins, relative to home.
+func TestANewLocalSessionStartsInTheClientsDirectory(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	m := newMachine(t)
+	mosey := buildMosey(t, "e2e")
+	for _, d := range []string{"proj/sub", "other"} {
+		if err := os.MkdirAll(filepath.Join(m.home, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	here := startLocalAt(t, true, filepath.Join(m.home, "proj", "sub"), "a client started in ~/proj/sub", mosey, m, "", []string{"-new"})
+	here.shows("$")
+	here.typeLine(`echo "at ~${PWD#"$HOME"}"`)
+	here.showsLine("at ~/proj/sub")
+
+	told := startLocalAt(t, true, filepath.Join(m.home, "proj", "sub"), "a client given -dir other", mosey, m, "", []string{"-new", "-dir", "other"})
+	told.shows("$")
+	told.typeLine(`echo "at ~${PWD#"$HOME"}"`)
+	told.showsLine("at ~/other")
+
+	for _, c := range []*realClient{here, told} {
+		c.typeLine("exit")
+		if status := c.exits(); status != 0 {
+			t.Errorf("%s exited %d after exit, not 0", c.label, status)
+		}
+	}
+	waitFor(t, "every session's processes to end", func() bool { return len(spawners(mosey)) == 0 })
 }
 
 // A local session's shell has the client's own agent, through the

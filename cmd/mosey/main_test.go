@@ -27,7 +27,7 @@ func TestTheClientCommandLine(t *testing.T) {
 		{[]string{"-a", "-A", "far"}, "far", "", nil, 'A'},
 		{[]string{"-A", "--", "-a", "far"}, "far", "", nil, 'a'}, // ssh's options come last, so win
 	} {
-		got, err := parseArgs(c.args)
+		got, err := parseArgs(c.args, origin{})
 		if err != nil {
 			t.Errorf("%q: %v", c.args, err)
 			continue
@@ -49,7 +49,7 @@ func TestABadCommandLineIsAUsageError(t *testing.T) {
 		{"--", "-p", "1", "-oProxyCommand=x"}, // no destination: localhost refuses ssh options
 		{"--", "-v", "--", "far"},
 	} {
-		_, err := parseArgs(args)
+		_, err := parseArgs(args, origin{})
 		var u *bootstrap.UsageError
 		if !errors.As(err, &u) {
 			t.Errorf("%q: %v", args, err)
@@ -64,19 +64,19 @@ func TestUploadIsAskByDefaultAndOtherwiseAsSaid(t *testing.T) {
 		if args != "" {
 			a = []string{"-upload", args, "far"}
 		}
-		got, err := parseArgs(a)
+		got, err := parseArgs(a, origin{})
 		if err != nil || got.upload != want || got.ssh.Server != "" {
 			t.Errorf("%q: %+v %v", a, got, err)
 		}
 	}
 	var u *bootstrap.UsageError
-	if _, err := parseArgs([]string{"-upload", "maybe", "far"}); !errors.As(err, &u) {
+	if _, err := parseArgs([]string{"-upload", "maybe", "far"}, origin{}); !errors.As(err, &u) {
 		t.Errorf("-upload maybe: %v", err)
 	}
 }
 
 func TestVersionNeedsNoDestination(t *testing.T) {
-	c, err := parseArgs([]string{"-version"})
+	c, err := parseArgs([]string{"-version"}, origin{})
 	if err != nil || !c.showVersion {
 		t.Errorf("%+v %v", c, err)
 	}
@@ -100,7 +100,7 @@ func TestSessionsOnTheCommandLine(t *testing.T) {
 		{[]string{"-list", "far"}, bootstrap.AttachAuto, "", true, ""},
 		{[]string{"-kill", "work", "far"}, bootstrap.AttachAuto, "", false, "work"},
 	} {
-		got, err := parseArgs(c.args)
+		got, err := parseArgs(c.args, origin{})
 		if err != nil {
 			t.Errorf("%q: %v", c.args, err)
 			continue
@@ -119,7 +119,7 @@ func TestSessionsOnTheCommandLine(t *testing.T) {
 		{"-kill", "x;y", "far"},
 		{"-r", "far"},
 	} {
-		_, err := parseArgs(args)
+		_, err := parseArgs(args, origin{})
 		var u *bootstrap.UsageError
 		if !errors.As(err, &u) {
 			t.Errorf("%q: %v", args, err)
@@ -133,13 +133,13 @@ func TestPredictIsAdaptiveByDefaultAndTakesMoshsNames(t *testing.T) {
 		if args != "" {
 			a = []string{"-predict", args, "far"}
 		}
-		got, err := parseArgs(a)
+		got, err := parseArgs(a, origin{})
 		if err != nil || got.predict != want {
 			t.Errorf("%q: %+v %v", a, got, err)
 		}
 	}
 	var u *bootstrap.UsageError
-	if _, err := parseArgs([]string{"-predict", "experimental", "far"}); !errors.As(err, &u) {
+	if _, err := parseArgs([]string{"-predict", "experimental", "far"}, origin{}); !errors.As(err, &u) {
 		t.Errorf("-predict experimental: %v", err)
 	}
 }
@@ -156,7 +156,7 @@ func TestDirAndTypeOnTheCommandLine(t *testing.T) {
 		{[]string{"-new", "-type", "vim\tx", "far"}, "", "vim\tx"},
 		{[]string{"-dir", "", "far"}, "", ""},
 	} {
-		got, err := parseArgs(c.args)
+		got, err := parseArgs(c.args, origin{})
 		if err != nil || got.dir != c.dir || got.typ != c.typ {
 			t.Errorf("%q: dir %q, type %q, %v", c.args, got.dir, got.typ, err)
 		}
@@ -169,10 +169,39 @@ func TestDirAndTypeOnTheCommandLine(t *testing.T) {
 		{"-dir", "a\tb", "far"},
 		{"-dir", strings.Repeat("d", bootstrap.MaxStartText+1), "far"},
 	} {
-		_, err := parseArgs(args)
+		_, err := parseArgs(args, origin{})
 		var u *bootstrap.UsageError
 		if !errors.As(err, &u) {
 			t.Errorf("%q: %v", args, err)
+		}
+	}
+}
+
+// A new local session with no -dir starts where the client was started,
+// as tmux's new-session does (bootstrap.md §9.2.4); a -dir, a remote
+// host, -list and -kill keep their own meaning, and no working directory
+// sends none.
+func TestALocalSessionWithNoDirStartsInTheClientsDirectory(t *testing.T) {
+	here := origin{wd: "/home/u/Projects/x"}
+	for _, c := range []struct {
+		args     []string
+		o        origin
+		dir      string
+		implicit bool
+	}{
+		{nil, here, "/home/u/Projects/x", true},
+		{[]string{"-new", "-close-if-idle"}, here, "/home/u/Projects/x", true},
+		{[]string{"-s", "work", "localhost"}, here, "/home/u/Projects/x", true},
+		{[]string{"localhost", "htop"}, here, "/home/u/Projects/x", true},
+		{[]string{"-dir", "src"}, here, "src", false},
+		{[]string{"far"}, here, "", false},
+		{[]string{"-list"}, here, "", false},
+		{[]string{"-kill", "work"}, here, "", false},
+		{[]string{"-new"}, origin{}, "", false},
+	} {
+		got, err := parseArgs(c.args, c.o)
+		if err != nil || got.dir != c.dir || got.dirImplicit != c.implicit {
+			t.Errorf("%q from %+v: dir %q, implicit %v, %v", c.args, c.o, got.dir, got.dirImplicit, err)
 		}
 	}
 }
@@ -201,7 +230,7 @@ func TestLocalhostIsThisMachine(t *testing.T) {
 		{args: []string{"-a", "localhost"}, attach: bootstrap.AttachAuto, agent: 'a'},
 		{args: []string{"-a", "-A", "localhost"}, attach: bootstrap.AttachAuto, agent: 'A'},
 	} {
-		got, err := parseArgs(c.args)
+		got, err := parseArgs(c.args, origin{})
 		if err != nil {
 			t.Errorf("%q: %v", c.args, err)
 			continue
@@ -217,7 +246,7 @@ func TestLocalhostIsThisMachine(t *testing.T) {
 	// Only the word itself: an address or a user@ is a host for ssh, so
 	// the ssh path can still be run against this machine.
 	for _, dest := range []string{"127.0.0.1", "::1", "me@localhost", "localhost.", "localhost2"} {
-		got, err := parseArgs([]string{dest})
+		got, err := parseArgs([]string{dest}, origin{})
 		if err != nil || got.ssh.Local() || got.ssh.Destination != dest || got.ssh.Program != "ssh" {
 			t.Errorf("%q: %+v %v", dest, got.ssh, err)
 		}
@@ -231,7 +260,7 @@ func TestLocalhostIsThisMachine(t *testing.T) {
 		{"-list", "-ssh", "ssh", "localhost"},
 		{"--", "-p", "22", "localhost"},
 	} {
-		_, err := parseArgs(args)
+		_, err := parseArgs(args, origin{})
 		var u *bootstrap.UsageError
 		if !errors.As(err, &u) || !strings.Contains(u.Msg, "no use with localhost") {
 			t.Errorf("%q: %v", args, err)
@@ -243,7 +272,7 @@ func TestLocalhostIsThisMachine(t *testing.T) {
 // 2026-11-18; bootstrap.md §2.2); -h and -help are the usage.
 func TestNoDestinationIsThisMachine(t *testing.T) {
 	for _, args := range [][]string{{"-h"}, {"-help"}} {
-		c, err := parseArgs(args)
+		c, err := parseArgs(args, origin{})
 		if err != nil || !c.help {
 			t.Errorf("%q: %+v %v", args, c, err)
 		}
@@ -264,14 +293,14 @@ func TestNoDestinationIsThisMachine(t *testing.T) {
 		{args: []string{"-a"}, attach: bootstrap.AttachAuto, agent: 'a'},
 		{args: []string{"-dir", "src"}, attach: bootstrap.AttachAuto},
 	} {
-		got, err := parseArgs(c.args)
+		got, err := parseArgs(c.args, origin{})
 		if err != nil || got.help || !got.ssh.Local() || got.ssh.Program != "" || got.attach != c.attach || got.list != c.list || got.kill != c.kill || got.ssh.Options.Agent != c.agent {
 			t.Errorf("%q: %+v %v", c.args, got, err)
 		}
 	}
 	// Flags that need ssh are still refused, as with localhost.
 	for _, args := range [][]string{{"-upload", "yes"}, {"-ssh", "ssh"}, {"--", "-p", "22"}} {
-		_, err := parseArgs(args)
+		_, err := parseArgs(args, origin{})
 		var u *bootstrap.UsageError
 		if !errors.As(err, &u) || !strings.Contains(u.Msg, "no use with localhost") {
 			t.Errorf("%q: %v", args, err)
@@ -305,7 +334,7 @@ func TestTheWordsAfterTheDestinationAreACommand(t *testing.T) {
 		{args: []string{"localhost", "htop"}, dest: "localhost", command: "htop", attach: bootstrap.AttachAuto},
 		{args: []string{"far"}, dest: "far", attach: bootstrap.AttachAuto},
 	} {
-		got, err := parseArgs(c.args)
+		got, err := parseArgs(c.args, origin{})
 		if err != nil {
 			t.Errorf("%q: %v", c.args, err)
 			continue
@@ -324,7 +353,7 @@ func TestTheWordsAfterTheDestinationAreACommand(t *testing.T) {
 		{"far", strings.Repeat("c", bootstrap.MaxStartText/2), strings.Repeat("c", bootstrap.MaxStartText/2)}, // the joining space counts
 		{"--", "-p", "22", "localhost", "ls"},
 	} {
-		_, err := parseArgs(args)
+		_, err := parseArgs(args, origin{})
 		var u *bootstrap.UsageError
 		if !errors.As(err, &u) {
 			t.Errorf("%q: %v", args, err)
@@ -340,7 +369,7 @@ func TestCloseIfIdleIsLocalOnly(t *testing.T) {
 		{"-close-if-idle", "localhost"},
 		{"-new", "-close-if-idle", "LocalHost"},
 	} {
-		got, err := parseArgs(args)
+		got, err := parseArgs(args, origin{})
 		if err != nil || !got.closeIfIdle || !got.ssh.Local() {
 			t.Errorf("%q: %+v %v", args, got, err)
 		}
@@ -351,7 +380,7 @@ func TestCloseIfIdleIsLocalOnly(t *testing.T) {
 		{"-close-if-idle", "-list"},
 		{"-close-if-idle", "-kill", "work"},
 	} {
-		_, err := parseArgs(args)
+		_, err := parseArgs(args, origin{})
 		var u *bootstrap.UsageError
 		if !errors.As(err, &u) {
 			t.Errorf("%q: want UsageError, got %v", args, err)

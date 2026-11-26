@@ -320,6 +320,10 @@ Refer to [docs/spec/bootstrap.md §2.2](docs/spec/bootstrap.md).
 
 - The shell starts in the directory of `-dir`. A relative directory is
   relative to your home directory on the host.
+- On this computer, with no `-dir`, the shell starts in the directory
+  where you started mosey, as with tmux. Thus a new terminal window
+  opens in the directory of the window that you opened it from. If that
+  directory does not exist, the shell starts in your home directory.
 - mosey types the text of `-type` into the shell, then Enter. This is
   the same as `tmux new-session -c DIR` and `tmux send-keys TEXT Enter`.
 - mosey types the text after the shell shows its prompt, or after 2
