@@ -222,11 +222,18 @@ func (s *Session) newLink(ctx context.Context, conn *transport.Conn, fwd *agent.
 	// The owners' bounds, not copies (architecture.md §4): the largest
 	// payload the transport carries, and the largest screen diff the
 	// server can make at the D23 clamp (screen.md §5.12).
+	//
+	// The link is local when the server's address is loopback: then no
+	// datagram leaves this machine, and SSP drops D11's network timing and
+	// the chaff (ssp.md §6.2.1). The address is the client's own: a
+	// loopback one is used only when the destination itself is loopback
+	// (bootstrap.md §7.2), so a far host cannot make a remote session local.
 	ep := ssp.NewEndpoint(conn, ssp.Config{
 		Role:           ssp.Client,
 		MaxPayload:     transport.MaxPayload,
 		FrameOverhead:  transport.FrameOverhead,
 		MaxRemoteBytes: screen.MaxDiff,
+		Local:          conn.Peer().Addr().Unmap().IsLoopback(),
 	}, input.Clone(), screen.NewGrid(0, 0))
 	engine := predict.New(predict.Config{Mode: s.Predict})
 	began := time.Now()

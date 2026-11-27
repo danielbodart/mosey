@@ -313,6 +313,9 @@ are the same:
 - its stderr through the §6.5 filter;
 - then the handshake, SSP, prediction, resume and R3.
 
+SSP uses its local timing when the client dials a loopback address, as it
+does for a session that started here (`ssp.md` §6.2.1).
+
 There is nothing for SSH to vouch for (D6). The client started the server
 itself, as the same user.
 

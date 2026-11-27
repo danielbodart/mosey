@@ -13,6 +13,15 @@ const (
 	minFrame = 20 * time.Millisecond
 	// maxFrame is the longest frame interval [P §4 Fig. 3], D11.
 	maxFrame = 250 * time.Millisecond
+	// localFrame replaces minFrame on a local connection (§6.2.1): Dan
+	// decided on 2026-11-27 that a local session drops D11's 50 Hz cap
+	// [D: Dan, 2026-11-27]. Some floor stays, so a flood of output (cat of
+	// a big file) cannot make the server send a frame per pty read: 4 ms
+	// is at most 250 frames a second, and is less than one refresh of the
+	// fastest common displays (240 Hz, 4.2 ms), so it costs at most one
+	// refresh, and only to the second of two changes within 4 ms. The first
+	// change after a pause never waits for it [D].
+	localFrame = 4 * time.Millisecond
 
 	// serverCollection is how long the server waits after a change for
 	// more output to join it, so writes that follow one another closely go
@@ -22,8 +31,16 @@ const (
 	serverCollection = 8 * time.Millisecond
 
 	// ackDelay is how long an ack may wait for data to ride on [P §2.3],
-	// D11. It is also the peer's MaxAckDelay that the RTO adds.
+	// D11. It is also the peer's MaxAckDelay that the RTO adds, on a local
+	// connection too, since this end cannot know the peer's timing.
 	ackDelay = 100 * time.Millisecond
+	// On a local connection the server does not wait to collect output
+	// and an ack goes at once (§6.2.1) [D: Dan, 2026-11-27]: a datagram on
+	// loopback costs nothing worth saving, and an ack held back holds back
+	// the sender's next multi-fragment frame (§6.3) and the end of a
+	// session (server.md §2.4).
+	localCollection = 0
+	localAckDelay   = 0
 
 	// heartbeat is the longest an endpoint stays silent [P §2.3], measured
 	// at 3.00 s both ways [M], D11.
@@ -67,6 +84,9 @@ const Burst = 16
 type rtt struct {
 	srtt, rttvar time.Duration
 	sampled      bool
+	// local is a local connection's: frames have localFrame's floor in
+	// place of minFrame's (§6.2.1). The zero value is D11's.
+	local bool
 }
 
 func (r *rtt) sample(d time.Duration) {
@@ -91,12 +111,16 @@ func (r *rtt) rto() time.Duration {
 }
 
 // frameInterval is SRTT/2 clamped to 20-250 ms: about one instruction in
-// flight [P §2.3].
+// flight [P §2.3]. On a local connection the floor is 4 ms (§6.2.1).
 func (r *rtt) frameInterval() time.Duration {
-	if !r.sampled {
-		return minFrame
+	floor := minFrame
+	if r.local {
+		floor = localFrame
 	}
-	return min(max(r.srtt/2, minFrame), maxFrame)
+	if !r.sampled {
+		return floor
+	}
+	return min(max(r.srtt/2, floor), maxFrame)
 }
 
 // retransmitAt is when unacknowledged state is next due to go again, with

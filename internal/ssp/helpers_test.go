@@ -276,10 +276,17 @@ func start(t *testing.T, c, s *end) *pair {
 // be a chaffEnd around its end.
 func startOver(t *testing.T, cd, sd Datagrams, c, s *end) *pair {
 	t.Helper()
+	return startLocality(t, cd, sd, c, s, false, false)
+}
+
+// startLocality is startOver with each end's Config.Local set: whether
+// that end sees its peer at a loopback address (§6.2.1).
+func startLocality(t *testing.T, cd, sd Datagrams, c, s *end, clientLocal, serverLocal bool) *pair {
+	t.Helper()
 	p := &pair{
-		client: NewEndpoint(cd, Config{Role: Client, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: boardLimit},
+		client: NewEndpoint(cd, Config{Role: Client, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: boardLimit, Local: clientLocal},
 			userinput.NewStream(), newBoard("")),
-		server: NewEndpoint(sd, Config{Role: Server, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: userinput.MaxDiffBytes},
+		server: NewEndpoint(sd, Config{Role: Server, MaxPayload: maxPayload, FrameOverhead: frameOverhead, MaxRemoteBytes: userinput.MaxDiffBytes, Local: serverLocal},
 			newBoard(""), userinput.NewStream()),
 		cEnd: c, sEnd: s,
 		input: userinput.NewStream(),

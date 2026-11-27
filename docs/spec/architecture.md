@@ -310,7 +310,8 @@ least 40 when idle or not typing; while chaffing both ends pad every
 datagram, chaff included, to at least 64 (Padmé above that; `ssp.md`
 §9.1.5, O10 and O12 as Dan amended them), so an on-path observer cannot
 tell which ticks carried keys. `ssp.md` §9.1 says what it hides and what
-it does not.
+it does not. A client whose server address is loopback does not chaff:
+there is no wire to observe (`ssp.md` §6.2.1).
 
 ## 4. Sizes on the wire (D5)
 
@@ -364,7 +365,8 @@ reserved.
 **ssp.** `State[S]` (`Clone`, `Equal`, `Diff(from)`, `Apply(diff)` that
 validates before mutating). `Datagrams` (`Send`, `Recv`), which
 `*transport.Conn` satisfies and which SSP's own tests satisfy with a plain
-netsim socket. `NewEndpoint[L, R](d, Config, local, remote)`, then `Run`
+netsim socket. `NewEndpoint[L, R](d, Config, local, remote)`, where
+`Config.Local` selects the local timing of `ssp.md` §6.2.1, then `Run`
 (which ends with an error wrapping `ErrProtocol` when the peer breaks the
 protocol), `Set(local)`, `Remote()`, `Acked()` (the acknowledged local
 version, for the client's input flow control, `ssp.md` §10.1),

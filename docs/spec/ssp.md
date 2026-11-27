@@ -7,7 +7,8 @@ our own wire format. Nothing here comes from Mosh's source code, which no
 one working on mosey reads (PLAN §4).
 
 Owner: **ssp**. Status: slice 1, plus chaff (§9.1; its tick and sizes,
-O10, are Dan's decision of 2026-11-15, §9.1.5). A
+O10, are Dan's decision of 2026-11-15, §9.1.5), plus the local timing
+(§6.2.1, Dan's decision of 2026-11-27). A
 change to anything marked as a wire format or a constant is a change to
 this file first, then to the code.
 
@@ -135,6 +136,10 @@ them), and `InputConsumed` counts the new stream from 0.
 (§6.2): the server waits to collect output before sending a new version,
 and the client does not wait to collect keystrokes. Everything else,
 including the wire format, is the same in both directions.
+
+`Config.Local` is true on a local connection, where the peer's address is
+a loopback address. It changes only timing and the client's chaff
+(§6.2.1), never the wire format.
 
 ## 3. Datagram format
 
@@ -438,6 +443,104 @@ SSP does **not** resend because a peer datagram shows the peer is behind
 median stall on two of three LTE traces [S5 §5]. It does not add XOR parity
 either (+18–20% client bytes for no gain, [S5 §5]).
 
+#### 6.2.1 Local connections [D: Dan, 2026-11-27]
+
+A **local connection** is a connection where the peer's address is a
+loopback address: `127.0.0.0/8`, `::1`, or an IPv4-mapped `127.0.0.0/8`.
+Each end reads this fact from its own transport and sets `Config.Local`:
+
+- The client reads the server address that it dials.
+- The server reads the client's address when it attaches the connection.
+
+**Why.** Every GNOME Console window runs a local mosey session
+(`mosey -new -close-if-idle`, `bootstrap.md` §2.2). Thus every key echo
+that the user sees goes through a local session, and often through a
+remote session inside it too. D11's timing is for a network path. On
+loopback there is no network path to pace, and no wire where an observer
+can read key timing. Dan decided on 2026-11-27: "let's just get rid of the
+local latency".
+
+On a local connection these values change. All other rules of §6 stay
+the same.
+
+| Quantity | Network (D11) | Local | Source |
+|---|---|---|---|
+| collection interval, server | 8 ms | 0 | [D: Dan, 2026-11-27] |
+| frame interval | `clamp(SRTT/2, 20 ms, 250 ms)`; 20 ms before the first RTT sample | `clamp(SRTT/2, 4 ms, 250 ms)`; 4 ms before the first RTT sample | [D: Dan, 2026-11-27]; the 4 ms floor [D], below |
+| delayed ack | 100 ms | 0: the ack goes at once | [D: Dan, 2026-11-27] |
+| chaff, client | while the user types (§9.1) | never | [D: Dan, 2026-11-27] |
+
+These do not change:
+
+- The server chaffs when chaff arrives (§9.1.2), on a local connection
+  too. See "Only the client decides about chaff", below.
+- The RTO adds 100 ms for the peer's ack delay (§7.1). One end cannot
+  know the timing of the other end.
+- The heartbeat, the retransmit and probe rules, `Window`, `Burst` and
+  the padding (§9.2).
+
+**Measured** [M]. `TestALocalSessionEchoesAKeyInTheLoopbackRoundTrip` in
+`internal/e2e` runs a real client and server over netsim, with a 15 µs
+loopback hop, in virtual time. It types 20 keys at gaps of 97 to 283 ms
+and measures from the key to the drawn echo. With D11's timing, the echo
+took 21 to 39 ms, median 30 ms; the first key after idle took 8 ms. With
+the local timing, every echo takes 30 µs, the two hops of the path.
+`TestARemoteSessionKeepsD11Timing` runs the same keys over netsim's LAN
+profile: the median stays 30 ms.
+
+**The flood bound.** With no floor, a flood of output (`cat` of a large
+file) makes the server send one frame for each pty read. The 4 ms floor
+limits the server to 250 frames a second. After a pause, a change never
+waits for the floor. The floor holds only the second of two changes that
+are less than 4 ms apart. 4 ms is less than one refresh of the fastest
+common displays (240 Hz, 4.2 ms). Thus the hold costs at most one display
+refresh [D]. The window (§6.1) and the multi-fragment rule (§6.3) still
+apply. With acks at once on loopback, they cost about one loopback round
+trip.
+
+**Why the ack goes at once.** A datagram on loopback costs almost nothing.
+A delayed ack holds back the next frame after a multi-fragment frame
+(§6.3). Thus, in a flood of multi-fragment frames, the screen changes at
+most about once each 100 ms [derived]. A delayed ack also delays the end of a session, which waits for the client
+to acknowledge the final screen (`server.md` §2.4).
+
+**Why an attacker cannot make a remote session local.**
+
+- The client uses a loopback server address only when the destination
+  itself resolves to loopback (`bootstrap.md` §7.2). A far host cannot
+  give it one: the client refuses a loopback `addr` for a destination
+  that is not loopback.
+- The server reads the client's address from datagrams that the transport
+  authenticates (D20). To send one from a loopback address, an attacker
+  needs the session's keys. An attacker on the path can change the source
+  address of an authentic datagram. But loopback addresses must not
+  appear outside a host (RFC 1122 §3.2.1.3, RFC 4291 §2.5.3), and Linux
+  drops a datagram from a network with a loopback source address as a
+  martian. Even if the server took the local timing for a far client,
+  the client still decides about chaff (below).
+- The peer says nothing about locality. No wire element and no protocol
+  number changes.
+- The decision is per connection, as SSP's state is (§1.3). A far client
+  can take over a session that a local client started (D26). Its
+  connection is not local, and it gets D11's timing.
+
+**Only the client decides about chaff.** A server whose client's address
+is loopback takes the local timing, but it chaffs whenever chaff arrives
+(§9.1.2). A client that dials a network address chaffs, and then the
+server chaffs too, whatever address the server sees. Thus a relay on the
+server's host (the server sees loopback, but the client is far) still
+hides keys in both directions. That server sends without the collection
+wait, but while it chaffs it sends only on its tick grid (§9.1.1).
+
+**Sessions on this machine that keep D11.**
+
+- A remote mosey inside a local session runs over a network. It keeps
+  D11 and chaff. Only the outer, local hop is fast.
+- A session that started over ssh advertises the address that the login
+  reached (`bootstrap.md` §2.2). A local client that takes it dials that
+  address, which is not loopback. That connection keeps D11, although its
+  datagrams do not leave the machine.
+
 ### 6.3 What to send
 
 The sender wakes at the earliest of: `changeAt + collection`,
@@ -716,6 +819,8 @@ one due (a burst of fragments, §5).
 - **Heartbeats** need nothing new: a chaffing endpoint sends far more often
   than every 3 s, and SSP's datagrams among its ticks keep `lastAny`
   current.
+- **A local client never chaffs** (§6.2.1). With no CHAFF from it, its
+  server does not chaff either.
 - **The receiver** of a CHAFF frame is the transport, which drops it after
   authenticating it. Chaff never reaches SSP's parser, its state, its RTT
   estimate or its silence clock (§6.2); the only thing it does is tell the
@@ -780,7 +885,8 @@ type Chaffer interface {
 An `Endpoint` whose `Datagrams` is a `Chaffer` chaffs; one whose
 `Datagrams` is not (SSP's own small path in tests) behaves as §6 alone
 says. `transport.Conn` implements it (`transport.md` §4.2), so production
-always chaffs: it is D11, not an option. Since nothing would fail if that
+always chaffs, except a client on a local connection (§6.2.1): it is D11,
+not an option. Since nothing would fail if that
 link broke (the endpoint would quietly not chaff), both `internal/client`
 and `internal/server` assert `var _ ssp.Chaffer = (*transport.Conn)(nil)`
 at compile time, and `TestARealSessionChaffsOnTheTickGridWhileTheUserTypes`
@@ -1229,6 +1335,7 @@ What SSP needs from it:
 | Frame interval | `clamp(SRTT/2, 20 ms, 250 ms)`, 20 ms before a sample | [P §2.3], [P §2.3 fn. 1], [P §4 Fig. 3], D11 |
 | Collection, server / client | 8 ms / 0 | [P §2.3, §4], D11 / [M], [S5 §7] |
 | Delayed ack | 100 ms | [P §2.3], D11 |
+| Local connection: collection, server / frame floor / delayed ack / client chaff | 0 / 4 ms / 0 / none | [D: Dan, 2026-11-27]; 4 ms [D]; §6.2.1 |
 | Heartbeat | 3 s | [P §2.3], [M], D11 |
 | RTT estimator | RFC 6298 §2: α 1/8, β 1/4, K 4 | [P §2.2] |
 | RTO floor | 50 ms | [P §2.2], D11 |
@@ -1281,6 +1388,13 @@ in the commit message):
 - frames are no closer than the frame interval, and the server's first
   frame after a change waits 8 ms while the client's first key goes at once;
 - an ack goes out within 100 ms of new state, or rides on data sooner;
+- **local connections** (§6.2.1): the server sends an echo the moment the
+  key arrives, and a real local session echoes a key in the two hops of
+  the loopback path; an ack goes at once; a local client sends no chaff,
+  and nor does its server; a flood of output goes as at most one frame
+  per 4 ms; a server that sees loopback still chaffs when its client
+  does; and a session over a network keeps D11's timing, its echo never
+  sooner than the 8 ms collection interval;
 - with the receiver's acks dropped, the sender's identical retransmission
   (same id and bytes) draws an ack within 100 ms, and a multi-fragment
   retransmission draws exactly one;

@@ -13,7 +13,9 @@
 // SSP knows nothing of keys or addresses: it sends and receives payloads
 // through a Datagrams, which the transport provides in production and a
 // plain netsim socket can provide in SSP's own tests. Its timers are the
-// time package's, so testing/synctest drives them.
+// time package's, so testing/synctest drives them. The one fact about
+// addresses it is given is Config.Local, whether the peer is on loopback,
+// which drops D11's network timing and the client's chaff (§6.2.1).
 //
 // Every payload SSP sees has been authenticated, so a malformed one comes
 // from a peer that holds the keys and is broken or hostile. SSP does not

@@ -161,6 +161,9 @@ type userTerminal struct {
 	resized chan struct{}
 	mu      sync.Mutex
 	drawn   bytes.Buffer
+	// wrote, if set, is signalled without blocking after every write, so
+	// a test can time what the renderer draws.
+	wrote chan struct{}
 }
 
 func (u *userTerminal) Read(p []byte) (int, error) {
@@ -173,8 +176,15 @@ func (u *userTerminal) Read(p []byte) (int, error) {
 
 func (u *userTerminal) Write(p []byte) (int, error) {
 	u.mu.Lock()
-	defer u.mu.Unlock()
-	return u.drawn.Write(p)
+	n, err := u.drawn.Write(p)
+	u.mu.Unlock()
+	if u.wrote != nil {
+		select {
+		case u.wrote <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
 }
 
 func (u *userTerminal) bytes() []byte {
@@ -225,6 +235,8 @@ type simNet struct {
 	log    *slog.Logger
 	// links are the first client's, up then down, for a test to cut.
 	links []*netsim.Link
+	// server is the server socket's address, which the client dials.
+	server netip.AddrPort
 }
 
 // sessionID is the one session every sim test serves.
@@ -232,7 +244,6 @@ var sessionID = [16]byte{1}
 
 func newSimNet(t *testing.T, p netsim.Profile) *simNet {
 	t.Helper()
-	log := slog.New(slog.DiscardHandler)
 	n := netsim.New(1)
 	t.Cleanup(func() { n.Close() })
 	ch, sh := n.NewHost("client"), n.NewHost("server")
@@ -245,7 +256,14 @@ func newSimNet(t *testing.T, p netsim.Profile) *simNet {
 		t.Fatal(err)
 	}
 	p.Setup(n, ch, sh, cc)
+	return newSimNetOver(t, n, sh, cc, sc, serverAddr)
+}
 
+// newSimNetOver is newSimNet on sockets the caller has made: the client's
+// cc and the server's sc at saddr, on host sh of n.
+func newSimNetOver(t *testing.T, n *netsim.Network, sh *netsim.Host, cc, sc *netsim.Conn, saddr netip.AddrPort) *simNet {
+	t.Helper()
+	log := slog.New(slog.DiscardHandler)
 	key, err := handshake.NewOneShotKey()
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +273,7 @@ func newSimNet(t *testing.T, p netsim.Profile) *simNet {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &simNet{net: n, sh: sh, cc: cc, sc: sc, creds: creds, cred: cred, key: key, log: log}
+	return &simNet{net: n, sh: sh, cc: cc, sc: sc, creds: creds, cred: cred, key: key, log: log, server: saddr}
 }
 
 // serve runs proto's Session over the server's socket, with prog as the
@@ -331,7 +349,7 @@ func (n *simNet) connect(ctx context.Context, user terminal.Terminal) <-chan err
 // its name and R3's Reconnect.
 func (n *simNet) connectWith(ctx context.Context, user terminal.Terminal, hook func(*client.Session)) <-chan error {
 	done := make(chan error, 1)
-	cli := &client.Session{Conn: n.cc, Server: serverAddr, Credential: n.cred, Key: n.key, Terminal: user, Log: n.log,
+	cli := &client.Session{Conn: n.cc, Server: n.server, Credential: n.cred, Key: n.key, Terminal: user, Log: n.log,
 		Capabilities: render.Capabilities{UTF8: true, Colors256: true}}
 	if hook != nil {
 		hook(cli)
@@ -359,12 +377,17 @@ func startSimSession(t *testing.T, p netsim.Profile) *simSession {
 // startSimSessionWith is startSimSession with prog as the shell and a hook
 // on the server's Session.
 func startSimSessionWith(t *testing.T, p netsim.Profile, prog program, hook func(*server.Session)) *simSession {
-	n := newSimNet(t, p)
+	return startSimSessionOn(t, newSimNet(t, p), p.Name, prog, hook)
+}
+
+// startSimSessionOn is startSimSessionWith over n, a network the caller
+// has made, which name stands for in messages.
+func startSimSessionOn(t *testing.T, n *simNet, name string, prog program, hook func(*server.Session)) *simSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	cctx, quit := context.WithCancel(ctx)
 	s := &simSession{
 		t:       t,
-		profile: p.Name,
+		profile: name,
 		user:    &userTerminal{keys: make(chan []byte), resized: make(chan struct{})},
 		term:    prog,
 		cc:      n.cc,

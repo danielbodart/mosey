@@ -49,7 +49,8 @@ const (
 
 // Config sets an Endpoint up. The timing constants are not here: they are
 // D11's, fixed in the spec, and a test that wants others is testing
-// something other than mosey.
+// something other than mosey. Local picks between D11's and the local
+// timing the spec fixes beside it.
 type Config struct {
 	Role Role
 	// MaxPayload is the largest payload Datagrams accepts: in production
@@ -65,6 +66,15 @@ type Config struct {
 	// decompression (D24): the peer object's largest diff. A bigger one
 	// ends Run with ErrProtocol; it is never truncated or applied.
 	MaxRemoteBytes int
+	// Local says that the peer's address is a loopback address, so the
+	// path never leaves this machine: the endpoint then takes the local
+	// timing of docs/spec/ssp.md §6.2.1 in place of D11's network timing
+	// [D: Dan, 2026-11-27]. It is a fact of the connection that each end
+	// reads from its own transport (the client the server address it
+	// dials, the server the client's address it accepted), never
+	// something the peer says, so a session over a network cannot be
+	// talked into it.
+	Local bool
 }
 
 // ErrProtocol is what Run's error wraps when the peer broke a rule of the

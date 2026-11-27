@@ -7,7 +7,8 @@ import (
 
 // Chaffer is what Datagrams implements when it can send cover traffic
 // (docs/spec/ssp.md §9.1.4). An Endpoint over one chaffs while the user
-// types, as D11 requires; over Datagrams that are not, it sends exactly
+// types, as D11 requires, unless it is a client on a local connection
+// (§6.2.1); over Datagrams that are not, it sends exactly
 // what §6 says and nothing more. transport.Conn is one.
 type Chaffer interface {
 	// SendChaff sends one CHAFF frame whose sealed plaintext, frame kind

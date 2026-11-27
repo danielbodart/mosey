@@ -591,11 +591,15 @@ var _ ssp.Chaffer = (*transport.Conn)(nil)
 func (s *Session) attach(parent context.Context, c *transport.Conn) *attachment {
 	s.Log.Info("client attached", "peer", c.Peer())
 	// MaxRemoteBytes is the largest diff a client may send (ssp.md §10.1).
+	// The link is local when the client's address is loopback (ssp.md
+	// §6.2.1): an authentic datagram from a loopback address comes from
+	// this machine, since the kernel drops one that claims it from outside.
 	ep := ssp.NewEndpoint(c, ssp.Config{
 		Role:           ssp.Server,
 		MaxPayload:     transport.MaxPayload,
 		FrameOverhead:  transport.FrameOverhead,
 		MaxRemoteBytes: userinput.MaxDiffBytes,
+		Local:          c.Peer().Addr().Unmap().IsLoopback(),
 	}, screen.NewGrid(0, 0), userinput.NewStream())
 	sctx, stop := context.WithCancel(parent)
 	a := &attachment{conn: c, ep: ep, stop: stop, sspDone: make(chan struct{}), gone: make(chan error, 1), quit: make(chan struct{}), at: time.Now()}

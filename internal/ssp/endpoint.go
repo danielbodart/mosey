@@ -19,8 +19,10 @@ type Endpoint[L State[L], R State[R]] struct {
 	lim limits
 	// epoch is when the endpoint was made: the zero of its timestamps.
 	epoch time.Time
-	// collection is how long a change waits for more to join it (§6.2).
-	collection time.Duration
+	// collection is how long a change waits for more to join it, and
+	// ackWait how long an owed ack waits for data to ride on (§6.2,
+	// §6.2.1).
+	collection, ackWait time.Duration
 	// wake tells Run that Set changed something.
 	wake chan struct{}
 	// changed is RemoteChanged's, ackedChanged AckedChanged's.
@@ -140,11 +142,20 @@ func NewEndpoint[L State[L], R State[R]](d Datagrams, cfg Config, local L, remot
 	}
 	e.sent[0] = e.pending
 	e.re.limits = e.lim
-	if c, ok := d.(Chaffer); ok {
+	// A local client does not chaff: on loopback there is no wire for an
+	// observer to read key timing off (§6.2.1). The server still chaffs
+	// whenever chaff arrives, so whether a session hides its keys is the
+	// client's decision alone, made on the address it dials (§9.1.2).
+	if c, ok := d.(Chaffer); ok && !(cfg.Local && cfg.Role == Client) {
 		e.ch = chaffing{c: c, tick: chaffTick, size: e.chaffSize()}
 	}
+	e.ackWait = ackDelay
 	if cfg.Role == Server {
 		e.collection = serverCollection
+	}
+	if cfg.Local {
+		e.collection, e.ackWait = localCollection, localAckDelay
+		e.rtt.local = true
 	}
 	return e
 }
@@ -450,7 +461,7 @@ func (e *Endpoint[L, R]) raiseFloor(floor uint64) {
 // oweAck makes sure an ack goes within the delayed-ack time, unless one is
 // already due sooner.
 func (e *Endpoint[L, R]) oweAck(now time.Time) {
-	if due := now.Add(ackDelay); e.ackDue.IsZero() || due.Before(e.ackDue) {
+	if due := now.Add(e.ackWait); e.ackDue.IsZero() || due.Before(e.ackDue) {
 		e.ackDue = due
 	}
 }
