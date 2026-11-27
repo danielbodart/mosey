@@ -77,6 +77,12 @@ func (s *spawner) limitEmu(*child) error { return nil }
 // is a SIGKILL, and wait4 then gives ru_maxrss at the limit or above: 513
 // MiB for a 512 MiB limit [M: dan-mac, 2026-11-27]. A SIGKILL the spawner
 // sent itself (proto's KillEmu) is not one. There is no watchdog [D].
+//
+// Jetsam counts the phys_footprint, which includes compressed memory, and
+// ru_maxrss does not. Under memory pressure emu can die at the limit with
+// a smaller RSS. The spawner then reports EmuSignalled, not EmuMemory: the
+// client gets the wrong reason, but emu is still rebuilt. This false
+// negative is accepted [D].
 func (s *spawner) limitHit(c *child, st *os.ProcessState) bool {
 	return jetsamKilled(st, emuMemoryMax) && !s.killAsked[c.gen]
 }
