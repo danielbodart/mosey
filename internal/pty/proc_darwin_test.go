@@ -29,17 +29,32 @@ func TestOnlyADevTtysNameIsTakenAsTheSlave(t *testing.T) {
 	}
 }
 
-func TestASessionWithOnlyItsLeaderHasNoOtherMember(t *testing.T) {
-	rec := func(pid int32) unix.KinfoProc {
+func TestOnlyAnotherProcessOnTheLeadersTerminalIsAnotherMember(t *testing.T) {
+	rec := func(pid, tdev int32) unix.KinfoProc {
 		var k unix.KinfoProc
 		k.Proc.P_pid = pid
+		k.Eproc.Tdev = tdev
 		return k
 	}
-	if hasOtherPID(nil, 7) || hasOtherPID([]unix.KinfoProc{rec(7)}, 7) {
-		t.Error("the leader alone has another member")
+	for _, c := range []struct {
+		name  string
+		procs []unix.KinfoProc
+		other bool
+	}{
+		{"the leader alone", []unix.KinfoProc{rec(7, 5)}, false},
+		{"others on another terminal or none", []unix.KinfoProc{rec(1, noDev), rec(7, 5), rec(9, 6)}, false},
+		{"a job on the leader's terminal", []unix.KinfoProc{rec(7, 5), rec(8, 5)}, true},
+	} {
+		got, err := hasOtherOnTerminal(c.procs, 7)
+		if err != nil || got != c.other {
+			t.Errorf("%s: %v, %v; want %v", c.name, got, err, c.other)
+		}
 	}
-	if !hasOtherPID([]unix.KinfoProc{rec(7), rec(8)}, 7) {
-		t.Error("a job in the session is not seen")
+	// With no terminal to compare, no answer is safe.
+	for _, procs := range [][]unix.KinfoProc{nil, {rec(8, 5)}, {rec(7, noDev), rec(8, noDev)}} {
+		if _, err := hasOtherOnTerminal(procs, 7); err == nil {
+			t.Errorf("%d records: no error", len(procs))
+		}
 	}
 }
 
@@ -54,7 +69,7 @@ func TestKernProcGivesAProcesssEffectiveUID(t *testing.T) {
 	if err != nil || int(k.Eproc.Ucred.Uid) != os.Geteuid() || int(k.Eproc.Pcred.P_ruid) != os.Getuid() {
 		t.Fatalf("kinfo_proc %+v, %v", k, err)
 	}
-	// macOS pids stay under PID_MAX, 99999 (sys/proc_internal.h).
+	// macOS pids stay under PID_MAX, 99999 (sys/proc.h in the macOS SDK).
 	if processRoot(1 << 30) {
 		t.Error("a pid with no process is root")
 	}

@@ -58,7 +58,10 @@ func open(size Size) (master, slave *os.File, err error) {
 // ioctl writes a NUL-terminated string into a 128-byte buffer: 128 is
 // the size encoded in the request number itself (0x40807453, _IOR with
 // size 0x80). x/sys has no wrapper that takes a buffer this size, so the
-// call is a raw ioctl.
+// call is a raw ioctl. On darwin, x/sys sends unix.Syscall through libc's
+// syscall(2) trampoline, not a trap. Apple marks syscall(2) deprecated,
+// but it works, and a deprecated API is acceptable until Apple removes it
+// (the rule Dan set for Seatbelt, server.md §10).
 func slaveName(m int) (string, error) {
 	var buf [128]byte
 	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(m), unix.TIOCPTYGNAME, uintptr(unsafe.Pointer(&buf[0]))); errno != 0 {
@@ -94,23 +97,52 @@ func processRoot(pid int) bool {
 	return k.Eproc.Ucred.Uid == 0
 }
 
-// otherSessionMember lists session sid's processes with sysctl
-// kern.proc.session. The shell leads its session, so its pid is the
-// session id.
+// otherSessionMember lists every process with sysctl kern.proc.all and
+// looks for one other than the shell on the shell's controlling terminal.
+// The shell leads its session, so its pid is the session id.
+//
+// It does not ask for kern.proc.session: XNU names only the all, pid,
+// tty, pgrp, uid, ruid and lcid nodes under kern.proc, so that name does
+// not resolve. It does not call getsid either: getsid can give ESRCH for
+// a zombie, and an unreaped job still holds the session. It compares
+// e_tdev instead, the controlling terminal that kinfo_proc gives for each
+// listed process (sys/sysctl.h). A terminal is the controlling terminal
+// of one session at most, and every member of a session shares it, so the
+// same e_tdev means the same session. Not yet measured on dan-mac.
 func otherSessionMember(sid int) (bool, error) {
-	procs, err := unix.SysctlKinfoProcSlice("kern.proc.session", sid)
+	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
 	if err != nil {
-		return false, fmt.Errorf("listing session %d: %w", sid, err)
+		return false, fmt.Errorf("listing processes: %w", err)
 	}
-	return hasOtherPID(procs, sid), nil
+	return hasOtherOnTerminal(procs, sid)
 }
 
-// hasOtherPID says whether any record is of a process other than pid.
-func hasOtherPID(procs []unix.KinfoProc, pid int) bool {
+// noDev is e_tdev for a process with no controlling terminal: NODEV, -1
+// (sys/types.h).
+const noDev = -1
+
+// hasOtherOnTerminal finds the leader's record in procs and says whether
+// any other record has the same controlling terminal. A leader that is
+// not listed, or that has no terminal, is an error: without the terminal
+// no answer is safe, and callers treat an error as not idle.
+func hasOtherOnTerminal(procs []unix.KinfoProc, leader int) (bool, error) {
+	tdev, found := int32(noDev), false
 	for _, p := range procs {
-		if int(p.Proc.P_pid) != pid {
-			return true
+		if int(p.Proc.P_pid) == leader {
+			tdev, found = p.Eproc.Tdev, true
+			break
 		}
 	}
-	return false
+	if !found {
+		return false, fmt.Errorf("process %d is not listed", leader)
+	}
+	if tdev == noDev {
+		return false, fmt.Errorf("process %d has no controlling terminal", leader)
+	}
+	for _, p := range procs {
+		if int(p.Proc.P_pid) != leader && p.Eproc.Tdev == tdev {
+			return true, nil
+		}
+	}
+	return false, nil
 }

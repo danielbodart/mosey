@@ -15,7 +15,8 @@ import (
 // SessionIdle reports whether the shell running on master with pid shellPID
 // is idle at its prompt: the pty's foreground process group is shellPID, and
 // no other process belongs to session shellPID (server.md §2.4). Linux
-// walks /proc; macOS lists the session with sysctl kern.proc.session.
+// walks /proc; macOS lists processes with sysctl kern.proc.all and
+// compares their controlling terminals.
 // Any error fails safe: callers treat an error as not idle. Outside Linux
 // and macOS it returns errors.ErrUnsupported.
 func SessionIdle(master *os.File, shellPID int) (bool, error) {
