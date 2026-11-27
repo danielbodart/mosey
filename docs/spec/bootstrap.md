@@ -2273,9 +2273,11 @@ The program's name is argv[0]'s base name, less a login shell's `-`. This
 is the name a program gives itself (a Nix-wrapped `claude` has comm
 `.claude-unwrapp` but argv[0] `claude` [M] /proc on NixOS, 2026-11-18).
 Else the name is its comm. Its directory is where `/proc/PID/cwd` points,
-with the user's home written `~`, as a prompt writes it. The spawner
-reads both as the user, who owns the processes. A value that is not
-readable (a `sudo` job's directory) is left out.
+with the user's home written `~`, as a prompt writes it. On macOS, argv[0]
+comes from `sysctl kern.procargs2`, the comm from `kinfo_proc`, and the
+directory from `proc_pidinfo` (`server.md` §10). The spawner reads these
+as the user, who owns the processes. A value that is not readable (a
+`sudo` job's directory) is left out.
 
 The spawner fits each value to its grammar:
 
@@ -2283,7 +2285,7 @@ The spawner fits each value to its grammar:
 - the value is cut on a rune boundary with `…`,
 - a directory is cut at its start, so its end shows.
 
-Each is absent when unknown. Both are absent outside Linux.
+Each is absent when unknown. Both are absent outside Linux and macOS.
 
 **Stable** (D8 V1, `versioning.md` §5). `aproto` is the one number of the
 attach protocol that the session's spawner speaks (`server.md` §2.8: the

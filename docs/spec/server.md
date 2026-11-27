@@ -1776,7 +1776,7 @@ In this section, [M] is a measurement on dan-mac on 2026-11-27, and
 | fd passing | `SCM_RIGHTS` | `SCM_RIGHTS` works [M]. One `sendmsg` carries at most 254 fds; 255 gives `EINVAL` [M] |
 | fds that do not fit | The kernel discards the fds that do not fit in the control buffer, and sets `MSG_CTRUNC` | The kernel puts every fd into the reader's fd table and sets `MSG_CTRUNC`. `cmsg_len` keeps the full length, and the reader gets the numbers of only the fds that fit: 8 fds into room for 4 opened 8 [M]. So the control buffer holds every fd one `sendmsg` can carry (§3.1) |
 | parent death | `Pdeathsig` (Linux-only `SysProcAttr` field: it stays in a `_linux.go` file) | No `Pdeathsig`. Parent death is EOF on the IPC socket |
-| process info | `/proc` | No `/proc`. Use `sysctl` `kern.proc.*` (`unix.SysctlKinfoProc` in `x/sys`) |
+| process info | `/proc` | No `/proc`. Use `sysctl` `kern.proc.*` (`unix.SysctlKinfoProc` in `x/sys`). For `-list`, argv[0] comes from `sysctl kern.procargs2`, and the working directory from `proc_pidinfo(PROC_PIDVNODEPATHINFO)` through a libSystem trampoline. Both fail for another user's process [M]; the name then comes from `kinfo_proc`. The `kern.procargs2` parser has a fuzz target (`FuzzProcArgs`). The directory is the real path, so `/tmp/x` shows as `/private/tmp/x` [M] |
 | detach from ssh | a systemd `--user` scope (§2.1) | A `setsid` process started over ssh lives after the ssh connection closes [M]. No scope is necessary |
 | login shell | `/etc/passwd` | `/etc/passwd` has no entry for a Directory Services user [M]. Use `$SHELL`, which sshd sets [M] |
 | sessions dir | `$XDG_RUNTIME_DIR/mosey`, else `/tmp/mosey-UID` (§2.6) | Always `/tmp/mosey-UID` [D]. It holds only sockets and directories. Logs and other regular files go elsewhere. The launchers' lock is an `flock` on the directory itself, not a lock file (`bootstrap.md` §9.2). Reason: macOS `tmp_cleaner` deletes regular files and empty directories in `/tmp` older than 3 days. `dirhelper` cleans `$TMPDIR` (`/var/folders/.../T`) after 3 days and at boot. Under `$TMPDIR`, the socket path is too long for `sun_path` (104 bytes with the NUL): `agent.sock.tmp` needed 106 [M]. The client's agent capture directory (`internal/agent/capture.go`) has the same length limit on a Mac client |
@@ -1864,6 +1864,12 @@ true in `spawner_darwin.go`). On dan-mac (macOS 15.7.4, arm64,
    live session are sandboxed, and that the spawner is not. The unified
    log shows no Seatbelt denial for a mosey role. After `exit`, no
    server process stays, and `/tmp/mosey-501` is empty.
+4. `-list` shows the foreground program and its directory. With `sleep`
+   in the foreground, `-list` showed `sleep`. After Ctrl-C, it showed
+   `zsh`, without the login shell's `-`. Both times the directory was
+   the one the shell was in. The `internal/pty` tests read the name and
+   the directory of the test process and of a child with its own
+   argv[0].
 
 **The spawner on darwin** (`spawner_darwin.go`). The spawner and the
 launcher skip `PR_SET_DUMPABLE`, which macOS does not have. There is no
@@ -1891,11 +1897,6 @@ developer rights. To measure if the flag goes on across `fork` and
 
 **Not done yet**:
 
-- `pty.ProgramIn` (`-list`, and `internal/server/resume_unix.go`) still
-  reads only `/proc`. On darwin it must read the name and the working
-  directory another way, for example `sysctl kern.procargs2` and
-  `proc_pidinfo`. Until then, `-list` on a Mac shows no foreground
-  program or directory, and darwin pty support is not complete.
 - `PT_DENY_ATTACH` for the launcher and the spawner (above).
 
 ---
