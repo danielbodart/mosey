@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,8 +33,12 @@ type Conn struct {
 	// framed is whether each message has its length before it, on a
 	// stream socket (frame.go); fr is where the read of one stands.
 	framed bool
-	fr     frameReader
-	buf    []byte
+	// frMu is held while a Recv reads a framed message, so Close can
+	// close the fds of a message part-read when a deadline stopped it.
+	frMu sync.Mutex
+	fr   frameReader
+	buf  []byte
+	oob  []byte // control data of one recvmsg
 	// skipped counts the attach messages of unknown, ignorable types
 	// Recv has read past (server.md §2.8).
 	skipped int
@@ -55,8 +60,21 @@ func NewConn(f *os.File, self, peer Peer) (*Conn, error) {
 		// One more than the largest message, so one that fills the buffer
 		// is known to be too long rather than cut.
 		buf: make([]byte, MaxMessage+1),
+		oob: make([]byte, controlSpace),
 	}, nil
 }
+
+// controlSpace is the room for the control data of one recvmsg. It holds
+// every fd one sendmsg can carry: 254 on darwin, where 255 gets EINVAL
+// [M: dan-mac, 2026-11-27], and SCM_MAX_FD, 253, on Linux [kernel ABI].
+// It must: darwin puts every fd of a message into the reader's fd table
+// even when the buffer is too small for them, and returns only the
+// numbers that fit, so the rest could never be closed (server.md §10
+// [M]). darwin keeps a message's control data in one 2048-byte mbuf
+// cluster, 8 bytes for each fd [derived: 254 fds is the most that fits],
+// and gives the reader 4 bytes for each, so 4096 bytes is room for them
+// in any number of control messages.
+const controlSpace = 4096
 
 // File is the underlying socket, for deadlines.
 func (c *Conn) File() *os.File { return c.f }
@@ -127,8 +145,36 @@ func readRecord(f *os.File, max int, framed bool) ([]byte, error) {
 		}
 		return buf[:n], nil
 	}
+	// recvmsg, not read: darwin's read(2) would put any fds that came
+	// into this process's fd table, unseen (server.md §3.1). None may
+	// come with a record.
+	raw, err := f.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	oob := make([]byte, controlSpace)
+	readFull := func(p []byte, start bool) error {
+		for len(p) > 0 {
+			n, fds, err := recvmsgRaw(raw, p, oob, "the record's sender")
+			if err != nil {
+				return err
+			}
+			if len(fds) > 0 {
+				closeFDs(fds)
+				return malformed("a record came with %d fds", len(fds))
+			}
+			if n == 0 {
+				if start {
+					return io.EOF
+				}
+				return io.ErrUnexpectedEOF
+			}
+			p, start = p[n:], false
+		}
+		return nil
+	}
 	var hdr [frameHeader]byte
-	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+	if err := readFull(hdr[:], true); err != nil {
 		return nil, err
 	}
 	// Bounded before the allocation: the length is the peer's word.
@@ -137,7 +183,7 @@ func readRecord(f *os.File, max int, framed bool) ([]byte, error) {
 		return nil, malformed("a framed record of %d bytes is not in 1..%d", l, max)
 	}
 	buf := make([]byte, l)
-	if _, err := io.ReadFull(f, buf); err != nil {
+	if err := readFull(buf, false); err != nil {
 		return nil, err
 	}
 	return buf, nil
@@ -336,9 +382,12 @@ func (c *Conn) read() (n int, fds []int, err error) {
 }
 
 // readFramed reads one framed message into c.buf, in as many reads as the
-// stream needs, each within the message (frame.go). A deadline or a close
-// may stop it part-way; the next call goes on from there.
+// stream needs, each within the message (frame.go). A deadline may stop
+// it part-way; the next call goes on from there, and Close closes the
+// fds of the part read.
 func (c *Conn) readFramed() (int, []int, error) {
+	c.frMu.Lock()
+	defer c.frMu.Unlock()
 	if c.fr.err != nil {
 		return 0, nil, c.fr.err
 	}
@@ -379,10 +428,15 @@ func (c *Conn) readFramed() (int, []int, error) {
 // recvmsgInto reads into p with recvmsg, and returns the fds that came,
 // close-on-exec. A read flagged truncated is refused and its fds closed.
 func (c *Conn) recvmsgInto(p []byte) (n int, fds []int, err error) {
-	oob := make([]byte, unix.CmsgSpace(4*4))
+	return recvmsgRaw(c.raw, p, c.oob, c.peer.String())
+}
+
+// recvmsgRaw is recvmsgInto on any socket, with oob for the control data
+// and from naming the peer in errors.
+func recvmsgRaw(raw syscall.RawConn, p, oob []byte, from string) (n int, fds []int, err error) {
 	var oobn, flags int
 	var rerr error
-	err = c.raw.Read(func(fd uintptr) bool {
+	err = raw.Read(func(fd uintptr) bool {
 		if !recvCloexec {
 			// No MSG_CMSG_CLOEXEC: the fds are made close-on-exec under
 			// ForkLock, as the net package does for accept, so no child
@@ -402,7 +456,7 @@ func (c *Conn) recvmsgInto(p []byte) (n int, fds []int, err error) {
 		// closed file", which os.File.Read would have called os.ErrClosed.
 		// It is os.ErrClosed here too, so a reader whose Conn is closed
 		// by its own process sees IsEOF, not a fault.
-		return 0, nil, fmt.Errorf("ipc: receiving from %s: %w (%v)", c.peer, os.ErrClosed, err)
+		return 0, nil, fmt.Errorf("ipc: receiving from %s: %w (%v)", from, os.ErrClosed, err)
 	}
 	if err == nil {
 		err = rerr
@@ -449,10 +503,17 @@ func cloexecRights(oob []byte) {
 // Pending says whether a message is waiting, without taking it: proto
 // asks before each emu request, because emu never speaks unasked and a
 // message while idle is a violation (server.md §3.5). It peeks with
-// recvmsg, which proto's policy has.
+// recvmsg, which proto's policy has. Ask it between Recvs, from the
+// goroutine that calls Recv: on a framed Conn it waits for a Recv in
+// progress to end.
 func (c *Conn) Pending() bool {
-	if c.framed && c.fr.started() {
-		return true // part of a message is read already
+	if c.framed {
+		c.frMu.Lock()
+		started := c.fr.started()
+		c.frMu.Unlock()
+		if started {
+			return true // part of a message is read already
+		}
 	}
 	var pending bool
 	c.raw.Control(func(fd uintptr) {
@@ -465,8 +526,18 @@ func (c *Conn) Pending() bool {
 	return pending
 }
 
-// Close closes the socket. A Recv blocked on it returns an error.
-func (c *Conn) Close() error { return c.f.Close() }
+// Close closes the socket, and the fds of a message that a deadline
+// stopped part-way. A Recv blocked on it returns an error, and closes
+// the fds of its part itself.
+func (c *Conn) Close() error {
+	// The socket first: that wakes a blocked Recv, which then lets go of
+	// frMu.
+	err := c.f.Close()
+	c.frMu.Lock()
+	closeFDs(c.fr.take())
+	c.frMu.Unlock()
+	return err
+}
 
 // IsEOF says whether err means the peer is gone rather than misbehaving.
 func IsEOF(err error) bool {

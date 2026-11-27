@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -399,5 +400,112 @@ func TestAFramedRecvKeepsNoCopyOfTheCredentialLine(t *testing.T) {
 	}
 	if !bytes.Equal(spawner.buf, make([]byte, len(spawner.buf))) {
 		t.Fatal("the receive buffer still holds the line")
+	}
+}
+
+// A message with as many fds as one sendmsg can carry is received whole
+// and refused, and none of its fds stays open. darwin puts every fd of a
+// message into the reader's fd table even when the control buffer is too
+// small for them, so the buffer must hold them all (server.md §10 [M]).
+func TestAMessageWithAllTheFDsASendCarriesLeavesNoneOpen(t *testing.T) {
+	for _, many := range []int{2, 8, 253} {
+		raw, proto := rawStream(t, Proto, Spawner)
+		a, b, _ := streamPair()
+		files := make([]*os.File, many)
+		for i := range files {
+			files[i] = a
+		}
+		before := openFDs(t)
+		emuLink, _ := Marshal(EmuLink{Generation: 1})
+		sendRaw(t, raw, appendFrame(nil, emuLink), files...)
+		if _, err := proto.Recv(); !errors.Is(err, ErrMalformed) {
+			t.Fatalf("%d fds: %v", many, err)
+		}
+		if after := openFDs(t); after != before {
+			t.Errorf("%d fds: %d fds open, was %d", many, after, before)
+		}
+		a.Close()
+		b.Close()
+	}
+}
+
+// A deadline that stops a Recv part-way through a message leaves the fds
+// of the part read with the Conn. Closing the Conn closes them, so a peer
+// that sends a message's start with fds and then stalls leaks nothing.
+func TestClosingAConnStoppedPartWayClosesTheFDsOfThePart(t *testing.T) {
+	l, r, _ := streamPair()
+	defer l.Close()
+	proto := framedConn(t, r, Proto, Spawner)
+	a, b, _ := streamPair()
+	defer a.Close()
+	defer b.Close()
+	before := openFDs(t)
+	emuLink, _ := Marshal(EmuLink{Generation: 1})
+	sendRaw(t, l, appendFrame(nil, emuLink)[:frameHeader+1], a)
+	proto.File().SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+	if _, err := proto.Recv(); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("got %v", err)
+	}
+	if after := openFDs(t); after != before+1 {
+		t.Fatalf("%d fds open while the message is part-read, want %d", after, before+1)
+	}
+	proto.Close()
+	if after := openFDs(t); after != before-1 {
+		t.Errorf("%d fds open after Close, want %d: the socket and the fd of the part are closed", after, before-1)
+	}
+}
+
+// A Close while a Recv waits part-way through a message wakes the Recv,
+// and the fds of the part are closed once, by one of the two.
+func TestClosingAConnUnderABlockedRecvClosesTheFDsOfThePart(t *testing.T) {
+	l, r, _ := streamPair()
+	defer l.Close()
+	proto := framedConn(t, r, Proto, Spawner)
+	a, b, _ := streamPair()
+	defer a.Close()
+	defer b.Close()
+	before := openFDs(t)
+	emuLink, _ := Marshal(EmuLink{Generation: 1})
+	sendRaw(t, l, appendFrame(nil, emuLink)[:frameHeader+1], a)
+	done := make(chan error, 1)
+	go func() {
+		_, err := proto.Recv()
+		done <- err
+	}()
+	// Wait until the Recv has taken the part, fd and all, off the socket.
+	// A peek that finds nothing says so; it takes nothing either way.
+	for {
+		var b [1]byte
+		_, _, err := unix.Recvfrom(int(fdOf(r)), b[:], unix.MSG_PEEK|unix.MSG_DONTWAIT)
+		if err == unix.EAGAIN {
+			break
+		}
+		runtime.Gosched()
+	}
+	proto.Close()
+	if err := <-done; !IsEOF(err) {
+		t.Fatalf("the blocked Recv returned %v", err)
+	}
+	if after := openFDs(t); after != before-1 {
+		t.Errorf("%d fds open after Close, want %d", after, before-1)
+	}
+}
+
+// A record must come with no fds. One that does is refused, and its fds
+// are closed: darwin's read(2) would have kept them, unseen (§3.1).
+func TestAFramedRecordWithFDsIsRefusedAndTheFDsClosed(t *testing.T) {
+	l, r, _ := streamPair()
+	defer l.Close()
+	defer r.Close()
+	a, b, _ := streamPair()
+	defer a.Close()
+	defer b.Close()
+	before := openFDs(t)
+	sendRaw(t, l, appendFrame(nil, []byte("greeting")), a)
+	if _, err := readRecord(r, 100, true); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("got %v", err)
+	}
+	if after := openFDs(t); after != before {
+		t.Errorf("%d fds open, was %d", after, before)
 	}
 }

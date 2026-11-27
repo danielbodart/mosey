@@ -410,8 +410,8 @@ since it holds the keys.
   the SID), before `Ready`. A failure to make it is logged and the session
   goes on, not resumable.
 - **Peer check.** On every accepted connection the spawner reads
-  `SO_PEERCRED` (on darwin, `LOCAL_PEERCRED`) and closes the connection, unanswered, unless the uid is
-  its own [S1 `resume.go`]. The directory's mode already keeps other users
+  `SO_PEERCRED` (on darwin, `LOCAL_PEERCRED`) and closes the
+  connection, unanswered, unless the uid is its own [S1 `resume.go`]. The directory's mode already keeps other users
   out; this is defence in depth.
 - **The exchange.** Spawner → peer: the greeting (`bootstrap.md` §9.2.1),
   one message, not an IPC message. Peer → spawner, within T2: `ClientLine`
@@ -638,7 +638,15 @@ deny-all and cannot open `/proc`.
     4 × (`MaxMessage` + 4) bytes [derived: about the room a Linux
     seqpacket sender has; darwin's default is 8192 bytes].
   - The attach greeting (§2.6) is framed the same way, and is bounded
-    by `MaxSessionLine`.
+    by `MaxSessionLine`. The launcher reads it with `recvmsg` too. A
+    greeting that comes with fds is refused, and its fds are closed.
+  - A `recvmsg` has room for 4096 bytes of control data. That holds
+    every fd that one `sendmsg` can carry. It must: when the control
+    buffer is too small, darwin still puts every fd of the message into
+    the reader's fd table, and gives the numbers of only the fds that
+    fit (§10 [M]).
+  - A `Close` of a connection also closes the fds of a message that a
+    deadline stopped part of the way through.
 
   This framing is on darwin only. The Linux wire does not change, and no
   protocol number changes.
@@ -1763,7 +1771,8 @@ In this section, [M] is a measurement on dan-mac on 2026-11-27, and
 | fds and `read(2)` | `read(2)` discards and closes fds that come with a message | `read(2)` puts the fds into the reader's fd table, and nothing closes them [M]. So every receiver uses `recvmsg` (§3.1) |
 | peer credentials | `SO_PEERCRED` | `LOCAL_PEERCRED` |
 | close-on-exec | `SOCK_CLOEXEC`, `accept4`, `MSG_CMSG_CLOEXEC` | None of these exist. `FD_CLOEXEC` is set under `syscall.ForkLock`, as Go's `net` package does |
-| fd passing | `SCM_RIGHTS` | `SCM_RIGHTS` works [M] |
+| fd passing | `SCM_RIGHTS` | `SCM_RIGHTS` works [M]. One `sendmsg` carries at most 254 fds; 255 gives `EINVAL` [M] |
+| fds that do not fit | The kernel discards the fds that do not fit in the control buffer, and sets `MSG_CTRUNC` | The kernel puts every fd into the reader's fd table and sets `MSG_CTRUNC`. `cmsg_len` keeps the full length, and the reader gets the numbers of only the fds that fit: 8 fds into room for 4 opened 8 [M]. So the control buffer holds every fd one `sendmsg` can carry (§3.1) |
 | parent death | `Pdeathsig` (Linux-only `SysProcAttr` field: it stays in a `_linux.go` file) | No `Pdeathsig`. Parent death is EOF on the IPC socket |
 | process info | `/proc` | No `/proc`. Use `sysctl` `kern.proc.*` (`unix.SysctlKinfoProc` in `x/sys`) |
 | detach from ssh | a systemd `--user` scope (§2.1) | A `setsid` process started over ssh lives after the ssh connection closes [M]. No scope is necessary |
@@ -1832,6 +1841,14 @@ are not Linux (`internal/client/upload.go`). So only a Mac with mosey
 installed by hand or by Nix runs the server. The server-side gates
 (`cmd/mosey/server.go`, `internal/server/launcher.go`) go away when the
 server works on macOS. The client runs on macOS already.
+
+**Not done yet** (after the IPC framing slice):
+
+- `sessionsDir` (`internal/server/attach.go`) still follows
+  `XDG_RUNTIME_DIR` and `TMPDIR` on darwin. It must be `/tmp/mosey-UID`
+  there [D] (see "sessions dir" above).
+- The client's agent capture directory (`internal/agent/capture.go`)
+  needs the same check of the `sun_path` length on a Mac client.
 
 ---
 
