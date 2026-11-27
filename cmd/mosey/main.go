@@ -61,7 +61,11 @@ func main() {
 	// Once, here, and handed to whatever starts a program or reads mosey's
 	// own file: on Android a linker may stand in front of mosey
 	// (internal/startup).
-	self, args := startup.Detect(runtime.GOOS, os.Args)
+	exe, err := os.Executable()
+	if err != nil {
+		exe = ""
+	}
+	self, args := startup.Detect(runtime.GOOS, exe, os.Args)
 	if len(args) > 1 {
 		if role, ok := serveRole(args[1]); ok {
 			runServer(role, self, args[1:])
