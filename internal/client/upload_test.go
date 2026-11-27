@@ -211,7 +211,6 @@ func TestUploadYesNeitherAsksNorRemembers(t *testing.T) {
 
 func TestAHostWithNoServerBuildIsToldSo(t *testing.T) {
 	for p, says := range map[bootstrap.ProbeLine]string{
-		{System: "Darwin", Machine: "arm64"}:   "copies its server only to Linux for now, and far is Darwin",
 		{System: "FreeBSD", Machine: "amd64"}:  "far is FreeBSD amd64, which mosey has no build for",
 		{System: "Linux", Machine: "armv7l"}:   "far is Linux armv7l, which mosey has no build for",
 		{System: "Android", Machine: "x86_64"}: "far is Android x86_64, which mosey has no build for",
@@ -236,6 +235,33 @@ func TestAnAndroidHostIsOfferedTheAndroidBuild(t *testing.T) {
 	}
 	if want := "mosey: far has no mosey this one can use. Download mosey 0.4.2 for android/arm64 from GitHub and copy it to ~/.local/bin/ there? [y/N] "; len(h.asked) != 1 || h.asked[0] != want {
 		t.Errorf("asked %q", h.asked)
+	}
+}
+
+// The macOS server has its Seatbelt sandbox (server.md §10), so a Mac is
+// offered a server as any other host is: this client's own file when it
+// is a darwin build for the Mac's machine, else the release (D7).
+func TestAMacIsOfferedTheDarwinBuild(t *testing.T) {
+	mac := bootstrap.ProbeLine{System: "Darwin", Machine: "arm64"}
+	h := newUploadHost(t)
+	h.answer = "n"
+	err := h.copier(UploadAsk, installer).copy(context.Background(), mac)
+	if err == nil || !strings.Contains(err.Error(), "not copying mosey to far") {
+		t.Fatalf("got %v", err)
+	}
+	if want := "mosey: far has no mosey this one can use. Download mosey 0.4.2 for darwin/arm64 from GitHub and copy it to ~/.local/bin/ there? [y/N] "; len(h.asked) != 1 || h.asked[0] != want {
+		t.Errorf("a linux client asked %q", h.asked)
+	}
+
+	h = newUploadHost(t)
+	h.answer = "n"
+	c := h.copier(UploadAsk, installer)
+	c.goos, c.goarch = "darwin", "arm64"
+	if err := c.copy(context.Background(), mac); err == nil {
+		t.Fatal("copied with the answer no")
+	}
+	if len(h.asked) != 1 || !strings.Contains(h.asked[0], "Copy this one (darwin/arm64,") {
+		t.Errorf("a darwin client asked %q", h.asked)
 	}
 }
 

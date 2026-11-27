@@ -1057,12 +1057,8 @@ it.
 The matches are exact and case-sensitive [derived from uname(1) on Linux
 and macOS]. `Android` comes from `uname -o` (§4.7.2) and takes `arm64`
 only. For anything else: `mosey: DEST is SYSNAME MACHINE, which mosey has no build
-for`. The client refuses a `darwin` remote, though there is a darwin
-build, with
-`mosey: the mosey server runs on Linux only for now, and DEST is Darwin`.
-The server's roles return `ErrUnsupported` there (D22, `server.md`). So a
-copy of 10 MB to the host, only to get that error, would waste the user's
-time. This check goes when a macOS server lands. An `android` remote
+for`. A `darwin` remote gets the darwin build: the macOS server runs
+under its Seatbelt sandbox (D22, `server.md` §10). An `android` remote
 runs the server, because the Android kernel is Linux.
 
 #### 4.7.4 Which file is sent

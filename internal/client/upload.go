@@ -66,12 +66,6 @@ func (c *copier) copy(ctx context.Context, p bootstrap.ProbeLine) error {
 	if !ok {
 		return fail(&bootstrap.NoServerError{Probe: p}, "%s is %s %s, which mosey has no build for", dest, p.System, p.Machine)
 	}
-	if goos != "linux" && goos != "android" {
-		// The macOS server has no sandbox until the Seatbelt slice
-		// (server.md §10 "Order" [D]). So the client copies a server only
-		// to Linux. The Seatbelt slice removes this gate.
-		return fail(&bootstrap.NoServerError{Probe: p}, "mosey copies its server only to Linux for now, and %s is %s", dest, p.System)
-	}
 	platform := goos + "/" + goarch
 	if c.mode == UploadNo {
 		return fail(&bootstrap.NoServerError{Probe: p}, "%s has no mosey: install it there, or run without -upload=no", dest)
