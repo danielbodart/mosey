@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -336,7 +337,14 @@ func TestAnInterruptDiscardsTheOutputNotYetRead(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if held < 4096 || held > 1<<20 {
+	// The least a sane kernel holds: Linux 6.18 held 20-22 KB, but macOS
+	// 15.7 (dan-mac, 2026-11-27) holds 1,024 bytes and keeps none after
+	// the interrupt [M], so the 4 KiB bound below is loose there.
+	least := 4096
+	if runtime.GOOS == "darwin" {
+		least = 1024
+	}
+	if held < least || held > 1<<20 {
 		t.Fatalf("the kernel held %d bytes before the writer would block", held)
 	}
 	// The line discipline acts on input in the background too, in order:
