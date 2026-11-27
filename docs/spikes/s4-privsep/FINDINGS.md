@@ -335,7 +335,7 @@ Under client load, observed every 500 ms:
   without PAM as the same user, so there was no logind session; a real PAM
   login normally sets `XDG_RUNTIME_DIR`.
 
-### 3.11 macOS (research and compile only, nothing run)
+### 3.11 macOS (research and compile; run on a Mac 2026-11-27)
 
 - `sandbox_init(3)` can be reached from a `CGO_ENABLED=0` binary the same
   way `x/sys/unix` reaches libSystem: `//go:cgo_import_dynamic` plus an
@@ -354,6 +354,14 @@ Under client load, observed every 500 ms:
 - Whether `sendto` on a pre-opened UDP socket survives `pure-computation`
   (roaming needs it) is unknown. `cmd/seatbelt-probe` tests exactly this
   and needs a Mac.
+- *Added 2026-11-27.* The probe ran on a Mac (dan-mac, macOS 15.7.4,
+  arm64). `pure-computation` blocks `sendto` and `recvfrom` on the
+  inherited UDP socket, and it blocks `TIOCSWINSZ`. So it does not fit
+  proto. A custom SBPL profile with `(deny default)` works. It allows UDP
+  on the inherited port, `TIOCSWINSZ` and the `hw.ncpu` sysctl, and it
+  denies `process-info*`. The profiles and their gaps are in
+  `docs/spec/server.md` §10. OpenSSH 10.5 dropped its macOS sandbox for
+  SDK ≥ 27.
 
 ## 4. Which code parses attacker input, and where it runs
 

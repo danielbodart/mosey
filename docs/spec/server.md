@@ -4,8 +4,8 @@ This is the spec for `mosey --serve`: layout C of S4 (D22). It says which
 processes the server runs, what each one holds, every message they send
 each other, byte by byte, the grammar proto holds emu's replies to, the
 sandbox each role runs in and the order it is entered, how the roles are
-supervised, the KILL soak CI gate, and what the platform layer leaves
-for macOS. The code in `internal/server`, `internal/ipc`, `internal/pty`,
+supervised, the KILL soak CI gate, and how the platform layer does
+macOS. The code in `internal/server`, `internal/ipc`, `internal/pty`,
 `internal/sandbox` and `cmd/mosey/server.go` is written from it.
 
 PLAN §2 is locked; where this spec cites a decision, the decision wins.
@@ -21,6 +21,7 @@ it is agreed and `architecture.md` updated in the same commit.
 | [S4 §x], [S2 §x] | measured in that spike; the section of its FINDINGS.md |
 | [RFC nnnn], [mosh(1)], [kernel ABI] | a published standard, man page or the Linux user-space ABI |
 | [derived] | our own choice, with the reasoning next to it; to be confirmed by the test named |
+| [M], [D] | in §10 only: a measurement on dan-mac, or a decision by Dan, both of 2026-11-27 |
 
 Clean room (PLAN §4): nothing here comes from Mosh's source. The port
 range comes from Mosh's man page; everything else is S2, S4, an RFC or
@@ -1699,24 +1700,89 @@ on ubuntu-24.04-arm with a CPU quota, no role killed (D22).
 ## 10. Platform layer and macOS
 
 Linux-only mechanisms live in `_linux.go` files behind portable
-functions; the `_other.go` files return `errors.ErrUnsupported`, and
-the whole tree builds and vets for darwin (`mise run lint`). macOS is
-parked, not ruled out (D22): nothing above this layer may assume Linux.
+functions. macOS mechanisms live in `_darwin.go` files behind the same
+functions. The `_other.go` files return `errors.ErrUnsupported`. The
+whole tree builds and vets for darwin (`mise run lint`). Nothing above
+this layer may assume Linux (D22).
 
-| mechanism | Linux (slice 1) | macOS (later; nothing here may prevent it) |
+Dan chose the macOS mechanisms on 2026-11-27 (D22 and D23, amended).
+The measurements ran on dan-mac (macOS 15.7.4, arm64) the same day.
+In this section, [M] is a measurement on dan-mac on 2026-11-27, and
+[D] is Dan's decision of 2026-11-27.
+
+| mechanism | Linux | macOS |
 |---|---|---|
-| pty | `/dev/ptmx`, `TIOCSPTLCK`, `TIOCGPTN`, `TCGETS`, `TIOCSWINSZ` | `/dev/ptmx` with `TIOCPTYGRANT`, `TIOCPTYUNLK`, `TIOCPTYGNAME`; `TIOCGETA` for termios; `TIOCSWINSZ` |
-| IPC framing | `SOCK_SEQPACKET` socketpair | macOS has no `AF_UNIX` `SOCK_SEQPACKET` (to verify on a Mac), and its `SOCK_DGRAM` caps a message at `net.local.dgram.maxdgram` (2 KiB by default). So: `SOCK_STREAM` with a 4-byte big-endian length before each message, bounded by `MaxMessage` before any allocation. The message layouts of §3.3 do not change; the length prefix is the one new thing to fuzz |
-| fd passing | `SCM_RIGHTS` | the same |
-| parent death | `Pdeathsig` (`SysProcAttr` field is Linux-only: it must stay in a `_linux.go` file) | EOF on the IPC socket only |
-| sandbox | Landlock + seccomp + `PR_SET_DUMPABLE` | Seatbelt `sandbox_init` with the `pure-computation` profile, reachable from a `CGO_ENABLED=0` binary through `//go:cgo_import_dynamic` and an assembly trampoline (S4 §3.11, built and compiled for both Mac architectures, never run). `ptrace(PT_DENY_ATTACH)` in place of DUMPABLE. Open: whether `sendto` on the inherited UDP socket survives `pure-computation` (roaming needs it; `cmd/seatbelt-probe` tests exactly this); and the API is deprecated, with profiles reported to kill processes built against SDK ≥ 27 (S4 §3.11). Dan decides before a macOS server ships |
-| emu memory limit | cgroup scope + `RLIMIT_DATA` | `RLIMIT_DATA` is not enforced for `mmap` on macOS, and there are no cgroups: unsolved, and required before a macOS server ships (D23) |
+| pty | `/dev/ptmx`, `TIOCSPTLCK`, `TIOCGPTN`, `TCGETS`, `TIOCSWINSZ` | `/dev/ptmx`, then `TIOCPTYGRANT`, `TIOCPTYUNLK` and `TIOCPTYGNAME` (gives `/dev/ttysNNN`); `TIOCGETA` for termios; `TIOCSWINSZ`. All work [M] |
+| IPC framing | `SOCK_SEQPACKET` socketpair | An `AF_UNIX` `SOCK_SEQPACKET` socketpair fails with "protocol not supported" [M]. `SOCK_DGRAM` caps a message at `net.local.dgram.maxdgram`, 2048 bytes [M]. So: `SOCK_STREAM`, with a 4-byte big-endian length before each message. The length is bounded by `MaxMessage` before any allocation. The layouts of §3.3 do not change. The length prefix is the one new parser, and it gets a fuzz target. This framing is on darwin only; the Linux wire does not change, and no protocol number changes |
+| fd passing | `SCM_RIGHTS` | `SCM_RIGHTS` works [M] |
+| parent death | `Pdeathsig` (Linux-only `SysProcAttr` field: it stays in a `_linux.go` file) | No `Pdeathsig`. Parent death is EOF on the IPC socket |
+| process info | `/proc` | No `/proc`. Use `sysctl` `kern.proc.*` (`unix.SysctlKinfoProc` in `x/sys`) |
+| detach from ssh | a systemd `--user` scope (§2.1) | A `setsid` process started over ssh lives after the ssh connection closes [M]. No scope is necessary |
+| login shell | `/etc/passwd` | `/etc/passwd` has no entry for a Directory Services user [M]. Use `$SHELL`, which sshd sets [M] |
+| sessions dir | `$XDG_RUNTIME_DIR/mosey`, else `/tmp/mosey-UID` (§2.6) | Always `/tmp/mosey-UID` [D]. It holds only sockets and directories. Logs and other regular files go elsewhere. Reason: macOS `tmp_cleaner` deletes regular files and empty directories in `/tmp` older than 3 days. `dirhelper` cleans `$TMPDIR` (`/var/folders/.../T`) after 3 days and at boot. Under `$TMPDIR`, the socket path is too long for `sun_path` (104 bytes with the NUL): `agent.sock.tmp` needed 106 [M]. The client's agent capture directory (`internal/agent/capture.go`) has the same length limit on a Mac client |
+| sandbox | Landlock + seccomp + `PR_SET_DUMPABLE` | Seatbelt `sandbox_init` (deprecated) with our own SBPL profile strings, flags 0 [D], reached from a `CGO_ENABLED=0` binary through `//go:cgo_import_dynamic` and an assembly trampoline (S4 §3.11). Plus `ptrace(PT_DENY_ATTACH)` in place of DUMPABLE. The profiles are below |
+| emu memory limit | cgroup scope `MemoryMax` + `RLIMIT_DATA` | The spawner starts emu with its own `posix_spawn`, not `os/exec`, and calls the private `posix_spawnattr_setjetsam_ext(attr, 0xC, -1, 512, 512)` [D]. `0xC` is ACTIVE and INACTIVE fatal. It also uses `posix_spawn_file_actions_adddup2`, `POSIX_SPAWN_CLOEXEC_DEFAULT` and `POSIX_SPAWN_SETSID` as necessary. The kernel sends SIGKILL at the limit; `wait4` then gives `ru_maxrss` of 513 MiB for a 512 MiB limit [M]. A SIGKILL that the spawner did not send, with `ru_maxrss` at or above the limit, means the limit was hit: tell the client and rebuild, as for the Linux OOM kill. There is no watchdog. `setrlimit` of `RLIMIT_DATA` or `RLIMIT_AS` below 1 TiB gives `EINVAL` [M], so darwin does not use them. Each kill writes a `JetsamEvent` report in `/Library/Logs/DiagnosticReports` [M]; this is accepted [D] |
 | syscall policy test | BPF interpreter, any host | not applicable |
 
-Until then `mosey --serve` on macOS prints `mosey --serve: the server
-runs on Linux only for now` and exits 1 (from `pty.Open`'s
-`ErrUnsupported`), so the client can say so. The client runs on macOS
-from slice 1.
+**The profiles** [D, M]. `PORT` is the port of the inherited UDP socket.
+proto puts it into the string at run time.
+
+proto:
+
+```
+(version 1)(deny default)
+(allow network-inbound (local udp "*:PORT"))
+(allow network-outbound (local udp "*:PORT"))
+(allow file-ioctl (ioctl-command TIOCSWINSZ))
+(allow sysctl-read (sysctl-name "hw.ncpu"))
+(deny process-info*)
+```
+
+emu:
+
+```
+(version 1)(deny default)
+(allow sysctl-read (sysctl-name "hw.ncpu"))
+(deny process-info*)
+```
+
+Why each rule is there [M]:
+
+- `(deny default)` does not deny `process-info*`. The explicit deny is
+  necessary.
+- Without `hw.ncpu`, Go sets `GOMAXPROCS` to 1. GC calls then took up to
+  2.2 s.
+- The built-in `pure-computation` profile blocks `sendto` and `recvfrom`
+  on the inherited UDP socket, and `TIOCSWINSZ`. So mosey does not use it.
+
+Gaps that stay open with these profiles [M]:
+
+- proto can send UDP to any address from its own port. Roaming needs
+  this.
+- A process can make SysV IPC objects with `IPC_PRIVATE`. This is a
+  denial of service only.
+- `getpriority` shows if a pid exists.
+- `statfs` is allowed.
+
+**API risk** [D]. `sandbox_init` is deprecated. Its man page says that
+processes built against SDK ≥ 27 and that use it will be killed (S4
+§3.11). Go 1.27.3 and 1.27.4 declare SDK 26.2 in the Mach-O. When a Go release
+declares SDK ≥ 27, darwin builds add `-ldflags=-macsdk=26.2` (the flag
+comes from Go CL 751260). If Apple stops the API, the fallback is the
+private `sandbox_compile_string` and `sandbox_apply`.
+
+**App Sandbox** (entitlements) was tested and rejected [M, D]. The
+sandbox goes on to the login shell, so it needs two signed binaries. It
+also needs an `Info.plist` patch, and its network entitlements open all
+TCP to proto.
+
+**Order** [D]. The server comes first, without the sandbox. On darwin the
+roles run without a sandbox and say so once in the log. The sandbox is
+the next slice. Until then, the client's auto-install refuses hosts that
+are not Linux (`internal/client/upload.go`). So only a Mac with mosey
+installed by hand or by Nix runs the server. The server-side gates
+(`cmd/mosey/server.go`, `internal/server/launcher.go`) go away when the
+server works on macOS. The client runs on macOS already.
 
 ---
 
