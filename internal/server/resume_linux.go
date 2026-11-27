@@ -63,7 +63,7 @@ func (s *spawner) acceptLoop(accept func() (*os.File, error)) {
 // proto hears of it, and the credential proto mints for it (bootstrap.md
 // §9.2 step 3).
 func (s *spawner) serveResume(f *os.File) error {
-	if _, err := f.Write(bootstrap.MarshalSessionLine(s.greeting())); err != nil {
+	if err := ipc.WriteRecord(f, bootstrap.MarshalSessionLine(s.greeting())); err != nil {
 		return fmt.Errorf("sending the greeting: %w", err)
 	}
 	conn, err := ipc.NewConn(f, ipc.Spawner, ipc.Launcher)
