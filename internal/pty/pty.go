@@ -52,11 +52,13 @@ func Echoes(master *os.File) (bool, error) {
 
 // ForegroundRoot says whether the process at the keyboard of the pty whose
 // master this is runs as root: the leader of the slave's foreground
-// process group, read with TIOCGPGRP, has effective uid 0 in the Uid line
-// of /proc/PGID/status (screen.md §4.8, server.md §2.9). The leader is one
-// small file; every member of the group would be a walk of /proc. A
-// leader that is gone or hidden is not root: an unknown is never shown as
-// root. Outside Linux it returns errors.ErrUnsupported.
+// process group, read with TIOCGPGRP, has effective uid 0 (screen.md
+// §4.8, server.md §2.9). Linux reads the Uid line of /proc/PGID/status;
+// macOS reads the leader's kinfo_proc with sysctl kern.proc.pid. The
+// leader is one read; every member of the group would be a walk of all
+// processes. A leader that is gone or hidden is not root: an unknown is
+// never shown as root. Outside Linux and macOS it returns
+// errors.ErrUnsupported.
 func ForegroundRoot(master *os.File) (bool, error) {
 	return foregroundRoot(master)
 }

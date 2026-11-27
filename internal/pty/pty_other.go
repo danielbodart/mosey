@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package pty
 
@@ -8,9 +8,8 @@ import (
 	"syscall"
 )
 
-// The server is Linux-only for now. macOS is parked, not ruled out (D22):
-// its pty is /dev/ptmx with TIOCPTYGRANT, TIOCPTYUNLK and TIOCPTYGNAME
-// (server.md §10), and nothing above this layer assumes Linux.
+// The server runs on Linux and macOS. Nothing above this layer assumes
+// either (D22): another platform gets a pty file of its own.
 
 func open(Size) (*os.File, *os.File, error) { return nil, nil, errors.ErrUnsupported }
 

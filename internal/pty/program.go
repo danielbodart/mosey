@@ -16,8 +16,8 @@ type Program struct {
 
 // ForegroundGroup is the pty's foreground process group, read with
 // TIOCGPGRP through the master: the shell at its prompt, or the job the
-// shell gave the terminal to (an editor, claude). Outside Linux it returns
-// errors.ErrUnsupported.
+// shell gave the terminal to (an editor, claude). Outside Linux and macOS
+// it returns errors.ErrUnsupported.
 func ForegroundGroup(master *os.File) (int, error) {
 	return foregroundGroup(master)
 }
