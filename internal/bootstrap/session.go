@@ -5,6 +5,8 @@ import (
 	"net/netip"
 	"strconv"
 	"time"
+
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 // The attach socket's greeting (bootstrap.md §9.2.1): the first message a
@@ -14,7 +16,7 @@ import (
 // release reads every field it knows and skips the rest.
 const (
 	sessionMagic = "MOSEY-SESSION"
-	// MaxSessionLine bounds a greeting, LF included: at most 1917 bytes
+	// MaxSessionLine bounds a greeting, LF included: at most 1991 bytes
 	// are used (§9.2.1).
 	MaxSessionLine = 2048
 	// AttachProtocol is the one number of the attach protocol (server.md
@@ -71,8 +73,13 @@ type SessionLine struct {
 	Started, Since time.Time
 	State          SessionState
 	// Peer is the last attached client's address, or the zero AddrPort
-	// ("-") if none is known.
+	// if none is known.
 	Peer netip.AddrPort
+	// PeerHost is the name that client claimed for its machine (§6.2's
+	// host), or "" for none. It stands only beside Peer: Marshal leaves it
+	// out without one, or when it is not a hostname.ValidClaim, and the
+	// parser drops it in both cases.
+	PeerHost string
 	// Holder, when HasHolder, is the id of the credential that holds the
 	// session: the attached connection's, or a pending resume's (§9.2.1).
 	Holder    [CredentialIDSize]byte
@@ -101,7 +108,7 @@ type SessionLine struct {
 // times only describe.
 var sessionSpec = lineSpec{
 	"cmd": true, "cwd": false, "fg": false, "holder": true, "name": true,
-	"peer": false, "sid": true, "since": false, "started": false, "state": true,
+	"peer": false, "peer-host": false, "sid": true, "since": false, "started": false, "state": true,
 }
 
 // MarshalSessionLine is s as one line, LF included.
@@ -115,9 +122,7 @@ func MarshalSessionLine(s SessionLine) []byte {
 		w.addB64("holder", true, s.Holder[:])
 	}
 	w.add("name", true, s.Name)
-	if s.Peer.IsValid() {
-		w.add("peer", false, s.Peer.String())
-	}
+	addPeer(w, s.Peer, s.PeerHost)
 	w.addB64("sid", true, s.SessionID[:])
 	w.add("since", false, strconv.FormatInt(s.Since.Unix(), 10))
 	w.add("started", false, strconv.FormatInt(s.Started.Unix(), 10))
@@ -168,6 +173,7 @@ func ParseSessionLine(line []byte) (SessionLine, error) {
 			return SessionLine{}, err
 		}
 	}
+	s.PeerHost = optionalHost(&p, "peer-host", s.Peer.IsValid())
 	if f, err = p.mandatory("sid"); err != nil {
 		return SessionLine{}, err
 	}
@@ -274,6 +280,18 @@ func parseUnix(f []byte, what string) (time.Time, error) {
 	return time.Unix(n, 0), nil
 }
 
+// addPeer adds the peer and peer-host fields, which are adjacent in key
+// order: the address when known, and the claimed name only beside it.
+func addPeer(w *lineWriter, peer netip.AddrPort, host string) {
+	if !peer.IsValid() {
+		return
+	}
+	w.add("peer", false, peer.String())
+	if hostname.ValidClaim(host) {
+		w.add("peer-host", false, host)
+	}
+}
+
 // parsePeer reads a peer addrport: valid, with no zone, not 4-in-6, not
 // unspecified, and a non-zero port (§9.2.1, §9.4).
 func parsePeer(f []byte) (netip.AddrPort, error) {
@@ -292,7 +310,7 @@ func parsePeer(f []byte) (netip.AddrPort, error) {
 // the user's terminal but fields of a printable grammar (D9).
 const (
 	listMagic = "MOSEY-LIST"
-	// MaxListLine bounds a list line, LF included: at most 1842 bytes are
+	// MaxListLine bounds a list line, LF included: at most 1916 bytes are
 	// used (§9.4).
 	MaxListLine = 2048
 	// MaxListed is the most list lines the client shows [choice].
@@ -305,8 +323,11 @@ type ListLine struct {
 	State SessionState
 	Since time.Time
 	// Peer is the greeting's (§9.2.1): the last attached client's address,
-	// or the zero AddrPort if none is known.
-	Peer netip.AddrPort
+	// or the zero AddrPort if none is known. PeerHost is the name that
+	// client claimed, "" for none; as in the greeting, it stands only
+	// beside Peer.
+	Peer     netip.AddrPort
+	PeerHost string
 	// Command is the greeting's (§9.2.1): what the session was started
 	// with, or "" for none. The parser holds it to cmdtext, valid UTF-8
 	// with no control character but tab, but it is still the far side's
@@ -319,7 +340,7 @@ type ListLine struct {
 
 // listSpec is the list line's fields (§9.4): the list is only shown, so
 // nothing in it is critical.
-var listSpec = lineSpec{"cmd": false, "cwd": false, "fg": false, "name": false, "peer": false, "since": false, "state": false}
+var listSpec = lineSpec{"cmd": false, "cwd": false, "fg": false, "name": false, "peer": false, "peer-host": false, "since": false, "state": false}
 
 // MarshalListLine is l as one line, LF included.
 func MarshalListLine(l ListLine) []byte {
@@ -329,9 +350,7 @@ func MarshalListLine(l ListLine) []byte {
 	}
 	addDescription(w, l.Foreground, l.Cwd)
 	w.add("name", false, l.Name)
-	if l.Peer.IsValid() {
-		w.add("peer", false, l.Peer.String())
-	}
+	addPeer(w, l.Peer, l.PeerHost)
 	w.add("since", false, strconv.FormatInt(l.Since.Unix(), 10))
 	w.add("state", false, l.State.String())
 	return w.end()
@@ -371,6 +390,7 @@ func ParseListLine(line []byte) (ListLine, error) {
 			return ListLine{}, err
 		}
 	}
+	l.PeerHost = optionalHost(&p, "peer-host", l.Peer.IsValid())
 	if f, err = p.mandatory("state"); err != nil {
 		return ListLine{}, err
 	}

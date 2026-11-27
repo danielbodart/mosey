@@ -110,6 +110,7 @@ func TestAClientLineSurvivesARoundTrip(t *testing.T) {
 	for _, n := range EnvNames {
 		max.Env[n] = strings.Repeat("x", 64)
 	}
+	max.Host = maxHost
 	// A command and a type exclude each other.
 	maxCommand := max
 	maxCommand.Type, maxCommand.Command = "", strings.Repeat("c", MaxStartText)
@@ -128,11 +129,11 @@ func TestAClientLineSurvivesARoundTrip(t *testing.T) {
 	}
 	// The longest legal line is the size §6.2 derives: the type's key is
 	// a byte longer than the command's.
-	if n := len(MarshalClientLine(max)); n != 5833 {
-		t.Errorf("longest client line is %d bytes, §6.2 says 5833", n)
+	if n := len(MarshalClientLine(max)); n != 5902 {
+		t.Errorf("longest client line is %d bytes, §6.2 says 5902", n)
 	}
-	if n := len(MarshalClientLine(maxCommand)); n != 5832 {
-		t.Errorf("longest client line with a command is %d bytes, not 5832", n)
+	if n := len(MarshalClientLine(maxCommand)); n != 5901 {
+		t.Errorf("longest client line with a command is %d bytes, not 5901", n)
 	}
 }
 

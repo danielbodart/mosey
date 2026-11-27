@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 // ParseFrom takes an OSC 7 URI as shells write it, with the host the
@@ -92,7 +94,7 @@ func FuzzParseFrom(f *testing.F) {
 			}
 			return
 		}
-		if host != "" && (!validHostname(host) || strings.HasPrefix(host, "-")) {
+		if host != "" && (!hostname.Valid(host) || strings.HasPrefix(host, "-")) {
 			t.Fatalf("%q: host %q", uri, host)
 		}
 		if !ValidDir(dir) || !strings.HasPrefix(dir, "/") {

@@ -51,12 +51,13 @@ func TestTheLongestSessionLineFitsItsBound(t *testing.T) {
 	s.Command = strings.Repeat("é", MaxStartText/2)
 	s.Cwd = "~/" + strings.Repeat("d", MaxCwd-2)
 	s.Foreground = strings.Repeat("f", MaxForeground)
+	s.PeerHost = maxHost
 	line := MarshalSessionLine(s)
-	// 1917 with a 5-digit number (§9.2.1); 255 is three.
-	if len(line) != 1917-2 || len(line) > MaxSessionLine {
-		t.Fatalf("%d bytes, not the 1915 §9.2.1 derives for aproto 255, or over %d", len(line), MaxSessionLine)
+	// 1991 with a 5-digit number (§9.2.1); 255 is three.
+	if len(line) != 1991-2 || len(line) > MaxSessionLine {
+		t.Fatalf("%d bytes, not the 1989 §9.2.1 derives for aproto 255, or over %d", len(line), MaxSessionLine)
 	}
-	if got, err := ParseSessionLine(line); err != nil || got.Command != s.Command || got.Cwd != s.Cwd || got.Foreground != s.Foreground {
+	if got, err := ParseSessionLine(line); err != nil || got.Command != s.Command || got.Cwd != s.Cwd || got.Foreground != s.Foreground || got.PeerHost != maxHost {
 		t.Fatalf("%+v, %v", got, err)
 	}
 }
@@ -239,13 +240,14 @@ func TestAListLineRoundTripsAndFitsItsBound(t *testing.T) {
 	longest.Cwd = strings.Repeat("ü", MaxCwd/2)
 	longest.Foreground = strings.Repeat("f", MaxForeground)
 	longest.Peer = netip.MustParseAddrPort("[ffff:ffff:ffff:ffff:ffff:ffff:ffff:fffe]:65535")
+	longest.PeerHost = maxHost
 	line := MarshalListLine(longest)
 	if got, err := ParseListLine(line); err != nil || got != longest {
 		t.Errorf("%+v, %v", got, err)
 	}
-	// 1842 with a 5-digit number (§9.4); this one has one digit.
-	if n := len(line); n != 1842-4 || n > MaxListLine {
-		t.Errorf("the longest list line is %d bytes, §9.4 says 1838 for number 1", n)
+	// 1916 with a 5-digit number (§9.4); this one has one digit.
+	if n := len(line); n != 1916-4 || n > MaxListLine {
+		t.Errorf("the longest list line is %d bytes, §9.4 says 1912 for number 1", n)
 	}
 }
 
@@ -318,6 +320,10 @@ func FuzzParseListLine(f *testing.F) {
 	withCommand.Foreground, withCommand.Cwd = "claude", "~/Projects/mosey"
 	withCommand.Peer = netip.MustParseAddrPort("100.64.1.2:41234")
 	f.Add(MarshalListLine(withCommand))
+	withCommand.PeerHost = "desktop"
+	f.Add(MarshalListLine(withCommand))
+	f.Add([]byte("MOSEY-LIST 1 name=a peer=127.0.0.1:1 peer-host=-x since=1 state=new\n"))
+	f.Add([]byte("MOSEY-LIST 1 name=a peer-host=desktop since=1 state=new\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
 		l, err := ParseListLine(line)
 		if err != nil {
@@ -329,7 +335,10 @@ func FuzzParseListLine(f *testing.F) {
 		if len(line) > MaxListLine {
 			t.Fatalf("accepted %d bytes", len(line))
 		}
-		fuzzLine(t, line, MaxListLine, listMagic, false, listSpec, ParseListLine, MarshalListLine, l)
+		// A peer-host that is not a valid claim, or has no peer beside
+		// it, is dropped: the line is then canonical without it.
+		fuzzLine(t, withoutBadHost(line, "peer-host", true), MaxListLine, listMagic, false, listSpec, ParseListLine, MarshalListLine, l)
+		checkPeerHost(t, l.Peer, l.PeerHost)
 		for i := 0; i < len(l.Name); i++ {
 			if l.Name[i] <= ' ' || l.Name[i] > '~' {
 				t.Fatalf("accepted a name with byte 0x%02x: %q", l.Name[i], line)
@@ -357,6 +366,11 @@ func FuzzParseSessionLine(f *testing.F) {
 	f.Add(MarshalSessionLine(n))
 	n.Foreground, n.Cwd = "vim", "/srv/ü"
 	f.Add(MarshalSessionLine(n))
+	h := sampleSessionLine()
+	h.PeerHost = "blade"
+	f.Add(MarshalSessionLine(h))
+	f.Add([]byte(addField(string(MarshalSessionLine(n)), "peer-host=blade")))
+	f.Add([]byte(addField(string(MarshalSessionLine(sampleSessionLine())), "peer-host=a_b")))
 	f.Add([]byte(addField(string(MarshalSessionLine(n)), "later=1")))
 	f.Add([]byte(addField(string(MarshalSessionLine(n)), "!later=1")))
 	f.Add([]byte("MOSEY-SESSION 1.2.3 and more\n"))
@@ -377,7 +391,9 @@ func FuzzParseSessionLine(f *testing.F) {
 			}
 			return
 		}
-		fuzzLine(t, line, MaxSessionLine, sessionMagic, true, sessionSpec,
+		checkPeerHost(t, s.Peer, s.PeerHost)
+		// As in the list line, a bad peer-host is dropped.
+		fuzzLine(t, withoutBadHost(line, "peer-host", true), MaxSessionLine, sessionMagic, true, sessionSpec,
 			func(b []byte) (SessionLine, error) {
 				s, err := ParseSessionLine(b)
 				if s.Unknown != "" && err == nil {

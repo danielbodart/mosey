@@ -13,7 +13,7 @@ import (
 var clientPath = []string{
 	"client", "render", "screen", "terminal", "userinput", "predict",
 	"ssp", "transport", "handshake", "bootstrap", "nocore", "channel", "agent",
-	"startup",
+	"startup", "hostname",
 }
 
 // The client never parses a remote escape sequence (D9), so nothing on its

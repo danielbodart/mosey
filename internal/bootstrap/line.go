@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 // The three lines of bootstrap.md §6. Their sizes are fixed so that every
@@ -22,7 +24,7 @@ const (
 	// to 1 by Dan, 2026-11-17.
 	Version = 1
 	// MaxClientLine bounds the stdin line, LF included. The longest legal
-	// line is 5833 bytes (§6.2); this is the next power of two, so the
+	// line is 5902 bytes (§6.2); this is the next power of two, so the
 	// launcher's read bound is fixed and generous.
 	MaxClientLine = 8192
 	// MaxCredentialLine bounds the stdout line, LF included: at most 1853
@@ -159,6 +161,12 @@ type ClientLine struct {
 	// SHELL -c Command in place of the interactive shell; "" is none, and
 	// no field. Only a new session uses it; a resume ignores it.
 	Command string
+	// Host is the name the client claims for its own machine
+	// (hostname.Claim), or "" for none. It only describes: the server
+	// shows it beside the client's address, never alone (§6.2, §9.1).
+	// Marshal leaves out one that is not a hostname.ValidClaim, and the
+	// parser drops one, so a bad name is no name, never a refused line.
+	Host string
 }
 
 // CredentialLine is what the server prints on ssh's stdout (§6.3).
@@ -255,7 +263,7 @@ var b64 = base64.RawURLEncoding.Strict()
 // that does something else; cols, rows and env only describe the client.
 var clientSpec = lineSpec{
 	"agent": true, "attach": true, "cmd": true, "cols": false, "dir": true,
-	"env": false, "public": true, "rows": false, "type": true,
+	"env": false, "host": false, "public": true, "rows": false, "type": true,
 }
 
 // MarshalClientLine is c as one line, LF included, its fields in key
@@ -277,6 +285,9 @@ func MarshalClientLine(c ClientLine) []byte {
 	}
 	if len(c.Env) > 0 {
 		w.b = appendEnv(w.key("env", false), c.Env)
+	}
+	if hostname.ValidClaim(c.Host) {
+		w.add("host", false, c.Host)
 	}
 	w.addB64("public", true, c.Public)
 	w.add("rows", false, strconv.Itoa(int(c.Rows)))
@@ -329,8 +340,9 @@ func ParseClientLine(line []byte) (ClientLine, error) {
 		if c.Env, kept, err = parseEnv(f); err != nil {
 			return ClientLine{}, err
 		}
-		p.stripped = replaceEnv(p.stripped, f, kept)
+		p.stripped = replaceField(p.stripped, "env", f, kept)
 	}
+	c.Host = optionalHost(&p, "host", true)
 	if c.Dir, err = optionalText(p, "dir", ValidDir); err != nil {
 		return ClientLine{}, err
 	}
@@ -803,21 +815,40 @@ func validEnvName(n string) bool {
 // LC_IDENTIFICATION's 17 bytes, rounded up].
 const maxEnvName = 32
 
-// replaceEnv gives the stripped line with its env field's value f
-// replaced by kept, or the field left out if kept is empty. The field
-// occurs once, and no other field's value holds " env=" (§6.1's values
-// hold no space), so the cut is exact.
-func replaceEnv(stripped, f, kept []byte) []byte {
-	field := append([]byte(" env="), f...)
+// replaceField gives the stripped line with the value f of its field key,
+// a field that is not critical, replaced by kept, or the field left out if
+// kept is empty. The field occurs once, and no other field's value holds
+// " key=" (§6.1's values hold no space), so the cut is exact.
+func replaceField(stripped []byte, key string, f, kept []byte) []byte {
+	field := append([]byte(" "+key+"="), f...)
 	i := bytes.Index(stripped, field)
 	if i < 0 || bytes.Equal(f, kept) {
 		return stripped
 	}
 	out := append([]byte{}, stripped[:i]...)
 	if len(kept) > 0 {
-		out = append(append(out, " env="...), kept...)
+		out = append(append(out, " "+key+"="...), kept...)
 	}
 	return append(out, stripped[i+len(field):]...)
+}
+
+// optionalHost reads a claimed host name: §6.2's host, or §9.2.1's and
+// §9.4's peer-host, which may stand only beside a peer (allowed). Absent,
+// invalid or not allowed is "", and a present field that gives "" is cut
+// from the stripped line, so the line is canonical without it. A bad claim
+// degrades to no claim and never refuses the line: the field only
+// describes, and the address beside it is what was observed.
+func optionalHost(p *parsed, key string, allowed bool) string {
+	f, ok := p.known[key]
+	if !ok {
+		return ""
+	}
+	// ValidClaim checks the length before it looks at a byte.
+	if allowed && hostname.ValidClaim(string(f)) {
+		return string(f)
+	}
+	p.stripped = replaceField(p.stripped, key, f, nil)
+	return ""
 }
 
 // parseLineAddr reads the CredentialLine's addr: an address in exactly

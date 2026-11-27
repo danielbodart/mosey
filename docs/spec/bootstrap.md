@@ -1443,6 +1443,7 @@ client-line = "MOSEY-CLIENT" SP "1" *(SP field) LF     ; fields in key order
 | `cols` | `dec`, 1..65535 | mandatory | no | it describes the client's terminal. The server clamps it, and the client sends its size again as its first event |
 | `!dir` | `b64text` of a `dirtext` | optional | yes | it instructs: start here. If ignored, the next command the user types runs in another directory |
 | `env` | `var *("," var)` | optional | no | it describes the client's locale and terminal. A server that dropped it gives the shell the default locale |
+| `host` | `hostname` | optional | no | it describes the client's machine, for the takeover message and `-list` (§9.1, §9.4). A server that dropped it shows the client's address alone |
 | `!public` | `b64(1216)` | mandatory | yes | it authenticates: the client's one-shot X-Wing key (D20) |
 | `rows` | `dec`, 1..65535 | mandatory | no | as `cols` |
 | `!type` | `b64text` of a `typetext` | optional | yes | it instructs: type this into the new shell. If ignored, the session starts without what the user asked to run |
@@ -1469,6 +1470,8 @@ typetext = 1..1024 bytes of UTF-8, no control character (Unicode Cc) but TAB
 cmdtext = typetext
 fgtext  = 1..48 bytes of UTF-8, no control character (Unicode Cc)
 cwdtext = 1..192 bytes of UTF-8, no control character (Unicode Cc)
+hostname = label *("." label)       ; 1..63 bytes in all (RFC 1123 §2.1)
+label   = (ALPHA / DIGIT) [*(ALPHA / DIGIT / "-") (ALPHA / DIGIT)]
 ```
 
 | Field | Meaning |
@@ -1480,6 +1483,7 @@ cwdtext = 1..192 bytes of UTF-8, no control character (Unicode Cc)
 | `dir` | `-dir`: the directory where a new session's login shell starts. It is relative to the remote `$HOME` unless absolute (§9.2.3). If absent, the shell starts in `$HOME` (`server.md` §2.5). Only a session that the line creates uses it |
 | `type` | `-type`: the text typed into a new session's pty after its shell starts, followed by Enter (§9.2.3). Only a session that the line creates uses it |
 | `cmd` | the command after `DESTINATION` (§2), joined with spaces. It runs as `SHELL -c CMD` in place of the interactive shell (§9.2.3). Only a session that the line creates runs it. With `auto`, the launcher also matches a detached session on it (§9.2). A line with `cmd` and `type` is refused (`line`) |
+| `host` | the name that the client claims for its own machine (`hostname.Own`). It is `os.Hostname()` if that is a `hostname`. Else it is the first label, if that is one. Else the field is absent. The server keeps it with the attached client, next to the address it observed (§9.2.1). The name is a claim and the address is an observation, so mosey never shows the name without the address (§9.1, §9.4). **A `host` that is not a `hostname` is dropped**, as if absent, and the line is canonical without it. It never refuses the line, because the field only describes [D: Dan, 2026-11-27]. The bound is 63 bytes [D: one DNS label (RFC 1035 §2.3.4), so a first label always fits] |
 | `public` | the client's one-shot X-Wing encapsulation key, `OneShotKey.PublicKey()`, 1216 bytes [S1, measured from `crypto/hpke`] |
 
 `dir`, `type` and `cmd` are base64url because a path or a command holds
@@ -1510,11 +1514,11 @@ later release) refuses the line with `MOSEY-ERROR 1 !code=unsupported detail=KEY
 (§6.4). The client says `mosey: DEST's mosey can't do KEY yet`. A server
 never starts a session without doing what the line asked.
 
-Size: at most 5833 bytes from this build [derived: `MOSEY-CLIENT 1` 14; ` !agent=yes` 11;
+Size: at most 5902 bytes from this build [derived: `MOSEY-CLIENT 1` 14; ` !agent=yes` 11;
 ` !attach=` and the longest attach, `resume:SID:CREDID` at 41, 50;
 ` cols=` and ` rows=` 11 each; ` !dir=` 1372 (the base64url of 1024
 bytes is 1366); ` env=` 1359 (at most 1354: 167 bytes of names, 18 × 65
-for `=` and value, 17 commas); ` !public=` 1631; then either ` !type=`
+for `=` and value, 17 commas); ` host=` 69; ` !public=` 1631; then either ` !type=`
 1373 or ` !cmd=` 1372, never both; LF 1]. **`MaxClientLine` = 8192**
 [derived: the next power of two, so the server's read bound is fixed and
 generous, and over 2 KiB is left for fields a later release adds].
@@ -1527,7 +1531,7 @@ them first. On the line, the grammar is ours and the parser is fuzzed.
 Example (key shortened; `c3Jj` is `-dir src`):
 
 ```
-MOSEY-CLIENT 1 !attach=new cols=211 !dir=c3Jj env=COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256color !public=nW3b…Qe8 rows=58
+MOSEY-CLIENT 1 !attach=new cols=211 !dir=c3Jj env=COLORTERM=truecolor,LANG=en_GB.UTF-8,TERM=xterm-256color host=blade !public=nW3b…Qe8 rows=58
 ```
 
 ### 6.3 CredentialLine: server → client, on ssh's stdout
@@ -1978,10 +1982,18 @@ event, the kicked client restores the terminal and prints:
 
 ```
 mosey: session taken over from ADDR:PORT at 2026-11-14T09:30:12+00:00
+mosey: session taken over from NAME (ADDR) at 2026-11-14T09:30:12+00:00
 ```
 
-(`By` as `netip.AddrPort.String()`, `At` in the client's local zone as
-RFC 3339 to the second). Then it exits with status 3. It does not
+`By` is `netip.AddrPort.String()`. `At` is in the client's local zone,
+as RFC 3339 to the second. The second form is for a new client that
+claimed a name (§6.2 `host`; `transport.md` §8.3). NAME is that claim and
+ADDR is the address the server observed, without the port. The name
+tells the user which machine took the session, and the address tells
+them where it came from. A loopback ADDR shows the same way: it says
+that the new client runs on the session's own host [D: Dan, 2026-11-27].
+mosey never shows the name without the address, because nothing checks
+the name. Then it exits with status 3. It does not
 reconnect: this is the "cut off a stolen client" property of D26.
 
 **The limit of that message.** The kicked client learns of the takeover
@@ -2185,6 +2197,7 @@ aproto       = dec              ; the attach protocol the spawner speaks,
 | `!holder` | `b64(8)`: the credential id that holds the session | optional | yes | it restricts: R3 takes a session back only if this is its own credential (§9.2.2). If ignored, a reconnect could take a session from whoever took it over |
 | `!name` | `sname` (§6.2) | mandatory | yes | it selects: `-s NAME` and `-kill NAME` find the session by it |
 | `peer` | `addrport`: `netip.AddrPort.String()` of the last attached client, unmapped, no zone | optional | no | it describes, for the takeover message |
+| `peer-host` | `hostname` (§6.2): the name that the last attached client claimed (its `host`) | optional | no | it describes, for `-list`. It is present only with `peer`. A launcher that drops it loses only the name |
 | `!sid` | `b64(16)` | mandatory | yes | it selects: the session a resume names (`resume:SID`) |
 | `since` | `dec`: unix seconds of the last change of state | mandatory | no | it describes. R1 orders detached sessions by it, but never takes one it would not otherwise take |
 | `started` | `dec`: unix seconds the session started | mandatory | no | it describes |
@@ -2207,6 +2220,13 @@ reconnecting client gave (§9.2.2). `holder` is absent when the session is
 clear in msg1 (`transport.md` §3.4), and only the user's own processes
 can read a greeting. R3 uses it to tell "still held by me" from "held by
 someone else" (§9.2.2).
+
+`peer-host` is the `host` of the ClientLine whose credential made the
+attached connection. Proto learns it with the client's key (`server.md`
+§3.3 `Start`, `Resume`) and reports it with the address (`Attached`).
+A `peer-host` without a `peer`, or one that is not a `hostname`, is
+dropped as if absent. The greeting is canonical without it, and the
+launcher reads the rest of the greeting as usual.
 
 `cmd` is the `cmd` of the ClientLine that created the session, exactly as
 it came (§6.2, §9.2.3). It stays for the life of the session. `auto`
@@ -2252,10 +2272,10 @@ choose that session. If `name:NAME` or `resume:SID` names it, the
 launcher refuses as for another attach protocol, with `attach` and its
 own number on both sides.
 
-`MaxSessionLine` = 2048 bytes [derived: the longest greeting is 1917
+`MaxSessionLine` = 2048 bytes [derived: the longest greeting is 1991
 bytes: `MOSEY-SESSION` and 5 digits 19; ` !cmd=` 1372; ` cwd=` 261;
 ` fg=` 68; ` !holder=` 20;
-` !name=` 39; ` peer=` and 47, 53; ` !sid=` 28; ` since=` and
+` !name=` 39; ` peer=` and 47, 53; ` peer-host=` and 63, 74; ` !sid=` 28; ` since=` and
 ` started=` with the 12-digit bound on the times, 19 and 21; ` !state=`
 and `detached`, 16; LF; then the next power of two]. A seqpacket message
 of that size fits any socket buffer that the kernel gives.
@@ -2656,6 +2676,7 @@ list-line = "MOSEY-LIST" SP "1" *(SP field) LF     ; §6.1, fields in key order
 | `fg` | `b64text` of an `fgtext`: the greeting's `fg` | optional | no | as `cmd` |
 | `name` | `sname` | mandatory | no | as `cmd` |
 | `peer` | `addrport`: the greeting's `peer` | optional | no | as `cmd` |
+| `peer-host` | `hostname` (§6.2): the greeting's `peer-host`, only with `peer` | optional | no | as `cmd` |
 | `since` | `dec`: unix seconds of the last change of state | mandatory | no | as `cmd` |
 | `state` | `new` / `attached` / `detached` | mandatory | no | as `cmd` |
 
@@ -2668,8 +2689,8 @@ shell's chatter, §6.5). It parses each `MOSEY-LIST` line with
 `ParseListLine`. The parser is canonical and accepts at most
 `MaxListLine` = 2048 bytes [derived: `MOSEY-LIST` and 5 digits 16;
 ` cmd=` 1371; ` cwd=` 261; ` fg=` 68; ` name=` 38; ` peer=` 53;
-` since=` 19; ` state=` and `detached` 15; LF; 1842 in all; then the
-next power of two]. The parser is fuzzed, because a hostile server
+` peer-host=` 74; ` since=` 19; ` state=` and `detached` 15; LF; 1916
+in all; then the next power of two]. The parser is fuzzed, because a hostile server
 writes the line. The client shows at most `MaxListed` = 1024 lines
 [choice]. It does not show a line that does not parse, and it says how
 many lines it dropped.
@@ -2688,16 +2709,18 @@ reorder what it shows (D9).
 The command is the last column. It shows only when a session has a
 command, and is empty for a session that has none. The client shows
 `peer` as `PEER`: the IP address without port, for attached sessions
-only. It shows `fg` as `RUNNING`, cut to 16 runes, and `cwd` as `DIR`,
+only. With a `peer-host`, `PEER` is `NAME (ADDR)`, as in §9.1, loopback
+included. A `peer-host` that is not a `hostname`, or one with no `peer`,
+is dropped as in §9.2.1: the row stays. It shows `fg` as `RUNNING`, cut to 16 runes, and `cwd` as `DIR`,
 cut to its last 32 runes with `…` before [choice: a program's name whole
 and enough of a path's end to tell sessions apart, so a row stays one
 line]. Each is a column only when a session has it, so an older server's
 list lays out as before:
 
 ```
-NAME         STATE     SINCE                      PEER        RUNNING  DIR               COMMAND
-quiet-heron  detached  2026-11-14T09:30:12+00:00              bash     ~
-brave-otter  attached  2026-11-16T15:02:40+00:00  100.64.1.2  claude   ~/Projects/mosey  claude
+NAME         STATE     SINCE                      PEER                RUNNING  DIR               COMMAND
+quiet-heron  detached  2026-11-14T09:30:12+00:00                      bash     ~
+brave-otter  attached  2026-11-16T15:02:40+00:00  blade (100.64.1.2)  claude   ~/Projects/mosey  claude
 ```
 
 `SINCE` is in the client's local zone, as §9.1's times are. If there is
@@ -2781,6 +2804,7 @@ type ClientLine struct {
 	Dir, Type       string            // !dir, !type: "" is absent (§6.2, §9.2.3)
 	Public          []byte            // 1216 bytes
 	Command         string            // !cmd: "" is absent (§6.2, §9.2.3)
+	Host            string            // host: "" is absent; a bad one is dropped (§6.2)
 }
 
 // CredentialLine is §6.3. Marshal always writes the number Version.
@@ -2836,6 +2860,7 @@ type SessionLine struct {
 	State           SessionState // New, Attached, Detached
 	Since           time.Time
 	Peer            netip.AddrPort // the zero AddrPort is absent
+	PeerHost        string         // peer-host; "" is absent, and it needs Peer
 	Holder          [8]byte        // HasHolder false is absent
 	Command         string         // !cmd; "" is absent (§9.2.3)
 	Foreground, Cwd string         // fg, cwd; "" is absent
@@ -2857,6 +2882,8 @@ type ListLine struct {
 	Name    string
 	State   SessionState
 	Since   time.Time
+	Peer     netip.AddrPort // the zero AddrPort is absent
+	PeerHost string         // peer-host; "" is absent, and it needs Peer
 	Command string // cmd; "" is absent
 	Foreground, Cwd string // fg, cwd; "" is absent
 }
@@ -3013,7 +3040,7 @@ any held bytes, escaped.
 |---|---|---|
 | `bootstrap.Version` | 1 | ours (§6.1, `versioning.md` §5: the number names the lines' envelope only; reset from 2 by Dan, 2026-11-17) |
 | `MaxFields` (any line) | 32 | [choice] `versioning.md` §6 |
-| `MaxClientLine` | 8192 B | [derived] §6.2: at most 5833 B used |
+| `MaxClientLine` | 8192 B | [derived] §6.2: at most 5902 B used |
 | `-dir`, `-type` length | 1–1024 B each | [choice] §6.2: macOS `PATH_MAX`; a quarter of termios(3)'s 4096-byte canonical line |
 | `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1853 B used |
 | `MaxErrorLine` | 256 B, frozen | [choice] §6.4: at most 112 B used by its two fields |
@@ -3045,7 +3072,7 @@ any held bytes, escaped.
 | Default size when the terminal says 0 | 80×24 | [choice]; the VT100's |
 | stderr filter line cut | 1024 B | [choice] |
 | Taken-over exit status | 3 | ours |
-| `MaxSessionLine` | 2048 B | [derived] §9.2.1: at most 1917 B used |
+| `MaxSessionLine` | 2048 B | [derived] §9.2.1: at most 1991 B used |
 | `MaxForeground`, `MaxCwd` | 48 B, 192 B | [choice] §9.2.1: a program's name; a path's tail, the greeting under `MaxSessionLine` |
 | `bootstrap.AttachProtocol` | 1 | ours (§9.2.1, `server.md` §2.8, `versioning.md` §5: reset from 2 by Dan, 2026-11-17) |
 | Greeting deadline (launcher, lister) | 2 s per socket | [choice]: the spawner answers at once; a hung one is skipped, not waited on |
@@ -3058,7 +3085,8 @@ any held bytes, escaped.
 | `ReconnectTry` (one R3 try, to the dial) | 60 s | [D] §9.2.2: twice the credential TTL |
 | `IdleTimeout` (a detached session's shell is hung up) | 7 days | [D] Dan, 2026-11-15 (D8 R4); a constant (PLAN O14) |
 | `HangupGrace` (SIGHUP, then the teardown) | 10 s | [choice] §9.3 |
-| `MaxListLine`, `MaxListed` | 2048 B, 1024 lines | [derived] §9.4: at most 1842 B used; [choice] |
+| `MaxListLine`, `MaxListed` | 2048 B, 1024 lines | [derived] §9.4: at most 1916 B used; [choice] |
+| `hostname.Max` | 63 B | [D] §6.2 `host`: one DNS label (RFC 1035 §2.3.4) |
 | R3: no session | exit 1 | [choice] §9.2.2 |
 
 ---
@@ -3087,6 +3115,10 @@ any held bytes, escaped.
   - An empty value, a key outside the grammar, and a known field with the
     wrong `!` marking.
   - More than `MaxFields` fields.
+- A `host` or `peer-host` that is not a `hostname` (64 bytes, a leading
+  or trailing `-`, an `_`, an empty label), and a `peer-host` with no
+  `peer`: each is dropped, and the line parses as the line without it.
+  Marshal never writes one.
 - Must-ignore (`versioning.md` §7), on every line. An unknown field
   without `!` parses to exactly the same result as the line without it.
   An unknown field with `!` is refused as a `*CriticalError` that names it.
@@ -3205,6 +3237,10 @@ lands. Put the durations in the commit message. CI runs each for 10 s.
     rune by rune, checks this.
   - The seeds include lines with and without `cmd`, and credential lines
     with and without `existing`.
+  - No accepted ClientLine has a `host` that is not a `hostname`. A
+    line with a bad `host` re-marshals to the line without it. A
+    reference in the test, a regular expression and the 63-byte bound,
+    checks this.
 - `FuzzChooseAddr`: no panic. The result, if any, breaks no row of §7.2.
 - `FuzzReadCredential`: no panic. It reads at most
   `MaxPreamble + MaxCredentialLine` bytes. The result, if any, re-marshals
@@ -3220,7 +3256,10 @@ lands. Put the durations in the commit message. CI runs each for 10 s.
 - `FuzzParseSessionLine`: no panic. Each accepted line re-marshals to the
   identical bytes, less its unknown fields. Its `cmd`, if any, is a
   `cmdtext`, its `fg` an `fgtext` and its `cwd` a `cwdtext`. The seeds
-  include lines with and without each.
+  include lines with and without each. Its `peer-host`, if any, is a
+  `hostname` beside a `peer`. A bad one is dropped, and the line
+  re-marshals to the line without it.
+- `FuzzParseListLine`: as `FuzzParseSessionLine` for `peer-host`.
 - `FuzzParseListLine`: no panic. Each accepted line re-marshals to the
   identical bytes, less its unknown fields. Every field other than `cmd`
   is printable ASCII with no space. `cmd` is a `cmdtext`, `fg` an

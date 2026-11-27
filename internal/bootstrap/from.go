@@ -3,6 +3,8 @@ package bootstrap
 import (
 	"net/url"
 	"strings"
+
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 // FromVar names the environment variable through which a terminal tells a
@@ -31,7 +33,7 @@ func ParseFrom(uri string) (host, dir string, ok bool) {
 		return "", "", false
 	}
 	host, path, found := strings.Cut(rest[2:], "/")
-	if !found || (host != "" && !validHostname(host)) {
+	if !found || (host != "" && !hostname.Valid(host)) {
 		return "", "", false
 	}
 	// A query or a fragment is not part of a directory (RFC 3986 §3.4,
@@ -44,27 +46,6 @@ func ParseFrom(uri string) (host, dir string, ok bool) {
 		return "", "", false
 	}
 	return host, dir, true
-}
-
-// validHostname says whether h is a hostname (RFC 1123 §2.1): 1 to 253
-// bytes of dot-separated labels, each 1 to 63 letters, digits and '-', not
-// starting or ending with '-'.
-func validHostname(h string) bool {
-	if len(h) < 1 || len(h) > 253 {
-		return false
-	}
-	for label := range strings.SplitSeq(h, ".") {
-		if len(label) < 1 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for i := 0; i < len(label); i++ {
-			c := label[i]
-			if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-') {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // SameHost says whether host, from a MOSEY_FROM URI, names this machine,

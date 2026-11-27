@@ -106,6 +106,9 @@ func FuzzParseClientLine(f *testing.F) {
 	f.Add(MarshalClientLine(r))
 	f.Add([]byte(addField(string(MarshalClientLine(r)), "later=1")))
 	f.Add([]byte(addField(string(MarshalClientLine(r)), "!later=1")))
+	r.Host = "blade.lan"
+	f.Add(MarshalClientLine(r))
+	f.Add([]byte(addField(string(MarshalClientLine(sampleClientLine())), "host=bad_name")))
 	f.Add([]byte("MOSEY-CLIENT 1 !attach=new cols=80 rows=24 !public=AAAA\n"))
 	f.Add([]byte("MOSEY-CLIENT 2\n"))
 	f.Fuzz(func(t *testing.T, line []byte) {
@@ -117,12 +120,16 @@ func FuzzParseClientLine(f *testing.F) {
 			return
 		}
 		// An env entry with a name the parser does not know is skipped as
-		// an unknown field is: the line is then canonical without it.
-		known := withoutUnknownEnv(line)
-		if !bytes.Equal(MarshalClientLine(c), withoutUnknownEnv(knownFields(t, line, MaxClientLine, clientMagic, clientSpec))) {
+		// an unknown field is, and a host that is not a valid claim is
+		// dropped: the line is then canonical without them.
+		known := withoutBadHost(withoutUnknownEnv(line), "host", false)
+		if !bytes.Equal(MarshalClientLine(c), withoutBadHost(withoutUnknownEnv(knownFields(t, line, MaxClientLine, clientMagic, clientSpec)), "host", false)) {
 			t.Fatalf("accepted %q, which re-marshals to %q", line, MarshalClientLine(c))
 		}
 		fuzzLine(t, known, MaxClientLine, clientMagic, false, clientSpec, ParseClientLine, MarshalClientLine, c)
+		if c.Host != "" && (len(c.Host) > 63 || !referenceClaim.MatchString(c.Host)) {
+			t.Fatalf("accepted host %q", c.Host)
+		}
 		if c.Cols == 0 || c.Rows == 0 || len(c.Public) != PublicKeySize {
 			t.Fatalf("accepted %+v", c)
 		}
