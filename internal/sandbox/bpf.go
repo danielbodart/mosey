@@ -134,10 +134,13 @@ const (
 // (S4 §3.3), as server.md §6.3 lists it. exit was never traced but is how a
 // thread ends when its goroutine exits locked to it (runtime.exitThread);
 // pread64 appears only under a CPU quota, when updatemaxprocs re-reads the
-// cgroup's cpu.max (S4 §3.5: the soak that found it).
+// cgroup's cpu.max (S4 §3.5: the soak that found it). restart_syscall was
+// never traced either: it is how the kernel goes on with a sleep that a
+// stop interrupted, and the freezer stops every task at suspend, so
+// without it every session died when the machine woke.
 var runtimeSyscalls = []string{
 	"mmap", "munmap", "madvise",
-	"futex", "sched_yield", "nanosleep", "gettid", "getpid",
+	"futex", "sched_yield", "nanosleep", "restart_syscall", "gettid", "getpid",
 	"sigaltstack", "rt_sigaction", "rt_sigprocmask", "rt_sigreturn",
 	"exit", "exit_group",
 	"sched_getaffinity", "pread64",

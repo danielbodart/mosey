@@ -1407,7 +1407,7 @@ Go 1.27 with `CGO_ENABLED=0` after start-up (S4 §3.3):
 
 ```
 mmap munmap madvise
-clone(CLONE_THREAD) futex sched_yield nanosleep gettid getpid
+clone(CLONE_THREAD) futex sched_yield nanosleep restart_syscall gettid getpid
 tgkill(own pid)
 sigaltstack rt_sigaction rt_sigprocmask rt_sigreturn
 exit exit_group
@@ -1428,7 +1428,10 @@ exits locked to it (`runtime.exitThread`); `pread64` appears only under a
 CPU quota, where Go's `updatemaxprocs` re-reads the cgroup's `cpu.max`
 (about every 60 s idle, every second busy), which is why strace without
 a quota missed it and only a soak under `CPUQuota` found it (S4 §3.3,
-§3.5).
+§3.5). `restart_syscall` was not traced either. The kernel uses it to
+continue a sleep that a stop interrupted (SIGSTOP, or the freezer at
+suspend). Without it, every session died when the machine woke from
+suspend.
 
 | role | adds | why |
 |---|---|---|

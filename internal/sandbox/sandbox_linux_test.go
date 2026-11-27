@@ -45,6 +45,7 @@ var children = map[string]func() error{
 	"counter":     childCounter,
 	"preemption":  childPreemption,
 	"socket-kill": childSignalsKill,
+	"stopped":     childStopped,
 }
 
 // child starts scenario in a copy of the test binary.
@@ -474,5 +475,71 @@ func TestSyscallTableMatchesTheHost(t *testing.T) {
 				t.Errorf("%s policy names %s, which %s has no number for", role, name, arch)
 			}
 		}
+	}
+}
+
+// childStopped sleeps in nanosleep(2) under Kill on a thread of its own,
+// after it writes that thread's id for the parent to stop it by.
+func childStopped() error {
+	runtime.LockOSThread()
+	if err := Enter(Emu, Kill, Params{}, nil); err != nil {
+		return err
+	}
+	fmt.Println(unix.Gettid())
+	ts := unix.NsecToTimespec(int64(time.Second))
+	return unix.Nanosleep(&ts, nil)
+}
+
+// A sleep that a stop interrupts goes on with restart_syscall(2), not with
+// the call itself. The freezer stops every task at suspend in the same
+// way, and a filter without restart_syscall killed every session when the
+// machine woke.
+func TestASleepInterruptedByAStopGoesOnUnderKill(t *testing.T) {
+	requireSeccomp(t)
+	cmd := child(t, "stopped")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(out).ReadString('\n')
+	if err != nil {
+		cmd.Process.Kill()
+		t.Fatalf("reading the child's thread id: %v\n%s", err, cmd.Stderr)
+	}
+	tid := strings.TrimSpace(line)
+	// The sandbox makes the child non-dumpable, which closes
+	// /proc/PID/task/TID/syscall to the parent; stat stays open. After its
+	// id the thread makes no call but nanosleep, so asleep is in it.
+	pid := strconv.Itoa(cmd.Process.Pid)
+	waitForState(t, filepath.Join("/proc", pid, "task", tid, "stat"), "S")
+	if err := cmd.Process.Signal(unix.SIGSTOP); err != nil {
+		t.Fatal(err)
+	}
+	waitForState(t, filepath.Join("/proc", pid, "stat"), "T")
+	if err := cmd.Process.Signal(unix.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("stopped: %v, want a clean exit\n%s", err, cmd.Stderr)
+	}
+}
+
+// waitForState waits until the stat file at path shows state, the field
+// after the command's closing bracket.
+func waitForState(t *testing.T, path, state string) {
+	t.Helper()
+	for {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		rest := string(b[strings.LastIndexByte(string(b), ')')+1:])
+		if f := strings.Fields(rest); len(f) > 0 && f[0] == state {
+			return
+		}
+		runtime.Gosched()
 	}
 }
