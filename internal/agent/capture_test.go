@@ -200,12 +200,13 @@ func TestTheCaptureDirectoryFollowsTheRuntimeDirectory(t *testing.T) {
 	}
 }
 
-// shortDir is a fresh directory with a short path: a unix socket's path
-// must fit in sun_path's 108 bytes, which t.TempDir's long names can
-// exceed.
+// shortDir is a fresh directory under /tmp, not $TMPDIR: a unix socket's
+// path must fit in sun_path (108 bytes on Linux, 104 on macOS). On macOS
+// $TMPDIR is so long that a capture socket's path does not fit
+// (server.md §10 [M]).
 func shortDir(t *testing.T) string {
 	t.Helper()
-	d, err := os.MkdirTemp("", "mc")
+	d, err := os.MkdirTemp("/tmp", "mc")
 	if err != nil {
 		t.Fatal(err)
 	}
