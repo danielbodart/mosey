@@ -15,7 +15,8 @@ import (
 const (
 	// MaxFields bounds the fields of any line, known or not, so that a
 	// line of unknown fields costs no more to read than a known one
-	// [choice: over three times the nine any line defines].
+	// [choice: almost three times the eleven a greeting defines, the most
+	// any line has].
 	MaxFields = 32
 	// maxKey bounds a key, without its "!".
 	maxKey = 16
