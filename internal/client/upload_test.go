@@ -211,7 +211,7 @@ func TestUploadYesNeitherAsksNorRemembers(t *testing.T) {
 
 func TestAHostWithNoServerBuildIsToldSo(t *testing.T) {
 	for p, says := range map[bootstrap.ProbeLine]string{
-		{System: "Darwin", Machine: "arm64"}:   "runs on Linux only for now, and far is Darwin",
+		{System: "Darwin", Machine: "arm64"}:   "copies its server only to Linux for now, and far is Darwin",
 		{System: "FreeBSD", Machine: "amd64"}:  "far is FreeBSD amd64, which mosey has no build for",
 		{System: "Linux", Machine: "armv7l"}:   "far is Linux armv7l, which mosey has no build for",
 		{System: "Android", Machine: "x86_64"}: "far is Android x86_64, which mosey has no build for",

@@ -183,7 +183,10 @@ It asks first. mosey uses a `mosey` in a different location on the
 - `-remote PATH` runs that binary on the host and copies nothing.
 - A development build (`dev`, or a local build) can copy only itself.
   Thus it can copy only to a host of its own platform.
-- At this time, the server operates only on Linux.
+- The client copies the server only to a Linux host. The server
+  also operates on macOS, but without a sandbox at this time. Thus
+  install it on a Mac yourself (Nix, or a release binary at
+  `~/.local/bin/mosey`) if you accept that.
 
 For the details and the threats that this does and does not stop, refer
 to [spec/bootstrap.md §4.7](spec/bootstrap.md) and
