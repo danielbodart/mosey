@@ -36,7 +36,8 @@ CI does the steps above for each push. It also runs:
 - each fuzz target for 10 seconds, in four shards,
 - the slow tests,
 - 150-second soak tests of the server with its seccomp `KILL` policy on
-  amd64 and arm64.
+  amd64 and arm64,
+- the tests of all packages on macOS 15, arm64.
 
 A release needs all jobs to pass. A newer push to trunk cancels the tests
 of the older run. It never cancels a release that is in progress. The

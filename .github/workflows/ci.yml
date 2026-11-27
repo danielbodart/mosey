@@ -268,6 +268,36 @@ jobs:
           TEST: ${{ matrix.test }}
         run: mise exec -- scripts/soak.sh --scope --test "$TEST" 150s
 
+  # Every package's tests on a real Mac (D22, server.md §10): the pty, the
+  # framed attach socket, the spawner, the Seatbelt sandbox and the
+  # macOS-only paths in the agent and the client, which vet for darwin in
+  # check compiles but never runs. Static, as a release builds them (D1;
+  # mise.toml sets CGO_ENABLED=0), so sandbox_init is reached as released,
+  # through cgo_import_dynamic. macos-15 on arm64 is the macOS the sandbox
+  # profiles were measured on (dan-mac, 15.7); macos-latest moves.
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      - id: go
+        run: |
+          {
+            echo "version=$(mise exec -- go env GOVERSION)"
+            echo "build=$(mise exec -- go env GOCACHE)"
+            echo "mod=$(mise exec -- go env GOMODCACHE)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go.outputs.build }}
+            ${{ steps.go.outputs.mod }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-test-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-test-
+            go-${{ runner.os }}-${{ runner.arch }}-${{ steps.go.outputs.version }}-
+      - run: mise run test
+
   # Static binaries for every platform a release ships for (D1, D10), kept
   # as the run's artifacts whether or not the commit is released: one job
   # cross-compiles all five (each took longer to start than to build), and
@@ -478,7 +508,7 @@ jobs:
   # which never moves a tag, or at gh release create, which never
   # overwrites a release.
   release:
-    needs: [check, race, fuzz-targets, fuzz, kill-soak, build, nix]
+    needs: [check, race, fuzz-targets, fuzz, kill-soak, macos, build, nix]
     if: >-
       always()
       && github.event_name != 'pull_request' && github.ref == 'refs/heads/trunk'
