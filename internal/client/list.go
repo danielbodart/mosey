@@ -113,7 +113,7 @@ func List(ctx context.Context, o ListOptions) error {
 	// (bootstrap.md §9.4).
 	attachedPeer := func(r bootstrap.ListLine) string {
 		if r.State == bootstrap.SessionAttached && r.Peer.IsValid() {
-			return hostname.Label(r.PeerHost, r.Peer.Addr().String())
+			return hostname.Label(r.PeerHost, shownAddr(r.Peer.Addr()))
 		}
 		return ""
 	}

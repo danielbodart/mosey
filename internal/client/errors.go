@@ -52,7 +52,7 @@ func (e *TakenOverError) Error() string {
 	// and a claimed name goes only with the address the server saw,
 	// loopback included: that says the new client is on the session's
 	// own host (bootstrap.md §9.1).
-	return fmt.Sprintf("session taken over from %s at %s", hostname.Label(e.Host, e.By.Addr().String()), at)
+	return fmt.Sprintf("session taken over from %s at %s", hostname.Label(e.Host, shownAddr(e.By.Addr())), at)
 }
 
 // DetachedError is this client going away while the session runs on (D8,

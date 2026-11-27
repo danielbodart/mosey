@@ -1986,7 +1986,23 @@ mosey: session taken over from NAME (ADDR) at 2026-11-14T09:30:12+00:00
 ```
 
 ADDR is the address of `By`, without the port: the port tells the user
-nothing [D: Dan, 2026-11-27]. `At` is in the client's local zone,
+nothing [D: Dan, 2026-11-27]. An IPv4 ADDR shows in full. An IPv6 ADDR
+starts as its RFC 5952 form. If that form writes four groups or fewer,
+ADDR is that form: `2001:db8::1` stays as it is. Otherwise ADDR is the
+form up to the end of its 2nd written group, `…`, and the form from the
+start of its 2nd-last written group. That is four groups, as in IPv4 [D:
+Dan, 2026-11-27]. The first two groups give the network, and the last two
+tell hosts apart. The cut works on the text, so a `::` in a kept part
+stays and no collapsed zero comes back:
+
+| RFC 5952 form | ADDR |
+|---|---|
+| `2a02:c7c:5a1b:e600:5e1f:9aff:fe3b:12cd` | `2a02:c7c…fe3b:12cd` |
+| `fe80::5e1f:9aff:fe3b:12cd` | `fe80::5e1f…fe3b:12cd` |
+| `2001:db8:0:1:2::` | `2001:db8…1:2::` |
+
+The cut form is at most 21 characters. The log keeps the full address.
+`At` is in the client's local zone,
 as RFC 3339 to the second. The second form is for a new client that
 claimed a name (§6.2 `host`; `transport.md` §8.3). NAME is that claim and
 ADDR is the address the server observed, without the port. The name
@@ -2709,8 +2725,8 @@ reorder what it shows (D9).
 
 The command is the last column. It shows only when a session has a
 command, and is empty for a session that has none. The client shows
-`peer` as `PEER`: the IP address without port, for attached sessions
-only. With a `peer-host`, `PEER` is `NAME (ADDR)`, as in §9.1, loopback
+`peer` as `PEER`: the IP address without port, shortened as in §9.1,
+for attached sessions only. With a `peer-host`, `PEER` is `NAME (ADDR)`, as in §9.1, loopback
 included. A `peer-host` that is not a `hostname`, or one with no `peer`,
 is dropped as in §9.2.1: the row stays. It shows `fg` as `RUNNING`, cut to 16 runes, and `cwd` as `DIR`,
 cut to its last 32 runes with `…` before [choice: a program's name whole
