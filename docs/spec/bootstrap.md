@@ -1452,11 +1452,13 @@ attach  = "auto"                    ; R1: the newest detached session started wi
         / "resume:" b64(16)         ; launcher → attach socket: take over session SID
           [":" b64(8)]              ; R3: ... only if it is detached or held by this credential
 sname   = (ALPHA / DIGIT) 0*31(ALPHA / DIGIT / "-" / "_" / ".")
-var     = name "=" 1*64vchar        ; names strictly ascending (byte order), no repeats
+var     = ename "=" 1*64vchar       ; names strictly ascending (byte order), no repeats
+ename   = UPALPHA 0*31(UPALPHA / DIGIT / "_")   ; a name not in the list below is skipped
 name    = "COLORTERM" / "LANG" / "LANGUAGE" / "LC_ADDRESS" / "LC_ALL"
         / "LC_COLLATE" / "LC_CTYPE" / "LC_IDENTIFICATION" / "LC_MEASUREMENT"
         / "LC_MESSAGES" / "LC_MONETARY" / "LC_NAME" / "LC_NUMERIC"
-        / "LC_PAPER" / "LC_TELEPHONE" / "LC_TIME" / "TERM"
+        / "LC_PAPER" / "LC_TELEPHONE" / "LC_TIME" / "TERM" / "VTE_VERSION"
+UPALPHA = %x41-5A                   ; A-Z
 vchar   = ALPHA / DIGIT / "." / "_" / "@" / ":" / "+" / "-"
 b64text = base64url, no padding, of 1..1024 bytes
 dirtext = 1..1024 bytes of UTF-8, no control character (Unicode Cc)
@@ -1471,7 +1473,7 @@ cwdtext = 1..192 bytes of UTF-8, no control character (Unicode Cc)
 | `attach` | which session (D8, §9.2). `auto` for a plain `mosey DEST` or `mosey DEST COMMAND`. `new` for `-new`. `name:NAME` for `-s NAME`. `resume:SID:CREDID` for R3's background reconnect: it names the session and the credential this client last held it with. `new:NAME` and `resume:SID` are what the launcher hands the session's spawner after it chooses (§9.2). A reconnect's CREDID stays (§9.2.2). A launcher refuses `new:NAME` from a client with `line`. The all-zero SID is refused: no session has it |
 | `agent` | whether the client will forward an agent (D25). The server needs it at spawn time to give the shell an `SSH_AUTH_SOCK` (`agent.md` §4.1). For `new` and resume alike, the server also needs it to trigger ssh's bind (§8) |
 | `cols`, `rows` | the size of the client's terminal. A terminal that reports 0 is sent as 80×24. The server clamps it (D23, `screen.ClampSize`). The client sends its size again as the first userinput event after it connects, in case the size changed during the bootstrap |
-| `env` | the client's locale and terminal variables, from the allow-list only. A variable is left out (logged at debug), never escaped, if it is unset, empty, longer than 64 bytes, or holds a byte outside `vchar`. If no variable remains, the field is absent. The server gives the locale variables to the shell. `server.md` defines what the server does with `TERM` and `COLORTERM` (the shell's `TERM` describes the server's emulator, not the client's terminal) |
+| `env` | the client's locale and terminal variables, from the allow-list (`name`) only. A variable is left out (logged at debug), never escaped, if it is unset, empty, longer than 64 bytes, or holds a byte outside `vchar`. If no variable remains, the field is absent. The server gives the locale variables to the shell. `server.md` defines what the server does with `TERM`, `COLORTERM` and `VTE_VERSION` (the shell's `TERM` describes the server's emulator, not the client's terminal). **An entry whose `ename` is not in the list is skipped**, as an unknown field is (`versioning.md` §2). It must still be a valid `var` in its place in the order, so it is bounded. The line is canonical without it. Thus a later client can add a variable, and an older server gives the shell the rest [D: Dan, 2026-11-27] |
 | `dir` | `-dir`: the directory where a new session's login shell starts. It is relative to the remote `$HOME` unless absolute (§9.2.3). If absent, the shell starts in `$HOME` (`server.md` §2.5). Only a session that the line creates uses it |
 | `type` | `-type`: the text typed into a new session's pty after its shell starts, followed by Enter (§9.2.3). Only a session that the line creates uses it |
 | `cmd` | the command after `DESTINATION` (§2), joined with spaces. It runs as `SHELL -c CMD` in place of the interactive shell (§9.2.3). Only a session that the line creates runs it. With `auto`, the launcher also matches a detached session on it (§9.2). A line with `cmd` and `type` is refused (`line`) |
@@ -1505,11 +1507,11 @@ later release) refuses the line with `MOSEY-ERROR 1 !code=unsupported detail=KEY
 (§6.4). The client says `mosey: DEST's mosey can't do KEY yet`. A server
 never starts a session without doing what the line asked.
 
-Size: at most 5756 bytes [derived: `MOSEY-CLIENT 1` 14; ` !agent=yes` 11;
+Size: at most 5833 bytes from this build [derived: `MOSEY-CLIENT 1` 14; ` !agent=yes` 11;
 ` !attach=` and the longest attach, `resume:SID:CREDID` at 41, 50;
 ` cols=` and ` rows=` 11 each; ` !dir=` 1372 (the base64url of 1024
-bytes is 1366); ` env=` 1282 (at most 1277: 156 bytes of names, 17 × 65
-for `=` and value, 16 commas); ` !public=` 1631; then either ` !type=`
+bytes is 1366); ` env=` 1359 (at most 1354: 167 bytes of names, 18 × 65
+for `=` and value, 17 commas); ` !public=` 1631; then either ` !type=`
 1373 or ` !cmd=` 1372, never both; LF 1]. **`MaxClientLine` = 8192**
 [derived: the next power of two, so the server's read bound is fixed and
 generous, and over 2 KiB is left for fields a later release adds].
@@ -3008,7 +3010,7 @@ any held bytes, escaped.
 |---|---|---|
 | `bootstrap.Version` | 1 | ours (§6.1, `versioning.md` §5: the number names the lines' envelope only; reset from 2 by Dan, 2026-11-17) |
 | `MaxFields` (any line) | 32 | [choice] `versioning.md` §6 |
-| `MaxClientLine` | 8192 B | [derived] §6.2: at most 5756 B used |
+| `MaxClientLine` | 8192 B | [derived] §6.2: at most 5833 B used |
 | `-dir`, `-type` length | 1–1024 B each | [choice] §6.2: macOS `PATH_MAX`; a quarter of termios(3)'s 4096-byte canonical line |
 | `MaxCredentialLine` | 2048 B | [derived] §6.3: at most 1853 B used |
 | `MaxErrorLine` | 256 B, frozen | [choice] §6.4: at most 112 B used by its two fields |
@@ -3072,7 +3074,8 @@ any held bytes, escaped.
 - Each rule of §6.1, broken one time:
   - CR, double space, trailing space, padding, non-zero trailing bits,
     wrong decoded length, leading zero, `0` cols, 65536.
-  - An unknown env name, and unsorted or repeated names.
+  - An env name that is not an `ename`, and unsorted or repeated names,
+    known or not. An unknown `ename` is skipped, and the rest applies.
   - `::ffff:` and zoned addresses, and `0.0.0.0`, `::`, `224.0.0.1`,
     `ff02::1` and `255.255.255.255` as `addr`.
   - A wrong number (the error carries the number).

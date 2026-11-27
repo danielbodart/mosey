@@ -22,7 +22,7 @@ const (
 	// to 1 by Dan, 2026-11-17.
 	Version = 1
 	// MaxClientLine bounds the stdin line, LF included. The longest legal
-	// line is 5756 bytes (§6.2); this is the next power of two, so the
+	// line is 5833 bytes (§6.2); this is the next power of two, so the
 	// launcher's read bound is fixed and generous.
 	MaxClientLine = 8192
 	// MaxCredentialLine bounds the stdout line, LF included: at most 1853
@@ -116,15 +116,17 @@ func ValidSessionName(n string) bool {
 	return true
 }
 
-// EnvNames are the only variables a ClientLine may carry (§6.2), in byte
-// order, which is the order they must appear in on the line. The server
-// gives the locale to the shell; TERM and COLORTERM describe the client's
-// terminal, and what the server does with them is server.md's.
+// EnvNames are the variables a ClientLine carries (§6.2), in byte order,
+// which is the order they must appear in on the line. The server gives
+// the locale to the shell; TERM, COLORTERM and VTE_VERSION describe the
+// client's terminal, and what the server does with them is server.md's.
+// A parser skips an env entry whose name is not here (versioning.md §2),
+// so a later build can add a name without a new protocol number.
 var EnvNames = []string{
 	"COLORTERM", "LANG", "LANGUAGE", "LC_ADDRESS", "LC_ALL",
 	"LC_COLLATE", "LC_CTYPE", "LC_IDENTIFICATION", "LC_MEASUREMENT",
 	"LC_MESSAGES", "LC_MONETARY", "LC_NAME", "LC_NUMERIC",
-	"LC_PAPER", "LC_TELEPHONE", "LC_TIME", "TERM",
+	"LC_PAPER", "LC_TELEPHONE", "LC_TIME", "TERM", "VTE_VERSION",
 }
 
 // ClientLine is what the client writes to ssh's stdin (§6.2). Marshal
@@ -323,9 +325,11 @@ func ParseClientLine(line []byte) (ClientLine, error) {
 		return ClientLine{}, err
 	}
 	if f, ok := p.known["env"]; ok {
-		if c.Env, err = parseEnv(f); err != nil {
+		var kept []byte
+		if c.Env, kept, err = parseEnv(f); err != nil {
 			return ClientLine{}, err
 		}
+		p.stripped = replaceEnv(p.stripped, f, kept)
 	}
 	if c.Dir, err = optionalText(p, "dir", ValidDir); err != nil {
 		return ClientLine{}, err
@@ -745,27 +749,75 @@ func appendEnv(b []byte, env map[string]string) []byte {
 	return b
 }
 
-func parseEnv(f []byte) (map[string]string, error) {
-	env := map[string]string{}
+// parseEnv reads the env field (§6.2). An entry whose name is not in
+// EnvNames is skipped, as an unknown field is (versioning.md §2), but it
+// must still have a valid name and value and keep the order, so it is
+// bounded and the line stays canonical. kept is the field without the
+// skipped entries, "" if none is left: what the marshaller gives back.
+func parseEnv(f []byte) (env map[string]string, kept []byte, err error) {
+	env = map[string]string{}
 	last := ""
 	for _, v := range bytes.Split(f, []byte(",")) {
 		name, value, ok := bytes.Cut(v, []byte("="))
 		if !ok {
-			return nil, badLine("env entry %q has no =", v)
+			return nil, nil, badLine("env entry %q has no =", v)
 		}
 		n := string(name)
-		if _, known := slices.BinarySearch(EnvNames, n); !known {
-			return nil, badLine("env name %q is not allowed", name)
+		if !validEnvName(n) {
+			return nil, nil, badLine("env name %q", name)
 		}
 		if n <= last {
-			return nil, badLine("env name %q out of order", name)
+			return nil, nil, badLine("env name %q out of order", name)
 		}
 		if !ValidEnvValue(string(value)) {
-			return nil, badLine("env value for %s", name)
+			return nil, nil, badLine("env value for %s", name)
 		}
-		env[n], last = string(value), n
+		last = n
+		if _, known := slices.BinarySearch(EnvNames, n); !known {
+			continue
+		}
+		env[n] = string(value)
+		if len(kept) > 0 {
+			kept = append(kept, ',')
+		}
+		kept = append(kept, v...)
 	}
-	return env, nil
+	return env, kept, nil
+}
+
+// validEnvName is §6.2's ename: an upper-case letter, then up to 31
+// upper-case letters, digits and '_'. Every name in EnvNames is one.
+func validEnvName(n string) bool {
+	if len(n) < 1 || len(n) > maxEnvName || n[0] < 'A' || n[0] > 'Z' {
+		return false
+	}
+	for i := 0; i < len(n); i++ {
+		if c := n[i]; !(c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// maxEnvName bounds an env name [choice: twice the longest in EnvNames,
+// LC_IDENTIFICATION's 17 bytes, rounded up].
+const maxEnvName = 32
+
+// replaceEnv gives the stripped line with its env field's value f
+// replaced by kept, or the field left out if kept is empty. The field
+// occurs once, and no other field's value holds " env=" (§6.1's values
+// hold no space), so the cut is exact.
+func replaceEnv(stripped, f, kept []byte) []byte {
+	field := append([]byte(" env="), f...)
+	i := bytes.Index(stripped, field)
+	if i < 0 || bytes.Equal(f, kept) {
+		return stripped
+	}
+	out := append([]byte{}, stripped[:i]...)
+	if len(kept) > 0 {
+		out = append(append(out, " env="...), kept...)
+	}
+	return append(out, stripped[i+len(field):]...)
 }
 
 // parseLineAddr reads the CredentialLine's addr: an address in exactly

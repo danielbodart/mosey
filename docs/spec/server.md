@@ -352,6 +352,15 @@ triggers above (nothing emu does is one of them):
   - `COLORTERM` as the client sent it, or unset: whether truecolor is
     worth emitting depends on what the user's terminal can show
     (§11, item 9).
+  - `VTE_VERSION` as the client sent it, or unset [D: Dan, 2026-11-27].
+    The user's terminal is VTE, so the shell's VTE integration
+    (`vte.sh`) runs and writes OSC 7 at each prompt. The emulator keeps
+    that directory, and the client gives it to the terminal
+    (`screen.md` §4.7). Without it, a remote shell writes no OSC 7, and
+    the tab's directory stays the local one. Thus a new window opened
+    from the tab (`bootstrap.md` §9.2.4) goes to the wrong machine. The
+    emulator consumes the other sequences `vte.sh` writes (OSC 666
+    `vte.shell.*`; `screen.md` §4.6).
   - The locale variables (`LANG`, `LANGUAGE`, `LC_*`) from the
     `ClientLine`, replacing any of the same name.
   - **Hopping** (D7, `bootstrap.md` §4.7.9): if the spawner's binary is

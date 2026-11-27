@@ -128,11 +128,11 @@ func TestAClientLineSurvivesARoundTrip(t *testing.T) {
 	}
 	// The longest legal line is the size §6.2 derives: the type's key is
 	// a byte longer than the command's.
-	if n := len(MarshalClientLine(max)); n != 5756 {
-		t.Errorf("longest client line is %d bytes, §6.2 says 5756", n)
+	if n := len(MarshalClientLine(max)); n != 5833 {
+		t.Errorf("longest client line is %d bytes, §6.2 says 5833", n)
 	}
-	if n := len(MarshalClientLine(maxCommand)); n != 5755 {
-		t.Errorf("longest client line with a command is %d bytes, not 5755", n)
+	if n := len(MarshalClientLine(maxCommand)); n != 5832 {
+		t.Errorf("longest client line with a command is %d bytes, not 5832", n)
 	}
 }
 
@@ -326,7 +326,11 @@ func TestEveryRuleOfAClientLineIsEnforced(t *testing.T) {
 		"cols 65536":            set("cols", "cols=65536"),
 		"negative rows":         set("rows", "rows=-24"),
 		"empty value":           set("rows", "rows="),
-		"unknown env name":      set("env", "env=HOME=x"),
+		"lower-case env name":   set("env", "env=home=x"),
+		"env name of a digit":   set("env", "env=1X=x"),
+		"long env name":         set("env", "env="+strings.Repeat("X", 33)+"=x"),
+		"unknown env unsorted":  set("env", "env=ZZ=x,LANG=y"),
+		"unknown env bad value": set("env", "env=HOME=a;b"),
 		"unsorted env":          set("env", "env=TERM=x,LANG=y"),
 		"repeated env":          set("env", "env=LANG=x,LANG=y"),
 		"empty env value":       set("env", "env=LANG="),
@@ -507,17 +511,46 @@ func TestAnErrorLineOutsideTheFrozenGrammarIsRefused(t *testing.T) {
 	}
 }
 
+// An env entry with a name this build does not know is skipped, as an
+// unknown field is (versioning.md §2), so a later client can send a new
+// variable to an older server. The known entries still apply.
+func TestAnUnknownEnvNameIsSkippedAndTheRestApplies(t *testing.T) {
+	good := string(MarshalClientLine(sampleClientLine()))
+	for _, c := range []struct{ env, want string }{
+		{"env=AAA=1,LANG=C,ZZ_TOP=2", "LANG=C"},
+		{"env=HOME=x", ""},
+		{"env=LANG=C,VTE_VERSION=8401", "LANG=C,VTE_VERSION=8401"},
+	} {
+		line := setField(t, good, "env", c.env)
+		got, err := ParseClientLine([]byte(line))
+		if err != nil {
+			t.Errorf("%s: %v", c.env, err)
+			continue
+		}
+		var kv []string
+		for _, n := range EnvNames {
+			if v, ok := got.Env[n]; ok {
+				kv = append(kv, n+"="+v)
+			}
+		}
+		if strings.Join(kv, ",") != c.want {
+			t.Errorf("%s: env %v, want %s", c.env, got.Env, c.want)
+		}
+	}
+}
+
 func TestClientEnvKeepsOnlyWhatTheLineCanCarry(t *testing.T) {
 	vars := map[string]string{
-		"TERM":     "xterm-256color",
-		"LANG":     "en_GB.UTF-8",
-		"LC_ALL":   "",
-		"LC_CTYPE": "a b",
-		"LC_TIME":  strings.Repeat("x", 65),
-		"HOME":     "/home/me",
+		"TERM":        "xterm-256color",
+		"LANG":        "en_GB.UTF-8",
+		"VTE_VERSION": "8401",
+		"LC_ALL":      "",
+		"LC_CTYPE":    "a b",
+		"LC_TIME":     strings.Repeat("x", 65),
+		"HOME":        "/home/me",
 	}
 	env, dropped := ClientEnv(func(n string) string { return vars[n] })
-	if len(env) != 2 || env["TERM"] != "xterm-256color" || env["LANG"] != "en_GB.UTF-8" {
+	if len(env) != 3 || env["TERM"] != "xterm-256color" || env["LANG"] != "en_GB.UTF-8" || env["VTE_VERSION"] != "8401" {
 		t.Errorf("env %v", env)
 	}
 	if strings.Join(dropped, ",") != "LC_CTYPE,LC_TIME" {

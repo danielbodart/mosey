@@ -209,8 +209,8 @@ func FuzzLogLine(f *testing.F) {
 }
 
 // The shell's environment (server.md §2.5): sshd's, without SSH_TTY and
-// sshd's agent, with the emulator's TERM, and the client's locale and
-// COLORTERM re-checked here whatever the parser accepted.
+// sshd's agent, with the emulator's TERM, and the client's locale,
+// COLORTERM and VTE_VERSION re-checked here whatever the parser accepted.
 func TestTheShellGetsSSHDsEnvironmentWithTheClientsLocale(t *testing.T) {
 	base := []string{
 		"PATH=/usr/bin:/bin", "HOME=/home/u", "USER=u", "SSH_CONNECTION=1.2.3.4 5 6.7.8.9 22",
@@ -218,7 +218,7 @@ func TestTheShellGetsSSHDsEnvironmentWithTheClientsLocale(t *testing.T) {
 	}
 	from := map[string]string{
 		"TERM": "alacritty", "COLORTERM": "truecolor", "LANG": "en_GB.UTF-8",
-		"LC_ALL": "bad value with spaces", "EVIL": "x",
+		"LC_ALL": "bad value with spaces", "EVIL": "x", "VTE_VERSION": "8401",
 	}
 	env := shellEnv(base, from, "", "", discardLog())
 	got := map[string]string{}
@@ -231,7 +231,7 @@ func TestTheShellGetsSSHDsEnvironmentWithTheClientsLocale(t *testing.T) {
 	}
 	for k, v := range map[string]string{
 		"PATH": "/usr/bin:/bin", "HOME": "/home/u", "USER": "u", "SSH_CONNECTION": "1.2.3.4 5 6.7.8.9 22",
-		"TERM": shellTERM, "COLORTERM": "truecolor", "LANG": "en_GB.UTF-8",
+		"TERM": shellTERM, "COLORTERM": "truecolor", "LANG": "en_GB.UTF-8", "VTE_VERSION": "8401",
 	} {
 		if got[k] != v {
 			t.Errorf("%s=%q, want %q", k, got[k], v)

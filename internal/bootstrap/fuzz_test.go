@@ -48,8 +48,45 @@ func fuzzLine[T any](t *testing.T, line []byte, max int, tag string, anyNumber b
 	}
 }
 
+// knownFields is line as parseLine leaves it, without its unknown fields.
+func knownFields(t *testing.T, line []byte, max int, tag string, spec lineSpec) []byte {
+	t.Helper()
+	p, err := parseLine(line, max, tag, false, spec)
+	if err != nil {
+		t.Fatalf("accepted %q, which the grammar refuses: %v", line, err)
+	}
+	return p.stripped
+}
+
+// withoutUnknownEnv is §6.2's rule written out by hand, as the fuzzer's
+// reference: line with each env entry whose name is not in EnvNames left
+// out, and the env field left out if no entry remains.
+func withoutUnknownEnv(line []byte) []byte {
+	words := strings.Split(strings.TrimSuffix(string(line), "\n"), " ")
+	out := words[:0]
+	for _, w := range words {
+		if v, ok := strings.CutPrefix(w, "env="); ok {
+			var kept []string
+			for _, e := range strings.Split(v, ",") {
+				n, _, _ := strings.Cut(e, "=")
+				if slices.Contains(EnvNames, n) {
+					kept = append(kept, e)
+				}
+			}
+			if len(kept) == 0 {
+				continue
+			}
+			w = "env=" + strings.Join(kept, ",")
+		}
+		out = append(out, w)
+	}
+	return []byte(strings.Join(out, " ") + "\n")
+}
+
 func FuzzParseClientLine(f *testing.F) {
 	f.Add(MarshalClientLine(sampleClientLine()))
+	// An env with names this build does not know, which it skips.
+	f.Add([]byte(strings.Replace(string(MarshalClientLine(sampleClientLine())), " env=", " env=AAA=1,HOME=x,", 1)))
 	r := sampleClientLine()
 	r.Attach, r.SessionID, r.Agent, r.Env = AttachResume, [16]byte{1}, true, nil
 	f.Add(MarshalClientLine(r))
@@ -79,7 +116,13 @@ func FuzzParseClientLine(f *testing.F) {
 			}
 			return
 		}
-		fuzzLine(t, line, MaxClientLine, clientMagic, false, clientSpec, ParseClientLine, MarshalClientLine, c)
+		// An env entry with a name the parser does not know is skipped as
+		// an unknown field is: the line is then canonical without it.
+		known := withoutUnknownEnv(line)
+		if !bytes.Equal(MarshalClientLine(c), withoutUnknownEnv(knownFields(t, line, MaxClientLine, clientMagic, clientSpec))) {
+			t.Fatalf("accepted %q, which re-marshals to %q", line, MarshalClientLine(c))
+		}
+		fuzzLine(t, known, MaxClientLine, clientMagic, false, clientSpec, ParseClientLine, MarshalClientLine, c)
 		if c.Cols == 0 || c.Rows == 0 || len(c.Public) != PublicKeySize {
 			t.Fatalf("accepted %+v", c)
 		}

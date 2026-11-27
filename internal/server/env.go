@@ -25,6 +25,7 @@ var clientVars = map[string]bool{
 	"LC_COLLATE": true, "LC_CTYPE": true, "LC_IDENTIFICATION": true, "LC_MEASUREMENT": true,
 	"LC_MESSAGES": true, "LC_MONETARY": true, "LC_NAME": true, "LC_NUMERIC": true,
 	"LC_PAPER": true, "LC_TELEPHONE": true, "LC_TIME": true, "TERM": true,
+	"VTE_VERSION": true,
 }
 
 // validVar re-checks a ClientLine value against bootstrap.md §6.2's vchar
@@ -49,7 +50,8 @@ func validVar(v string) bool {
 // spawner's own, which is sshd's, so SSH_CONNECTION, USER, PATH and the
 // rest are as an ssh login has them, except that SSH_TTY names no tty of
 // this session, sshd's SSH_AUTH_SOCK dies with the bootstrap connection,
-// TERM is the emulator's, COLORTERM and the locale come from the client,
+// TERM is the emulator's, COLORTERM, VTE_VERSION and the locale come from
+// the client,
 // and hop, if not "", goes first on PATH (hopDir).
 func shellEnv(base []string, from map[string]string, agentSock, hop string, log *slog.Logger) []string {
 	var env []string
