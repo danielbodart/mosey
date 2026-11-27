@@ -42,7 +42,7 @@ decision wins.
 | `internal/predict` | Predictive local echo (D12, `prediction.md`): epochs over the user's own keystrokes, judged against the server's cells, drawn as an overlay on the client's copy of the screen | client | **prediction** | `doc.go`, `engine.go`, `keys.go`, `width.go`, `overlay.go` |
 | `internal/emu` | The `Emulator` interface and the tuios.dev/vt implementation (D23) | emu (tests: in process) | **screen** | `emu.go`, `tuios.go` |
 | `internal/pty` | Open ptys, set their size, read the echo-off bit, whether the foreground runs as root, and whether the session is idle, start the login shell (D14) | spawner, proto | **server-proc** | `pty.go`, `pty_linux.go`, `pty_other.go`, `idle.go` |
-| `internal/sandbox` | Landlock deny-all, seccomp cBPF compiler and per-role policies, `DUMPABLE=0` (D22) | proto, emu | **server-proc** | `doc.go`, `sandbox.go`, `bpf.go`, `sandbox_linux.go`, `sandbox_other.go` |
+| `internal/sandbox` | Landlock deny-all, seccomp cBPF compiler and per-role policies, `DUMPABLE=0`; on macOS the Seatbelt profiles and `PT_DENY_ATTACH` (D22) | proto, emu | **server-proc** | `doc.go`, `sandbox.go`, `bpf.go`, `profile.go`, `sandbox_linux.go`, `sandbox_darwin.go`, `sandbox_darwin.s`, `sandbox_other.go` |
 | `internal/nocore` | `DUMPABLE=0` and `RLIMIT_CORE=0` for every process that holds a secret (threat-model.md §4.10) | client, launcher, spawner, proto, emu | **server-proc** | `doc.go`, `nocore.go` |
 | `internal/spawn` | `posix_spawn` with the jetsam memory limit, for emu on macOS (D23, `server.md` §10) | spawner (macOS) | **server-proc** | `doc.go`, `spawn.go`, `spawn_darwin.go`, `spawn_darwin.s` |
 | `internal/startup` | How this mosey was started: its arguments, its own file, and starting a program the same way, so an Android linker in front of a static mosey is undone in one place | client, all server roles | **bootstrap-client** | `doc.go`, `startup.go` |
@@ -525,4 +525,4 @@ when the server ends the session, and otherwise tells the server with
 | Chaff (D11, O10) | **built** (chaff slice; the client's 64 B chaffing floor in the dequoin slice): `ssp.Chaffer`, `transport.Conn.SendChaff` and `ChaffArrived`, `ssp.md` §9.1 |
 | Auto-upload (D7) | Landed, simplified 2026-11-15 to one installed file used only where the host has no mosey, and moved 2026-11-16 to `~/.local/bin/mosey` so hopping needs no rc file: `bootstrap.md` §4.7, `internal/install`; the release job attests every binary for `gh attestation verify` by hand (`bootstrap.md` §4.6); a client-side signature check is parked (PLAN O16) |
 | NAT traversal (O6) | packet type `0x05` |
-| macOS server (D22) | `pty_other.go`, `sandbox_other.go` return `ErrUnsupported` |
+| macOS server (D22) | **built**: the darwin spawner, `internal/spawn`, and the Seatbelt sandbox (`server.md` §10) |

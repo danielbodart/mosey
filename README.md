@@ -43,9 +43,8 @@ paper and public specifications. It contains no Mosh code
 `ssh`: your configuration, your keys and your agent.
 
 mosey has no panes, windows or status bar. Use the tabs and splits of
-your terminal. The server operates on Linux and macOS. On macOS it has no
-sandbox yet, and mosey does not copy it to a Mac: install it there
-yourself. The client operates on Linux, macOS and Android (Termux).
+your terminal. The server operates on Linux and macOS, in a sandbox on
+both. The client operates on Linux, macOS and Android (Termux).
 
 ## Quick start
 
@@ -165,8 +164,9 @@ from a different computer show. Press `Enter` to open one.
 - The handshake is post-quantum and hybrid (X-Wing: ML-KEM-768 and
   X25519), with forward secrecy and new keys at intervals.
 - Cover packets hide when you type and the size of most keys.
-- The terminal emulator runs on the server in a Landlock and seccomp
-  sandbox. Your terminal never reads escape sequences from the host.
+- The terminal emulator runs on the server in a sandbox: Landlock and
+  seccomp on Linux, Seatbelt on macOS. Your terminal never reads escape
+  sequences from the host.
 - ProVerif checks the protocol designs.
 
 Some of these features need support from your terminal. Refer to

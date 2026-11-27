@@ -658,10 +658,14 @@ trials; built with `GOEXPERIMENT=runtimesecret` and key generation inside
     inherited across `exec`, and the user's login shell must keep the
     user's own core-dump settings.
   - **darwin**: `setrlimit(RLIMIT_CORE, 0)` in the client, proto and
-    emu. The launcher and the spawner have no protection: macOS has no
-    `PR_SET_DUMPABLE`, and the rlimit reason above applies. This is a
-    known gap (`server.md` §10). The Seatbelt slice decides whether
-    `PT_DENY_ATTACH` can close it.
+    emu. proto and emu also call `ptrace(PT_DENY_ATTACH)` when they
+    enter their sandbox. The launcher and the spawner have no
+    protection: macOS has no `PR_SET_DUMPABLE`, and the rlimit reason
+    above applies. This is a known gap (`server.md` §10).
+    `PT_DENY_ATTACH` does not close it yet: it is not known whether the
+    login shell keeps the flag. On dan-mac, a user's process could not
+    attach to another of the user's processes at all [M]. So the gap is
+    open to root and to a user with developer rights.
   - **Who:** the client (`mosey host`, before its one-shot X-Wing key
     exists; a requirement on `bootstrap.md` §4.3), the launcher and
     spawner (before they read the credential line; `server.md` §2.1),
@@ -679,8 +683,8 @@ trials; built with `GOEXPERIMENT=runtimesecret` and key generation inside
 | Role | Holds | Parses | Sandbox | A compromise gets |
 |---|---|---|---|---|
 | launcher, spawner | the pty master (spawner; kept so the shell outlives proto); no key, but for a moment the credential line (PSK included) on its way to stdout, wiped once written (§4.10) | `ClientLine` (from the user), proto's IPC messages, and the attach protocol from the user's own processes (§4.5) | none, but `DUMPABLE=0` (§4.10): the spawner forks the login shell | the user |
-| **proto** | keys, the UDP socket, the pty master | every datagram (pre-auth: header, lookup, AEAD, msg1), SSP, emu's `Update` and `Replies` | Landlock deny-all, seccomp TSYNC, `DUMPABLE=0` | **the user**: it can type into the shell (S4 red team: `pwned-ipc` created under every sandbox setting [M S4 §3.6]), and `sendto` anywhere from its socket |
-| **emu** | nothing: no key, no pty, no socket but its IPC | all program output (the VT parser) | Landlock deny-all, seccomp TSYNC, `DUMPABLE=0` | its own IPC. Its diffs pass `Grid.Apply`; its replies pass `ValidReply` |
+| **proto** | keys, the UDP socket, the pty master | every datagram (pre-auth: header, lookup, AEAD, msg1), SSP, emu's `Update` and `Replies` | Landlock deny-all, seccomp TSYNC, `DUMPABLE=0`; on macOS, its Seatbelt profile and `PT_DENY_ATTACH` (`server.md` §10) | **the user**: it can type into the shell (S4 red team: `pwned-ipc` created under every sandbox setting [M S4 §3.6]), and `sendto` anywhere from its socket |
+| **emu** | nothing: no key, no pty, no socket but its IPC | all program output (the VT parser) | Landlock deny-all, seccomp TSYNC, `DUMPABLE=0`; on macOS, its Seatbelt profile and `PT_DENY_ATTACH` | its own IPC. Its diffs pass `Grid.Apply`; its replies pass `ValidReply` |
 
 So **the emu sandbox is the one that really contains an attacker**, and it
 guards the code with the most attacker-reachable input: anything that
@@ -1138,6 +1142,7 @@ target (architecture §6).
 | emu is restarted when hung, dead or over its memory | `server` | a silent emu produces `KillEmu{deadline}` after T4; a killed one comes back through `EmuLink`; S2's link flood hits the limit under `RLIMIT_DATA` alone (**not yet tested**: see R18) |
 | `ValidReply` admits only fixed templates | `server` | `FuzzSplitReplies`: no token holds a C0 byte but its leading ESC and terminator, and every token `ValidReply` accepts is one of the shapes; `TestForgedRepliesAreRefused` |
 | Each role's policy allows exactly its list | `sandbox` | the BPF interpreter, amd64 and arm64 |
+| proto and emu under their Seatbelt profiles cannot open or stat a file, connect, bind or send from a new socket, exec, or signal or inspect another process; proto still answers on its own UDP port, takes an fd over IPC and sets the pty size; `GOMAXPROCS` stays above 1 | `sandbox` (darwin, run on a Mac) | a child of the test binary enters each profile and tries each; an allow-all profile, and one without `hw.ncpu`, fail the test [M] |
 | emu under its sandbox cannot open, connect, exec, create sockets or signal another process | `sandbox` (linux) | a red-team battery run inside the sandboxed role, as S4's, plus `tgkill` at a sibling and `fcntl(F_SETOWN)` + `O_ASYNC`, with Landlock's signal scope off |
 | A resume revokes the old client and erases its keys; the old client exits saying who took over; nothing secret is reused | `e2e`, `server` | netsim: a client vanishes and another attaches with a new credential for the same SID; the first gets `Revoked`; real sshd: `mosey -s NAME` takes over and the first exits 3 (`TestSessionsThroughRealSSH`) |
 | A background reconnect never takes a session another client holds (PLAN O15's placeholder, until Dan decides) | `server`, `e2e` | the launcher's holder rule (`TestReconnectTakesItsOwnSessionAndNeverAnothers`); netsim: a reconnect told `taken` exits 3 |
@@ -1161,7 +1166,7 @@ target (architecture §6).
 | Prediction (D12) | Landed: §4.16 |
 | Chaff (D11, O10) | Landed: §4.14, R2 |
 | Auto-upload (D7) | Landed: §4.13. Release binaries carry GitHub build attestations for checking by hand; the client checking them is parked (`bootstrap.md` §14 C, PLAN O16) |
-| macOS server (D22) | Seatbelt or nothing; until then the sandbox returns `ErrUnsupported` and the server says it runs unconfined |
+| macOS server (D22) | Landed: proto and emu run under Seatbelt profiles and `PT_DENY_ATTACH` (§4.11, `server.md` §10) |
 
 ## Review notes
 

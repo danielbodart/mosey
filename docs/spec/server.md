@@ -1337,8 +1337,10 @@ two probes §6.2 expects to fail where a feature is missing (an optional
 right offered one at a time, and the `RESTRICT_SELF_TSYNC` flag), where
 EINVAL means "not supported" and the next step is the fallback §6.2
 names; and so is any error from `prctl`. Fatal, because it means the sandbox the kernel advertises did not
-turn on, and carrying on would run seccomp-only silently. On other
-systems `Enter` returns `errors.ErrUnsupported` (§10).
+turn on, and carrying on would run seccomp-only silently. On macOS,
+`Enter` calls `ptrace(PT_DENY_ATTACH)` and then `sandbox_init` with the
+role's profile (§10). Every error there is fatal, with no exception. On
+other systems `Enter` returns `errors.ErrUnsupported`.
 
 **Action** (`sandbox.Action`), chosen per architecture by the binary,
 never by the environment in a release build:
@@ -1780,10 +1782,12 @@ In this section, [M] is a measurement on dan-mac on 2026-11-27, and
 | sessions dir | `$XDG_RUNTIME_DIR/mosey`, else `/tmp/mosey-UID` (§2.6) | Always `/tmp/mosey-UID` [D]. It holds only sockets and directories. Logs and other regular files go elsewhere. The launchers' lock is an `flock` on the directory itself, not a lock file (`bootstrap.md` §9.2). Reason: macOS `tmp_cleaner` deletes regular files and empty directories in `/tmp` older than 3 days. `dirhelper` cleans `$TMPDIR` (`/var/folders/.../T`) after 3 days and at boot. Under `$TMPDIR`, the socket path is too long for `sun_path` (104 bytes with the NUL): `agent.sock.tmp` needed 106 [M]. The client's agent capture directory (`internal/agent/capture.go`) has the same length limit on a Mac client |
 | sandbox | Landlock + seccomp + `PR_SET_DUMPABLE` | Seatbelt `sandbox_init` (deprecated) with our own SBPL profile strings, flags 0 [D], reached from a `CGO_ENABLED=0` binary through `//go:cgo_import_dynamic` and an assembly trampoline (S4 §3.11). Plus `ptrace(PT_DENY_ATTACH)` in place of DUMPABLE. The profiles are below |
 | emu memory limit | cgroup scope `MemoryMax` + `RLIMIT_DATA` | The spawner starts emu with its own `posix_spawn` (`internal/spawn`), not `os/exec`, and calls the private `posix_spawnattr_setjetsam_ext(attr, 0xC, -1, 512, 512)` [D]. `0xC` is ACTIVE and INACTIVE fatal. It also uses `posix_spawn_file_actions_adddup2` and `POSIX_SPAWN_CLOEXEC_DEFAULT`. It does not use `POSIX_SPAWN_SETSID`: emu stays in the spawner's session, as on Linux. The kernel sends SIGKILL at the limit; `wait4` then gives `ru_maxrss` of 513 MiB for a 512 MiB limit [M]. A SIGKILL that the spawner did not send, with `ru_maxrss` at or above the limit, means the limit was hit: tell the client and rebuild, as for the Linux OOM kill. There is no watchdog. `setrlimit` of `RLIMIT_DATA` or `RLIMIT_AS` below 1 TiB gives `EINVAL` [M], so darwin does not use them. Each kill writes a `JetsamEvent` report in `/Library/Logs/DiagnosticReports` [M]; this is accepted [D] |
-| syscall policy test | BPF interpreter, any host | not applicable |
+| syscall policy test | BPF interpreter, any host | The profile text, any host. A child under each profile, on a Mac (`sandbox_darwin_test.go`) |
 
 **The profiles** [D, M]. `PORT` is the port of the inherited UDP socket.
-proto puts it into the string at run time.
+proto reads it from the socket and puts it into the string at run time.
+`sandbox.Profile` makes the text. It refuses a port that is not 1 to
+65535 before the port goes into the text.
 
 proto:
 
@@ -1834,27 +1838,32 @@ sandbox goes on to the login shell, so it needs two signed binaries. It
 also needs an `Info.plist` patch, and its network entitlements open all
 TCP to proto.
 
-**Order** [D]. The server comes first, without the sandbox. On darwin the
-roles run without a sandbox. The spawner says so once in the session
-log; the roles do not, so an emu restart does not repeat it. On Linux a
-sandbox failure stays fatal. The sandbox is the next slice. Until then,
-the client's auto-install refuses hosts that are not Linux
-(`internal/client/upload.go`). So only a Mac with mosey installed by
-hand or by Nix can run the server. The client runs on macOS already.
+**Order** [D]. The server came first, without the sandbox. The Seatbelt
+sandbox came next. A sandbox failure is now fatal on darwin, as on
+Linux. The client copies the server to a Mac as to any other host (D7).
 
-**Status**. The server runs on macOS, without a sandbox
-(`serverRuns` is true in `spawner_darwin.go`). On dan-mac (macOS
-15.7.4, arm64, 2026-11-27) these passed [M]:
+**Status**. The server runs on macOS, with its sandbox (`serverRuns` is
+true in `spawner_darwin.go`). On dan-mac (macOS 15.7.4, arm64,
+2026-11-27) these passed [M]:
 
-1. The `internal/ipc`, `internal/pty`, `internal/spawn` and
-   `internal/server` tests.
-2. The client on Linux against the Mac with `-remote PATH`: start a
-   session and type a command, detach, `-list`, resume into the same
-   shell, and `exit`. After `exit`, no server process stays, and
-   `/tmp/mosey-501` is empty.
-
-The client still copies the server only to Linux (`internal/client/upload.go`).
-The sandbox slice removes that gate.
+1. The `internal/ipc`, `internal/pty`, `internal/spawn`,
+   `internal/sandbox` and `internal/server` tests. The `internal/server`
+   tests run the real emu under its profile.
+2. The `internal/sandbox` tests run a child under each profile. Under
+   proto's profile, the child answers a datagram on its own port, takes
+   an fd over `SCM_RIGHTS` and uses it, and sets and reads the pty size.
+   Under each profile, the child cannot open or stat a file, connect
+   over TCP or to a unix socket, bind or send from a new UDP socket,
+   exec, or signal or read another process. `GOMAXPROCS` stays at 10.
+   An allow-all profile, and a profile without `hw.ncpu`, fail these
+   tests.
+3. The client on Linux against the Mac with `-remote PATH`: start a
+   session and type a command, resize, detach, `-list`, resume into the
+   same shell, `-A` with `ssh-add -l` and a signature from the forwarded
+   agent, and `exit`. `sandbox_check` says that proto and emu of the
+   live session are sandboxed, and that the spawner is not. The unified
+   log shows no Seatbelt denial for a mosey role. After `exit`, no
+   server process stays, and `/tmp/mosey-501` is empty.
 
 **The spawner on darwin** (`spawner_darwin.go`). The spawner and the
 launcher skip `PR_SET_DUMPABLE`, which macOS does not have. There is no
@@ -1869,17 +1878,25 @@ protection from core dumps or debuggers. macOS has no `PR_SET_DUMPABLE`.
 They do not set `RLIMIT_CORE` to 0, for the Linux reason: an rlimit
 goes on across `exec`, and the user's login shell must keep the user's
 core-dump settings (`threat-model.md` §4.10). proto and emu set
-`RLIMIT_CORE` to 0 (`internal/nocore`). The Seatbelt slice decides
-whether `PT_DENY_ATTACH` can close this gap.
+`RLIMIT_CORE` to 0 (`internal/nocore`) and call `PT_DENY_ATTACH`
+(`sandbox.Enter`).
 
-**Not done yet** (after the spawner slice):
+`PT_DENY_ATTACH` does not close this gap yet. It is not known whether
+the login shell, which the spawner starts, keeps the flag. The user's
+debugger must still reach the shell's programs. On dan-mac a user's
+process could not `PT_ATTACH` to another of the user's processes: the
+call gave `EPERM` [M]. So the gap is open to root and to a user with
+developer rights. To measure if the flag goes on across `fork` and
+`exec` needs such rights.
+
+**Not done yet**:
 
 - `pty.ProgramIn` (`-list`, and `internal/server/resume_unix.go`) still
   reads only `/proc`. On darwin it must read the name and the working
   directory another way, for example `sysctl kern.procargs2` and
   `proc_pidinfo`. Until then, `-list` on a Mac shows no foreground
   program or directory, and darwin pty support is not complete.
-- The Seatbelt sandbox and `PT_DENY_ATTACH` (the next slice).
+- `PT_DENY_ATTACH` for the launcher and the spawner (above).
 
 ---
 

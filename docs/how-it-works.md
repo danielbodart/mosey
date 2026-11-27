@@ -59,7 +59,8 @@ never writes secrets to disk. Refer to
   or stops. It cannot hide keys that collect while the network is
   stopped.
 - **An isolated terminal emulator.** The terminal emulator operates on
-  the server, in its own Landlock and seccomp sandbox. It sends
+  the server, in its own sandbox: Landlock and seccomp on Linux, Seatbelt
+  on macOS. It sends
   structured screen changes to your computer. Your terminal never reads
   escape sequences from the remote host. Thus a full class of terminal
   attacks cannot occur.
