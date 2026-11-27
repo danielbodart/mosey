@@ -120,3 +120,39 @@ func FuzzProcArgs(f *testing.F) {
 		}
 	})
 }
+
+// Any buffer and fill count gives a directory with no NUL in it, and
+// only a full fill gives one at all: then it is the bytes at the
+// directory's offset, up to their first NUL. A buffer built around a
+// path gives that path.
+func FuzzVnodePathCwd(f *testing.F) {
+	full := make([]byte, vnodePathInfoSize)
+	copy(full[vnodePathInfoCwdOff:], "/Users/u/src\x00junk")
+	f.Add(full, vnodePathInfoSize, "/Users/u/src")
+	f.Add(full, 0, "/")
+	f.Add(bytes.Repeat([]byte{'a'}, vnodePathInfoSize), vnodePathInfoSize, "")
+	f.Add([]byte{}, vnodePathInfoSize, "/private/tmp/x")
+	f.Fuzz(func(t *testing.T, b []byte, n int, path string) {
+		got := vnodePathCwd(b, n)
+		if strings.IndexByte(got, 0) >= 0 {
+			t.Fatalf("n=%d: %q holds a NUL", n, got)
+		}
+		if got != "" {
+			if n != vnodePathInfoSize || len(b) < vnodePathInfoSize {
+				t.Fatalf("n=%d, len %d: %q from a short fill", n, len(b), got)
+			}
+			p := b[vnodePathInfoCwdOff : vnodePathInfoCwdOff+maxPathLen]
+			if want, _, _ := bytes.Cut(p, []byte{0}); got != string(want) {
+				t.Fatalf("%q; the record holds %q", got, want)
+			}
+		}
+		if strings.IndexByte(path, 0) >= 0 || len(path) >= maxPathLen {
+			return
+		}
+		built := bytes.Repeat([]byte{0xff}, vnodePathInfoSize)
+		copy(built[vnodePathInfoCwdOff:], path+"\x00")
+		if got := vnodePathCwd(built, len(built)); got != path {
+			t.Fatalf("%q from a record of %q", got, path)
+		}
+	})
+}
