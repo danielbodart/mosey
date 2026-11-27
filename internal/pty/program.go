@@ -31,7 +31,9 @@ const maxCmdline = 4096
 // which is the name a program gives itself (a Nix wrapper's comm is
 // ".claude-unwrapp" where argv[0] is "claude" [M] /proc on NixOS,
 // 2026-11-18), else the kernel's comm; its directory is where cwd points.
-// A process that is gone or not ours gives an empty Program.
+// A process that is gone or not ours gives an empty Program. macOS has
+// no /proc, so there it gives an empty Program too: the darwin way is
+// not written yet (server.md §10, "Not done yet").
 func ProgramIn(proc string, pid int) Program {
 	dir := filepath.Join(proc, strconv.Itoa(pid))
 	var p Program

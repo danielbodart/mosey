@@ -1849,6 +1849,10 @@ server works on macOS. The client runs on macOS already.
   there [D] (see "sessions dir" above).
 - The client's agent capture directory (`internal/agent/capture.go`)
   needs the same check of the `sun_path` length on a Mac client.
+- `pty.ProgramIn` (`-list`, and `internal/server/resume_linux.go`) still
+  reads only `/proc`. On darwin it must read the name and the working
+  directory another way, for example `sysctl kern.procargs2` and
+  `proc_pidinfo`. Until then, darwin pty support is not complete.
 
 ---
 
