@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 // maxList bounds what -list and -kill read from the server: MaxListed
@@ -107,9 +108,12 @@ func List(ctx context.Context, o ListOptions) error {
 	has := func(f func(bootstrap.ListLine) string) bool {
 		return slices.ContainsFunc(rows, func(r bootstrap.ListLine) bool { return f(r) != "" })
 	}
+	// A claimed name shows only beside the address, loopback included:
+	// "desktop (127.0.0.1)" says the client is on the session's own host
+	// (bootstrap.md §9.4).
 	attachedPeer := func(r bootstrap.ListLine) string {
 		if r.State == bootstrap.SessionAttached && r.Peer.IsValid() {
-			return r.Peer.Addr().String()
+			return hostname.Label(r.PeerHost, r.Peer.Addr().String())
 		}
 		return ""
 	}

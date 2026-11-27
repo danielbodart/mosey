@@ -39,6 +39,12 @@ type Options struct {
 	// Getenv reads the environment: TERM, the locale, SSH_AUTH_SOCK,
 	// and where the state directory is.
 	Getenv func(string) string
+	// Host is the name this client claims for its machine, a
+	// hostname.ValidClaim, or "" to claim none: cmd/mosey gives
+	// hostname.Own. The server shows it beside this client's address, in
+	// -list and to a client this one takes the session from
+	// (bootstrap.md §6.2, §9.1).
+	Host string
 	// Attach and Name say which session (D8 R1, R2; bootstrap.md §9.2):
 	// AttachAuto for a plain `mosey host`, AttachName with Name for -s,
 	// AttachNew for -new.
@@ -136,6 +142,7 @@ func Run(ctx context.Context, o Options) error {
 			Cols:    uint16(size.Cols),
 			Rows:    uint16(size.Rows),
 			Env:     env,
+			Host:    o.Host,
 			Public:  key.PublicKey(),
 		},
 		stderr: o.Stderr,
@@ -267,6 +274,7 @@ func reconnector(o Options, sid [16]byte) func(context.Context, [8]byte) (*Reatt
 				Cols:      uint16(size.Cols),
 				Rows:      uint16(size.Rows),
 				Env:       env,
+				Host:      o.Host,
 				Public:    key.PublicKey(),
 			},
 			stderr: &logLines{log: o.Log},

@@ -195,9 +195,10 @@ func TestTheListShowsWhatRunsInEachSessionAndWhere(t *testing.T) {
 	}
 }
 
-// Attached sessions with a known peer gain a PEER column showing only the
-// IP address; detached rows leave PEER empty so stale addresses are not
-// shown as active (bootstrap.md §9.4).
+// Attached sessions with a known peer gain a PEER column showing the IP
+// address, after the client's claimed name when it sent one; detached rows
+// leave PEER empty so stale addresses are not shown as active
+// (bootstrap.md §9.4).
 func TestTheListShowsThePeerOfAttachedSessionsOnly(t *testing.T) {
 	dir := t.TempDir()
 	ssh := fakeSSH(t, dir, "hostname far\n", 0)
@@ -206,6 +207,7 @@ func TestTheListShowsThePeerOfAttachedSessionsOnly(t *testing.T) {
 	script := "#!/bin/sh\n[ \"$1\" = --serve=list ] || exit 9\n" +
 		"printf 'MOSEY-LIST 1 cwd=" + b("~/Projects/mosey") + " fg=" + b("claude") + " name=remote peer=100.64.1.2:41234 since=1794651234 state=attached\\n'\n" +
 		"printf 'MOSEY-LIST 1 cwd=" + b("~") + " fg=" + b("bash") + " name=local peer=127.0.0.1:50000 since=1794651234 state=attached\\n'\n" +
+		"printf 'MOSEY-LIST 1 cwd=" + b("~") + " fg=" + b("vim") + " name=named peer=127.0.0.1:50001 peer-host=desktop since=1794651234 state=attached\\n'\n" +
 		"printf 'MOSEY-LIST 1 cwd=" + b("~") + " fg=" + b("bash") + " name=gone peer=192.0.2.7:50000 since=1794651234 state=detached\\n'\n"
 	if err := os.WriteFile(server, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -220,10 +222,11 @@ func TestTheListShowsThePeerOfAttachedSessionsOnly(t *testing.T) {
 	got := out.String()
 	since := time.Unix(1794651234, 0).Local().Format(takenOverTime)
 	for _, want := range []string{
-		"NAME    STATE     SINCE" + strings.Repeat(" ", len(since)-5+2) + "PEER        RUNNING  DIR\n",
-		"remote  attached  " + since + "  100.64.1.2  claude   ~/Projects/mosey\n",
-		"local   attached  " + since + "  127.0.0.1   bash     ~\n",
-		"gone    detached  " + since + "              bash     ~\n",
+		"NAME    STATE     SINCE" + strings.Repeat(" ", len(since)-5+2) + "PEER                 RUNNING  DIR\n",
+		"remote  attached  " + since + "  100.64.1.2           claude   ~/Projects/mosey\n",
+		"local   attached  " + since + "  127.0.0.1            bash     ~\n",
+		"named   attached  " + since + "  desktop (127.0.0.1)  vim      ~\n",
+		"gone    detached  " + since + "                       bash     ~\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the table lacks %q:\n%s", want, got)

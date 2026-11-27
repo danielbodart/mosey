@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 // realClient is the real mosey client binary on a pty of its own, as a
@@ -204,7 +205,7 @@ func TestSessionsThroughRealSSH(t *testing.T) {
 	if status := third.exits(); status != 3 {
 		t.Errorf("the third client exited %d, not 3; log:\n%s", status, third.log())
 	}
-	third.shows("session taken over from 127.0.0.1:")
+	third.shows(takenOverFromHere())
 
 	fifth := startClient(t, "the fifth client", mosey, s, "-new")
 	fifth.shows("$")
@@ -220,7 +221,7 @@ func TestSessionsThroughRealSSH(t *testing.T) {
 		t.Fatalf("mosey -list exited %d:\n%s", status, out)
 	}
 	for _, n := range []string{name, other, fresh} {
-		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(n) + `\s+attached\s+\d{4}-\d\d-\d\dT\S+\s+127\.0\.0\.1\s+bash\s+~$`).MatchString(out) {
+		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(n) + `\s+attached\s+\d{4}-\d\d-\d\dT\S+\s+` + peerHere + `\s+bash\s+~$`).MatchString(out) {
 			t.Errorf("mosey -list does not show %s attached:\n%s", n, out)
 		}
 	}
@@ -251,3 +252,20 @@ func TestSessionsThroughRealSSH(t *testing.T) {
 		t.Errorf("mosey -list after the end:\n%s", out)
 	}
 }
+
+// takenOverFromHere is how a client revoked by another mosey on this
+// machine names it (bootstrap.md §9.1): by this machine's claimed name and
+// loopback, or by the loopback address and port when it claims none. The
+// name travels the whole way: the ClientLine, the spawner, proto's Mint,
+// and the REVOKED frame (transport.md §8.3).
+func takenOverFromHere() string {
+	if h := hostname.Own(); h != "" {
+		return "session taken over from " + h + " (127.0.0.1) at "
+	}
+	return "session taken over from 127.0.0.1:"
+}
+
+// peerHere is -list's PEER for a client on this machine, as a regular
+// expression: its claimed name beside loopback, or loopback alone when it
+// claims none (bootstrap.md §9.4).
+var peerHere = regexp.QuoteMeta(hostname.Label(hostname.Own(), "127.0.0.1"))

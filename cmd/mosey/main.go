@@ -16,6 +16,7 @@ import (
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/client"
+	"github.com/danielbodart/mosey/internal/hostname"
 	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/predict"
 	"github.com/danielbodart/mosey/internal/server"
@@ -397,6 +398,7 @@ func runClient(self startup.Process, args []string) int {
 		Stderr:      os.Stderr,
 		Log:         log,
 		Getenv:      os.Getenv,
+		Host:        hostname.Own(),
 		Attach:      c.attach,
 		Name:        c.name,
 		Dir:         c.dir,
