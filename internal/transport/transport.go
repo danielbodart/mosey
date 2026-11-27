@@ -145,8 +145,8 @@ type Rekeyed struct{ Epoch uint64 }
 type RekeyOverdue struct{ Age time.Duration }
 
 // Revoked says another client took the session over (D26): the client says
-// "session taken over from <By> at <At>", or "from <Host> (<By's
-// address>)" when Host is not "", and exits. Host is the name the new
+// "session taken over from <By's address> at <At>", or "from <Host>
+// (<By's address>)" when Host is not "", and exits. Host is the name the new
 // client claimed for its machine (§8.3): a claim, never shown without By.
 type Revoked struct {
 	By   netip.AddrPort

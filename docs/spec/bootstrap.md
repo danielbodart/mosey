@@ -1981,11 +1981,12 @@ For a `new` attach there is nothing to revoke. On the `transport.Revoked`
 event, the kicked client restores the terminal and prints:
 
 ```
-mosey: session taken over from ADDR:PORT at 2026-11-14T09:30:12+00:00
+mosey: session taken over from ADDR at 2026-11-14T09:30:12+00:00
 mosey: session taken over from NAME (ADDR) at 2026-11-14T09:30:12+00:00
 ```
 
-`By` is `netip.AddrPort.String()`. `At` is in the client's local zone,
+ADDR is the address of `By`, without the port: the port tells the user
+nothing [D: Dan, 2026-11-27]. `At` is in the client's local zone,
 as RFC 3339 to the second. The second form is for a new client that
 claimed a name (§6.2 `host`; `transport.md` §8.3). NAME is that claim and
 ADDR is the address the server observed, without the port. The name

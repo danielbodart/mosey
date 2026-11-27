@@ -293,7 +293,7 @@ func TestRevocationEndsTheSessionAsTakenOver(t *testing.T) {
 func TestTheTakenOverMessageSaysWhoAndWhen(t *testing.T) {
 	at := time.Date(2026, 11, 14, 9, 30, 12, 0, time.FixedZone("", 0))
 	e := &TakenOverError{By: netip.MustParseAddrPort("[2001:db8::1]:60001"), At: at}
-	want := "session taken over from [2001:db8::1]:60001 at " + at.Local().Format("2006-01-02T15:04:05-07:00")
+	want := "session taken over from 2001:db8::1 at " + at.Local().Format("2006-01-02T15:04:05-07:00")
 	if e.Error() != want {
 		t.Errorf("%q", e.Error())
 	}

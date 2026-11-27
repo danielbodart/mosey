@@ -1308,7 +1308,7 @@ the field is optional and needs no new number (`versioning.md` §5)
 [D: Dan, 2026-11-27].
 
 The revoked client reports `transport.Revoked{By, Host, At}`. It says
-"session taken over from <addr> at <time>", or "from <name> (<address>)"
+"session taken over from <address> at <time>", or "from <name> (<address>)"
 with a name, and exits (D26). The address part decides whether the body
 is read. Any other family value, or a body shorter than the address part,
 is ignored like any malformed body (§4.2). **A bad name part is dropped,

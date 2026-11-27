@@ -255,14 +255,14 @@ func TestSessionsThroughRealSSH(t *testing.T) {
 
 // takenOverFromHere is how a client revoked by another mosey on this
 // machine names it (bootstrap.md §9.1): by this machine's claimed name and
-// loopback, or by the loopback address and port when it claims none. The
+// loopback, or by the loopback address alone when it claims none. The
 // name travels the whole way: the ClientLine, the spawner, proto's Mint,
 // and the REVOKED frame (transport.md §8.3).
 func takenOverFromHere() string {
 	if h := hostname.Own(); h != "" {
 		return "session taken over from " + h + " (127.0.0.1) at "
 	}
-	return "session taken over from 127.0.0.1:"
+	return "session taken over from 127.0.0.1 at "
 }
 
 // peerHere is -list's PEER for a client on this machine, as a regular
