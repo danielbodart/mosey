@@ -29,15 +29,6 @@ func pairOf(t *testing.T, a, b Peer) (*Conn, *Conn) {
 	return ca, cb
 }
 
-func openFDs(t *testing.T) int {
-	t.Helper()
-	entries, err := os.ReadDir("/proc/self/fd")
-	if err != nil {
-		t.Skip("no /proc/self/fd")
-	}
-	return len(entries)
-}
-
 func TestMessagesCrossASocketpairWhole(t *testing.T) {
 	proto, emu := pairOf(t, Proto, Emu)
 	for _, m := range []Message{Init{Cols: 80, Rows: 24, ScrollbackCells: 1}, Output{Data: []byte("hi")}, Flush{}} {
@@ -103,13 +94,6 @@ func TestStartCarriesTheSocketAndThePTYMaster(t *testing.T) {
 	s.PTY.Close()
 	udp.Close()
 	pty.Close()
-}
-
-func fdOf(f *os.File) uintptr {
-	raw, _ := f.SyscallConn()
-	var fd uintptr
-	raw.Control(func(x uintptr) { fd = x })
-	return fd
 }
 
 // A message that carries the wrong number of fds is refused and every fd
@@ -311,23 +295,23 @@ func TestSendRefusesAMessageItsSideDoesNotSend(t *testing.T) {
 	}
 }
 
-func TestCheckSeqpacket(t *testing.T) {
+func TestCheckSocketTakesOnlyASeqpacketSocketOnLinux(t *testing.T) {
 	l, r, _ := Pair()
 	defer l.Close()
 	defer r.Close()
-	if err := CheckSeqpacket(int(fdOf(l))); err != nil {
+	if err := CheckSocket(int(fdOf(l))); err != nil {
 		t.Fatal(err)
 	}
 	fds, _ := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	defer unix.Close(fds[0])
 	defer unix.Close(fds[1])
-	if err := CheckSeqpacket(fds[0]); err == nil {
+	if err := CheckSocket(fds[0]); err == nil {
 		t.Fatal("a stream socket passed")
 	}
 	pr, pw, _ := os.Pipe()
 	defer pr.Close()
 	defer pw.Close()
-	if err := CheckSeqpacket(int(fdOf(pr))); err == nil {
+	if err := CheckSocket(int(fdOf(pr))); err == nil {
 		t.Fatal("a pipe passed")
 	}
 }

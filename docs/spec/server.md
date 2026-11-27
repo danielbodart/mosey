@@ -399,7 +399,8 @@ since it holds the keys.
   then checks with `lstat` that it is a directory, not a symlink, owned by
   its uid, with no group or other permission bits; anything else and it
   makes no socket. It then makes `SID-HEX` (0700, `mkdir` failing on one
-  that exists), and binds a `SOCK_SEQPACKET` unix socket at
+  that exists), and binds a `SOCK_SEQPACKET` unix socket (on darwin, a
+  `SOCK_STREAM` socket framed as in §3.1) at
   `attach.sock.tmp`, listens, sets it 0600 and renames it to
   `attach.sock`, so a socket at the final name is always one that accepts.
   A launcher or lister makes the same check of `R/mosey` and of
@@ -409,7 +410,7 @@ since it holds the keys.
   the SID), before `Ready`. A failure to make it is logged and the session
   goes on, not resumable.
 - **Peer check.** On every accepted connection the spawner reads
-  `SO_PEERCRED` and closes the connection, unanswered, unless the uid is
+  `SO_PEERCRED` (on darwin, `LOCAL_PEERCRED`) and closes the connection, unanswered, unless the uid is
   its own [S1 `resume.go`]. The directory's mode already keeps other users
   out; this is defence in depth.
 - **The exchange.** Spawner → peer: the greeting (`bootstrap.md` §9.2.1),
@@ -578,7 +579,8 @@ deny-all and cannot open `/proc`.
 - **Sockets.** `AF_UNIX`, `SOCK_SEQPACKET`, made with `socketpair(2)`:
   the kernel keeps message boundaries and delivers in order, so a
   message is one `send` and one `recv` and there is no length field to
-  parse (S4 §2). macOS needs another framing (§10).
+  parse (S4 §2). darwin uses `SOCK_STREAM` with a length before each
+  message (see "Framing on darwin" below, and §10).
 - **Sizes.** No message is longer than `MaxMessage` = 65536 bytes
   [derived: well under the default `net.core.wmem_default` of 212992,
   which bounds one seqpacket message, so no tuning is needed on any
@@ -595,7 +597,45 @@ deny-all and cannot open `/proc`.
 - **Who reads with what.** spawner: `recvmsg` on B, C and the attach
   socket (closes any fds: none are allowed in). proto: `recvmsg` on C
   (Start, EmuLink and AgentConn carry fds), `read` on E. emu: `read` on
-  E. launcher: `read` on B and on the attach socket.
+  E. launcher: `read` on B and on the attach socket. On darwin every
+  receiver uses `recvmsg` (see "Framing on darwin").
+- **Framing on darwin.** macOS has no `AF_UNIX` `SOCK_SEQPACKET` (§10).
+  On darwin, the pairs and the attach socket are `SOCK_STREAM`.
+  A 4-byte big-endian length comes before each message. The message
+  after the length is the same bytes as on Linux. The rules are:
+  - The receiver reads the 4 bytes of the length, then the body.
+    No read goes past the end of the current message.
+  - A length of 0 or more than `MaxMessage` is refused before the body
+    is read and before any allocation. The stream then has no known
+    message boundary, so the refusal is final: every later receive on
+    that connection is refused too.
+  - A body that is refused (bad layout, wrong peer, wrong number of
+    fds) is read in full first. The stream keeps its place, as a
+    refused seqpacket message does on Linux.
+  - The sender sends a message with its fds in one `sendmsg`. The fds
+    go with the first byte of the message. A short send continues with
+    plain writes.
+  - The fds that arrive during the reads of a message belong to that
+    message. This is true for short reads too, because no read crosses
+    the end of a message.
+  - A deadline can stop a receive part of the way through a message.
+    The next receive continues from that point.
+  - The stream ends between messages: that is EOF. The stream ends in a
+    message: that is EOF too (the peer has gone), and the fds of that
+    message are closed.
+  - darwin's `read(2)` puts the fds that come with the data into the
+    fd table of the reader, and nothing closes them [M: dan-mac,
+    2026-11-27]. So on darwin every receiver uses `recvmsg`, and a
+    message with fds that it must not have is refused and its fds
+    closed.
+  - Each end of a pair has `SO_SNDBUF` and `SO_RCVBUF` of
+    4 × (`MaxMessage` + 4) bytes [derived: about the room a Linux
+    seqpacket sender has; darwin's default is 8192 bytes].
+  - The attach greeting (§2.6) is framed the same way, and is bounded
+    by `MaxSessionLine`.
+
+  This framing is on darwin only. The Linux wire does not change, and no
+  protocol number changes.
 - **Encoding.** Byte 0 is the type. Integers are unsigned big-endian
   unless marked `i32` (two's complement, big-endian). Each type has one
   fixed layout; a message is valid only if its length is exactly the
@@ -1713,7 +1753,10 @@ In this section, [M] is a measurement on dan-mac on 2026-11-27, and
 | mechanism | Linux | macOS |
 |---|---|---|
 | pty | `/dev/ptmx`, `TIOCSPTLCK`, `TIOCGPTN`, `TCGETS`, `TIOCSWINSZ` | `/dev/ptmx`, then `TIOCPTYGRANT`, `TIOCPTYUNLK` and `TIOCPTYGNAME` (gives `/dev/ttysNNN`); `TIOCGETA` for termios; `TIOCSWINSZ`. All work [M] |
-| IPC framing | `SOCK_SEQPACKET` socketpair | An `AF_UNIX` `SOCK_SEQPACKET` socketpair fails with "protocol not supported" [M]. `SOCK_DGRAM` caps a message at `net.local.dgram.maxdgram`, 2048 bytes [M]. So: `SOCK_STREAM`, with a 4-byte big-endian length before each message. The length is bounded by `MaxMessage` before any allocation. The layouts of §3.3 do not change. The length prefix is the one new parser, and it gets a fuzz target. This framing is on darwin only; the Linux wire does not change, and no protocol number changes |
+| IPC framing | `SOCK_SEQPACKET` socketpair | An `AF_UNIX` `SOCK_SEQPACKET` socketpair fails with "protocol not supported" [M]. `SOCK_DGRAM` caps a message at `net.local.dgram.maxdgram`, 2048 bytes [M]. So: `SOCK_STREAM`, with a 4-byte big-endian length before each message. The length is bounded by `MaxMessage` before any allocation. The layouts of §3.3 do not change. The length prefix is the one new parser, and it gets a fuzz target (`FuzzFrameReader`). The attach socket is a framed `SOCK_STREAM` socket too. §3.1 ("Framing on darwin") gives the rules. This framing is on darwin only; the Linux wire does not change, and no protocol number changes |
+| fds and `read(2)` | `read(2)` discards and closes fds that come with a message | `read(2)` puts the fds into the reader's fd table, and nothing closes them [M]. So every receiver uses `recvmsg` (§3.1) |
+| peer credentials | `SO_PEERCRED` | `LOCAL_PEERCRED` |
+| close-on-exec | `SOCK_CLOEXEC`, `accept4`, `MSG_CMSG_CLOEXEC` | None of these exist. `FD_CLOEXEC` is set under `syscall.ForkLock`, as Go's `net` package does |
 | fd passing | `SCM_RIGHTS` | `SCM_RIGHTS` works [M] |
 | parent death | `Pdeathsig` (Linux-only `SysProcAttr` field: it stays in a `_linux.go` file) | No `Pdeathsig`. Parent death is EOF on the IPC socket |
 | process info | `/proc` | No `/proc`. Use `sysctl` `kern.proc.*` (`unix.SysctlKinfoProc` in `x/sys`) |

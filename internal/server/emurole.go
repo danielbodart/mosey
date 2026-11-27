@@ -51,8 +51,9 @@ func settleLazyInit() {
 	time.Local = time.UTC
 }
 
-// wrapRoleSocket checks that fd is the seqpacket socket a role is started
-// with and wraps it; before the sandbox, which denies getsockopt.
+// wrapRoleSocket checks that fd is the IPC socket a role is started
+// with (ipc.CheckSocket) and wraps it; before the sandbox, which denies
+// getsockopt.
 //
 // f was made by os.NewFile on an fd that exec.Cmd.ExtraFiles left in
 // blocking mode, so it cannot be polled and has no deadlines. Rather than
@@ -68,7 +69,7 @@ func wrapRoleSocket(f *os.File, self, peer ipc.Peer) (*ipc.Conn, error) {
 	var fd int
 	var derr error
 	if err := raw.Control(func(x uintptr) {
-		if derr = ipc.CheckSeqpacket(int(x)); derr == nil {
+		if derr = ipc.CheckSocket(int(x)); derr == nil {
 			fd, derr = unix.FcntlInt(x, unix.F_DUPFD_CLOEXEC, 0)
 		}
 	}); err != nil {

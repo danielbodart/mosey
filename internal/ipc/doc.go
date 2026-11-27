@@ -1,7 +1,10 @@
 // Package ipc is how the server's roles talk (D22, server.md §3): messages
-// on SOCK_SEQPACKET socketpairs, so the kernel keeps message boundaries and
-// there is no length field to parse, and file descriptors passed with
-// SCM_RIGHTS, on the spawner's messages only.
+// on socketpairs, and file descriptors passed with SCM_RIGHTS, on the
+// spawner's messages only. On Linux the pairs are SOCK_SEQPACKET, so the
+// kernel keeps message boundaries and there is no length field to parse.
+// macOS has no AF_UNIX SOCK_SEQPACKET, so there they are SOCK_STREAM with
+// a 4-byte length before each message (frame.go, server.md §10); the
+// messages themselves are the same bytes.
 //
 //	launcher -> spawner  ClientLine
 //	spawner -> launcher  Ready, Failed

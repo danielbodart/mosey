@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +14,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Conn is one end of a seqpacket socketpair, made for one peer.
+// Conn is one end of a socketpair, made for one peer: SOCK_SEQPACKET on
+// Linux, SOCK_STREAM with each message framed on darwin (server.md §3.1,
+// §10).
 //
 // Send and Recv may be called from different goroutines; each from one at
 // a time.
@@ -23,17 +26,23 @@ type Conn struct {
 	self, peer Peer
 	// recvmsg is whether Recv reads with recvmsg, to take and close fds,
 	// or with read, for which the kernel discards any that come
-	// (server.md §3.1, "Who reads with what").
+	// (server.md §3.1, "Who reads with what"). A framed Conn always reads
+	// with recvmsg (readFramed).
 	recvmsg bool
-	buf     []byte
+	// framed is whether each message has its length before it, on a
+	// stream socket (frame.go); fr is where the read of one stands.
+	framed bool
+	fr     frameReader
+	buf    []byte
 	// skipped counts the attach messages of unknown, ignorable types
 	// Recv has read past (server.md §2.8).
 	skipped int
 }
 
-// NewConn wraps f, one end of a SOCK_SEQPACKET pair, as self's connection
-// to peer. f should be non-blocking (Pair's and Wrap's are), so reads can
-// have deadlines. It makes no syscall a sandboxed role is denied.
+// NewConn wraps f, one end of a pair Pair makes or an attach socket
+// connection, as self's connection to peer. f should be non-blocking
+// (Pair's and Wrap's are), so reads can have deadlines. It makes no
+// syscall a sandboxed role is denied.
 func NewConn(f *os.File, self, peer Peer) (*Conn, error) {
 	raw, err := f.SyscallConn()
 	if err != nil {
@@ -42,6 +51,7 @@ func NewConn(f *os.File, self, peer Peer) (*Conn, error) {
 	return &Conn{
 		f: f, raw: raw, self: self, peer: peer,
 		recvmsg: self == Spawner || (self == Proto && peer == Spawner),
+		framed:  framedIPC,
 		// One more than the largest message, so one that fills the buffer
 		// is known to be too long rather than cut.
 		buf: make([]byte, MaxMessage+1),
@@ -70,18 +80,67 @@ func Wrap(fd int, name string) (*os.File, error) {
 	return os.NewFile(uintptr(fd), name), nil
 }
 
-// CheckSeqpacket says whether fd is a SOCK_SEQPACKET socket. Roles call it
-// on the fd they were started with, before their sandbox, which denies
+// CheckSocket says whether fd is a socket of the type this platform's IPC
+// uses: SOCK_SEQPACKET on Linux, SOCK_STREAM on darwin. Roles call it on
+// the fd they were started with, before their sandbox, which denies
 // getsockopt.
-func CheckSeqpacket(fd int) error {
+func CheckSocket(fd int) error {
 	t, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_TYPE)
 	if err != nil {
 		return fmt.Errorf("ipc: fd %d is not a socket: %w", fd, err)
 	}
-	if t != unix.SOCK_SEQPACKET {
-		return fmt.Errorf("ipc: fd %d is a socket of type %d, not SOCK_SEQPACKET", fd, t)
+	if t != sockType {
+		return fmt.Errorf("ipc: fd %d is a socket of type %d, not %d", fd, t, sockType)
 	}
 	return nil
+}
+
+// WriteRecord sends b as one record that is not an IPC message: the
+// attach socket's greeting (server.md §2.6). On Linux it is one seqpacket
+// message; on darwin it is framed as a message is.
+func WriteRecord(f *os.File, b []byte) error { return writeRecord(f, b, framedIPC) }
+
+func writeRecord(f *os.File, b []byte, framed bool) error {
+	if framed {
+		b = appendFrame(make([]byte, 0, frameHeader+len(b)), b)
+	}
+	_, err := f.Write(b)
+	return err
+}
+
+// ReadRecord reads one record that WriteRecord sent, of at most max
+// bytes. A longer one is refused with an error that wraps ErrMalformed. It
+// reads no byte past the record, so a Conn can take over f after it.
+func ReadRecord(f *os.File, max int) ([]byte, error) { return readRecord(f, max, framedIPC) }
+
+func readRecord(f *os.File, max int, framed bool) ([]byte, error) {
+	if !framed {
+		// One seqpacket message, read whole: a buffer one byte over the
+		// bound tells a long one from one that fits.
+		buf := make([]byte, max+1)
+		n, err := f.Read(buf)
+		if err != nil {
+			return nil, err
+		}
+		if n > max {
+			return nil, malformed("a record over %d bytes", max)
+		}
+		return buf[:n], nil
+	}
+	var hdr [frameHeader]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		return nil, err
+	}
+	// Bounded before the allocation: the length is the peer's word.
+	l := binary.BigEndian.Uint32(hdr[:])
+	if l == 0 || l > uint32(max) {
+		return nil, malformed("a framed record of %d bytes is not in 1..%d", l, max)
+	}
+	buf := make([]byte, l)
+	if _, err := io.ReadFull(f, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
 }
 
 // Send sends m, with its fds attached if it carries any. Only the spawner
@@ -99,6 +158,11 @@ func (c *Conn) Send(m Message) error {
 	// Credential and Ready carry the credential line, PSK and all: no
 	// copy of it outlives the send (threat-model.md §4.10).
 	defer clear(b)
+	if c.framed {
+		framed := appendFrame(make([]byte, 0, frameHeader+len(b)), b)
+		defer clear(framed)
+		b = framed
+	}
 	fs := files(m)
 	if len(fs) == 0 {
 		_, err := c.f.Write(b)
@@ -120,8 +184,9 @@ func (c *Conn) Send(m Message) error {
 	}
 	rights := unix.UnixRights(fds...)
 	var serr error
+	var n int
 	err = c.raw.Write(func(fd uintptr) bool {
-		serr = unix.Sendmsg(int(fd), b, rights, nil, 0)
+		n, serr = unix.SendmsgN(int(fd), b, rights, nil, 0)
 		return serr != unix.EAGAIN
 	})
 	// The files must stay open, and so their fds valid, until sendmsg has
@@ -130,7 +195,16 @@ func (c *Conn) Send(m Message) error {
 	if err != nil {
 		return err
 	}
-	return serr
+	if serr != nil {
+		return serr
+	}
+	if n < len(b) {
+		// Only a stream socket sends part of a message. The fds went
+		// with its first bytes, where the receiver looks for them
+		// (frame.go); the rest follows as plain bytes.
+		_, err = c.f.Write(b[n:])
+	}
+	return err
 }
 
 // Recv receives the next message from the peer. io.EOF means the peer has
@@ -139,7 +213,9 @@ func (c *Conn) Send(m Message) error {
 // wrapping ErrMalformed, and every fd that came with it is closed. An
 // attach message of a type this build does not know, whose type says it
 // may be ignored, is read past, with its fds closed, at most MaxSkipped
-// times on one connection (server.md §2.8).
+// times on one connection (server.md §2.8). On a framed Conn, a refused
+// length is final: the stream has lost its place, so every later Recv
+// refuses too.
 func (c *Conn) Recv() (Message, error) {
 	for {
 		m, err := c.recv()
@@ -183,13 +259,8 @@ func (c *Conn) recv() (Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	closeAll := func() {
-		for _, fd := range fds {
-			unix.Close(fd)
-		}
-	}
 	if n > MaxMessage {
-		closeAll()
+		closeFDs(fds)
 		return nil, malformed("over %d bytes", MaxMessage)
 	}
 	m, err := Parse(c.peer, c.self, c.buf[:n])
@@ -198,11 +269,11 @@ func (c *Conn) recv() (Message, error) {
 	// line, which is wiped as soon as it is read (threat-model.md §4.10).
 	clear(c.buf[:n])
 	if err != nil {
-		closeAll()
+		closeFDs(fds)
 		return nil, err
 	}
 	if len(fds) != want {
-		closeAll()
+		closeFDs(fds)
 		return nil, malformed("%T came with %d fds, not %d", m, len(fds), want)
 	}
 	if want == 0 {
@@ -215,9 +286,7 @@ func (c *Conn) recv() (Message, error) {
 			for _, g := range fs[:i] {
 				g.Close()
 			}
-			for _, fd := range fds[i:] {
-				unix.Close(fd)
-			}
+			closeFDs(fds[i:])
 			return nil, err
 		}
 		fs[i] = f
@@ -238,17 +307,93 @@ func CloseFiles(m Message) {
 	}
 }
 
+// closeFDs closes fds that were received and not handed on.
+func closeFDs(fds []int) {
+	for _, fd := range fds {
+		unix.Close(fd)
+	}
+}
+
 // read reads one message into c.buf, with any fds that came with it.
 func (c *Conn) read() (n int, fds []int, err error) {
+	if c.framed {
+		return c.readFramed()
+	}
 	if !c.recvmsg {
 		n, err = c.f.Read(c.buf)
 		return n, nil, err
 	}
+	n, fds, err = c.recvmsgInto(c.buf)
+	if err != nil {
+		return 0, nil, err
+	}
+	if n == 0 && len(fds) == 0 {
+		// recvmsg cannot tell an empty message from a closed peer, and an
+		// empty message is never valid, so both end the conversation.
+		return 0, nil, io.EOF
+	}
+	return n, fds, nil
+}
+
+// readFramed reads one framed message into c.buf, in as many reads as the
+// stream needs, each within the message (frame.go). A deadline or a close
+// may stop it part-way; the next call goes on from there.
+func (c *Conn) readFramed() (int, []int, error) {
+	if c.fr.err != nil {
+		return 0, nil, c.fr.err
+	}
+	for {
+		// Always recvmsg, even where no fds are allowed in: darwin's
+		// read(2) puts any fds that came into this process's fd table,
+		// where nothing would ever close them (server.md §10 [M]).
+		// recvmsg hands them over, and recv closes them.
+		n, fds, err := c.recvmsgInto(c.fr.next(c.buf))
+		if errors.Is(err, ErrMalformed) {
+			// The bytes of this read are gone with its fds: the stream
+			// has lost its place.
+			c.fr.err = err
+			closeFDs(c.fr.take())
+			return 0, nil, err
+		}
+		if err != nil {
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				// The connection is gone (closed here, or reset), so
+				// the rest of the message will not come: close the fds
+				// of its part that did. Only a deadline is resumed.
+				c.fr.err = err
+				closeFDs(c.fr.take())
+			}
+			return 0, nil, err
+		}
+		size, mfds, done, err := c.fr.add(n, fds)
+		if err != nil {
+			closeFDs(mfds)
+			return 0, nil, err
+		}
+		if done {
+			return size, mfds, nil
+		}
+	}
+}
+
+// recvmsgInto reads into p with recvmsg, and returns the fds that came,
+// close-on-exec. A read flagged truncated is refused and its fds closed.
+func (c *Conn) recvmsgInto(p []byte) (n int, fds []int, err error) {
 	oob := make([]byte, unix.CmsgSpace(4*4))
 	var oobn, flags int
 	var rerr error
 	err = c.raw.Read(func(fd uintptr) bool {
-		n, oobn, flags, _, rerr = unix.Recvmsg(int(fd), c.buf, oob, recvFlags)
+		if !recvCloexec {
+			// No MSG_CMSG_CLOEXEC: the fds are made close-on-exec under
+			// ForkLock, as the net package does for accept, so no child
+			// forked meanwhile inherits one.
+			syscall.ForkLock.RLock()
+			defer syscall.ForkLock.RUnlock()
+		}
+		n, oobn, flags, _, rerr = unix.Recvmsg(int(fd), p, oob, recvFlags)
+		if !recvCloexec && rerr == nil && oobn > 0 {
+			cloexecRights(oob[:oobn])
+		}
 		return rerr != unix.EAGAIN
 	})
 	if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
@@ -279,17 +424,26 @@ func (c *Conn) read() (n int, fds []int, err error) {
 		}
 	}
 	if flags&(unix.MSG_TRUNC|unix.MSG_CTRUNC) != 0 {
-		for _, fd := range fds {
-			unix.Close(fd)
-		}
+		closeFDs(fds)
 		return 0, nil, malformed("truncated (flags %#x)", flags)
 	}
-	if n == 0 && len(fds) == 0 {
-		// recvmsg cannot tell an empty message from a closed peer, and an
-		// empty message is never valid, so both end the conversation.
-		return 0, nil, io.EOF
-	}
 	return n, fds, nil
+}
+
+// cloexecRights sets close-on-exec on every fd in the control messages of
+// oob.
+func cloexecRights(oob []byte) {
+	cmsgs, err := unix.ParseSocketControlMessage(oob)
+	if err != nil {
+		return
+	}
+	for _, cm := range cmsgs {
+		if fds, err := unix.ParseUnixRights(&cm); err == nil {
+			for _, fd := range fds {
+				unix.CloseOnExec(fd)
+			}
+		}
+	}
 }
 
 // Pending says whether a message is waiting, without taking it: proto
@@ -297,6 +451,9 @@ func (c *Conn) read() (n int, fds []int, err error) {
 // message while idle is a violation (server.md §3.5). It peeks with
 // recvmsg, which proto's policy has.
 func (c *Conn) Pending() bool {
+	if c.framed && c.fr.started() {
+		return true // part of a message is read already
+	}
 	var pending bool
 	c.raw.Control(func(fd uintptr) {
 		var b [1]byte
