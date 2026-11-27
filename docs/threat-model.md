@@ -657,7 +657,11 @@ trials; built with `GOEXPERIMENT=runtimesecret` and key generation inside
     costs nothing). The launcher and spawner do **not**: an rlimit is
     inherited across `exec`, and the user's login shell must keep the
     user's own core-dump settings.
-  - **darwin** (client now, server [later]): `setrlimit(RLIMIT_CORE, 0)`.
+  - **darwin**: `setrlimit(RLIMIT_CORE, 0)` in the client, proto and
+    emu. The launcher and the spawner have no protection: macOS has no
+    `PR_SET_DUMPABLE`, and the rlimit reason above applies. This is a
+    known gap (`server.md` §10). The Seatbelt slice decides whether
+    `PT_DENY_ATTACH` can close it.
   - **Who:** the client (`mosey host`, before its one-shot X-Wing key
     exists; a requirement on `bootstrap.md` §4.3), the launcher and
     spawner (before they read the credential line; `server.md` §2.1),

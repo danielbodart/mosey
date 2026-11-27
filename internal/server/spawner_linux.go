@@ -32,6 +32,10 @@ func (cfg *SpawnerConfig) platformDefaults() {
 	}
 }
 
+// serverRuns says whether the launcher starts a server on this system
+// (D22, server.md §10).
+const serverRuns = true
+
 // setNotDumpable is PR_SET_DUMPABLE 0 for the launcher and the spawner
 // (threat-model.md §4.10). A failure is fatal.
 func setNotDumpable() error { return nocore.NotDumpable() }

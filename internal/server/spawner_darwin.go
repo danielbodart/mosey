@@ -17,6 +17,12 @@ import (
 // session needs no scope. emu's memory limit is jetsam's, set at its
 // posix_spawn [D].
 
+// serverRuns says whether the launcher starts a server on this system. On
+// macOS it is false until the darwin code has run on a Mac: its tests and
+// the end-to-end run of server.md §10 "Status". The tests set it, so
+// they run the code that the launcher holds back from users.
+var serverRuns = false
+
 func (cfg *SpawnerConfig) platformDefaults() {}
 
 // joinSessionScope has nothing to do: a session needs no scope on macOS
@@ -24,8 +30,10 @@ func (cfg *SpawnerConfig) platformDefaults() {}
 func (s *spawner) joinSessionScope() {}
 
 // setNotDumpable has nothing to do on macOS: there is no PR_SET_DUMPABLE.
-// The Seatbelt slice adds ptrace(PT_DENY_ATTACH) to the roles that hold
-// keys (server.md §10).
+// RLIMIT_CORE 0 would go on to the user's login shell, as on Linux. So
+// the launcher and the spawner read the credential line with no
+// protection: a known gap (server.md §10, threat-model.md §4.10). The
+// Seatbelt slice decides whether PT_DENY_ATTACH can close it.
 func setNotDumpable() error { return nil }
 
 // noteSandbox says once, in the session's log, that the roles run

@@ -1840,8 +1840,21 @@ log; the roles do not, so an emu restart does not repeat it. On Linux a
 sandbox failure stays fatal. The sandbox is the next slice. Until then,
 the client's auto-install refuses hosts that are not Linux
 (`internal/client/upload.go`). So only a Mac with mosey installed by
-hand or by Nix runs the server. The launcher and `cmd/mosey` accept
-darwin. The client runs on macOS already.
+hand or by Nix can run the server. The client runs on macOS already.
+
+**Status**. The darwin spawner and roles build and vet, but they have
+not run on a Mac yet. Thus the launcher still refuses darwin
+(`serverRuns` in `spawner_darwin.go`), and the user documents say that
+the server operates only on Linux. The `internal/server` tests set
+`serverRuns`, so they run the darwin code. To open the gate, do these
+steps in one commit:
+
+1. Run the `internal/spawn` and `internal/server` tests on a Mac.
+2. Run the client against a Mac with `-remote PATH`. Type a command,
+   detach, resume, and use `-list`.
+3. Set `serverRuns` to true on darwin.
+4. Say in `README.md` and `docs/install.md` that the server operates on
+   macOS without a sandbox.
 
 **The spawner on darwin** (`spawner_darwin.go`). The spawner and the
 launcher skip `PR_SET_DUMPABLE`, which macOS does not have. There is no
@@ -1849,6 +1862,15 @@ session scope. proto starts with `os/exec` and no `Pdeathsig`. emu
 starts with `posix_spawn` and its jetsam limit. The client's agent
 capture directory is `/tmp/mosey-UID` on macOS too, for the same
 `sun_path` reason.
+
+**No core-dump protection for the launcher and the spawner**. On darwin
+the launcher and the spawner read the credential line with no
+protection from core dumps or debuggers. macOS has no `PR_SET_DUMPABLE`.
+They do not set `RLIMIT_CORE` to 0, for the Linux reason: an rlimit
+goes on across `exec`, and the user's login shell must keep the user's
+core-dump settings (`threat-model.md` §4.10). proto and emu set
+`RLIMIT_CORE` to 0 (`internal/nocore`). The Seatbelt slice decides
+whether `PT_DENY_ATTACH` can close this gap.
 
 **Not done yet** (after the spawner slice):
 
@@ -1858,6 +1880,7 @@ capture directory is `/tmp/mosey-UID` on macOS too, for the same
   `proc_pidinfo`. Until then, `-list` on a Mac shows no foreground
   program or directory, and darwin pty support is not complete.
 - The Seatbelt sandbox and `PT_DENY_ATTACH` (the next slice).
+- The runs on a Mac that open the launcher's gate ("Status").
 
 ---
 

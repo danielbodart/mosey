@@ -43,10 +43,6 @@ const (
 	emuMemoryMax = 512 << 20
 )
 
-// serverRuns says whether the server runs on this system: on Linux and
-// macOS (D22, server.md §10).
-const serverRuns = true
-
 // SpawnerConfig is how the spawner is set up; the zero values of the
 // optional fields are production's.
 type SpawnerConfig struct {

@@ -123,7 +123,7 @@ func runServer(role string, self startup.Process, args []string) {
 		os.Exit(2)
 	}
 	if errors.Is(err, errors.ErrUnsupported) {
-		failServer(errors.New("the server runs on Linux and macOS only"))
+		failServer(errors.New("the server runs on Linux only for now"))
 	}
 	if err != nil {
 		failServer(err)
