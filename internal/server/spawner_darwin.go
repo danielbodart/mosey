@@ -18,10 +18,10 @@ import (
 // posix_spawn [D].
 
 // serverRuns says whether the launcher starts a server on this system. On
-// macOS it is false until the darwin code has run on a Mac: its tests and
-// the end-to-end run of server.md §10 "Status". The tests set it, so
-// they run the code that the launcher holds back from users.
-var serverRuns = false
+// macOS it does: the darwin tests and the end-to-end run of server.md §10
+// passed on dan-mac (macOS 15.7.4, 2026-11-27) [M]. It runs without the
+// Seatbelt sandbox until that slice lands (D22, Q5 server first).
+const serverRuns = true
 
 func (cfg *SpawnerConfig) platformDefaults() {}
 

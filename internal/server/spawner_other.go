@@ -12,7 +12,7 @@ import (
 )
 
 // serverRuns says whether the launcher starts a server on this system: on
-// Linux only for now (D22, server.md §10).
+// Linux and macOS only (D22, server.md §10).
 const serverRuns = false
 
 // SpawnerConfig is how the spawner is set up (see spawner_unix.go).

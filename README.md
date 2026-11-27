@@ -43,8 +43,9 @@ paper and public specifications. It contains no Mosh code
 `ssh`: your configuration, your keys and your agent.
 
 mosey has no panes, windows or status bar. Use the tabs and splits of
-your terminal. The server operates only on Linux. The client operates on
-Linux, macOS and Android (Termux).
+your terminal. The server operates on Linux and macOS. On macOS it has no
+sandbox yet, and mosey does not copy it to a Mac: install it there
+yourself. The client operates on Linux, macOS and Android (Termux).
 
 ## Quick start
 

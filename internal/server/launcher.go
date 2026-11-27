@@ -80,7 +80,7 @@ func (l *Launcher) Run(ctx context.Context) error {
 
 func (l *Launcher) run(ctx context.Context) error {
 	if !serverRuns {
-		return &LaunchError{Code: bootstrap.CodeUnsupported, Text: "the server runs on Linux only for now"}
+		return &LaunchError{Code: bootstrap.CodeUnsupported, Text: "the server runs on Linux and macOS only"}
 	}
 	// Before the credential line passes through, as in the spawner
 	// (threat-model.md §4.10).
