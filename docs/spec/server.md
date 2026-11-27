@@ -1777,9 +1777,9 @@ In this section, [M] is a measurement on dan-mac on 2026-11-27, and
 | process info | `/proc` | No `/proc`. Use `sysctl` `kern.proc.*` (`unix.SysctlKinfoProc` in `x/sys`) |
 | detach from ssh | a systemd `--user` scope (§2.1) | A `setsid` process started over ssh lives after the ssh connection closes [M]. No scope is necessary |
 | login shell | `/etc/passwd` | `/etc/passwd` has no entry for a Directory Services user [M]. Use `$SHELL`, which sshd sets [M] |
-| sessions dir | `$XDG_RUNTIME_DIR/mosey`, else `/tmp/mosey-UID` (§2.6) | Always `/tmp/mosey-UID` [D]. It holds only sockets and directories. Logs and other regular files go elsewhere. Reason: macOS `tmp_cleaner` deletes regular files and empty directories in `/tmp` older than 3 days. `dirhelper` cleans `$TMPDIR` (`/var/folders/.../T`) after 3 days and at boot. Under `$TMPDIR`, the socket path is too long for `sun_path` (104 bytes with the NUL): `agent.sock.tmp` needed 106 [M]. The client's agent capture directory (`internal/agent/capture.go`) has the same length limit on a Mac client |
+| sessions dir | `$XDG_RUNTIME_DIR/mosey`, else `/tmp/mosey-UID` (§2.6) | Always `/tmp/mosey-UID` [D]. It holds only sockets and directories. Logs and other regular files go elsewhere. The launchers' lock is an `flock` on the directory itself, not a lock file (`bootstrap.md` §9.2). Reason: macOS `tmp_cleaner` deletes regular files and empty directories in `/tmp` older than 3 days. `dirhelper` cleans `$TMPDIR` (`/var/folders/.../T`) after 3 days and at boot. Under `$TMPDIR`, the socket path is too long for `sun_path` (104 bytes with the NUL): `agent.sock.tmp` needed 106 [M]. The client's agent capture directory (`internal/agent/capture.go`) has the same length limit on a Mac client |
 | sandbox | Landlock + seccomp + `PR_SET_DUMPABLE` | Seatbelt `sandbox_init` (deprecated) with our own SBPL profile strings, flags 0 [D], reached from a `CGO_ENABLED=0` binary through `//go:cgo_import_dynamic` and an assembly trampoline (S4 §3.11). Plus `ptrace(PT_DENY_ATTACH)` in place of DUMPABLE. The profiles are below |
-| emu memory limit | cgroup scope `MemoryMax` + `RLIMIT_DATA` | The spawner starts emu with its own `posix_spawn`, not `os/exec`, and calls the private `posix_spawnattr_setjetsam_ext(attr, 0xC, -1, 512, 512)` [D]. `0xC` is ACTIVE and INACTIVE fatal. It also uses `posix_spawn_file_actions_adddup2`, `POSIX_SPAWN_CLOEXEC_DEFAULT` and `POSIX_SPAWN_SETSID` as necessary. The kernel sends SIGKILL at the limit; `wait4` then gives `ru_maxrss` of 513 MiB for a 512 MiB limit [M]. A SIGKILL that the spawner did not send, with `ru_maxrss` at or above the limit, means the limit was hit: tell the client and rebuild, as for the Linux OOM kill. There is no watchdog. `setrlimit` of `RLIMIT_DATA` or `RLIMIT_AS` below 1 TiB gives `EINVAL` [M], so darwin does not use them. Each kill writes a `JetsamEvent` report in `/Library/Logs/DiagnosticReports` [M]; this is accepted [D] |
+| emu memory limit | cgroup scope `MemoryMax` + `RLIMIT_DATA` | The spawner starts emu with its own `posix_spawn` (`internal/spawn`), not `os/exec`, and calls the private `posix_spawnattr_setjetsam_ext(attr, 0xC, -1, 512, 512)` [D]. `0xC` is ACTIVE and INACTIVE fatal. It also uses `posix_spawn_file_actions_adddup2`, `POSIX_SPAWN_CLOEXEC_DEFAULT` and `POSIX_SPAWN_SETSID` as necessary. The kernel sends SIGKILL at the limit; `wait4` then gives `ru_maxrss` of 513 MiB for a 512 MiB limit [M]. A SIGKILL that the spawner did not send, with `ru_maxrss` at or above the limit, means the limit was hit: tell the client and rebuild, as for the Linux OOM kill. There is no watchdog. `setrlimit` of `RLIMIT_DATA` or `RLIMIT_AS` below 1 TiB gives `EINVAL` [M], so darwin does not use them. Each kill writes a `JetsamEvent` report in `/Library/Logs/DiagnosticReports` [M]; this is accepted [D] |
 | syscall policy test | BPF interpreter, any host | not applicable |
 
 **The profiles** [D, M]. `PORT` is the port of the inherited UDP socket.
@@ -1835,24 +1835,29 @@ also needs an `Info.plist` patch, and its network entitlements open all
 TCP to proto.
 
 **Order** [D]. The server comes first, without the sandbox. On darwin the
-roles run without a sandbox and say so once in the log. The sandbox is
-the next slice. Until then, the client's auto-install refuses hosts that
-are not Linux (`internal/client/upload.go`). So only a Mac with mosey
-installed by hand or by Nix runs the server. The server-side gates
-(`cmd/mosey/server.go`, `internal/server/launcher.go`) go away when the
-server works on macOS. The client runs on macOS already.
+roles run without a sandbox. The spawner says so once in the session
+log; the roles do not, so an emu restart does not repeat it. On Linux a
+sandbox failure stays fatal. The sandbox is the next slice. Until then,
+the client's auto-install refuses hosts that are not Linux
+(`internal/client/upload.go`). So only a Mac with mosey installed by
+hand or by Nix runs the server. The launcher and `cmd/mosey` accept
+darwin. The client runs on macOS already.
 
-**Not done yet** (after the IPC framing slice):
+**The spawner on darwin** (`spawner_darwin.go`). The spawner and the
+launcher skip `PR_SET_DUMPABLE`, which macOS does not have. There is no
+session scope. proto starts with `os/exec` and no `Pdeathsig`. emu
+starts with `posix_spawn` and its jetsam limit. The client's agent
+capture directory is `/tmp/mosey-UID` on macOS too, for the same
+`sun_path` reason.
 
-- `sessionsDir` (`internal/server/attach.go`) still follows
-  `XDG_RUNTIME_DIR` and `TMPDIR` on darwin. It must be `/tmp/mosey-UID`
-  there [D] (see "sessions dir" above).
-- The client's agent capture directory (`internal/agent/capture.go`)
-  needs the same check of the `sun_path` length on a Mac client.
-- `pty.ProgramIn` (`-list`, and `internal/server/resume_linux.go`) still
+**Not done yet** (after the spawner slice):
+
+- `pty.ProgramIn` (`-list`, and `internal/server/resume_unix.go`) still
   reads only `/proc`. On darwin it must read the name and the working
   directory another way, for example `sysctl kern.procargs2` and
-  `proc_pidinfo`. Until then, darwin pty support is not complete.
+  `proc_pidinfo`. Until then, `-list` on a Mac shows no foreground
+  program or directory, and darwin pty support is not complete.
+- The Seatbelt sandbox and `PT_DENY_ATTACH` (the next slice).
 
 ---
 

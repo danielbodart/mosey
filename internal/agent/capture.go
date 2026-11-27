@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"syscall"
@@ -95,8 +96,13 @@ type Capture struct {
 // CaptureDir is where the capture socket lives (bootstrap.md §8 step 1):
 // $XDG_RUNTIME_DIR/mosey when that is set and absolute, else the
 // temporary directory's mosey-UID, as the server's sessions directory is
-// (server.md §2.6).
+// (server.md §2.6). On macOS it is always /tmp/mosey-UID, as the sessions
+// directory is there: under $TMPDIR (/var/folders/.../T), a socket path
+// can be too long for sun_path's 104 bytes (server.md §10).
 func CaptureDir(getenv func(string) string) string {
+	if runtime.GOOS == "darwin" {
+		return filepath.Join("/tmp", "mosey-"+strconv.Itoa(os.Getuid()))
+	}
 	if r := getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(r) {
 		return filepath.Join(r, "mosey")
 	}

@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/danielbodart/mosey/internal/screen"
 )
 
 // needs skips t while one of the packages the server is built on is still
@@ -23,6 +25,21 @@ func needs(t *testing.T, what string, probe func()) {
 		}
 	}()
 	probe()
+}
+
+// text is row y as it would be drawn, blanks as spaces, trailing ones
+// dropped.
+func text(g *screen.Grid, y int) string {
+	cols, _ := g.Size()
+	var b strings.Builder
+	for x := range cols {
+		c := g.Cell(x, y)
+		if c.Text == "" && c.Width != 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(c.Text)
+	}
+	return strings.TrimRight(b.String(), " ")
 }
 
 func discardLog() *slog.Logger { return slog.New(slog.DiscardHandler) }

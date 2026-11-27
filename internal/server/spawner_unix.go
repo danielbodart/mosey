@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package server
 
 import (
@@ -22,7 +24,6 @@ import (
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/handshake"
 	"github.com/danielbodart/mosey/internal/ipc"
-	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/pty"
 	"github.com/danielbodart/mosey/internal/screen"
 	"github.com/danielbodart/mosey/internal/startup"
@@ -37,13 +38,14 @@ const (
 	// before its own NoClient (bootstrap.md §4.5): CredentialTTL plus a
 	// margin for teardown and clock granularity.
 	backstop = handshake.CredentialTTL + 10*time.Second
-	// emuDataLimit is emu's RLIMIT_DATA, twice D23's MemoryMax, because it
-	// counts private writable mappings, which run ahead of what a cgroup
-	// charges [derived; TestEmuMemoryLimitRestartsEmu].
-	emuDataLimit = 1 << 30
-	// emuMemoryMax is D23's cgroup limit on emu.
+	// emuMemoryMax is D23's limit on emu: the cgroup's MemoryMax on Linux,
+	// the jetsam limit on macOS (server.md §10).
 	emuMemoryMax = 512 << 20
 )
+
+// serverRuns says whether the server runs on this system: on Linux and
+// macOS (D22, server.md §10).
+const serverRuns = true
 
 // SpawnerConfig is how the spawner is set up; the zero values of the
 // optional fields are production's.
@@ -69,17 +71,24 @@ type SpawnerConfig struct {
 	// option (PLAN O14): tests set it.
 	IdleTimeout time.Duration
 
-	// prlimit sets emu's RLIMIT_DATA; a test hook.
-	prlimit func(pid int) error
+	// sessions overrides the sessions directory (server.md §2.6), which
+	// on macOS is always /tmp/mosey-UID; a test hook, so no test reaches
+	// the user's own sessions.
+	sessions string
 	// sessionIdle overrides pty.SessionIdle; a test hook.
 	sessionIdle func(master *os.File, shellPID int) (bool, error)
-	// busctl runs `busctl ARGS...`; a test hook, so no test asks the
-	// user's own systemd manager for a unit.
+
+	// The Linux-only test hooks (spawner_linux.go, scope_linux.go).
+	//
+	// prlimit sets emu's RLIMIT_DATA.
+	prlimit func(pid int) error
+	// busctl runs `busctl ARGS...`, so no test asks the user's own systemd
+	// manager for a unit.
 	busctl func(args []string) ([]byte, error)
-	// lingerDir is where logind marks lingering users; a test hook.
+	// lingerDir is where logind marks lingering users.
 	lingerDir string
 	// selfCgroup is read for the spawner's own cgroup instead of
-	// /proc/self/cgroup; a test hook.
+	// /proc/self/cgroup.
 	selfCgroup string
 }
 
@@ -92,21 +101,13 @@ func RunSpawner(ctx context.Context, ipcFD *os.File, cfg SpawnerConfig) error {
 	// user's other processes cannot read it and a crash leaves no core of
 	// it. Not the core rlimit, which the login shell would inherit
 	// (threat-model.md §4.10).
-	if err := nocore.NotDumpable(); err != nil {
+	if err := setNotDumpable(); err != nil {
 		return err
 	}
 	if cfg.Environ == nil {
 		cfg.Environ = os.Environ()
 	}
-	if cfg.prlimit == nil {
-		cfg.prlimit = limitData
-	}
-	if cfg.lingerDir == "" {
-		cfg.lingerDir = lingerDir
-	}
-	if cfg.selfCgroup == "" {
-		cfg.selfCgroup = "/proc/self/cgroup"
-	}
+	cfg.platformDefaults()
 	if cfg.FirstPort == 0 && cfg.LastPort == 0 {
 		cfg.FirstPort, cfg.LastPort = FirstPort, LastPort
 	}
@@ -126,7 +127,7 @@ type child struct {
 	done chan *os.ProcessState
 	// oom is set when emu's stderr says Go ran out of memory.
 	oom atomic.Bool
-	// cgroup is emu's scope's cgroup directory, if it has one.
+	// cgroup is emu's scope's cgroup directory, if it has one (Linux).
 	cgroup string
 }
 
@@ -250,6 +251,14 @@ func (s *spawner) getenv(name string) string {
 	return ""
 }
 
+// sessionsDir is where the session's attach socket goes (server.md §2.6).
+func (s *spawner) sessionsDir() string {
+	if s.cfg.sessions != "" {
+		return s.cfg.sessions
+	}
+	return sessionsDir(s.getenv)
+}
+
 func (s *spawner) run(ctx context.Context, ipcFD *os.File) error {
 	launcher, err := wrapRoleSocket(ipcFD, ipc.Spawner, ipc.Launcher)
 	if err != nil {
@@ -299,6 +308,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	if err := s.openLog(); err != nil {
 		return err
 	}
+	s.noteSandbox()
 	// Before anything else starts, so proto, emu and the shell all begin
 	// in the session's own scope (§2.1 step 4.2).
 	s.joinSessionScope()
@@ -377,7 +387,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	s.hangups = make(chan struct{}, 1)
 	s.idleHangups = make(chan idleHangupRequest)
 	s.superviseDone = make(chan struct{})
-	if s.attach, err = listenAttach(sessionsDir(s.getenv), s.sid); err != nil {
+	if s.attach, err = listenAttach(s.sessionsDir(), s.sid); err != nil {
 		s.log.Warn("no attach socket: this session cannot be resumed", "err", err)
 		s.attach = nil
 	} else {
@@ -536,10 +546,11 @@ func (s *spawner) startRole(role string, sock *os.File, gen uint32) (*child, err
 	cmd.Env = roleEnv(s.cfg.Environ)
 	cmd.Stderr = w
 	cmd.ExtraFiles = []*os.File{sock}
-	// A spawner that is SIGKILLed takes its roles with it; EOF on the
-	// socket is the primary signal, this the backstop.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
-	if err := s.start.run(cmd.Start); err != nil {
+	var wait func() *os.ProcessState
+	if err := s.start.run(func() (err error) {
+		wait, err = startProcess(role, cmd)
+		return err
+	}); err != nil {
 		r.Close()
 		return nil, err
 	}
@@ -563,11 +574,11 @@ func (s *spawner) startRole(role string, sock *os.File, gen uint32) (*child, err
 		r.Close()
 	}()
 	go func() {
-		cmd.Wait()
+		st := wait()
 		// The stderr lines, the OOM one included, are all in before the
 		// exit is acted on.
 		<-logs
-		c.done <- cmd.ProcessState
+		c.done <- st
 	}()
 	return c, nil
 }
@@ -603,39 +614,16 @@ func (s *spawner) startEmu() (*os.File, error) {
 	s.restarts.started(c.born)
 	s.gen = gen
 	s.emu = c
-	// RLIMIT_DATA is required: mosey never runs an emu with no memory
-	// bound (threat-model.md §4.8). It is set from here, not by emu on
-	// itself, so nothing emu says decides whether a limit is in force.
-	if err := s.cfg.prlimit(c.cmd.Process.Pid); err != nil {
+	// A memory bound is required: mosey never runs an emu without one
+	// (threat-model.md §4.8). It is set from here, not by emu on itself,
+	// so nothing emu says decides whether a limit is in force.
+	if err := s.limitEmu(c); err != nil {
 		c.cmd.Process.Kill()
 		local.Close()
 		s.log.Error("cannot limit the emulator's memory", "err", err)
 		return nil, errors.New("cannot limit the emulator's memory")
 	}
-	c.cgroup = s.emuScope(c.cmd.Process.Pid, gen)
 	return local, nil
-}
-
-func limitData(pid int) error {
-	lim := unix.Rlimit{Cur: emuDataLimit, Max: emuDataLimit}
-	return unix.Prlimit(pid, unix.RLIMIT_DATA, &lim, nil)
-}
-
-// oomKilled says whether emu's scope saw the kernel kill it for memory.
-func oomKilled(cgroup string) bool {
-	if cgroup == "" {
-		return false
-	}
-	b, err := os.ReadFile(cgroup + "/memory.events")
-	if err != nil {
-		return false
-	}
-	for _, l := range strings.Split(string(b), "\n") {
-		if n, ok := strings.CutPrefix(l, "oom_kill "); ok {
-			return n != "0"
-		}
-	}
-	return false
 }
 
 func (s *spawner) startShell(cl bootstrap.ClientLine, agentSock string, slave *os.File) error {
@@ -976,7 +964,7 @@ func (s *spawner) hangup() <-chan time.Time {
 	if s.master != nil {
 		// The foreground job (an editor, say) is told as well, as the
 		// kernel tells it when a terminal hangs up.
-		if pg, err := unix.IoctlGetInt(int(s.master.Fd()), unix.TIOCGPGRP); err == nil && pg > 1 && pg != pid {
+		if pg, err := pty.ForegroundGroup(s.master); err == nil && pg > 1 && pg != pid {
 			if err := syscall.Kill(-pg, syscall.SIGHUP); err != nil {
 				s.log.Warn("SIGHUP to the foreground job", "pgrp", pg, "err", err)
 			}
@@ -1020,7 +1008,7 @@ func (s *spawner) handleIdleHangup(req idleHangupRequest, hungUp *<-chan time.Ti
 func (s *spawner) classify(c *child, st *os.ProcessState) (ipc.EmuEnd, int32) {
 	code := status(st)
 	switch {
-	case c.oom.Load() && code == 2, oomKilled(c.cgroup):
+	case c.oom.Load() && code == 2, s.limitHit(c, st):
 		return ipc.EmuMemory, code
 	case s.killAsked[c.gen]:
 		return ipc.EmuKilled, code
@@ -1115,7 +1103,7 @@ func waitOrKill(c *child, grace time.Duration) {
 // which never returns while the spawner runs: Pdeathsig fires when the
 // thread that forked the child exits, not the process (S4 §3.2, measured),
 // so a child started from a thread the runtime later retires would be
-// killed with it.
+// killed with it. macOS has no Pdeathsig; the starter costs nothing there.
 type starter struct{ reqs chan func() }
 
 func newStarter() *starter {
@@ -1153,11 +1141,11 @@ func bindUDP(addr netip.Addr, first, last uint16) (*os.File, uint16, error) {
 	case addr.Is6():
 		sa = func(port int) unix.Sockaddr { return &unix.SockaddrInet6{Port: port, Addr: addr.As16()} }
 	}
-	fd, err := unix.Socket(family, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+	fd, err := socket(family, unix.SOCK_DGRAM, false)
 	if err != nil && !addr.IsValid() {
 		// A host without IPv6: the IPv4 wildcard.
 		family, sa = unix.AF_INET, func(port int) unix.Sockaddr { return &unix.SockaddrInet4{Port: port} }
-		fd, err = unix.Socket(family, unix.SOCK_DGRAM|unix.SOCK_CLOEXEC, 0)
+		fd, err = socket(family, unix.SOCK_DGRAM, false)
 	}
 	if err != nil {
 		return nil, 0, fmt.Errorf("making the UDP socket: %w", err)

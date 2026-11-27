@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package server
 
 import (
@@ -38,6 +40,13 @@ const testWaitingLine = "the shell exited; waiting for the test's SIGUSR1"
 
 var protoWaiting = regexp.MustCompile(`proto pid=(\d+)[^\n]*` + regexp.QuoteMeta(testWaitingLine))
 
+// testSessionsDir is the sessions directory of a server under test: in
+// the test's own XDG_RUNTIME_DIR, which macOS's sessionsDir does not
+// follow, so no test reaches the user's own sessions.
+func testSessionsDir(getenv func(string) string) string {
+	return filepath.Join(getenv("XDG_RUNTIME_DIR"), "mosey")
+}
+
 // fakeServe is `Self --serve=ROLE` when Self is this test binary.
 func fakeServe(role string) int {
 	ctx := context.Background()
@@ -50,6 +59,7 @@ func fakeServe(role string) int {
 			Self:     startup.Process{Path: self},
 			Version:  fakeVersion,
 			BindAddr: netip.MustParseAddr("127.0.0.1"),
+			sessions: testSessionsDir(os.Getenv),
 		})
 	case "emu":
 		err = RunEmu(ctx, os.NewFile(3, "ipc"), log)
@@ -214,6 +224,7 @@ func TestTheSpawnerRunsASessionAndRebuildsEmu(t *testing.T) {
 			"SSH_CONNECTION=127.0.0.1 40000 127.0.0.1 22",
 		},
 	}
+	l.sessions = testSessionsDir(l.getenv)
 	if err := l.Run(context.Background()); err != nil {
 		t.Fatalf("the launcher: %v\nstderr: %s\nlog:\n%s", err, stderr.String(), sessionLog(state))
 	}
@@ -230,7 +241,7 @@ func TestTheSpawnerRunsASessionAndRebuildsEmu(t *testing.T) {
 	// The stand-in holds its Exit until told, so this is checked in that
 	// window every time, not only when the timing allows.
 	m := protoWaiting.FindStringSubmatch(waitForLog(t, logPath(state), protoWaiting.MatchString))
-	if live := liveSessions(sessionsDir(l.getenv)); len(live) != 0 {
+	if live := liveSessions(l.sessionsDir()); len(live) != 0 {
 		for _, s := range live {
 			s.f.Close()
 		}

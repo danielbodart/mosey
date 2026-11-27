@@ -79,7 +79,7 @@ func RunProto(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 
 	warn := func(w string) { log.Warn(w) }
 	settleLazyInit()
-	if err := sandbox.Enter(sandbox.Proto, sandbox.DefaultAction(), sandbox.Params{PTY: ptyFD}, warn); err != nil {
+	if err := enterSandbox(sandbox.Proto, sandbox.Params{PTY: ptyFD}, warn); err != nil {
 		return fmt.Errorf("entering the sandbox: %w", err)
 	}
 	churn()

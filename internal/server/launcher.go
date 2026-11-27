@@ -16,7 +16,6 @@ import (
 	"github.com/danielbodart/mosey/internal/agent"
 	"github.com/danielbodart/mosey/internal/bootstrap"
 	"github.com/danielbodart/mosey/internal/ipc"
-	"github.com/danielbodart/mosey/internal/nocore"
 	"github.com/danielbodart/mosey/internal/startup"
 )
 
@@ -47,6 +46,9 @@ type Launcher struct {
 	// Trigger opens sshd's forwarded agent to make the client's ssh send
 	// its bind (bootstrap.md §8): agent.Trigger, unless a test sets it.
 	Trigger func(ctx context.Context, sock string) error
+	// sessions overrides the sessions directory, which on macOS is always
+	// /tmp/mosey-UID (server.md §10); a test hook, as the spawner's is.
+	sessions string
 }
 
 // LaunchError is a bootstrap failure the client is told about with an
@@ -77,11 +79,12 @@ func (l *Launcher) Run(ctx context.Context) error {
 }
 
 func (l *Launcher) run(ctx context.Context) error {
+	if !serverRuns {
+		return &LaunchError{Code: bootstrap.CodeUnsupported, Text: "the server runs on Linux and macOS only"}
+	}
 	// Before the credential line passes through, as in the spawner
-	// (threat-model.md §4.10). The server runs on Linux only for now.
-	if err := nocore.NotDumpable(); errors.Is(err, errors.ErrUnsupported) {
-		return &LaunchError{Code: bootstrap.CodeUnsupported, Text: "the server runs on Linux only for now"}
-	} else if err != nil {
+	// (threat-model.md §4.10).
+	if err := setNotDumpable(); err != nil {
 		return err
 	}
 	line, err := readClientLine(ctx, l.Stdin)
@@ -95,7 +98,7 @@ func (l *Launcher) run(ctx context.Context) error {
 
 	// Choosing and starting are one step (bootstrap.md §9.2 "The lock"):
 	// the lock is held until the spawner has answered.
-	base := sessionsDir(l.getenv)
+	base := l.sessionsDir()
 	lock, err := lockSessions(base, T2)
 	if err != nil {
 		return err
@@ -318,6 +321,14 @@ func (l *Launcher) trigger(ctx context.Context, cl bootstrap.ClientLine) {
 	// Its failure is the capture's to explain: the client says why it
 	// has no bind, so nothing is printed here too.
 	_ = trigger(ctx, sock)
+}
+
+// sessionsDir is where the user's sessions are (server.md §2.6).
+func (l *Launcher) sessionsDir() string {
+	if l.sessions != "" {
+		return l.sessions
+	}
+	return sessionsDir(l.getenv)
 }
 
 func (l *Launcher) getenv(name string) string {

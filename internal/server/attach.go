@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync/atomic"
 	"syscall"
@@ -36,7 +37,17 @@ const (
 // sessionsDir is R/mosey (server.md §2.6): under $XDG_RUNTIME_DIR when it
 // is set and absolute, else under the temporary directory with the uid in
 // its name, so users of a shared /tmp do not collide.
+//
+// On macOS it is always /tmp/mosey-UID [D, server.md §10]. $TMPDIR is
+// /var/folders/.../T there: dirhelper cleans it after 3 days and at boot,
+// and a socket path under it does not fit in sun_path's 104 bytes [M].
+// tmp_cleaner deletes regular files and empty directories in /tmp that
+// are older than 3 days, so the directory holds only sockets and
+// directories (lock.go).
 func sessionsDir(getenv func(string) string) string {
+	if runtime.GOOS == "darwin" {
+		return filepath.Join("/tmp", "mosey-"+strconv.Itoa(os.Getuid()))
+	}
 	if r := getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(r) {
 		return filepath.Join(r, "mosey")
 	}

@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package server
 
@@ -11,7 +11,11 @@ import (
 	"github.com/danielbodart/mosey/internal/startup"
 )
 
-// SpawnerConfig is how the spawner is set up (see spawner_linux.go).
+// serverRuns says whether the server runs on this system: on Linux and
+// macOS only (D22, server.md §10).
+const serverRuns = false
+
+// SpawnerConfig is how the spawner is set up (see spawner_unix.go).
 type SpawnerConfig struct {
 	Self                startup.Process
 	Version             string
@@ -21,8 +25,9 @@ type SpawnerConfig struct {
 	LogDir              string
 }
 
-// RunSpawner: the server runs on Linux only for now (server.md §10).
-// macOS is parked, not ruled out (D22).
+// RunSpawner: the server runs on Linux and macOS only (server.md §10).
 func RunSpawner(context.Context, *os.File, SpawnerConfig) error {
 	return errors.ErrUnsupported
 }
+
+func setNotDumpable() error { return errors.ErrUnsupported }

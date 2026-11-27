@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -186,6 +187,9 @@ func TestACaptureDirectoryOthersCanReachIsRefused(t *testing.T) {
 }
 
 func TestTheCaptureDirectoryFollowsTheRuntimeDirectory(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("on macOS it is always /tmp/mosey-UID (capture_darwin_test.go)")
+	}
 	env := map[string]string{"XDG_RUNTIME_DIR": "/run/user/7"}
 	if got := CaptureDir(func(k string) string { return env[k] }); got != "/run/user/7/mosey" {
 		t.Errorf("got %s", got)

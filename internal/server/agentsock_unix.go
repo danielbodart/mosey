@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package server
 
 import (
@@ -24,7 +26,7 @@ func listenAgent(dir string) (*agentListener, error) {
 		return nil, err
 	}
 	l := &agentListener{path: filepath.Join(dir, agentName)}
-	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, 0)
+	fd, err := socket(unix.AF_UNIX, unix.SOCK_STREAM, true)
 	if err != nil {
 		return nil, fmt.Errorf("making the agent socket: %w", err)
 	}
@@ -69,7 +71,7 @@ func (l *agentListener) Accept() (*os.File, error) {
 	var nfd int
 	var aerr error
 	err = raw.Read(func(fd uintptr) bool {
-		nfd, _, aerr = unix.Accept4(int(fd), unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK)
+		nfd, aerr = accept(int(fd))
 		return aerr != unix.EAGAIN
 	})
 	if err == nil {

@@ -2111,7 +2111,9 @@ greeting. The lock file is made `0600` with `O_NOFOLLOW` in `R/mosey`,
 and `R/mosey` is checked first as `server.md` §2.6 says. The launcher
 holds the lock until it has the credential line or has failed. T2 (15 s)
 bounds the wait for the lock. `flock` releases the lock when its holder
-exits, so a launcher that dies leaves no lock behind.
+exits, so a launcher that dies leaves no lock behind. On macOS there is
+no lock file: the launcher locks the directory `R/mosey` itself, because
+`R/mosey` holds only sockets and directories there (`server.md` §10).
 
 Thus two `mosey DEST` started together (a terminal that restores its
 tabs) never choose the same detached session. Two `-s NAME` never start

@@ -154,21 +154,6 @@ func (h *emuHarness) snapshot() *screen.Grid {
 	return g
 }
 
-// text is row y as it would be drawn, blanks as spaces, trailing ones
-// dropped.
-func text(g *screen.Grid, y int) string {
-	cols, _ := g.Size()
-	var b strings.Builder
-	for x := range cols {
-		c := g.Cell(x, y)
-		if c.Text == "" && c.Width != 0 {
-			b.WriteByte(' ')
-		}
-		b.WriteString(c.Text)
-	}
-	return strings.TrimRight(b.String(), " ")
-}
-
 // draw is an answer that writes s at the top left, then answers honestly.
 func draw(s string, replies string) answerFunc {
 	return func(f *fakeEmu, req ipc.Message) []ipc.Message {
