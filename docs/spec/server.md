@@ -618,6 +618,12 @@ deny-all and cannot open `/proc`.
   - The fds that arrive during the reads of a message belong to that
     message. This is true for short reads too, because no read crosses
     the end of a message.
+  - fds come only with the first read of a message. fds that come with
+    a later read are refused, the refusal is final, and every fd of the
+    message is closed. Reason: a peer could send a message one byte at
+    a time, each byte with fds, and fill the reader's fd table before
+    the message ends. One read brings the fds of one `sendmsg` at most,
+    so this bounds the fds that one message holds.
   - A deadline can stop a receive part of the way through a message.
     The next receive continues from that point.
   - The stream ends between messages: that is EOF. The stream ends in a

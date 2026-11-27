@@ -22,8 +22,12 @@ type fakeStream struct {
 }
 
 // readInto reads at most len(p) bytes, and at most the next chunk size.
-// The fds sent with any byte it returns come with it, as a kernel gives
-// them with the first byte of their send.
+// A read stops before a byte that was sent with fds, unless that byte is
+// its first, so the fds come with the read that starts at their byte, as
+// a kernel gives a send's fds with its first byte. (Linux may also
+// give them with a read that began on plain bytes before them [M]. The
+// reader then takes them if that read is the first of its message, and
+// refuses them if not: either way, one read brings one send's fds.)
 func (s *fakeStream) readInto(p []byte) (int, []int) {
 	n := len(p)
 	if len(s.chunks) > 0 {
@@ -35,6 +39,12 @@ func (s *fakeStream) readInto(p []byte) (int, []int) {
 	s.calls++
 	if rest := len(s.data) - s.read; rest < n {
 		n = rest
+	}
+	for i := 1; i < n; i++ {
+		if len(s.fdsAt[s.read+i]) > 0 {
+			n = i
+			break
+		}
 	}
 	copy(p, s.data[s.read:s.read+n])
 	var fds []int
@@ -200,21 +210,72 @@ func TestFramedRecordsAreBoundedBeforeTheyAreRead(t *testing.T) {
 	}
 }
 
+// fds sent with a byte after the first of a message are refused: the
+// sender attaches a message's fds to its first byte only, and a peer that
+// sends more on later bytes could otherwise fill the receiver's fd table
+// a byte at a time. Every fd that came is handed back to be closed, and
+// the refusal is final.
+func TestFDsAfterTheFirstReadOfAMessageAreRefusedAndHandedBack(t *testing.T) {
+	stream := frameAll([]byte("hello world"), []byte("after"))
+	for _, at := range []int{1, frameHeader - 1, frameHeader, frameHeader + 5, frameHeader + 10} {
+		s := &fakeStream{data: stream, fdsAt: map[int][]int{0: {10}, at: {11, 12}}, chunks: []int{1}}
+		var r frameReader
+		buf := make([]byte, MaxMessage+1)
+		var handed []int
+		var err error
+		for err == nil {
+			n, fds := s.readInto(r.next(buf))
+			var mfds []int
+			var done bool
+			_, mfds, done, err = r.add(n, fds)
+			if done {
+				t.Fatalf("fds at %d: the message was accepted", at)
+			}
+			handed = append(handed, mfds...)
+		}
+		if !errors.Is(err, ErrMalformed) {
+			t.Errorf("fds at %d: %v", at, err)
+		}
+		if !equalInts(handed, []int{10, 11, 12}) {
+			t.Errorf("fds at %d: handed back %v", at, handed)
+		}
+		if s.read != at+1 {
+			t.Errorf("fds at %d: read %d bytes, want none past the refused read", at, s.read)
+		}
+		if _, fds, _, again := r.add(1, []int{13}); !errors.Is(again, ErrMalformed) || !equalInts(fds, []int{13}) {
+			t.Errorf("fds at %d: after the refusal, %v and fds %v", at, again, fds)
+		}
+	}
+}
+
 // FuzzFrameReader drives the frame reader over any stream, cut at any
-// sizes. The invariants: what it returns agrees with a plain reading of
-// the stream, it never reads past a refused length, and it never reads
-// past the end of the message it is reading.
+// sizes, with fds sent at any bytes (bit i of marks puts fd 1000+i at
+// byte i). The invariants: what it returns agrees with a plain reading of
+// the stream; it never reads past a refused length, nor past the end of
+// the message it is reading; a message comes with the fds of its first
+// byte only, and fds on any later byte are refused; and every fd that
+// came is handed back once, with its message or with the error.
 func FuzzFrameReader(f *testing.F) {
-	f.Add(frameAll([]byte{1}, []byte("two")), uint8(0))
-	f.Add(frameAll([]byte("abc")), uint8(1))
-	f.Add([]byte{0, 0, 0, 0}, uint8(2))
-	f.Add([]byte{0, 1, 0, 1, 9}, uint8(3))
-	f.Add([]byte{0, 0, 0, 3, 1}, uint8(1))
-	f.Fuzz(func(t *testing.T, data []byte, chunk uint8) {
-		s := &fakeStream{data: data, chunks: []int{int(chunk%9) + 1, int(chunk/9) + 1}}
+	f.Add(frameAll([]byte{1}, []byte("two")), uint8(0), []byte{0x01})
+	f.Add(frameAll([]byte("abc")), uint8(1), []byte{0x02})
+	f.Add([]byte{0, 0, 0, 0}, uint8(2), []byte{})
+	f.Add([]byte{0, 1, 0, 1, 9}, uint8(3), []byte{0x11})
+	f.Add([]byte{0, 0, 0, 3, 1}, uint8(1), []byte{0xff})
+	f.Add(frameAll([]byte("ab"), []byte("cd")), uint8(0), []byte{0x41})
+	f.Fuzz(func(t *testing.T, data []byte, chunk uint8, marks []byte) {
+		marked := func(i int) bool { return i/8 < len(marks) && marks[i/8]>>(i%8)&1 == 1 }
+		fdsAt := map[int][]int{}
+		for i := range data {
+			if marked(i) {
+				fdsAt[i] = []int{1000 + i}
+			}
+		}
+		s := &fakeStream{data: data, fdsAt: fdsAt, chunks: []int{int(chunk%9) + 1, int(chunk/9) + 1}}
 		var r frameReader
 		buf := make([]byte, MaxMessage+1)
 		var got [][]byte
+		var gotFDs [][]int
+		var sent, handed []int
 		var err error
 		start := 0 // where the message being read begins
 		for err == nil {
@@ -223,22 +284,44 @@ func FuzzFrameReader(f *testing.F) {
 				limit += r.size
 			}
 			n, fds := s.readInto(r.next(buf))
+			sent = append(sent, fds...)
 			if s.read > limit {
 				t.Fatalf("read to %d, past the message that ends at %d", s.read, limit)
 			}
 			var size int
 			var done bool
-			size, _, done, err = r.add(n, fds)
+			var mfds []int
+			size, mfds, done, err = r.add(n, fds)
+			handed = append(handed, mfds...)
 			if done {
 				got = append(got, append([]byte(nil), buf[:size]...))
+				gotFDs = append(gotFDs, mfds)
 				start = s.read
 			}
 		}
-		// The reference: lengths and bodies, one after another.
+		if !equalInts(handed, sent) {
+			t.Fatalf("fds %v came and %v were handed back", sent, handed)
+		}
+		// The reference: lengths and bodies, one after another, with fds
+		// allowed at the first byte of each message only.
 		var want [][]byte
+		var wantFDs [][]int
 		off := 0
 		var wantErr error = io.EOF
+		misplaced := func(from, to int) bool {
+			for i := from; i < to && i < len(data); i++ {
+				if marked(i) {
+					return true
+				}
+			}
+			return false
+		}
+	walk:
 		for off < len(data) {
+			if misplaced(off+1, off+frameHeader) {
+				wantErr = ErrMalformed
+				break
+			}
 			if len(data)-off < frameHeader {
 				wantErr = errors.New("short length")
 				break
@@ -251,12 +334,18 @@ func FuzzFrameReader(f *testing.F) {
 				}
 				break
 			}
-			if uint64(len(data)-off-frameHeader) < uint64(l) {
+			end := off + frameHeader + int(l)
+			switch {
+			case misplaced(off+frameHeader, end):
+				wantErr = ErrMalformed
+				break walk
+			case end > len(data):
 				wantErr = errors.New("short body")
-				break
+				break walk
 			}
-			want = append(want, data[off+frameHeader:off+frameHeader+int(l)])
-			off += frameHeader + int(l)
+			want = append(want, data[off+frameHeader:end])
+			wantFDs = append(wantFDs, fdsAt[off])
+			off = end
 		}
 		if len(got) != len(want) {
 			t.Fatalf("%d messages, want %d", len(got), len(want))
@@ -264,6 +353,9 @@ func FuzzFrameReader(f *testing.F) {
 		for i := range want {
 			if !bytes.Equal(got[i], want[i]) {
 				t.Fatalf("message %d is %x, want %x", i, got[i], want[i])
+			}
+			if !equalInts(gotFDs[i], wantFDs[i]) {
+				t.Fatalf("message %d came with fds %v, want %v", i, gotFDs[i], wantFDs[i])
 			}
 		}
 		switch {
@@ -274,9 +366,10 @@ func FuzzFrameReader(f *testing.F) {
 		case wantErr != io.EOF && !errors.Is(wantErr, ErrMalformed) && (err == io.EOF || !IsEOF(err)):
 			t.Fatalf("ended with %v, want an end within a message", err)
 		}
-		// Refused or ended, the reader stays so, and reads nothing more.
-		if _, _, _, again := r.add(0, nil); again == nil {
-			t.Fatal("a reader that has stopped started again")
+		// Refused or ended, the reader stays so, reads nothing more, and
+		// hands back any fds it is given.
+		if _, fds, _, again := r.add(1, []int{7}); again == nil || !equalInts(fds, []int{7}) {
+			t.Fatalf("a reader that has stopped started again, or kept fds %v", fds)
 		}
 	})
 }

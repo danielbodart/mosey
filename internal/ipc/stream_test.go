@@ -355,6 +355,34 @@ func TestAFramedRecordLeavesTheStreamAtTheNextMessage(t *testing.T) {
 	}
 }
 
+// A peer that sends a message a byte at a time, each byte with fds, is
+// refused at the second byte, with every fd closed: it cannot fill the
+// receiver's fd table before the message ends.
+func TestFDsAfterTheFirstByteOfAFramedMessageAreRefused(t *testing.T) {
+	raw, proto := rawStream(t, Proto, Spawner)
+	a, b, _ := streamPair()
+	defer a.Close()
+	defer b.Close()
+	before := openFDs(t)
+	emuLink := appendFrame(nil, []byte{typeEmuLink, 0, 0, 0, 0, 0, 0, 0, 1})
+	for i := range emuLink[:frameHeader+2] {
+		sendRaw(t, raw, emuLink[i:i+1], a, a, a)
+	}
+	if _, err := proto.Recv(); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := proto.Recv(); !errors.Is(err, ErrMalformed) {
+		t.Fatalf("after the refusal: %v", err)
+	}
+	// Only the first two sends were read: the rest wait in the socket,
+	// and close with it.
+	proto.Close()
+	raw.Close()
+	if after := openFDs(t); after != before-2 {
+		t.Errorf("%d fds open, want %d", after, before-2)
+	}
+}
+
 // The credential line leaves no copy in the frame either.
 func TestAFramedRecvKeepsNoCopyOfTheCredentialLine(t *testing.T) {
 	spawner, proto := streamPairOf(t, Spawner, Proto)

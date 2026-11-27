@@ -30,6 +30,13 @@ func appendFrame(dst, b []byte) []byte {
 // next message's fds. That keeps each message's fds with it even when the
 // kernel gives the message in short reads.
 //
+// So fds come only with the first read of a message, the one that starts
+// at its first byte. fds on any later read are refused, finally, with
+// every fd of the message closed. Otherwise a peer could send a message a
+// byte at a time, each byte with fds, and fill the receiver's fd table
+// before the message ends: one read brings at most the fds of one
+// sendmsg (server.md §10 [M]), so this bounds what a message holds.
+//
 // A length of 0 or over MaxMessage is refused before the body is read or
 // anything allocated. The stream has then lost its place, so the refusal
 // is final: every later call returns it, and nothing more is read.
@@ -58,19 +65,26 @@ func (r *frameReader) started() bool { return r.nhdr > 0 || len(r.fds) > 0 }
 // with it. Once the message is whole, it returns the body's length and
 // its fds, and starts on the next message. A read of 0 bytes is the end
 // of the stream: io.EOF between messages, and within one, an error that
-// wraps io.EOF too (the peer is gone, not misbehaving). On any error the
-// caller closes the fds returned.
+// wraps io.EOF too (the peer is gone, not misbehaving). fds on a read
+// after the first of a message are a final refusal. On any error the
+// caller closes the fds returned; after a final error, every call returns
+// it with the fds it was given.
 func (r *frameReader) add(n int, fds []int) (size int, msgFDs []int, done bool, err error) {
+	started := r.started()
 	r.fds = append(r.fds, fds...)
+	if r.err != nil {
+		return 0, r.take(), false, r.err
+	}
 	if n == 0 {
-		fds := r.take()
-		if r.err == nil {
-			r.err = io.EOF
-			if len(fds) > 0 || r.nhdr > 0 {
-				r.err = fmt.Errorf("ipc: the stream ended within a message: %w", io.EOF)
-			}
+		r.err = io.EOF
+		if started {
+			r.err = fmt.Errorf("ipc: the stream ended within a message: %w", io.EOF)
 		}
-		return 0, fds, false, r.err
+		return 0, r.take(), false, r.err
+	}
+	if started && len(fds) > 0 {
+		r.err = malformed("fds came after the first byte of a message")
+		return 0, r.take(), false, r.err
 	}
 	if r.nhdr < frameHeader {
 		r.nhdr += n
