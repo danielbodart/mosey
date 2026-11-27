@@ -1,8 +1,10 @@
 package server
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"syscall"
 	"testing"
@@ -13,8 +15,9 @@ import (
 
 func init() { roleChildren["alloc"] = childAlloc }
 
-// childAlloc touches MOSEY_TEST_MIB MiB and keeps it, then waits to be
-// killed.
+// childAlloc touches MOSEY_TEST_MIB MiB and keeps it. Then it says so on
+// stdout and keeps the memory until stdin closes. Thus a child that the
+// limit does not kill ends when its test lets it go.
 func childAlloc() error {
 	mib, _ := strconv.Atoi(os.Getenv("MOSEY_TEST_MIB"))
 	var keep [][]byte
@@ -26,13 +29,15 @@ func childAlloc() error {
 		keep = append(keep, b)
 	}
 	os.Stdout.WriteString("allocated\n")
-	time.Sleep(time.Hour)
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	runtime.KeepAlive(keep)
 	return nil
 }
 
-// spawnAlloc starts childAlloc under a jetsam limit of limitMiB and
-// returns it and a pipe that says "allocated" once it has.
-func spawnAlloc(t *testing.T, mib, limitMiB int) (*os.Process, *os.File) {
+// spawnAlloc starts childAlloc under a jetsam limit of limitMiB. It
+// returns the child, a pipe that says "allocated" once it has, and the
+// child's stdin: closing it ends the child.
+func spawnAlloc(t *testing.T, mib, limitMiB int) (p *os.Process, out, in *os.File) {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
@@ -42,18 +47,23 @@ func spawnAlloc(t *testing.T, mib, limitMiB int) (*os.Process, *os.File) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := spawn.Start(spawn.Attr{
-		Path:           self,
-		Args:           []string{self},
-		Env:            []string{roleChildEnv + "=alloc", "MOSEY_TEST_MIB=" + strconv.Itoa(mib)},
-		Files:          []*os.File{nil, w, w},
-		MemoryLimitMiB: limitMiB,
-	})
-	w.Close()
+	inR, inW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	return p, r
+	p, err = spawn.Start(spawn.Attr{
+		Path:           self,
+		Args:           []string{self},
+		Env:            []string{roleChildEnv + "=alloc", "MOSEY_TEST_MIB=" + strconv.Itoa(mib)},
+		Files:          []*os.File{inR, w, w},
+		MemoryLimitMiB: limitMiB,
+	})
+	w.Close()
+	inR.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p, r, inW
 }
 
 // TestAnEmuOverItsJetsamLimitIsToldApartFromAKill: the kernel's SIGKILL
@@ -62,8 +72,15 @@ func spawnAlloc(t *testing.T, mib, limitMiB int) (*os.Process, *os.File) {
 // process is not.
 func TestAnEmuOverItsJetsamLimitIsToldApartFromAKill(t *testing.T) {
 	const limit = 64
-	p, r := spawnAlloc(t, 4*limit, limit)
+	p, r, in := spawnAlloc(t, 4*limit, limit)
+	buf := make([]byte, 64)
+	if n, _ := r.Read(buf); n > 0 {
+		// It holds four times its limit and lives: there is no limit.
+		// Closing its stdin lets it end.
+		t.Errorf("a child that holds %d MiB under a jetsam limit of %d MiB was not killed", 4*limit, limit)
+	}
 	r.Close()
+	in.Close()
 	st, err := p.Wait()
 	if err != nil {
 		t.Fatal(err)
@@ -72,11 +89,11 @@ func TestAnEmuOverItsJetsamLimitIsToldApartFromAKill(t *testing.T) {
 		t.Errorf("over its limit the child ended with %v, rusage %+v: not taken for the limit", st, st.SysUsage())
 	}
 
-	p, r = spawnAlloc(t, 8, limit)
-	buf := make([]byte, 64)
+	p, r, in = spawnAlloc(t, 8, limit)
 	r.Read(buf) // "allocated": it is alive and has its memory
 	r.Close()
 	p.Signal(syscall.SIGKILL)
+	in.Close()
 	if st, err = p.Wait(); err != nil {
 		t.Fatal(err)
 	}
