@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -28,7 +29,7 @@ var libsandbox_free_error_trampoline_addr uintptr
 var libsandbox_check_trampoline_addr uintptr
 
 //go:linkname syscall_syscall syscall.syscall
-func syscall_syscall(fn, a1, a2, a3 uintptr) (r1, r2 uintptr, err uintptr)
+func syscall_syscall(fn, a1, a2, a3 uintptr) (r1, r2 uintptr, err syscall.Errno)
 
 func enter(role Role, _ Action, params Params, _ func(string)) error {
 	// Built first, so a bad port costs nothing half applied.

@@ -2,6 +2,7 @@ package pty
 
 import (
 	"runtime"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -16,15 +17,22 @@ import (
 //
 // mosey is built with CGO_ENABLED=0 (D1), so proc_pidinfo is reached as
 // internal/sandbox reaches sandbox_init: a dynamic import from libSystem,
-// and an assembly trampoline (program_darwin.s) that syscall.syscall6
-// calls on the system stack.
+// and an assembly trampoline (program_darwin.s) that syscall6 calls on
+// the system stack.
 
 //go:cgo_import_dynamic libproc_pidinfo proc_pidinfo "/usr/lib/libSystem.B.dylib"
 
 var libproc_pidinfo_trampoline_addr uintptr
 
-//go:linkname syscall_syscall6 syscall.syscall6
-func syscall_syscall6(fn, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err uintptr)
+// syscall6 is declared as internal/spawn declares it, with the types of
+// syscall.syscall6 itself. Each package declares it, and there is no one
+// shared wrapper: a Go wrapper could grow the stack between a
+// uintptr(unsafe.Pointer(&x)) and the call, and the uintptr would then
+// point at the old stack. syscall.syscall6 is nosplit (Go 1.27), so a
+// direct call cannot.
+//
+//go:linkname syscall6 syscall.syscall6
+func syscall6(fn, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err syscall.Errno)
 
 // procPIDVnodePathInfo is PROC_PIDVNODEPATHINFO (sys/proc_info.h).
 const procPIDVnodePathInfo = 9
@@ -51,7 +59,7 @@ func programOf(pid int) Program {
 // filled, and 0 on failure.
 func processCwd(pid int) string {
 	b := make([]byte, vnodePathInfoSize)
-	r, _, _ := syscall_syscall6(libproc_pidinfo_trampoline_addr,
+	r, _, _ := syscall6(libproc_pidinfo_trampoline_addr,
 		uintptr(pid), procPIDVnodePathInfo, 0, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)), 0)
 	runtime.KeepAlive(b)
 	return vnodePathCwd(b, int(int32(r)))
