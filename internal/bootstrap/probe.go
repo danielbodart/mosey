@@ -24,7 +24,7 @@ var probeSpec = lineSpec{"machine": false, "system": false}
 // knows which build to copy over. The far side chooses both, and all a
 // lie gains it is a different public build.
 type ProbeLine struct {
-	System  string // uname -s, or "unknown"
+	System  string // uname -s, Android if uname -o says so, or "unknown"
 	Machine string // uname -m, or "unknown"
 }
 

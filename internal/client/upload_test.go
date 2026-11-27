@@ -211,15 +211,31 @@ func TestUploadYesNeitherAsksNorRemembers(t *testing.T) {
 
 func TestAHostWithNoServerBuildIsToldSo(t *testing.T) {
 	for p, says := range map[bootstrap.ProbeLine]string{
-		{System: "Darwin", Machine: "arm64"}:  "runs on Linux only for now, and far is Darwin",
-		{System: "FreeBSD", Machine: "amd64"}: "far is FreeBSD amd64, which mosey has no build for",
-		{System: "Linux", Machine: "armv7l"}:  "far is Linux armv7l, which mosey has no build for",
+		{System: "Darwin", Machine: "arm64"}:   "runs on Linux only for now, and far is Darwin",
+		{System: "FreeBSD", Machine: "amd64"}:  "far is FreeBSD amd64, which mosey has no build for",
+		{System: "Linux", Machine: "armv7l"}:   "far is Linux armv7l, which mosey has no build for",
+		{System: "Android", Machine: "x86_64"}: "far is Android x86_64, which mosey has no build for",
 	} {
 		h := newUploadHost(t)
 		err := h.copier(UploadYes, installer).copy(context.Background(), p)
 		if err == nil || !strings.Contains(err.Error(), says) || h.sshRan() {
 			t.Errorf("%+v: %v (ssh ran: %v)", p, err, h.sshRan())
 		}
+	}
+}
+
+// Termux runs a program through Android's linker, which refuses the
+// static linux build (ELF type ET_EXEC), so an Android host is offered
+// the android build (Dan's phone, 2026-11-27).
+func TestAnAndroidHostIsOfferedTheAndroidBuild(t *testing.T) {
+	h := newUploadHost(t)
+	h.answer = "n"
+	err := h.copier(UploadAsk, installer).copy(context.Background(), bootstrap.ProbeLine{System: "Android", Machine: "aarch64"})
+	if err == nil || !strings.Contains(err.Error(), "not copying mosey to far") {
+		t.Fatalf("got %v", err)
+	}
+	if want := "mosey: far has no mosey this one can use. Download mosey 0.4.2 for android/arm64 from GitHub and copy it to ~/.local/bin/ there? [y/N] "; len(h.asked) != 1 || h.asked[0] != want {
+		t.Errorf("asked %q", h.asked)
 	}
 }
 

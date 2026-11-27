@@ -66,7 +66,7 @@ func (c *copier) copy(ctx context.Context, p bootstrap.ProbeLine) error {
 	if !ok {
 		return fail(&bootstrap.NoServerError{Probe: p}, "%s is %s %s, which mosey has no build for", dest, p.System, p.Machine)
 	}
-	if goos != "linux" {
+	if goos != "linux" && goos != "android" {
 		// The server's roles say ErrUnsupported there (D22): copying a
 		// build over only to be told so would waste the user's time.
 		return fail(&bootstrap.NoServerError{Probe: p}, "the mosey server runs on Linux only for now, and %s is %s", dest, p.System)

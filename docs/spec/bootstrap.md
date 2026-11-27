@@ -842,11 +842,20 @@ downloaded file says what it is.
 
 The auto-upload slice owns the map from the remote's `uname -s` and
 `uname -m` to `os` and `arch`, and also the download. The map is `Linux`
-→ `linux`, `Darwin` → `darwin`, `x86_64` → `amd64`, `aarch64` and `arm64`
-→ `arm64`. Anything else has no asset. An Android host says `Linux`, so
-it gets `linux-<arch>`, which runs there. The `android-arm64` asset is for
-a person who installs a client on a phone. An Android client, whose
-`runtime.GOOS` is `android`, never sends itself to a `linux` host.
+→ `linux`, `Darwin` → `darwin`, `Android` → `android`, `x86_64` →
+`amd64`, `aarch64` and `arm64` → `arm64`. Anything else has no asset.
+There is no `android-amd64` asset.
+
+An Android host says `Linux` to `uname -s`, so the probe asks
+`uname -o` too, and sends `Android` when that says `Android`. The
+`linux-<arch>` build does not run in Termux (Dan's phone, 2026-11-27).
+Termux runs every program through Android's linker, and the linker loads
+only a position-independent program (ELF type `ET_DYN`). The linux build
+is static, of type `ET_EXEC`, so the upload fails with
+`unexpected e_type: 2`. The android build is position-independent.
+
+An Android client, whose `runtime.GOOS` is `android`, never sends itself
+to a `linux` host.
 
 `SHA256SUMS` comes over HTTPS from the same release. So it catches
 corruption and a wrong file, but not a compromised GitHub account or CI.
@@ -934,7 +943,7 @@ The remote command is one argument, as in §4.1. `B H` is the client's
 `handshake.ProtocolVersion`, now `1 1`:
 
 ```
-exec /bin/sh -c 'b="$HOME/.local/bin"; f="$b/mosey"; p=$(command -v mosey 2>/dev/null); case $p in "$f"|"") ;; *) exec mosey FLAG;; esac; w=; for d in "$HOME/" "$HOME/.local/" "$b/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; if test -h "$b" || test -h "$f" || test -n "$w"; then :; elif test -O "$HOME/.local" && test -O "$b" && test -O "$f"; then if [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; p=; fi; if [ -n "$p" ]; then exec "$f" FLAG; fi; s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 machine=${a:-unknown} system=${s:-unknown}"'
+exec /bin/sh -c 'b="$HOME/.local/bin"; f="$b/mosey"; p=$(command -v mosey 2>/dev/null); case $p in "$f"|"") ;; *) exec mosey FLAG;; esac; w=; for d in "$HOME/" "$HOME/.local/" "$b/"; do case $(ls -ld "$d" 2>/dev/null) in ?????w*|????????w*|"") w=1;; esac; done; if test -h "$b" || test -h "$f" || test -n "$w"; then :; elif test -O "$HOME/.local" && test -O "$b" && test -O "$f"; then if [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "B H" ]; then exec "$f" FLAG; fi; p=; fi; if [ -n "$p" ]; then exec "$f" FLAG; fi; s=$(uname -s 2>/dev/null); case $(uname -o 2>/dev/null) in Android) s=Android;; esac; a=$(uname -m 2>/dev/null); echo "MOSEY-PROBE 1 machine=${a:-unknown} system=${s:-unknown}"'
 ```
 
 - **`PATH` first** (Dan, 2026-11-15). The probe execs a `mosey` on the
@@ -1022,7 +1031,7 @@ probe-line = "MOSEY-PROBE" SP "1" *(SP field) LF     ; §6.1, fields in key orde
 | Field | Value | Mandatory | Critical | Why critical or not |
 |---|---|---|---|---|
 | `machine` | `1*64(%x21-7E)`: `uname -m`, or `unknown` | mandatory | no | it describes the host. A wrong one gets a build that does not run, never a wrong action |
-| `system` | `1*64(%x21-7E)`: `uname -s`, or `unknown` | mandatory | no | as `machine` |
+| `system` | `1*64(%x21-7E)`: `uname -s`, `Android` if `uname -o` says `Android`, or `unknown` | mandatory | no | as `machine` |
 
 At most 163 bytes [derived: 11, SP, 5 digits, ` machine=` 9 and 64,
 ` system=` 8 and 64, LF]; **`MaxProbeLine` = 256** [choice: room for
@@ -1043,15 +1052,18 @@ it.
 |---|---|---|---|---|
 | `Linux` | `linux` | | `x86_64`, `amd64` | `amd64` |
 | `Darwin` | `darwin` | | `aarch64`, `arm64` | `arm64` |
+| `Android` | `android` | | | |
 
 The matches are exact and case-sensitive [derived from uname(1) on Linux
-and macOS]. For anything else: `mosey: DEST is SYSNAME MACHINE, which mosey has no build
+and macOS]. `Android` comes from `uname -o` (§4.7.2) and takes `arm64`
+only. For anything else: `mosey: DEST is SYSNAME MACHINE, which mosey has no build
 for`. The client refuses a `darwin` remote, though there is a darwin
 build, with
 `mosey: the mosey server runs on Linux only for now, and DEST is Darwin`.
 The server's roles return `ErrUnsupported` there (D22, `server.md`). So a
 copy of 10 MB to the host, only to get that error, would waste the user's
-time. This check goes when a macOS server lands.
+time. This check goes when a macOS server lands. An `android` remote
+runs the server, because the Android kernel is Linux.
 
 #### 4.7.4 Which file is sent
 

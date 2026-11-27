@@ -84,13 +84,14 @@ func TestEveryPlatformWithABuildIsMappedAndNoOther(t *testing.T) {
 		{"Linux", "aarch64", "linux", "arm64"},
 		{"Darwin", "arm64", "darwin", "arm64"},
 		{"Darwin", "x86_64", "darwin", "amd64"},
+		{"Android", "aarch64", "android", "arm64"},
 	} {
 		os, arch, ok := Platform(ProbeLine{System: c.sys, Machine: c.machine})
 		if !ok || os != c.os || arch != c.arch {
 			t.Errorf("%s %s: %s %s %v", c.sys, c.machine, os, arch, ok)
 		}
 	}
-	for _, p := range []ProbeLine{{"linux", "x86_64"}, {"FreeBSD", "amd64"}, {"Linux", "armv7l"}, {"Linux", "riscv64"}, {"unknown", "unknown"}, {"Linux", "i686"}} {
+	for _, p := range []ProbeLine{{"linux", "x86_64"}, {"FreeBSD", "amd64"}, {"Linux", "armv7l"}, {"Linux", "riscv64"}, {"unknown", "unknown"}, {"Linux", "i686"}, {"Android", "x86_64"}, {"android", "aarch64"}} {
 		if os, arch, ok := Platform(p); ok {
 			t.Errorf("%+v mapped to %s/%s", p, os, arch)
 		}

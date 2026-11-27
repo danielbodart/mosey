@@ -265,7 +265,8 @@ func wrap(script string) string {
 // MOSEY-PROBE line makes the client offer to replace it. One on PATH
 // that fails the rules (a symlink the user made) is exec'd as any PATH
 // mosey is: the installer would refuse to replace it anyway. With
-// nothing to run, one MOSEY-PROBE line saying what the host is, and exit
+// nothing to run, one MOSEY-PROBE line saying what the host is (Android,
+// which says Linux to uname -s, by its uname -o), and exit
 // 0, so 126 and 127 keep their slice-1 meaning. (The script may hold no
 // !, so "not a symlink" is the empty then-branch.)
 func probeCommand(protocol, flag string) string {
@@ -279,7 +280,7 @@ func probeCommand(protocol, flag string) string {
 		`elif test -O "$HOME/.local" && test -O "$b" && test -O "$f"; then ` +
 		`if [ "$("$f" --serve=protocol </dev/null 2>/dev/null)" = "` + protocol + `" ]; then exec "$f" ` + flag + `; fi; p=; fi; ` +
 		`if [ -n "$p" ]; then exec "$f" ` + flag + `; fi; ` +
-		`s=$(uname -s 2>/dev/null); a=$(uname -m 2>/dev/null); ` +
+		`s=$(uname -s 2>/dev/null); case $(uname -o 2>/dev/null) in Android) s=Android;; esac; a=$(uname -m 2>/dev/null); ` +
 		`echo "` + probeMagic + ` ` + strconv.Itoa(Version) + ` machine=${a:-unknown} system=${s:-unknown}"`)
 }
 

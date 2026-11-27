@@ -62,6 +62,8 @@ func Platform(p ProbeLine) (goos, goarch string, ok bool) {
 		goos = "linux"
 	case "Darwin":
 		goos = "darwin"
+	case "Android":
+		goos = "android"
 	default:
 		return "", "", false
 	}
@@ -71,6 +73,10 @@ func Platform(p ProbeLine) (goos, goarch string, ok bool) {
 	case "aarch64", "arm64":
 		goarch = "arm64"
 	default:
+		return "", "", false
+	}
+	if goos == "android" && goarch != "arm64" {
+		// Go links android/amd64 only with cgo, so there is no build.
 		return "", "", false
 	}
 	return goos, goarch, true
