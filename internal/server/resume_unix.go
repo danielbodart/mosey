@@ -229,7 +229,8 @@ type shellRef struct {
 // the session's command), so -list shows what the user would see. Should
 // the leader have gone while others of its group live on, or the group be
 // unreadable, the shell stands in. Read afresh for every greeting: two
-// small /proc files and a readlink, and a lister is a person at a prompt.
+// small /proc files and a readlink on Linux, two sysctls and a
+// proc_pidinfo on macOS, and a lister is a person at a prompt.
 func (s *spawner) foreground() (fg, cwd string) {
 	sh := s.shellOf.Load()
 	if sh == nil {
@@ -237,10 +238,10 @@ func (s *spawner) foreground() (fg, cwd string) {
 	}
 	var p pty.Program
 	if pg, err := pty.ForegroundGroup(s.master); err == nil && pg > 0 {
-		p = pty.ProgramIn("/proc", pg)
+		p = pty.ProgramOf(pg)
 	}
 	if p.Name == "" {
-		p = pty.ProgramIn("/proc", sh.pid)
+		p = pty.ProgramOf(sh.pid)
 	}
 	return describeProgram(p, sh.home)
 }

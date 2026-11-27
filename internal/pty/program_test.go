@@ -68,7 +68,7 @@ func TestThisProcessIsDescribedFromProc(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := ProgramIn("/proc", os.Getpid())
+	p := ProgramOf(os.Getpid())
 	if p.Name != filepath.Base(os.Args[0]) || p.Dir != wd {
 		t.Errorf("%+v, want %s in %s", p, filepath.Base(os.Args[0]), wd)
 	}

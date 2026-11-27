@@ -26,14 +26,20 @@ func ForegroundGroup(master *os.File) (int, error) {
 // and a path is at most PATH_MAX, 4096 bytes on Linux.
 const maxCmdline = 4096
 
-// ProgramIn describes process pid from proc (/proc, or a test's fake):
-// its name is argv[0]'s base name, without the "-" a login shell's has,
-// which is the name a program gives itself (a Nix wrapper's comm is
-// ".claude-unwrapp" where argv[0] is "claude" [M] /proc on NixOS,
-// 2026-11-18), else the kernel's comm; its directory is where cwd points.
-// A process that is gone or not ours gives an empty Program. macOS has
-// no /proc, so there it gives an empty Program too: the darwin way is
-// not written yet (server.md §10, "Not done yet").
+// ProgramOf describes process pid: its name is argv[0]'s base name,
+// without the "-" a login shell's has, which is the name a program gives
+// itself (a Nix wrapper's comm is ".claude-unwrapp" where argv[0] is
+// "claude" [M] /proc on NixOS, 2026-11-18), else the kernel's comm; its
+// directory is its current directory. A process that is gone gives an
+// empty Program; another user's may give its name only. Linux reads
+// /proc (ProgramIn); macOS reads sysctl kern.procargs2 and proc_pidinfo
+// (server.md §10).
+func ProgramOf(pid int) Program {
+	return programOf(pid)
+}
+
+// ProgramIn is ProgramOf from proc, a /proc or a test's fake: argv[0]
+// from cmdline, else comm, and the directory where cwd points.
 func ProgramIn(proc string, pid int) Program {
 	dir := filepath.Join(proc, strconv.Itoa(pid))
 	var p Program
