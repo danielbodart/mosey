@@ -90,6 +90,14 @@ func TestTheRemoteCommandExitsAsShSaysUnderEveryShell(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "mosey"), []byte("#!/bin/sh\necho \"served $1\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// POSIX says 127 for a missing file, and dash and bash 5 say so. macOS's
+	// /bin/sh is bash 3.2, whose exec says 126 for it [M dan-mac, macOS
+	// 15.7]. The client takes 126 and 127 alike as no server (§4.2), so
+	// what matters is that the login shell does not change /bin/sh's status.
+	missing := ExitStatus(exec.Command("/bin/sh", "-c", "exec "+filepath.Join(home, "nothing-here")).Run())
+	if missing != 127 && missing != 126 {
+		t.Fatalf("/bin/sh exits %d for a missing file, not 126 or 127", missing)
+	}
 	ran := 0
 	for _, shell := range []string{"sh", "bash", "zsh", "fish", "tcsh", "nu"} {
 		path, err := exec.LookPath(shell)
@@ -102,7 +110,7 @@ func TestTheRemoteCommandExitsAsShSaysUnderEveryShell(t *testing.T) {
 			status int
 			out    string
 		}{
-			{"~/nothing-here", 127, ""},
+			{"~/nothing-here", missing, ""},
 			{"~/notexec", 126, ""},
 			{"~/mosey", 0, "served --serve\n"},
 		} {

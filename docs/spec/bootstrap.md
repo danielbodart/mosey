@@ -546,7 +546,9 @@ binary:
   shell of the user [shells]. ssh exits with the remote command's status.
   The client reports 126 or 127 with no protocol line as `ErrNoServer`
   (§10). A launcher never exits 126 or 127 itself (its failures are exit 1,
-  §4.4), so the two cannot be confused.
+  §4.4), so the two cannot be confused. On macOS, `/bin/sh` is bash 3.2,
+  and its `exec` gives 126 for a missing file too [M: dan-mac, macOS
+  15.7]. The client treats 126 and 127 the same, so this changes nothing.
 
   A server of any mosey version serves the client as the client's own
   version would (D8 V1). A server of another protocol fails the bootstrap
