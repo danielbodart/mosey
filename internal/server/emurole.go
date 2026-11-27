@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"runtime"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -36,23 +35,11 @@ func RunEmu(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 	// The emulator is made after Init arrives, inside the sandbox, so any
 	// syscall it makes is one the soak sees.
 	settleLazyInit()
-	if err := enterSandbox(sandbox.Emu, sandbox.Params{}, func(w string) { log.Warn(w) }); err != nil {
+	if err := sandbox.Enter(sandbox.Emu, sandbox.DefaultAction(), sandbox.Params{}, func(w string) { log.Warn(w) }); err != nil {
 		return fmt.Errorf("entering the sandbox: %w", err)
 	}
 	churn()
 	return serveEmu(ctx, conn, newEmulator, log)
-}
-
-// enterSandbox confines this role with the build's action (server.md
-// §6.1). macOS has no sandbox for mosey yet (server.md §10 "Order" [D]):
-// there the role runs unconfined, and the spawner says so in the session
-// log, once. Anywhere else a failure is fatal.
-func enterSandbox(role sandbox.Role, params sandbox.Params, warn func(string)) error {
-	err := sandbox.Enter(role, sandbox.DefaultAction(), params, warn)
-	if runtime.GOOS == "darwin" && errors.Is(err, errors.ErrUnsupported) {
-		return nil
-	}
-	return err
 }
 
 // settleLazyInit does, before the sandbox, the work the standard library

@@ -304,7 +304,6 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	if err := s.openLog(); err != nil {
 		return err
 	}
-	s.noteSandbox()
 	// Before anything else starts, so proto, emu and the shell all begin
 	// in the session's own scope (§2.1 step 4.2).
 	s.joinSessionScope()

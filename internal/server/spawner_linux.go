@@ -40,10 +40,6 @@ const serverRuns = true
 // (threat-model.md §4.10). A failure is fatal.
 func setNotDumpable() error { return nocore.NotDumpable() }
 
-// noteSandbox says nothing on Linux: every role enters its sandbox, and
-// a failure to is fatal.
-func (s *spawner) noteSandbox() {}
-
 // startProcess starts a role. A spawner that is SIGKILLed takes its roles
 // with it: EOF on the socket is the primary signal, Pdeathsig the
 // backstop.

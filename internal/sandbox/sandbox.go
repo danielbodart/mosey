@@ -65,8 +65,14 @@ func (a Action) String() string {
 // compiled with, because they are known only once it is running.
 type Params struct {
 	// PTY is the pty master's fd number, the only fd proto may ioctl.
-	// Needed for Proto; ignored for Emu.
+	// Needed for Proto on Linux; ignored for Emu, and on macOS, whose
+	// profile cannot name an fd.
 	PTY int
+	// UDPPort is the local port of proto's UDP socket, the only port its
+	// macOS profile lets it receive and send on. Needed for Proto on
+	// macOS; ignored for Emu, and on Linux, whose filter cannot see a
+	// socket's port.
+	UDPPort int
 	// Pid is the process's own pid, the only thread group it may tgkill.
 	// Enter fills it from getpid() when it is zero; tests give another to
 	// the interpreter.
@@ -82,7 +88,11 @@ type Params struct {
 // a kernel without Landlock (the version probe says 0, ENOSYS or
 // EOPNOTSUPP), which Enter reports through warn and carries on with seccomp
 // alone, which on its own stopped every attack in S4's battery (S4 §3.6).
-// On systems other than Linux it returns errors.ErrUnsupported.
+//
+// On macOS it does, in order: ptrace(PT_DENY_ATTACH) in place of
+// DUMPABLE, then sandbox_init with role's Profile (server.md §10). action
+// does not apply there: Seatbelt fails a denied call with EPERM. Every
+// failure is fatal. On other systems it returns errors.ErrUnsupported.
 func Enter(role Role, action Action, params Params, warn func(string)) error {
 	if warn == nil {
 		warn = func(string) {}

@@ -19,8 +19,9 @@ import (
 
 // serverRuns says whether the launcher starts a server on this system. On
 // macOS it does: the darwin tests and the end-to-end run of server.md §10
-// passed on dan-mac (macOS 15.7.4, 2026-11-27) [M]. It runs without the
-// Seatbelt sandbox until that slice lands (D22, Q5 server first).
+// passed on dan-mac (macOS 15.7.4, 2026-11-27) [M]. proto and emu enter
+// their Seatbelt profiles (internal/sandbox, D22), and a failure is fatal,
+// as on Linux.
 const serverRuns = true
 
 func (cfg *SpawnerConfig) platformDefaults() {}
@@ -32,17 +33,14 @@ func (s *spawner) joinSessionScope() {}
 // setNotDumpable has nothing to do on macOS: there is no PR_SET_DUMPABLE.
 // RLIMIT_CORE 0 would go on to the user's login shell, as on Linux. So
 // the launcher and the spawner read the credential line with no
-// protection: a known gap (server.md §10, threat-model.md §4.10). The
-// Seatbelt slice decides whether PT_DENY_ATTACH can close it.
+// protection: a known gap (server.md §10, threat-model.md §4.10).
+// PT_DENY_ATTACH does not close it yet: it is not known whether the login
+// shell, which the spawner starts, keeps the flag, and the shell's own
+// programs must stay open to the user's debugger. On dan-mac a user's
+// process could not attach to another of the user's processes at all
+// [M: EPERM, 2026-11-27], so the gap is open to root and to a user with
+// developer rights.
 func setNotDumpable() error { return nil }
-
-// noteSandbox says once, in the session's log, that the roles run
-// unconfined: the Seatbelt sandbox is the next slice (server.md §10
-// "Order" [D]). The roles say nothing, so an emu restart does not repeat
-// it.
-func (s *spawner) noteSandbox() {
-	s.log.Warn("macOS has no sandbox for mosey yet: proto and emu run unconfined (server.md §10)")
-}
 
 // startProcess starts a role. emu is started with posix_spawn, so the
 // kernel holds it to D23's limit from its first instruction; os/exec

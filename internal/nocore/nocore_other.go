@@ -6,8 +6,9 @@ import "errors"
 
 // There is no PR_SET_DUMPABLE off Linux. On darwin the rlimit is what
 // Process relies on (threat-model.md §4.10). The darwin server skips
-// NotDumpable on purpose (setNotDumpable in spawner_darwin.go).
-// PT_DENY_ATTACH comes with the Seatbelt slice.
+// NotDumpable on purpose (setNotDumpable in spawner_darwin.go). proto
+// and emu call ptrace(PT_DENY_ATTACH) in sandbox.Enter, which is where
+// the darwin sandbox is (server.md §10).
 func notDumpable() error { return errors.ErrUnsupported }
 
 func unsupported(err error) bool { return errors.Is(err, errors.ErrUnsupported) }

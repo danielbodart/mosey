@@ -20,7 +20,10 @@
 // roles under load (server.md §6.3).
 //
 // Landlock is used through golang.org/x/sys/unix directly, with no
-// go-landlock dependency (S4 §1.5). Linux-only mechanisms sit behind Enter;
-// on other systems it says errors.ErrUnsupported (D22: macOS is parked, not
-// ruled out).
+// go-landlock dependency (S4 §1.5). Linux-only mechanisms sit behind Enter.
+//
+// On macOS, Enter calls ptrace(PT_DENY_ATTACH) and then Seatbelt's
+// sandbox_init with our own profile per role (Profile, server.md §10, D22).
+// The profiles deny by default and allow only what each role was measured
+// to need. On other systems Enter says errors.ErrUnsupported.
 package sandbox

@@ -77,9 +77,17 @@ func RunProto(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 		raw.Control(func(fd uintptr) { ptyFD = int(fd) })
 	}
 
+	// The macOS profile names the UDP socket's own port, read from the
+	// socket, not from Start (server.md §10).
+	var udpPort int
+	if a, ok := pc.LocalAddr().(*net.UDPAddr); ok {
+		udpPort = a.Port
+	}
+
 	warn := func(w string) { log.Warn(w) }
 	settleLazyInit()
-	if err := enterSandbox(sandbox.Proto, sandbox.Params{PTY: ptyFD}, warn); err != nil {
+	params := sandbox.Params{PTY: ptyFD, UDPPort: udpPort}
+	if err := sandbox.Enter(sandbox.Proto, sandbox.DefaultAction(), params, warn); err != nil {
 		return fmt.Errorf("entering the sandbox: %w", err)
 	}
 	churn()
