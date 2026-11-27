@@ -161,6 +161,8 @@ understands first, and the sender sends only what was advertised:
   be ignored (a mark on the tab, `screen.md` §5.4), and a ClientLine's
   `cmd`, `dir` and `type` are critical (`bootstrap.md` §6.2), so a server
   that does not know them refuses the line and the client says so.
+  The screen's FARREMOTE (2026-11-27) is added in the same way, with no
+  feature: a property op that may be ignored.
 
 | code | name | what it allows | defined in |
 |---|---|---|---|

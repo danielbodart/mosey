@@ -147,3 +147,85 @@ func TestTheRemoteHostIsEscapedAndAnInvalidOneIsAQuestionMark(t *testing.T) {
 		}
 	}
 }
+
+// In a local session, the tab's remote mark is the one a mosey client
+// nested in the session set: written when the grid's FarRemote appears,
+// unset with the bare name when the nested client leaves, and Leave
+// clears it with the prefix as it clears the client's own (§8.8).
+func TestANestedMoseysRemoteMarkReachesTheTab(t *testing.T) {
+	var out bytes.Buffer
+	r := render.New(&out, allCaps)
+	r.SetRemote("")
+	r.Resize(10, 3)
+	_ = r.Enter()
+	g := screen.NewGrid(10, 3)
+	_ = r.Render(g)
+	written(&out)
+	nested := g.Clone()
+	nested.FarRemote = "dan-desktop"
+	_ = r.Render(nested)
+	if s, want := written(&out), "\x1b]666;vte.ext.mosey.remote=dan-desktop\x1b\\"; s != want {
+		t.Fatalf("nested client in: %q, want %q", s, want)
+	}
+	_ = r.Render(g)
+	if s, want := written(&out), "\x1b]666;vte.ext.mosey.remote\x1b\\"; s != want {
+		t.Fatalf("nested client out: %q, want %q", s, want)
+	}
+	_ = r.Render(nested)
+	written(&out)
+	_ = r.Leave()
+	if s := written(&out); s != unmarkOwn {
+		t.Fatalf("Leave while nested: %q, want %q", s, unmarkOwn)
+	}
+}
+
+// A remote session's own mark is the fact the client knows: a far-side
+// remote mark neither replaces it nor, when it goes, unsets it.
+func TestTheClientsOwnRemoteMarkWinsOverTheFarSides(t *testing.T) {
+	var out bytes.Buffer
+	r := render.New(&out, allCaps)
+	r.SetRemote("dan@blade")
+	r.Resize(10, 3)
+	_ = r.Enter()
+	g := screen.NewGrid(10, 3)
+	g.FarRemote = "elsewhere"
+	_ = r.Render(g)
+	if s := written(&out); s != remoteSet {
+		t.Fatalf("first frame: %q, want %q", s, remoteSet)
+	}
+	gone := g.Clone()
+	gone.FarRemote = ""
+	_ = r.Render(gone)
+	if s := written(&out); s != "" {
+		t.Fatalf("the far mark going wrote %q", s)
+	}
+}
+
+// A far-side remote mark is forgeable, so it must not hide root: root is
+// still written from the grid's Root, the far mark coming or going never
+// touches it, and a FarRemote that fails the allow-list (a grid built by
+// client code, not Apply) is never written (§8.4, §8.8).
+func TestAFarRemoteMarkNeverHidesRoot(t *testing.T) {
+	var out bytes.Buffer
+	r := render.New(&out, allCaps)
+	r.Resize(10, 3)
+	_ = r.Enter()
+	g := screen.NewGrid(10, 3)
+	g.Root, g.FarRemote = true, "evil"
+	_ = r.Render(g)
+	if s, want := written(&out), "\x1b]666;vte.ext.mosey.remote=evil\x1b\\"+rootSet; s != want {
+		t.Fatalf("root and a far mark: %q, want %q", s, want)
+	}
+	cleared := g.Clone()
+	cleared.FarRemote = ""
+	_ = r.Render(cleared)
+	if s, want := written(&out), "\x1b]666;vte.ext.mosey.remote\x1b\\"; s != want {
+		t.Fatalf("the far mark cleared: %q, want only %q", s, want)
+	}
+	bad := cleared.Clone()
+	bad.FarRemote = "evil\x1b]2;x\x07"
+	_ = r.Render(bad)
+	if s := written(&out); s != "" {
+		t.Fatalf("an invalid far mark wrote %q", s)
+	}
+}

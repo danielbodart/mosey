@@ -660,7 +660,8 @@ func TestCapabilitiesFromTheEnvironment(t *testing.T) {
 // grid's, or narrower), so history lines are also wrapped (§8.7). A seed
 // whose first byte is odd also marks the session remote with a host made
 // of the next bytes, so the client's own mark is written, escaped and
-// unset in the same alphabet (§8.8).
+// unset in the same alphabet (§8.8); the generator's grids carry a far
+// remote mark too, which is written when the client has none.
 func FuzzRender(f *testing.F) {
 	f.Add([]byte("\x01dan@blade;a\\b\x1b]2;x\x07\xc2\x9c"), uint8(0xff))
 	f.Add([]byte("seed"), uint8(0xff))

@@ -269,6 +269,9 @@ func (s *Source) State(g *screen.Grid) {
 	if s.N(4) == 0 {
 		g.Root = s.Bool()
 	}
+	if s.N(4) == 0 {
+		g.FarRemote = []string{"", "dan-desktop", "dan@blade", "a;b\\c · 漢", "?"}[s.N(5)]
+	}
 }
 
 // Next is a later version of g: g scrolled, resized, partly rewritten or

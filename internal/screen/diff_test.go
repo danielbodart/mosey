@@ -306,6 +306,12 @@ func TestEachRuleOfTheFormatRefusesWhatBreaksIt(t *testing.T) {
 		"ROOT 0xff":                               prop(0xe7, []byte{0xff}),
 		"ROOT truncated":                          prop(0xe7),
 		"ROOT twice":                              cat(prop(0xe7, []byte{1}), prop(0xe7, []byte{1})),
+		"FARREMOTE with C1":                       prop(0xe8, []byte("a\u009cb")),
+		"FARREMOTE with a newline":                prop(0xe8, []byte("a\nb")),
+		"FARREMOTE with bidi":                     prop(0xe8, []byte("a\u202eb")),
+		"FARREMOTE not UTF-8":                     prop(0xe8, []byte{'a', 0xff}),
+		"FARREMOTE over the bound":                prop(0xe8, bytes.Repeat([]byte("a"), screen.MaxContainerValue+1)),
+		"FARREMOTE twice":                         cat(prop(0xe8, []byte("a")), prop(0xe8, []byte("b"))),
 		"PEN no flags":                            {0x4c, 0x00},
 		"PEN reserved flag":                       {0x4c, 0x40},
 		"PEN colour kind 3":                       {0x4c, 0x01, 0x03},
@@ -452,10 +458,11 @@ func TestStateOpsRoundTrip(t *testing.T) {
 	to.Container = screen.Container{Name: "frisket · a;b\\c", Runtime: "flong", UID: "4294967295"}
 	to.Cwd = "file://host/home/dan/%E6%BC%A2"
 	to.Root = true
+	to.FarRemote = "dan@blade · a;b\\c"
 	roundTrip(t, from, to)
 	// A mark cleared is a mark of three empty values; the directory too.
 	cleared := to.Clone()
-	cleared.Container, cleared.Cwd, cleared.Root = screen.Container{}, "", false
+	cleared.Container, cleared.Cwd, cleared.Root, cleared.FarRemote = screen.Container{}, "", false, ""
 	roundTrip(t, to, cleared)
 	// A clipboard of exactly MaxClipboard passes; the empty write clears.
 	to2 := to.Clone()
@@ -507,6 +514,37 @@ func TestRootIsTheSpecsThreeBytesEachWay(t *testing.T) {
 	}
 }
 
+// §5.11 example 12: FARREMOTE is the host as its whole body, and the clear
+// is an empty body. Its opcode is in the range a receiver may ignore, so a
+// client from before it draws the same screen without the far side's
+// mark: here a decoder that skips it stands in for that client.
+func TestTheFarSidesRemoteMarkIsTheSpecsBytesAndMayBeIgnored(t *testing.T) {
+	from := base80x24()
+	to := from.Clone()
+	to.FarRemote = "dan-desktop"
+	want := cat([]byte{0xe8, 11}, []byte("dan-desktop"))
+	if d := to.Diff(from); !bytes.Equal(d, want) {
+		t.Fatalf("setting FarRemote is % x", d)
+	}
+	if d := from.Diff(to); !bytes.Equal(d, []byte{0xe8, 0x00}) {
+		t.Fatalf("clearing FarRemote is % x", d)
+	}
+	g := from.Clone()
+	if err := g.Apply(want); err != nil || !g.Equal(to) {
+		t.Fatalf("Apply: %v, FarRemote %q", err, g.FarRemote)
+	}
+	if want[0]&0x20 == 0 {
+		t.Fatalf("FARREMOTE %#02x is marked critical", want[0])
+	}
+	// The same op under an opcode this decoder does not know, as an older
+	// one does not know 0xE8, is skipped and changes nothing.
+	unknown := cat([]byte{0xf8}, want[1:])
+	g = from.Clone()
+	if err := g.Apply(unknown); err != nil || !g.Equal(from) {
+		t.Fatalf("an older client's view: %v", err)
+	}
+}
+
 func TestAWorstCaseFullScreenStaysWithinMaxDiffAndTheBudget(t *testing.T) {
 	to := screen.NewGrid(screen.MaxCols, screen.MaxRows)
 	cluster := strings.Repeat("á", 21) // 63 bytes
@@ -548,7 +586,7 @@ func TestAPropertyOpFromALaterReleaseIsSkippedUnlessCritical(t *testing.T) {
 	to.Title, to.Root = "work", true
 	d := roundTrip(t, from, to)
 	for _, at := range []int{0, len(d)} {
-		for _, op := range [][]byte{unhex(t, "F0 03 61 62 63"), unhex(t, "FF 00"), prop(0xe8, make([]byte, screen.MaxProperty))} {
+		for _, op := range [][]byte{unhex(t, "F0 03 61 62 63"), unhex(t, "FF 00"), prop(0xf8, make([]byte, screen.MaxProperty))} {
 			g := from.Clone()
 			if err := g.Apply(cat(d[:at], op, d[at:])); err != nil || !g.Equal(to) {
 				t.Errorf("% x at %d: %v", op[:2], at, err)

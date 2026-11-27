@@ -11,31 +11,44 @@ import (
 // mark among them (docs/spec/screen.md §4.6).
 const termpropOSC = 666
 
-// maxTermpropBody bounds the OSC 666 body emu reads: three values of
-// MaxContainerValue bytes, each at most doubled by escaping, are 1.5 KiB,
+// maxTermpropBody bounds the OSC 666 body emu reads: four values of
+// MaxContainerValue bytes, each at most doubled by escaping, are 2 KiB,
 // and the rest is room for termprops not carried [derived, §3]. A longer
 // body is ignored whole.
 const maxTermpropBody = 8 << 10
 
-// The container termprops carried, and the prefix that names all of them.
+// The termprops carried: the container mark's three, mosey's remote mark
+// (§8.8), and the prefixes that unset each family. mosey's root mark is
+// not carried: root is only ever measured (§4.8), so vte.ext.mosey.root is
+// skipped like any other termprop.
 const (
 	containerPrefix  = "vte.container."
 	containerName    = containerPrefix + "name"
 	containerRuntime = containerPrefix + "runtime"
 	containerUID     = containerPrefix + "uid"
+	moseyPrefix      = "vte.ext.mosey."
+	moseyRemote      = moseyPrefix + "remote"
 )
 
-// applyTermprops is the container mark after the OSC 666 body data, as
-// tuios hands it over ("666;item;item..."), given the mark cur. It returns
-// false, and the caller keeps cur, when the body is not OSC 666, is over
-// maxTermpropBody, or carries a container value that is badly escaped or
-// fails the allow-list: a rejected sequence changes nothing (§4.6). Every
-// item that is not one of the three carried properties is skipped.
+// termprops are the marks emu keeps from OSC 666: the container mark, and
+// the remote mark a mosey client nested in the session writes
+// (docs/spec/screen.md §4.6).
+type termprops struct {
+	container screen.Container
+	remote    string
+}
+
+// applyTermprops is the marks after the OSC 666 body data, as tuios hands
+// it over ("666;item;item..."), given the marks cur. It returns false, and
+// the caller keeps cur, when the body is not OSC 666, is over
+// maxTermpropBody, or carries a value that is badly escaped or fails the
+// allow-list: a rejected sequence changes nothing (§4.6). Every item that
+// is not one of the carried properties or prefixes is skipped.
 //
 // This is not an escape-sequence parser: tuios has already found the
 // sequence and its body (D9, D19). It only splits the item list, as VTE
 // does, at ';'.
-func applyTermprops(cur screen.Container, data []byte) (screen.Container, bool) {
+func applyTermprops(cur termprops, data []byte) (termprops, bool) {
 	if len(data) > maxTermpropBody {
 		return cur, false
 	}
@@ -48,19 +61,28 @@ func applyTermprops(cur screen.Container, data []byte) (screen.Container, bool) 
 	}
 	c := cur
 	for _, item := range strings.Split(string(rest[1:]), ";") {
-		if item == containerPrefix {
-			c = screen.Container{}
+		switch item {
+		case containerPrefix:
+			c.container = screen.Container{}
+			continue
+		case moseyPrefix:
+			// The prefix unsets all of mosey's marks, as a nested client's
+			// Leave writes it; root is not carried, so only remote goes.
+			c.remote = ""
 			continue
 		}
 		key, value, set := strings.Cut(item, "=")
 		var field *string
+		valid := screen.ValidContainerValue
 		switch key {
 		case containerName:
-			field = &c.Name
+			field = &c.container.Name
 		case containerRuntime:
-			field = &c.Runtime
+			field = &c.container.Runtime
 		case containerUID:
-			field = &c.UID
+			field, valid = &c.container.UID, screen.ValidContainerUID
+		case moseyRemote:
+			field = &c.remote
 		default:
 			continue
 		}
@@ -71,10 +93,6 @@ func applyTermprops(cur screen.Container, data []byte) (screen.Container, bool) 
 			continue
 		}
 		v, ok := unescapeTermprop(value)
-		valid := screen.ValidContainerValue
-		if key == containerUID {
-			valid = screen.ValidContainerUID
-		}
 		if !ok || !valid(v) {
 			return cur, false
 		}

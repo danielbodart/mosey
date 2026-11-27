@@ -38,8 +38,14 @@ type Grid struct {
 	// (docs/spec/screen.md §4.8). The spawner measures it and proto sets
 	// it; no output can, so the client's root mark (§8.8) cannot be
 	// forged or hidden by anything a program prints.
-	Root  bool
-	Modes Modes
+	Root bool
+	// FarRemote is the remote mark a program on the far side set with
+	// OSC 666's vte.ext.mosey.remote, already through the allow-list, or
+	// "": a mosey client nested inside this session says which host its
+	// own session is on (docs/spec/screen.md §4.6, §8.8). Unlike Root it
+	// may be forged, which costs at most a purple tab.
+	FarRemote string
+	Modes     Modes
 	// EchoOff is set while the shell's pty has echo off in canonical mode
 	// (!ECHO && ICANON), as at a password prompt. The client neither
 	// predicts nor logs keys while it is set (D12, prediction.md §3).
@@ -204,7 +210,7 @@ func (g *Grid) Clone() *Grid {
 func (g *Grid) Equal(other *Grid) bool {
 	if g.cols != other.cols || g.rows != other.rows ||
 		g.Cursor != other.Cursor || g.Title != other.Title || g.Modes != other.Modes ||
-		g.Container != other.Container || g.Cwd != other.Cwd || g.Root != other.Root ||
+		g.Container != other.Container || g.Cwd != other.Cwd || g.Root != other.Root || g.FarRemote != other.FarRemote ||
 		g.EchoOff != other.EchoOff || g.EchoAck != other.EchoAck || g.EchoApplied != other.EchoApplied ||
 		g.InputConsumed != other.InputConsumed || g.Bell != other.Bell ||
 		g.Rebuilt != other.Rebuilt || g.Clipboard.Seq != other.Clipboard.Seq ||
@@ -260,6 +266,9 @@ func (g *Grid) Valid() error {
 	}
 	if !ValidContainer(g.Container) {
 		return errors.New("G8: container mark outside the allow-list")
+	}
+	if !ValidContainerValue(g.FarRemote) {
+		return errors.New("G8: far remote mark outside the allow-list")
 	}
 	if !ValidCwd(g.Cwd) {
 		return errors.New("G8: directory outside the allow-list")

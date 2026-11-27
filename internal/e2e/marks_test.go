@@ -99,6 +99,38 @@ func TestTheTabIsMarkedRemoteAndRootOnlyFromWhatMoseyKnows(t *testing.T) {
 	})
 }
 
+// In a local session, a mosey client nested in it writes its remote mark,
+// and the far side carries it to the tab (screen.md §4.6, §8.8): the tab
+// turns remote with the nested client's host, back to local when the
+// nested client writes its clear, and a root mark printed beside it still
+// changes nothing.
+func TestANestedMoseysRemoteMarkReachesTheTabOverALossyNetwork(t *testing.T) {
+	skipUntilBuilt(t, allPackages...)
+	synctest.Test(t, func(t *testing.T) {
+		s, _ := startMarkedSession(t, "")
+		s.wait("prompt", func() bool { return bytes.Contains(s.user.bytes(), []byte("$")) })
+		say := func(b string) {
+			s.prog.mu.Lock()
+			s.prog.print(b)
+			s.prog.mu.Unlock()
+		}
+		nested := "\x1b]666;vte.ext.mosey.remote=dan-desktop\x1b\\"
+		say(nested + "\x1b]666;vte.ext.mosey.root=1\x1b\\inner$ ")
+		s.wait("the nested client's mark", func() bool { return bytes.Contains(s.user.bytes(), []byte(nested)) })
+		if bytes.Contains(s.user.bytes(), []byte(markRoot)) {
+			t.Fatal("a printed root mark reached the user's terminal")
+		}
+		in := len(s.user.bytes())
+		say(unmarkMosey + "outer$ ")
+		unset := []byte("\x1b]666;vte.ext.mosey.remote\x1b\\")
+		s.wait("the mark unset", func() bool { return bytes.Contains(s.user.bytes()[in:], unset) })
+		s.exit()
+		if after := s.user.bytes()[in:]; bytes.Contains(after, []byte(unmarkMosey)) {
+			t.Fatalf("the client cleared a mark it no longer showed: %q", after)
+		}
+	})
+}
+
 // A session on this machine (mosey localhost) writes no mark of mosey's
 // own at all, so the tab stays local.
 func TestALocalSessionLeavesTheTabUnmarked(t *testing.T) {

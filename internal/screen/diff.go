@@ -720,6 +720,9 @@ func (e *encoder) state() {
 		}
 		e.prop(opRoot, b)
 	}
+	if to.FarRemote != from.FarRemote {
+		e.prop(opFarRemote, []byte(to.FarRemote)...)
+	}
 }
 
 // history writes the lines of the target's history that the receiver does

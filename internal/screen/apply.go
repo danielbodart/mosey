@@ -58,6 +58,7 @@ const (
 	opContainer = 0xe5
 	opCwd       = 0xe6
 	opRoot      = 0xe7
+	opFarRemote = 0xe8
 	// The history ops of phase 3 (§2.5, §5.6).
 	opHist  = 0x60
 	opHLine = 0x61
@@ -115,6 +116,7 @@ const (
 	onceContainer
 	onceCwd
 	onceRoot
+	onceFarRemote
 )
 
 // Apply turns g into the grid a Diff was made towards. The diff is hostile:
@@ -386,10 +388,11 @@ var properties = map[byte]propertyOp{
 	opContainer: {"CONTAINER", onceContainer, 2*(2+MaxContainerValue) + MaxContainerUID, (*decoder).container},
 	opCwd:       {"CWD", onceCwd, MaxCwd, (*decoder).cwd},
 	opRoot:      {"ROOT", onceRoot, 1, (*decoder).root},
+	opFarRemote: {"FARREMOTE", onceFarRemote, MaxContainerValue, (*decoder).farRemote},
 }
 
 // rest is the rest of a property op's body: the trailing string of TITLE,
-// CLIP, CONTAINER and CWD, whose length is the body's (§5.4).
+// CLIP, CONTAINER, CWD and FARREMOTE, whose length is the body's (§5.4).
 func (d *decoder) rest(what string, max int) (string, error) {
 	if len(d.b)-d.pos > max {
 		return "", d.fail("%s of %d bytes, over %d", what, len(d.b)-d.pos, max)
@@ -457,6 +460,20 @@ func (d *decoder) root() error {
 		return d.fail("ROOT %#02x, not 0 or 1", b)
 	}
 	d.out.Root = b == 1
+	return nil
+}
+
+// farRemote is FARREMOTE: the far side's remote mark, the whole body,
+// through the container value's allow-list (§4.6, §5.6).
+func (d *decoder) farRemote() error {
+	s, err := d.rest("FARREMOTE", MaxContainerValue)
+	if err != nil {
+		return err
+	}
+	if !ValidContainerValue(s) {
+		return d.fail("FARREMOTE outside the allow-list")
+	}
+	d.out.FarRemote = s
 	return nil
 }
 

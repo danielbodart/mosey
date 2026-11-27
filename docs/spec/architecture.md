@@ -397,7 +397,8 @@ throttles on (`ssp.md` §10.1).
 width, `Style`), `Cursor`, `Title`, `Container` and `Cwd` (OSC 666's
 container mark and OSC 7's directory, `screen.md` §4.6, §4.7), `Root`
 (the far keyboard runs as root, measured by the spawner and never from
-output, `screen.md` §4.8), `Modes`, and prediction's `EchoOff`
+output, `screen.md` §4.8), `FarRemote` (a nested mosey client's remote
+mark, `screen.md` §4.6, §8.8), `Modes`, and prediction's `EchoOff`
 (D12), `EchoAck` and `EchoApplied` (`prediction.md` §3), `Clipboard` (OSC 52 write, D27) and `Bell`,
 plus `InputConsumed` (the client's input flow control, `ssp.md` §10.1),
 `Rebuilt` (D23's rebuild notice) and `History` (the scrollback window,

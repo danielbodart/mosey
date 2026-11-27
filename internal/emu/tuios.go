@@ -28,9 +28,9 @@ const writeChunk = 4 << 10
 //   - the kitty keyboard protocol is off, until the client can say whether
 //     the user's terminal has it;
 //   - colour queries are answered with the client's colours;
-//   - OSC 666's container mark and OSC 7's directory are kept, through
-//     the allow-list, from tuios' PrivateOSC and WorkingDirectory
-//     callbacks;
+//   - OSC 666's container mark, a nested mosey's remote mark and OSC 7's
+//     directory are kept, through the allow-list, from tuios' PrivateOSC
+//     and WorkingDirectory callbacks;
 //   - the scrollback is min(10000, ScrollbackCells/cols) lines (D23).
 //
 // The emulator is not safe for concurrent use. It is a Holder.
@@ -77,15 +77,16 @@ func New(cols, rows int, opts Options) (Emulator, error) {
 				e.pending, e.held = nil, nil
 			}
 		},
-		// The container mark (OSC 666) reaches us as the body of an OSC
-		// tuios does not interpret; a body the allow-list refuses changes
-		// nothing (docs/spec/screen.md §4.6).
+		// The container mark and a nested client's remote mark (OSC 666)
+		// reach us as the body of an OSC tuios does not interpret; a body
+		// the allow-list refuses changes nothing (docs/spec/screen.md
+		// §4.6).
 		PrivateOSC: func(cmd int, data []byte) {
 			if cmd != termpropOSC {
 				return
 			}
-			if c, ok := applyTermprops(e.container, data); ok {
-				e.container = c
+			if m, ok := applyTermprops(e.marks, data); ok {
+				e.marks = m
 			}
 		},
 		// OSC 7's directory URI, which tuios has taken from its body. One
@@ -106,10 +107,10 @@ type tuios struct {
 
 	bell uint64
 	clip screen.Clipboard
-	// container and cwd are the last OSC 666 container mark and OSC 7
-	// directory that passed the allow-list (docs/spec/screen.md §4.6, §4.7).
-	container screen.Container
-	cwd       string
+	// marks and cwd are the last OSC 666 marks and OSC 7 directory that
+	// passed the allow-list (docs/spec/screen.md §4.6, §4.7).
+	marks termprops
+	cwd   string
 	// hist is the history window, the lines tuios scrolled into its ring,
 	// numbered from 0 in this emulator (docs/spec/screen.md §6.3).
 	hist screen.History
@@ -331,7 +332,7 @@ func (e *tuios) fill(g *screen.Grid) {
 		Shape:   cursorShape(shape, steady),
 	}
 	g.Title = screen.SanitizeTitle(e.t.Titles().Title)
-	g.Container, g.Cwd = e.container, e.cwd
+	g.Container, g.FarRemote, g.Cwd = e.marks.container, e.marks.remote, e.cwd
 	g.Modes = e.modes()
 	g.Bell = e.bell
 	g.Clipboard = screen.Clipboard{Seq: e.clip.Seq, Data: e.clip.Data}

@@ -105,6 +105,7 @@ fuzzed decoder protects both boundaries.
 | `Container` | `{Name, Runtime, UID}`: the container mark the program set with OSC 666 (§4.6); all empty is no mark | CONTAINER |
 | `Cwd` | the program's current directory as a `file:` URI from OSC 7 (§4.7); empty is none | CWD |
 | `Root` | the pty's foreground process runs as uid 0, as the spawner measured it (§4.8); never from output | ROOT |
+| `FarRemote` | the remote mark a far-side program set with OSC 666 `vte.ext.mosey.remote` (§4.6): the host of a mosey client nested in this session; empty is none | FARREMOTE |
 | `Bell` | count of bells | BELL |
 | `Rebuilt` (§11 item 1) | `{Seq, Reason}`: the emulator was rebuilt [D23] | REBUILT |
 | `InputConsumed` (§11 item 15) | the index in the client's input stream up to which the server has written events to the pty: input flow control [`ssp.md` §10.1] | CONSUMED |
@@ -151,7 +152,8 @@ item 4).
   - `Shape` is in 0..6 (DECSCUSR [xterm]).
 - **G8, the rest.**
   - `ValidTitle(Title)`.
-  - `ValidContainer(Container)` and `ValidCwd(Cwd)` (§4.6, §4.7).
+  - `ValidContainer(Container)`, `ValidContainerValue(FarRemote)` and
+    `ValidCwd(Cwd)` (§4.6, §4.7).
   - `len(Clipboard.Data) ≤ MaxClipboard`.
   - `Modes` fields are within their enums: `Mouse` 0..3, `MouseEncoding`
     0..1, and `KittyKeyboard` 0..31 (the five progressive-enhancement
@@ -526,11 +528,22 @@ What VTE does with the sequence is taken from flong's `DESIGN.md` ("OSC
 - the BEL-terminated form is refused, so the client always ends it with
   ST.
 
-**The field.** `Container{Name, Runtime, UID}`, three strings. All three
-empty is no mark. Only these three properties are carried; every other
-termprop, and every other `vte.container.*` property, is consumed by the
-server's emulator (§4.5). That includes mosey's own `vte.ext.mosey.*`
-(§8.8): the far side cannot print the client's marks.
+**The fields.** `Container{Name, Runtime, UID}`, three strings. All three
+empty is no mark. The emulator also carries one of mosey's own
+termprops, `vte.ext.mosey.remote`, as `FarRemote`, one string. A mosey
+client nested in the session writes it (§8.8). Empty is no mark. The
+server's emulator consumes every other termprop and every other
+`vte.container.*` property (§4.5). That includes `vte.ext.mosey.root`:
+a far-side program cannot print the root mark (§4.8).
+
+Why the remote mark goes through (Dan, 2026-11-27): a local session in
+every terminal window is now the usual case. A `mosey dan-desktop` typed
+in it is a nested client, and without its mark the tab stays local. A
+forged remote mark can only make a tab purple. The terminal puts root
+above it (§8.8), so it cannot hide red.
+
+**`FarRemote`** must pass `ValidContainerValue`, the same rule as a
+container name.
 
 **`ValidContainerValue(s)`** (for `Name` and `Runtime`): empty, or 1 to
 `MaxContainerValue` bytes of valid UTF-8 with no forbidden code point and
@@ -551,24 +564,26 @@ sequence of its own, only the body's item list. For OSC 666 it:
 
 1. ignores a body over 8 KiB (§3) whole;
 2. splits what follows `666;` at every `;`, and takes the items in order,
-   on a copy of the current mark:
-   - `vte.container.` empties all three fields;
-   - `vte.container.name`, `vte.container.runtime` or `vte.container.uid`
-     with no `=` empties that field [derived: the bare name unsets one
-     property as the prefix unsets all];
-   - one of the three followed by `=` and a value sets that field to the
+   on a copy of the current marks:
+   - `vte.container.` empties the three container fields;
+   - `vte.ext.mosey.` empties `FarRemote`, as VTE unsets all of mosey's
+     termprops for it;
+   - `vte.container.name`, `vte.container.runtime`, `vte.container.uid`
+     or `vte.ext.mosey.remote` with no `=` empties that field [derived:
+     the bare name unsets one property as the prefix unsets all];
+   - one of the four followed by `=` and a value sets that field to the
      value unescaped (`\\`, `\s`, `\n`); an empty value empties it;
    - anything else is not carried and is skipped;
-3. if any of the three's values has another escape, a `\` at its end, or
+3. if any of the four's values has another escape, a `\` at its end, or
    fails its `Valid` test once unescaped (a `\n` makes a newline, a C0
    control, so it always fails), the whole sequence changes nothing:
    rejected input changes no state;
-4. otherwise the copy becomes the mark.
+4. otherwise the copy becomes the marks.
 
 The terminator does not matter to the emulator: tuios hands over the body
 of a BEL-terminated sequence too, and it is the client that writes ST.
 
-**The client** writes the mark only from these fields, re-escaping it
+**The client** writes the marks only from these fields, re-escaping them
 itself (§8.4); it never forwards the remote bytes.
 
 ### 4.7 Current directory (OSC 7)
@@ -824,8 +839,9 @@ any) and before HIST, and changing no phase:
 | `0xE5` | CONTAINER | string name (0..`MaxContainerValue`), string runtime (0..`MaxContainerValue`), then uid, the rest of the body (0..10) | no | a mark on the tab (§4.6, §8.8) |
 | `0xE6` | CWD | the URI, the whole body (0..`MaxCwd`) | no | a mark on the tab (§4.7) |
 | `0xE7` | ROOT | `byte` (0 or 1) | no | a mark on the tab (§4.8): a client that ignores it shows a root shell as an ordinary one, which costs a warning, not an action |
+| `0xE8` | FARREMOTE | the host, the whole body (0..`MaxContainerValue`) | no | a mark on the tab (§4.6, §8.8): a client that ignores it shows a nested session as local |
 | `0xC3`–`0xDF` | | unknown: an error | yes | |
-| `0xE8`–`0xFF` | | unknown: skipped | no | |
+| `0xE9`–`0xFF` | | unknown: skipped | no | |
 
 An unknown property op's `L` is at most `MaxProperty` and at most the
 bytes left, and a diff may hold at most `MaxUnknownProps` of them; both
@@ -1087,6 +1103,11 @@ Sets `Root` to `b == 1` (§4.8). It may be ignored (§5.4): a client that
 does not know it shows no root mark, and draws everything else as
 before.
 
+**FARREMOTE `s`.** `s` is the whole body. Requires
+`ValidContainerValue(s)` (§4.6). Sets `FarRemote`. An empty body clears
+it. It may be ignored (§5.4): a client that does not know it shows no
+far-side remote mark, and draws everything else as before.
+
 **History ops (phase 3, §2.5).** They append lines to the history; the
 diff states the number of the first one, and the lines follow in order.
 
@@ -1272,8 +1293,8 @@ E1–E6, not the exact bytes.
    - Otherwise, if it is where the write position stands, use HERE.
    - Otherwise use CURSOR.
 5. **State.** Emit CURSTYLE, TITLE, MODES, ECHO, BELL, CLIP, REBUILT,
-   CONSUMED, CONTAINER, CWD and ROOT for each field that differs from
-   `from`.
+   CONSUMED, CONTAINER, CWD, ROOT and FARREMOTE for each field that
+   differs from `from`.
 6. **History.** If `g.History` differs from `from.History`, emit HIST
    with `max(from.History.Next, first)`, where `first` is the number of
    `g`'s oldest held line, then each line from there: HROW for a line
@@ -1372,6 +1393,10 @@ All examples are at 80 × 24 unless a size is given. Bytes are in hex.
     this decoder: `0xF0` may be ignored, and its 3-byte body is read
     past, so the diff applies as if it were not there. `D0 03 61 62 63`
     is an error: `0xD0` is critical and unknown.
+
+12. **A nested mosey's host, then none.** `E8 0B` `dan-desktop` sets
+    `FarRemote` to `dan-desktop`: an 11-byte body. `E8 00` clears it. A
+    client from before FARREMOTE skips both, as in example 11.
 
 ### 5.12 Size: what it costs, the bound, the gate
 
@@ -1905,7 +1930,9 @@ this (§10).
    separate `vte.ext.mosey.*` termprops (item 6, §8.8). A fresh
    renderer has written no mark, so on attach or resume the first
    frame writes the grid's current one.
-6. **mosey's marks** (§8.8). If the remote host or `Root` differs from
+6. **mosey's marks** (§8.8). The remote host is the client's own
+   (`SetRemote`) if it has one. Else it is `FarRemote`, if that passes
+   `ValidContainerValue`. If the remote host or `Root` differs from
    what the renderer last wrote, write the changed one: `OSC 666 ;
    vte.ext.mosey.remote=<host> ST` or, for none, `OSC 666 ;
    vte.ext.mosey.remote ST`; `OSC 666 ; vte.ext.mosey.root=1 ST` or
@@ -2080,7 +2107,7 @@ through its C API installs `vte.ext.mosey.remote` and
 
 | termprop | VTE type | set | unset | meaning |
 |---|---|---|---|---|
-| `vte.ext.mosey.remote` | `VTE_PROPERTY_STRING` | `vte.ext.mosey.remote=<host>` | `vte.ext.mosey.remote` | the session is on another machine; the value is DESTINATION as the user typed it (`dan@blade`, `blade`, `ssh://blade:2222`) |
+| `vte.ext.mosey.remote` | `VTE_PROPERTY_STRING` | `vte.ext.mosey.remote=<host>` | `vte.ext.mosey.remote` | the session is on another machine; the value is DESTINATION as the user typed it (`dan@blade`, `blade`, `ssh://blade:2222`), the client's own or a nested client's (**When**) |
 | `vte.ext.mosey.root` | `VTE_PROPERTY_BOOL` | `vte.ext.mosey.root=1` | `vte.ext.mosey.root` | the process at the far keyboard runs as root (§4.8) |
 | `vte.container.name`, `.runtime`, `.uid` | VTE's own | §8.4 item 5 | `vte.container.` | the far side's container mark, carried as today (§4.6); forgeable by design |
 
@@ -2104,6 +2131,16 @@ one is skipped and the known one still set.]
   as an `ssh` to them would. It does not change during a session. A
   DESTINATION that fails `ValidContainerValue` (no user can type one
   ssh would take) is written as `?`, so the fact is still told.
+- **remote from a nested client.** When the client has no remote mark
+  of its own, it writes the grid's `FarRemote` (§4.6). A mosey client
+  nested in the session writes its own remote mark to the session's
+  emulator. The emulator keeps it as `FarRemote`, and the outer client
+  shows it. When the nested client leaves, it writes `vte.ext.mosey.`,
+  `FarRemote` becomes empty, and the outer client unsets the mark. The
+  tab is local again. A nested client killed before its `Leave` writes
+  no clear, so the mark stays until a program sets or clears it. The
+  client's own mark always wins: a remote session does not change its
+  host for a nested one.
 - **root** follows the grid's `Root`, written when it changes.
 - Both are written by `Render` (§8.4 item 6) and unset by `Leave` (§8.6
   item 11). A fresh renderer has written neither, so a resume writes
@@ -2148,21 +2185,28 @@ win. For that patch:
    termprop says it, and says nothing for `mosey localhost`.
 
 **Why a printed mark cannot hide root.** Root reaches the terminal only
-as `vte.ext.mosey.root`, which the client writes only from `Root`,
-which only the spawner's measurement sets (§4.8): emu consumes every
-`vte.ext.*` item a program prints (§4.6), and proto refuses an emu grid
-with `Root` set (§7.3). A printed container mark adds only
-`vte.container.*`, below root in the table. So a hostile far side can
-make a tab blue, which is accepted (§4.6), and never take away its red.
+as `vte.ext.mosey.root`. The client writes it only from `Root`. Only the
+spawner's measurement sets `Root` (§4.8). emu consumes every
+`vte.ext.*` item a program prints, except `vte.ext.mosey.remote`
+(§4.6). proto refuses an emu grid with `Root` set (§7.3). A printed
+container mark adds only `vte.container.*`, and a printed remote mark
+adds only `vte.ext.mosey.remote`. Both are below root in the table. So a
+hostile far side can make a tab blue or purple, which is accepted, and
+it can never take away the tab's red.
 
-**Nested hops.** If the far foreground program is itself `ssh` or
-`mosey`, the keyboard is on yet another machine, and the tab already says
-remote: the client asserts it for the whole session, and a container
-mark above it hides the colour, not the fact, which the terminal still
-holds. So nothing more is built for the first hop. What a nested mosey
-knows (root or a container three hops away) would need a side channel
-from it, and is parked (Dan, 2026-11-16). The one case not covered is
-`mosey localhost` and then `ssh` inside it: the tab stays local.
+**Nested hops.** In a remote session, the tab already says remote. The
+client asserts it for the whole session. If the far foreground program
+is itself `ssh` or `mosey`, the keyboard is on yet another machine, and
+the tab still says remote. A container mark above it hides the colour,
+not the fact, which the terminal still holds.
+
+In a local session, a nested mosey client marks the tab remote through
+`FarRemote` (**When**). A nested client's root mark does not go
+through: root is only measured (§4.8). So a root shell two hops away
+shows as remote, not root.
+
+Out of scope (Dan, 2026-11-27): plain `ssh` inside a local session. ssh
+writes no mark, so the tab stays local.
 
 ## 9. What the client must never do
 
@@ -2283,25 +2327,35 @@ commit message, and for 10 s each in CI (`mise run fuzz-smoke`)
 - **Root.** ROOT with a byte other than 0 or 1, or twice, is refused and
   changes nothing; `FuzzApply` has seeds of it, and `FuzzRoundTrip`'s
   generator sets `Root`.
+- **Far remote.** FARREMOTE that fails `ValidContainerValue`, is over
+  `MaxContainerValue`, or comes twice, is refused and changes nothing.
+  `FuzzApply` has seeds of it, and `FuzzRoundTrip`'s generator sets
+  `FarRemote`.
 
 **`internal/emu`**
 
-- **`FuzzTermprops`.** Any OSC 666 body: the mark it leaves is valid,
-  and one that changed the mark is one the body's own items explain; a
-  body with a bad carried value changes nothing.
+- **`FuzzTermprops`.** Any OSC 666 body: the marks it leaves are valid,
+  and a value that changed is one the body's own items explain; a body
+  with a bad carried value changes nothing. It covers the container
+  mark and `FarRemote`.
 - **Container and directory through the emulator**: OSC 666 set, clear
   by prefix and by name, escapes round-tripping through the client's
   writer, and every refusal; OSC 7 accepted, percent-encoded, and
-  refused. A program printing `vte.ext.mosey.root=1` or
-  `vte.ext.mosey.remote=…` changes nothing in the grid: `Root` stays
-  false and no mark is set (§8.8).
+  refused. A program printing `vte.ext.mosey.root=1` changes nothing in
+  the grid: `Root` stays false (§8.8). A program printing
+  `vte.ext.mosey.remote=<host>` sets `FarRemote`, and
+  `vte.ext.mosey.` or the bare name clears it. A bad value changes
+  nothing.
 
 **`internal/render`**
 
 - **mosey's marks** (§8.8): a remote host is written on the first frame
   and not again; none for localhost; `Root` written when it rises and
   unset when it falls; `Leave` unsets both with the prefix only if one
-  was shown; a printed container mark never touches either.
+  was shown; a printed container mark never touches either. In a
+  local session, the grid's `FarRemote` is written when it appears and
+  unset when it goes; the client's own host wins over it; it never
+  touches root; and an invalid one is never written.
 
 - **`FuzzEmuRoundTrip`.** Program bytes and resizes up to the clamp go
   into `emu.New`. A snapshot is taken and diffed after each half, and the
@@ -2469,6 +2523,11 @@ agreed first).
     client skips what it does not know; `0x52`–`0x5F` become reserved
     core. Protocol 1, as if designed so. Owners: screen and all users of
     the diff (versioning slice).
+20. **`Grid.FarRemote`** and FARREMOTE (`0xE8`, §4.6, §5.6; Dan,
+    2026-11-27). The op may be ignored, so it needs no protocol number
+    and no feature. emu fills it from `vte.ext.mosey.remote`, and
+    `render` shows it when the client has no remote mark of its own
+    (§8.8). Owners: screen, emu and render (nested-marks slice).
 
 ## Review notes
 

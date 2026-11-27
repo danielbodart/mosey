@@ -103,6 +103,7 @@ func TestValidNamesTheBrokenInvariant(t *testing.T) {
 		"rebuilt reason": {func(g *screen.Grid) { g.Rebuilt.Reason = 4 }, "G8"},
 		"container name": {func(g *screen.Grid) { g.Container.Name = "a\nb" }, "G8"},
 		"container uid":  {func(g *screen.Grid) { g.Container.UID = "-1" }, "G8"},
+		"far remote":     {func(g *screen.Grid) { g.FarRemote = "a\x1bb" }, "G8"},
 		"directory":      {func(g *screen.Grid) { g.Cwd = "file://h/%1b" }, "G8"},
 	} {
 		g := screen.NewGrid(4, 2)

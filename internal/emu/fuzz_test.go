@@ -20,6 +20,7 @@ func FuzzEmuRoundTrip(f *testing.F) {
 		"\x1b[?1049h\x1b[?1002h\x1b[?1006h", "\x1b[?2026hheld", "abcd漢\x1b[3;10r\x1b[5S",
 		"x\x1b[2147483647b", "\x1b[?3h\x1b[8;50;200t",
 		"\x1b]666;vte.container.name=box;vte.container.runtime=flong;vte.container.uid=1000\x1b\\", "\x1b]7;file://h/a b\x1b\\",
+		"\x1b]666;vte.ext.mosey.remote=dan-desktop\x1b\\", "\x1b]666;vte.ext.mosey.remote=a\\sb;vte.ext.mosey.root=1\x1b\\\x1b]666;vte.ext.mosey.\a",
 	} {
 		f.Add([]byte(s), []byte("\r\n\x1b[1;1Hmore"), uint16(80), uint16(24))
 	}

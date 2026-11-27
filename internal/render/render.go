@@ -51,7 +51,8 @@ type Renderer struct {
 	mark screen.Container
 	// remote is the host the client marks the terminal as remote with,
 	// "" for none (SetRemote); shownRemote and shownRoot are mosey's own
-	// marks as last written (docs/spec/screen.md §8.8).
+	// marks as last written, shownRemote from remote or, when that is "",
+	// from the grid's FarRemote (docs/spec/screen.md §8.8).
 	remote      string
 	shownRemote string
 	shownRoot   bool
@@ -582,7 +583,7 @@ func (r *Renderer) state(g *screen.Grid) {
 		}
 	}
 	r.container(g.Container)
-	r.marks(g.Root)
+	r.marks(g.Root, g.FarRemote)
 	if g.Cwd != r.cwd {
 		r.cwd = g.Cwd
 		if g.Cwd != "" && screen.ValidCwd(g.Cwd) {
@@ -672,18 +673,24 @@ const (
 )
 
 // marks writes mosey's own marks that changed (§8.4 item 6): remote, from
-// SetRemote, and root, from the grid's Root, which only the server's
-// measurement sets (§4.8). They are facts; the terminal shows one state
-// from them and its own, root first (§8.8).
-func (r *Renderer) marks(root bool) {
-	if r.remote != r.shownRemote {
+// SetRemote, or else from far, the remote mark a mosey client nested in
+// the session set; and root, from the grid's Root, which only the
+// server's measurement sets (§4.8). They are facts; the terminal shows one
+// state from them and its own, root first (§8.8). A forged far mark can
+// make a local tab purple and no more: it cannot unset root.
+func (r *Renderer) marks(root bool, far string) {
+	remote := r.remote
+	if remote == "" && screen.ValidContainerValue(far) {
+		remote = far
+	}
+	if remote != r.shownRemote {
 		r.buf = append(r.buf, remoteMark...)
-		if r.remote != "" {
+		if remote != "" {
 			r.buf = append(r.buf, '=')
-			r.termpropValue(r.remote)
+			r.termpropValue(remote)
 		}
 		r.buf = append(r.buf, "\x1b\\"...)
-		r.shownRemote = r.remote
+		r.shownRemote = remote
 	}
 	if root != r.shownRoot {
 		if root {
