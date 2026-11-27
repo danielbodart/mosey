@@ -10,6 +10,10 @@ import (
 // getTermios is the ioctl that reads termios on Linux.
 const getTermios = unix.TCGETS
 
+// noForegroundGroup is what TIOCGPGRP gives on Linux for a terminal with
+// no foreground group: 0, which foregroundGroup gives back unchanged.
+const noForegroundGroup = 0
+
 func open(size Size) (master, slave *os.File, err error) {
 	m, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {

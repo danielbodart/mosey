@@ -13,6 +13,11 @@ import (
 // getTermios is the ioctl that reads termios on macOS.
 const getTermios = unix.TIOCGETA
 
+// noForegroundGroup is what TIOCGPGRP can give on macOS for a terminal
+// with no foreground group: NO_PID, 100000, one more than PID_MAX
+// (sys/proc.h in the macOS SDK). No real pid has this value.
+const noForegroundGroup = 100000
+
 // open makes a pty the macOS way (server.md §10): /dev/ptmx, then
 // TIOCPTYGRANT and TIOCPTYUNLK (what grantpt and unlockpt do), then
 // TIOCPTYGNAME for the slave's path. macOS has no TIOCGPTPEER, so the

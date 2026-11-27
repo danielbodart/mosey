@@ -93,11 +93,17 @@ func foregroundGroup(master *os.File) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("reading the pty's foreground process group: %w", err)
 	}
+	// With no foreground group, Linux gives 0 and macOS may give NO_PID.
+	// Both become 0, so callers test for one value only.
+	if pgrp == noForegroundGroup {
+		return 0, nil
+	}
 	return pgrp, nil
 }
 
 // foregroundRoot asks the platform about the foreground group's leader
-// only: a group's id is its leader's pid.
+// only: a group's id is its leader's pid. A pty with no foreground group
+// has no leader, which is not root.
 func foregroundRoot(master *os.File) (bool, error) {
 	pgrp, err := foregroundGroup(master)
 	if err != nil {

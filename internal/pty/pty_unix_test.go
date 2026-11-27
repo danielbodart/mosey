@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -141,6 +142,21 @@ func TestMain(m *testing.M) {
 			}
 			if err := job.Start(); err != nil {
 				fmt.Printf("starting a job: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		if mode == "zombie" {
+			// A job that has exited and is not reaped: its stdin is
+			// /dev/null, so it exits at once.
+			self, _ := os.Executable()
+			job := exec.Command(self)
+			job.Env = []string{"MOSEY_PTY_CHILD=1"}
+			if err := job.Start(); err != nil {
+				fmt.Printf("starting a job: %v\n", err)
+				os.Exit(1)
+			}
+			if err := waitExitedNoReap(job.Process.Pid); err != nil {
+				fmt.Printf("waiting for the job: %v\n", err)
 				os.Exit(1)
 			}
 		}
@@ -353,6 +369,9 @@ func TestAnInterruptDiscardsTheOutputNotYetRead(t *testing.T) {
 // uid 0, and this shows the ioctl and the read join up.
 func TestForegroundRootReadsTheForegroundLeaderThroughTheMaster(t *testing.T) {
 	m, s := openPTY(t, Size{80, 24})
+	if pg, err := ForegroundGroup(m); err != nil || pg != 0 {
+		t.Fatalf("with no foreground job: group %d, %v; want 0", pg, err)
+	}
 	if root, err := ForegroundRoot(m); err != nil || root {
 		t.Fatalf("with no foreground job: root %v, %v", root, err)
 	}
@@ -433,5 +452,38 @@ func TestAShellAloneInItsSessionIsIdleAndOneWithAJobIsNot(t *testing.T) {
 	stop()
 	if err != nil || idle {
 		t.Fatalf("a shell with a job: idle %v, %v", idle, err)
+	}
+}
+
+// waitExitedNoReap waits until process pid has exited, and leaves it a
+// zombie: waitid with WEXITED|WNOWAIT, which Linux and macOS both have
+// (POSIX). x/sys has no waitid for darwin, so the call is raw. The
+// buffer is larger than either platform's siginfo_t.
+func waitExitedNoReap(pid int) error {
+	const pPID = 1 // P_PID, idtype_t in sys/wait.h on both platforms
+	var info [256]byte
+	for {
+		_, _, errno := unix.Syscall6(unix.SYS_WAITID, pPID, uintptr(pid), uintptr(unsafe.Pointer(&info[0])), unix.WEXITED|unix.WNOWAIT, 0, 0)
+		switch errno {
+		case unix.EINTR:
+			continue
+		case 0:
+			return nil
+		default:
+			return errno
+		}
+	}
+}
+
+// A shell whose job has exited but which has not yet reaped it is not
+// idle: the zombie is still a member of the session. A shell reaps its
+// jobs, so this state is short; the test pins it so that Linux and macOS
+// are known to agree.
+func TestAShellWithAnUnreapedJobIsNotIdle(t *testing.T) {
+	m, pid, stop := startShell(t, "zombie")
+	idle, err := SessionIdle(m, pid)
+	stop()
+	if err != nil || idle {
+		t.Fatalf("a shell with an unreaped job: idle %v, %v", idle, err)
 	}
 }
