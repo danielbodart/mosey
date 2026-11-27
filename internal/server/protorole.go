@@ -105,8 +105,8 @@ func RunProto(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 	// mint makes a credential for the session, bound to a client's
 	// one-shot key, and sends the spawner its line: at the bootstrap, and
 	// for each resume (transport.md §8.1).
-	mint := func(clientPublic []byte) error {
-		cred, err := creds.Mint(session, clientPublic)
+	mint := func(clientPublic []byte, clientHost string) error {
+		cred, err := creds.Mint(session, clientPublic, clientHost)
 		if err != nil {
 			return fmt.Errorf("minting a credential: %w", err)
 		}
@@ -129,7 +129,7 @@ func RunProto(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 		}
 		return nil
 	}
-	if err := mint(start.ClientPublic); err != nil {
+	if err := mint(start.ClientPublic, start.ClientHost); err != nil {
 		return err
 	}
 
@@ -140,14 +140,14 @@ func RunProto(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 		Terminal: ptyTerminal{master},
 		Emulator: em,
 		Log:      log,
-		Attached: func(peer netip.AddrPort, credential [8]byte) {
+		Attached: func(peer netip.AddrPort, host string, credential [8]byte) {
 			// The dual-stack socket reports an IPv4 client as mapped, and a
 			// zone means nothing to the spawner: the address as a person
 			// would write it.
 			if peer.IsValid() {
 				peer = netip.AddrPortFrom(peer.Addr().Unmap().WithZone(""), peer.Port())
 			}
-			if err := ctl.Send(ipc.Attached{Credential: credential, Peer: peer}); err != nil {
+			if err := ctl.Send(ipc.Attached{Credential: credential, Peer: peer, Host: host}); err != nil {
 				log.Warn("telling the spawner a client attached", "err", err)
 			}
 		},
@@ -163,8 +163,8 @@ func RunProto(ctx context.Context, ipcFD *os.File, log *slog.Logger) error {
 		},
 	}
 	em.repaint = sess.Repaint
-	resume := func(clientPublic []byte) error {
-		if err := mint(clientPublic); err != nil {
+	resume := func(clientPublic []byte, clientHost string) error {
+		if err := mint(clientPublic, clientHost); err != nil {
 			return err
 		}
 		sess.Minted()
@@ -227,7 +227,7 @@ var errSpawnerGone = errors.New("the spawner closed the control socket")
 // readControl is proto's C reader: EmuLink, EmuPaused, AgentConn,
 // ShellExit, Resume and Root from the spawner. A malformed message is a bug in a more trusted process, so
 // proto logs it and ends (server.md §5.3).
-func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, resume func([]byte) error, cancel context.CancelCauseFunc, log *slog.Logger) {
+func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, resume func(clientPublic []byte, clientHost string) error, cancel context.CancelCauseFunc, log *slog.Logger) {
 	gen := uint32(1)
 	for {
 		m, err := ctl.Recv()
@@ -262,7 +262,7 @@ func readControl(ctl *ipc.Conn, em *ipcEmulator, sess *Session, resume func([]by
 			// The spawner checked the key (server.md §2.6), so a mint that
 			// fails is a bug, and the session ends on it rather than leave
 			// the spawner waiting for a credential.
-			if err := resume(m.ClientPublic); err != nil {
+			if err := resume(m.ClientPublic, m.ClientHost); err != nil {
 				log.Error("minting a credential for a resume", "err", err)
 				cancel(err)
 				return

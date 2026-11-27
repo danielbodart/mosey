@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/danielbodart/mosey/internal/handshake"
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 // Conn is one end of an established, authenticated connection.
@@ -25,6 +26,10 @@ type Conn struct {
 	// the server, the greeting's holder (bootstrap.md §9.2.1); on the
 	// client, what R3's reconnect names (§9.2.2).
 	cred [8]byte
+	// clientHost is, on the server, the name the client claimed for its
+	// machine when its credential was minted, "" for none: what a REVOKED
+	// frame names the connection's client by (§8.3).
+	clientHost string
 
 	// The key sets of transport.md §6.1, and the current epoch's root.
 	cur, next, prev *keyset
@@ -535,15 +540,18 @@ func (c *Conn) onPathResponse(token []byte, from netip.AddrPort) {
 // connection, saying who took it over and when. A malformed body is
 // ignored like any other.
 func (c *Conn) onRevoked(body []byte) {
-	by, at, ok := parseRevoked(body)
+	by, host, at, ok := parseRevoked(body)
 	if !ok {
 		return
 	}
-	c.emit(Revoked{By: by, At: at})
+	c.emit(Revoked{By: by, Host: host, At: at})
 	c.shutdown(ErrRevoked)
 }
 
-func revokedBody(at time.Time, by netip.AddrPort) []byte {
+// revokedBody is a REVOKED body (§8.3): when, the new client's address,
+// and, when it claimed one, its name, which is left out unless it is a
+// hostname.ValidClaim.
+func revokedBody(at time.Time, by netip.AddrPort, host string) []byte {
 	b := binary.LittleEndian.AppendUint64(nil, uint64(at.UnixMilli()))
 	a := by.Addr().Unmap()
 	if a.Is4() {
@@ -552,14 +560,24 @@ func revokedBody(at time.Time, by netip.AddrPort) []byte {
 		b = append(b, 6)
 	}
 	b = append(b, a.AsSlice()...)
-	return binary.LittleEndian.AppendUint16(b, by.Port())
+	b = binary.LittleEndian.AppendUint16(b, by.Port())
+	if hostname.ValidClaim(host) {
+		b = append(append(b, byte(len(host))), host...)
+	}
+	return b
 }
 
-func parseRevoked(b []byte) (netip.AddrPort, time.Time, bool) {
+// parseRevoked reads a REVOKED body (§8.3). The address part decides:
+// any fault in it, or a body shorter than it, refuses the body. The name
+// after it only labels the address, so a name part that is not one
+// length byte and a hostname.ValidClaim of that length is dropped, and
+// the body reads as the address alone, rather than leave the client
+// without the news that it was cut off.
+func parseRevoked(b []byte) (by netip.AddrPort, host string, at time.Time, ok bool) {
 	if len(b) < 9 {
-		return netip.AddrPort{}, time.Time{}, false
+		return netip.AddrPort{}, "", time.Time{}, false
 	}
-	at := time.UnixMilli(int64(binary.LittleEndian.Uint64(b)))
+	at = time.UnixMilli(int64(binary.LittleEndian.Uint64(b)))
 	var size int
 	switch b[8] {
 	case 4:
@@ -567,17 +585,23 @@ func parseRevoked(b []byte) (netip.AddrPort, time.Time, bool) {
 	case 6:
 		size = 16
 	default:
-		return netip.AddrPort{}, time.Time{}, false
+		return netip.AddrPort{}, "", time.Time{}, false
 	}
-	if len(b) != 9+size+2 {
-		return netip.AddrPort{}, time.Time{}, false
+	if len(b) < 9+size+2 {
+		return netip.AddrPort{}, "", time.Time{}, false
 	}
 	addr, _ := netip.AddrFromSlice(b[9 : 9+size])
 	if addr.Is4In6() {
 		// An IPv4 address has its own family; the sender never maps one.
-		return netip.AddrPort{}, time.Time{}, false
+		return netip.AddrPort{}, "", time.Time{}, false
 	}
-	return netip.AddrPortFrom(addr, binary.LittleEndian.Uint16(b[9+size:])), at, true
+	by = netip.AddrPortFrom(addr, binary.LittleEndian.Uint16(b[9+size:]))
+	// The length byte is checked against what is there before a byte of
+	// the name is read.
+	if rest := b[9+size+2:]; len(rest) > 1 && int(rest[0]) == len(rest)-1 && hostname.ValidClaim(string(rest[1:])) {
+		host = string(rest[1:])
+	}
+	return by, host, at, true
 }
 
 // --- Timers ---

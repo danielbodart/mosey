@@ -665,8 +665,9 @@ Offsets and lengths in bytes.
 | 9 | 0, 4 or 16 | advertised address | §2.2; unmapped, not unspecified, no zone |
 | 9, 13 or 25 | 1216 | client public key | the X-Wing encapsulation key from the `ClientLine` [D20]; its length is `handshake`'s constant |
 | 1225, 1229 or 1241 | 1 + n | session name | its length n, 1..32, then the `sname` (`bootstrap.md` §6.2), which proto puts in every credential line it mints (§2.6 "The name") |
+| after the name | 1 + h | client host | its length h, 0..63, then the name the client claimed for its machine: the ClientLine's `host`, a `hostname` (`bootstrap.md` §6.2). 0 is none. Proto gives it to `Mint`, for the REVOKED frame (`transport.md` §8.3). Any other length, or a name that is not a `hostname`, is malformed (§3.1): both ends are this build, and the spawner sends only what `ParseClientLine` kept |
 
-Length 1227..1274. fds: exactly 2, `[0]` the UDP socket, `[1]`
+Length 1228..1338. fds: exactly 2, `[0]` the UDP socket, `[1]`
 the pty master.
 
 **0x02 EmuLink** (spawner → proto). Once straight after `Start`, then
@@ -691,7 +692,8 @@ its sandbox as it does each E (§3.6). Any number, at any time after
 `Start`. Proto serves or closes it (`agent.md` §4.2); it never answers.
 
 **0x05 Resume** (spawner → proto): type, then the resuming client's
-X-Wing public key, exactly 1216 bytes (as in `Start`). Length 1217. Proto
+X-Wing public key, exactly 1216 bytes (as in `Start`), then its claimed
+host as in `Start` (1 + h, h 0..63). Length 1218..1281. Proto
 mints a credential for its own session id bound to that key (TTL, cap of
 2 unused per session, `transport.md` §8.1) and answers with exactly one
 `Credential`. The spawner has checked the key, so a key `Mint` refuses is
@@ -788,11 +790,16 @@ request crossed a restart), not refused.
 **0x33 Attached** (proto → spawner): type; the credential id (8) the
 connection was made with; family (1): 0 (the client's address is not yet
 validated), 4 or 6; then for 4 or 6 the address (4 or 16 bytes, unmapped,
-not unspecified) and the port (2, not 0). Length 10, 16 or 28. Proto sends
+not unspecified) and the port (2, not 0); then the host that the
+connection's client claimed, as in `Start` (1 + h, h 0..63; proto has it
+from `Mint`, through `transport.Conn.ClientHost`). Length 11, 17 or 29,
+plus h. The greeting's `peer-host` is that host, and it changes only
+with `peer`: an `Attached` with no address leaves both as they were, so
+a name is never paired with another client's address. Proto sends
 it each time a client confirms a credential, with the connection's
 validated address if it has one, and again when a client it had reported
 silent (§2.4) is heard. It is what the greeting's `attached`, `since`,
-`peer` and `holder` say (§2.6). The spawner keeps a
+`peer`, `peer-host` and `holder` say (§2.6). The spawner keeps a
 backstop of `handshake.CredentialTTL` + 10 s from the `Ready`, restarted by
 each `Resume` it forwards (`bootstrap.md` §4.5): if no `Attached` has
 come by then it ends the session itself, so a proto that hangs before its

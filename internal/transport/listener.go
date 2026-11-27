@@ -331,6 +331,7 @@ func (l *Listener) confirm(pc *pending, pkt []byte, from netip.AddrPort) {
 
 	c := newConn(l.e, true, pc.ks, &pc.root)
 	c.listener, c.sid, c.cred, c.version = l, pc.p.SessionID, pc.p.CredentialID, pc.p.Version
+	c.clientHost = pc.p.ClientHost
 	// What both offered: the server's answer in msg2 (transport.md §3.6).
 	for _, ch := range pc.p.Hello.Channels {
 		if serverHello.Supports(ch) {
@@ -355,7 +356,7 @@ func (l *Listener) confirm(pc *pending, pkt []byte, from netip.AddrPort) {
 	now := time.Now()
 	for other := range l.conns {
 		if other.sid == c.sid {
-			other.revoke(l, from, now)
+			other.revoke(l, from, c.clientHost, now)
 		}
 	}
 	l.conns[c] = struct{}{}

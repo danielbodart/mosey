@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 // Peer is one of the server's roles, as an end of a socketpair.
@@ -33,9 +35,10 @@ func (p Peer) String() string {
 	return "unknown"
 }
 
-// Limits of server.md §3.3 and §8. ipc imports nothing (architecture §1),
-// so the bounds it shares with screen, emu and handshake are restated here,
-// and the server's tests check they agree.
+// Limits of server.md §3.3 and §8. ipc imports nothing of the roles'
+// packages (architecture §1), only hostname, the one rule for a claimed
+// name, so the bounds it shares with screen, emu and handshake are restated
+// here, and the server's tests check they agree.
 const (
 	// MaxMessage bounds every message, well under the default
 	// net.core.wmem_default (212992) that bounds one seqpacket message, so
@@ -150,8 +153,13 @@ type Start struct {
 	// line it mints: 1..MaxSessionName bytes, checked by the spawner as an
 	// sname before it sends it, and here only for its length and bytes.
 	Name string
-	UDP  *os.File // the bound socket, never connected
-	PTY  *os.File // the master
+	// ClientHost is the name the client claimed for its machine, the
+	// ClientLine's host (bootstrap.md §6.2), or "" for none. Proto gives
+	// it to Mint, so a REVOKED frame can name this client (transport.md
+	// §8.3).
+	ClientHost string
+	UDP        *os.File // the bound socket, never connected
+	PTY        *os.File // the master
 }
 
 // EmuEnd is how the previous emu ended, as an EmuLink tells proto.
@@ -188,6 +196,8 @@ type ShellExit struct{ Status int32 }
 // checked the key; proto answers with exactly one Credential.
 type Resume struct {
 	ClientPublic []byte
+	// ClientHost is as Start's: the resuming client's claimed name.
+	ClientHost string
 }
 
 // EmuPaused tells proto that emu's restart budget is spent and no emu
@@ -278,10 +288,12 @@ type KillEmu struct {
 // backstop timer (bootstrap.md §4.5), and each is what the attach socket's
 // greeting says (server.md §2.6). Credential is the id the connection was
 // made with, the greeting's holder; Peer is the client's validated
-// address, or the zero AddrPort while it has none.
+// address, or the zero AddrPort while it has none; Host is the name that
+// client claimed, the greeting's peer-host, or "" for none.
 type Attached struct {
 	Credential [CredentialIDSize]byte
 	Peer       netip.AddrPort
+	Host       string
 }
 
 // Detached tells the spawner the attached client has gone, with no other
@@ -425,6 +437,7 @@ func Marshal(m Message) ([]byte, error) {
 		b = appendAddr(b, m.Addr)
 		b = append(b, m.ClientPublic...)
 		b = append(append(b, byte(len(m.Name))), m.Name...)
+		b = appendHost(b, m.ClientHost)
 	case EmuLink:
 		b = binary.BigEndian.AppendUint32(b, m.Generation)
 		b = append(b, byte(m.Reason))
@@ -433,6 +446,7 @@ func Marshal(m Message) ([]byte, error) {
 		b = binary.BigEndian.AppendUint32(b, uint32(m.Status))
 	case Resume:
 		b = append(b, m.ClientPublic...)
+		b = appendHost(b, m.ClientHost)
 	case EmuPaused:
 		b = binary.BigEndian.AppendUint16(b, m.Seconds)
 	case Root:
@@ -461,6 +475,7 @@ func Marshal(m Message) ([]byte, error) {
 		if m.Peer.Addr().IsValid() {
 			b = binary.BigEndian.AppendUint16(b, m.Peer.Port())
 		}
+		b = appendHost(b, m.Host)
 	case Flush, Detached, FirstOutput, AgentConn, Hangup:
 	case Update:
 		var flags byte
@@ -567,15 +582,22 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		if len(rest) < PublicKeySize+2 {
 			return nil, malformed("Start's public key and name are %d bytes", len(rest))
 		}
-		m.ClientPublic = append([]byte(nil), rest[:PublicKeySize]...)
-		name := rest[PublicKeySize+1:]
-		if n := int(rest[PublicKeySize]); n < 1 || n > MaxSessionName || n != len(name) {
-			return nil, malformed("Start's name is %d bytes, said to be %d", len(name), n)
+		pub := rest[:PublicKeySize]
+		n := int(rest[PublicKeySize])
+		rest = rest[PublicKeySize+1:]
+		if n < 1 || n > MaxSessionName || n > len(rest) {
+			return nil, malformed("Start's name is said to be %d bytes, with %d left", n, len(rest))
 		}
+		name := rest[:n]
 		if !printable(name) || bytes.IndexByte(name, ' ') >= 0 {
 			return nil, malformed("Start's name is not printable ASCII")
 		}
-		m.Name = string(name)
+		host, err := parseHost(rest[n:], "Start")
+		if err != nil {
+			return nil, err
+		}
+		m.ClientPublic = append([]byte(nil), pub...)
+		m.Name, m.ClientHost = string(name), host
 		return m, nil
 	case typeEmuLink:
 		if err := fixed(9); err != nil {
@@ -600,10 +622,14 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		}
 		return ShellExit{Status: int32(u32(0))}, nil
 	case typeResume:
-		if len(body) != PublicKeySize {
+		if len(body) < PublicKeySize {
 			return nil, malformed("Resume's public key is %d bytes, not %d", len(body), PublicKeySize)
 		}
-		return Resume{ClientPublic: append([]byte(nil), body...)}, nil
+		host, err := parseHost(body[PublicKeySize:], "Resume")
+		if err != nil {
+			return nil, err
+		}
+		return Resume{ClientPublic: append([]byte(nil), body[:PublicKeySize]...), ClientHost: host}, nil
 	case typeEmuPaused:
 		if err := fixed(2); err != nil {
 			return nil, err
@@ -714,17 +740,19 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !addr.IsValid() {
-			return m, fixed(CredentialIDSize + 1)
+		if addr.IsValid() {
+			if len(rest) < 2 {
+				return nil, malformed("Attached is %d bytes", len(b))
+			}
+			port := binary.BigEndian.Uint16(rest)
+			if port == 0 {
+				return nil, malformed("Attached has port 0")
+			}
+			m.Peer, rest = netip.AddrPortFrom(addr, port), rest[2:]
 		}
-		if len(rest) != 2 {
-			return nil, malformed("Attached is %d bytes", len(b))
+		if m.Host, err = parseHost(rest, "Attached"); err != nil {
+			return nil, err
 		}
-		port := binary.BigEndian.Uint16(rest)
-		if port == 0 {
-			return nil, malformed("Attached has port 0")
-		}
-		m.Peer = netip.AddrPortFrom(addr, port)
 		return m, nil
 	case typeDetached:
 		return Detached{}, fixed(0)
@@ -752,6 +780,33 @@ func Parse(from, to Peer, b []byte) (Message, error) {
 		return Failed{Text: string(body)}, nil
 	}
 	return nil, malformed("unknown type %#02x", t)
+}
+
+// appendHost writes a claimed host name as its length, 0 for none, and its
+// bytes. Marshal refuses what parseHost would, so a bad name is a bug of
+// the sender's, found where it is.
+func appendHost(b []byte, host string) []byte {
+	return append(append(b, byte(len(host))), host...)
+}
+
+// parseHost reads appendHost's layout, which must be all of b: a length of
+// 0, or of 1..hostname.Max and a hostname.ValidClaim of that length.
+// Unlike the bootstrap lines, which drop a bad name, a bad one here is
+// malformed: both ends are this build, and its sender checked it first.
+func parseHost(b []byte, what string) (string, error) {
+	if len(b) < 1 {
+		return "", malformed("%s has no host name length", what)
+	}
+	if int(b[0]) != len(b)-1 {
+		return "", malformed("%s's host name is %d bytes, said to be %d", what, len(b)-1, b[0])
+	}
+	if len(b) == 1 {
+		return "", nil
+	}
+	if h := string(b[1:]); hostname.ValidClaim(h) {
+		return h, nil
+	}
+	return "", malformed("%s's host name is not a host name", what)
 }
 
 // appendAddr writes an address as its family (0 for none, 4 or 6) and its

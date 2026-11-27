@@ -16,7 +16,7 @@ func transcript(t *testing.T) map[string]string {
 	creds := NewCredentials(nil)
 	resp := NewResponder(creds, terminalOnly, func() uint32 { return 0x51515151 })
 	key := must(NewOneShotKey())
-	cred, err := creds.Mint(sid, key.PublicKey())
+	cred, err := creds.Mint(sid, key.PublicKey(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

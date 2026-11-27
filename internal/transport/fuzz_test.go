@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/danielbodart/mosey/internal/handshake"
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 // FuzzReceive feeds the server's receive path whatever the fuzzer makes,
@@ -161,18 +163,32 @@ func FuzzInitSlot(f *testing.F) {
 }
 
 // FuzzParseRevoked: a REVOKED body the client accepts re-encodes to the
-// same bytes, so the parser accepts exactly the grammar of transport.md
-// §8.3 and nothing looser.
+// same bytes, or, when its name part is dropped, to exactly its address
+// part, so the parser accepts the grammar of transport.md §8.3 and nothing
+// looser; and a name it returns is a valid claim.
 func FuzzParseRevoked(f *testing.F) {
-	f.Add(revokedBody(time.UnixMilli(1_700_000_000_000), netip.MustParseAddrPort("192.0.2.1:60001")))
-	f.Add(revokedBody(time.UnixMilli(1), netip.MustParseAddrPort("[2001:db8::1]:22")))
+	f.Add(revokedBody(time.UnixMilli(1_700_000_000_000), netip.MustParseAddrPort("192.0.2.1:60001"), ""))
+	f.Add(revokedBody(time.UnixMilli(1), netip.MustParseAddrPort("[2001:db8::1]:22"), ""))
+	f.Add(revokedBody(time.UnixMilli(1), netip.MustParseAddrPort("127.0.0.1:41234"), "desktop"))
+	f.Add(revokedBody(time.UnixMilli(1), netip.MustParseAddrPort("[2001:db8::1]:22"), strings.Repeat("h", 63)))
+	f.Add(append(revokedBody(time.UnixMilli(1), netip.MustParseAddrPort("192.0.2.1:1"), ""), 3, 'a', '_', 'b'))
 	f.Fuzz(func(t *testing.T, b []byte) {
-		by, at, ok := parseRevoked(b)
+		by, host, at, ok := parseRevoked(b)
 		if !ok {
 			return
 		}
-		if again := revokedBody(at, by); !bytes.Equal(again, b) {
-			t.Fatalf("%x parsed as %v at %v, which encodes as %x", b, by, at, again)
+		again := revokedBody(at, by, host)
+		if !bytes.HasPrefix(b, again) || len(again) != len(b) && host != "" {
+			t.Fatalf("%x parsed as %v, %q at %v, which encodes as %x", b, by, host, at, again)
+		}
+		if host != "" && (len(host) > 63 || !hostname.Valid(host) || len(b) != len(again)) {
+			t.Fatalf("%x gave host %q", b, host)
+		}
+		if host == "" && len(again) < len(b) {
+			// The address part alone is a body too, and means the same.
+			if by2, host2, at2, ok := parseRevoked(again); !ok || by2 != by || host2 != "" || !at2.Equal(at) {
+				t.Fatalf("%x without its name part read as %v, %q, %v, %v", b, by2, host2, at2, ok)
+			}
 		}
 	})
 }

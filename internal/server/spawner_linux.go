@@ -203,6 +203,7 @@ type spawner struct {
 	state     bootstrap.SessionState
 	since     time.Time
 	peer      netip.AddrPort
+	peerHost  string
 	holder    [8]byte
 	hasHolder bool
 	hold      [8]byte
@@ -222,6 +223,7 @@ type spawner struct {
 // where the credential line goes back to.
 type resumeRequest struct {
 	public       []byte
+	host         string
 	requester    [8]byte
 	hasRequester bool
 	reply        chan []byte
@@ -345,7 +347,7 @@ func (s *spawner) bootstrap(ctx context.Context) error {
 	s.readCtl()
 	err = s.ctl.Send(ipc.Start{
 		Cols: uint16(cols), Rows: uint16(rows), Port: port, Addr: s.advertised,
-		ClientPublic: cl.Public, Name: s.name, UDP: udp, PTY: master,
+		ClientPublic: cl.Public, Name: s.name, ClientHost: cl.Host, UDP: udp, PTY: master,
 	})
 	if err == nil {
 		err = s.ctl.Send(ipc.EmuLink{Generation: 1, Reason: ipc.EmuFirst, Conn: emuEnd})
@@ -876,7 +878,7 @@ func (s *spawner) supervise(ctx context.Context) error {
 		case f := <-s.agentConns:
 			s.passAgentConn(f)
 		case r := <-s.resumes:
-			if err := s.ctl.Send(ipc.Resume{ClientPublic: r.public}); err != nil {
+			if err := s.ctl.Send(ipc.Resume{ClientPublic: r.public, ClientHost: r.host}); err != nil {
 				s.log.Warn("forwarding a resume to proto", "err", err)
 				close(r.reply)
 				continue
@@ -923,8 +925,8 @@ func (s *spawner) supervise(ctx context.Context) error {
 				}
 				idle.attached()
 				root.attached()
-				s.setAttached(m.Credential, m.Peer)
-				s.log.Info("a client attached", "peer", m.Peer, "credential", fmt.Sprintf("%x", m.Credential))
+				s.setAttached(m.Credential, m.Peer, m.Host)
+				s.log.Info("a client attached", "peer", m.Peer, "host", m.Host, "credential", fmt.Sprintf("%x", m.Credential))
 			case ipc.Detached:
 				s.setDetached()
 				idle.detached()

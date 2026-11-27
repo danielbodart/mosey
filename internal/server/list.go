@@ -34,7 +34,7 @@ func List(w io.Writer, getenv func(string) string) error {
 			continue
 		}
 		rows = append(rows, row{started: g.Started, line: bootstrap.ListLine{
-			Name: g.Name, State: g.State, Since: g.Since, Peer: g.Peer, Command: g.Command,
+			Name: g.Name, State: g.State, Since: g.Since, Peer: g.Peer, PeerHost: g.PeerHost, Command: g.Command,
 			Foreground: g.Foreground, Cwd: g.Cwd,
 		}})
 	}

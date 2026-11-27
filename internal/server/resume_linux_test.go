@@ -430,15 +430,27 @@ func TestTheGreetingFollowsAttachAndDetachAndAListerChangesNothing(t *testing.T)
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	ss.send(ipc.Attached{Credential: [8]byte{7}, Peer: peer})
-	if g := until(bootstrap.SessionAttached); g.State != bootstrap.SessionAttached || g.Peer != peer ||
+	ss.send(ipc.Attached{Credential: [8]byte{7}, Peer: peer, Host: "blade"})
+	if g := until(bootstrap.SessionAttached); g.State != bootstrap.SessionAttached || g.Peer != peer || g.PeerHost != "blade" ||
 		!g.HasHolder || g.Holder != [8]byte{7} || g.Name != stubName {
 		t.Errorf("after Attached: %+v", g)
 	}
 	ss.send(ipc.Detached{})
-	if g := until(bootstrap.SessionDetached); g.State != bootstrap.SessionDetached || g.Peer != peer || g.HasHolder {
+	if g := until(bootstrap.SessionDetached); g.State != bootstrap.SessionDetached || g.Peer != peer || g.PeerHost != "blade" || g.HasHolder {
 		t.Errorf("after Detached: %+v", g)
 	}
+	// A client not yet at a validated address leaves the last address
+	// and its name as they were: a name never goes with another's address.
+	ss.send(ipc.Attached{Credential: [8]byte{8}, Host: "desktop"})
+	deadline := time.Now().Add(10 * time.Second)
+	for ss.greetingOf().Holder != [8]byte{8} && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if g := ss.greetingOf(); g.Holder != [8]byte{8} || g.Peer != peer || g.PeerHost != "blade" {
+		t.Errorf("after an Attached with no address: %+v", g)
+	}
+	ss.send(ipc.Detached{})
+	until(bootstrap.SessionDetached)
 	// The listers above reached nothing: the first thing proto hears is
 	// the resume that follows them.
 	public, done := ss.launch(sid)

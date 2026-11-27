@@ -145,10 +145,13 @@ type Rekeyed struct{ Epoch uint64 }
 type RekeyOverdue struct{ Age time.Duration }
 
 // Revoked says another client took the session over (D26): the client says
-// "session taken over from <By> at <At>" and exits.
+// "session taken over from <By> at <At>", or "from <Host> (<By's
+// address>)" when Host is not "", and exits. Host is the name the new
+// client claimed for its machine (§8.3): a claim, never shown without By.
 type Revoked struct {
-	By netip.AddrPort
-	At time.Time
+	By   netip.AddrPort
+	Host string
+	At   time.Time
 }
 
 // Ended says the peer ended the session with an END frame (transport.md
@@ -239,6 +242,11 @@ func (c *Conn) Events() <-chan Event { return c.events }
 // reconnect names as its own (bootstrap.md §9.2). It is not secret: it is
 // in the clear in msg1 (transport.md §3.4).
 func (c *Conn) CredentialID() [8]byte { return c.cred }
+
+// ClientHost is, on the server, the name the client claimed for its
+// machine when its credential was minted (handshake.Credentials.Mint), or
+// "" for none. It is a claim: show it only beside Peer.
+func (c *Conn) ClientHost() string { return c.clientHost }
 
 // Peer is the validated address packets go to: on the client, the
 // server's; on the server, the client's, or the zero AddrPort while none is

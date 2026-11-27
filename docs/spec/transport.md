@@ -248,7 +248,10 @@ Before the handshake, over SSH (`bootstrap.md` has the line formats):
 
 1. The client runs `KEYGEN()` for its one-shot key `(sk_C, s_C)` and
    writes `s_C` (1216 B) to SSH stdin.
-2. The server (proto) runs `Credentials.Mint(sid, s_C)`, which draws:
+2. The server (proto) runs `Credentials.Mint(sid, s_C, host)`, which
+   draws the fields below. `host` is the name that the client claimed
+   for its machine (`bootstrap.md` §6.2), or none. The store only keeps
+   it for the REVOKED frame of §8.3, and authenticates nothing with it.
 
 | Field | Size | How |
 |---|---|---|
@@ -702,7 +705,7 @@ The kind is the first byte of the plaintext. These match `transport.Kind`.
 | `0x06` | PATH_RESPONSE | the 8 bytes of a challenge | 38 | any live receive key | slice 1 |
 | `0x07` | CHAFF | sent as zeros, received as any bytes | 30–1232 | any live receive key | chaff slice: `ssp.md` §9.1 |
 | `0x08` | CHANNEL | a stream frame of `agent.md` §5.1: stream id (u32 LE) ‖ op ‖ fields ‖ zero padding, 6–1202 B | 64–1232 | any live receive key | agent slice (D15, D25); §4.4 |
-| `0x09` | REVOKED | §8.3 | 45 or 57 | any live receive key | slice 1; fires from the resume slice (D26) |
+| `0x09` | REVOKED | §8.3 | 45 or 57; 47–121 with a name | any live receive key | slice 1; fires from the resume slice (D26) |
 | `0x0A` | END | 1 B: why (`0x01` the shell exited, `0x02` the client detached; any other value still ends the connection) | 31 | any live receive key | slice 1, added at integration (§8.4) |
 | `0x0B`–`0xFF` | | | | | reserved |
 
@@ -1286,12 +1289,43 @@ offset  size  field
 8       1     family: 4 or 6
 9       4|16  address of the new client
 13|25   2     port, u16 LE
-total   15 or 27 B (packet 45 or 57 B)
+                -- the address part ends here: 15 or 27 B
+15|27   1     n: the name's length, 1..63        } only when the new
+16|28   n     name: a hostname (bootstrap.md §6.2) } client claimed one
+total   15 or 27 B without a name (packet 45 or 57 B);
+        17..79 or 29..91 B with one (packet 47..109 or 59..121 B)
 ```
 
-The revoked client reports `transport.Revoked{By, At}`, says "session taken
-over from <addr> at <time>" and exits (D26). Any other family value, or a
-wrong length, is ignored like any malformed body (§4.2).
+The name is the `host` that the new client sent in its ClientLine
+(`bootstrap.md` §6.2). Proto gives it to `Mint` with the client's key
+(§3.4). The listener reads it from the `Pending` that the confirming
+packet opened, so it names the client that confirmed. The name is a
+claim, and the address is what the server observed. Thus the client never
+shows the name without the address (`bootstrap.md` §9.1). The sender
+leaves the name out unless it is a `hostname` of at most 63 bytes. A body
+without a name is the layout of protocol 1 before the name was added, so
+the field is optional and needs no new number (`versioning.md` §5)
+[D: Dan, 2026-11-27].
+
+The revoked client reports `transport.Revoked{By, Host, At}`. It says
+"session taken over from <addr> at <time>", or "from <name> (<address>)"
+with a name, and exits (D26). The address part decides whether the body
+is read. Any other family value, or a body shorter than the address part,
+is ignored like any malformed body (§4.2). **A bad name part is dropped,
+not the body.** The name part is bad when its length byte does not give
+the bytes that follow, or the name is not a `hostname` of at most 63
+bytes. The client then reads the body as the address alone. Thus the
+revoked client still learns that it was cut off and from where [D: Dan,
+2026-11-27]. Only the server holds the keys that seal the body, so a bad
+name part is a server bug, not an attack.
+
+**Sizes and the tombstone.** The largest REVOKED packet is 121 B [derived:
+91 + `Overhead` 30]. A tombstone sends a copy only for a packet of at least
+41 B [derived: ⌈121 / `AmplificationFactor`⌉]. The client's smallest SSP
+datagram is 69 B [derived: its padding floor F = 40 of sealed plaintext
+(`ssp.md` §9.2), + 29], so each of its heartbeats still draws a copy. A
+31-B KEEPALIVE draws a copy only up to 93 B. That is every body with a name
+of up to 47 bytes (IPv4) or 35 bytes (IPv6) [derived].
 
 ### 8.4 Ending a session
 
@@ -1504,8 +1538,10 @@ Beyond the general rules in `architecture.md` §6:
   (b) a client packet re-sourced from `V`, the challenge to `V` relayed to
   the client, whose PATH_RESPONSE arrives from its own address: `V` is not
   validated.
-- **Revocation**: the old client receives REVOKED, reports the address and
-  time, and its later packets get at most three copies.
+- **Revocation**: the old client receives REVOKED, reports the address,
+  the new client's name when it claimed one, and the time. Its later
+  packets get at most three copies, also when the copies carry a 63-byte
+  name. A bad name part reads as the address alone.
 - **Fuzz targets** (each run for minutes locally, durations recorded):
   `ParseHello` (round trip of known elements; an unknown element with
   bit 7 set changes nothing, with it clear is refused), `Responder.ReadMsg1` with mac1 recomputed so
@@ -1513,7 +1549,10 @@ Beyond the general rules in `architecture.md` §6:
   genuine msg1 succeeds), `Initiator.ReadMsg2` (no msg2 from a server
   without `sk_S` is accepted), the data-packet receive path (a rejected
   packet changes nothing; no forgery is accepted), the INIT reassembly,
-  and `replay.Window` against a map-based reference.
+  and `replay.Window` against a map-based reference, and the REVOKED
+  body (an accepted body re-encodes to itself, or to its address part
+  when its name part is dropped; a name it returns is a `hostname` of at
+  most 63 bytes).
 
 ## 12. Constants
 
@@ -1554,6 +1593,8 @@ Beyond the general rules in `architecture.md` §6:
 | Challenge resend | 250 ms, doubling, cap 1 s | §7.3 | [ours]; D11 for the floor and cap |
 | Candidate abandoned after | 10 s | §7.3 | [ours] |
 | REVOKED copies | 4 | §8.3 | [ours] |
+| REVOKED name | 0 or 1 + 1..63 B | §8.3 | [D] `hostname.Max`: `bootstrap.md` §6.2 |
+| Largest REVOKED packet | 121 B | §8.3 | [derived] 27 + 1 + 63 + 30 |
 | Tombstone life | 60 s | §8.3 | [ours] |
 | END copies, spacing | 3, 100 ms | §8.4 | [ours] |
 

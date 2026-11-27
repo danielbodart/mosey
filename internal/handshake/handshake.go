@@ -305,6 +305,11 @@ type Pending struct {
 	// SessionID and CredentialID are public, for revocation (D26) and logs.
 	SessionID    [16]byte
 	CredentialID [8]byte
+	// ClientHost is the name the client claimed for its machine when its
+	// credential was minted, or "" for none: a label for the REVOKED
+	// frame a confirmation sends the session's other clients
+	// (transport.md §8.3). It is the caller's, given to Mint as it was.
+	ClientHost string
 
 	store    *Credentials
 	cred     *credential
@@ -461,7 +466,7 @@ func (r *Responder) ReadMsg1(msg1 []byte) (msg2 []byte, p *Pending, err error) {
 	}
 
 	p = &Pending{
-		Keys: keys, Hello: client, Version: version, SessionID: cred.sid, CredentialID: cred.id,
+		Keys: keys, Hello: client, Version: version, SessionID: cred.sid, CredentialID: cred.id, ClientHost: cred.clientHost,
 		store: c, cred: cred, msg1Hash: hash, msg2: msg2,
 	}
 	if len(cred.pendings) >= MaxPending {

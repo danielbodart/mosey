@@ -298,7 +298,7 @@ func TestARealUDPSocketOnLoopbackWorksToo(t *testing.T) {
 	l := Listen(ssock, creds, nil)
 	defer l.Close()
 	key := must(handshake.NewOneShotKey())
-	cred := must(creds.Mint(must(handshake.NewSessionID()), key.PublicKey()))
+	cred := must(creds.Mint(must(handshake.NewSessionID()), key.PublicKey(), ""))
 	csock, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)

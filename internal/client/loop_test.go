@@ -277,11 +277,11 @@ func TestRevocationEndsTheSessionAsTakenOver(t *testing.T) {
 		at := time.Date(2026, 11, 14, 9, 30, 12, 0, time.UTC)
 		by := netip.MustParseAddrPort("198.51.100.4:41000")
 		h.events <- transport.PeerChanged{}
-		h.events <- transport.Revoked{By: by, At: at}
+		h.events <- transport.Revoked{By: by, Host: "blade", At: at}
 		synctest.Wait()
 		err := <-h.done
 		var taken *TakenOverError
-		if !errors.As(err, &taken) || taken.By != by || !taken.At.Equal(at) || ExitStatus(err) != StatusTakenOver {
+		if !errors.As(err, &taken) || taken.By != by || taken.Host != "blade" || !taken.At.Equal(at) || ExitStatus(err) != StatusTakenOver {
 			t.Fatalf("%v", err)
 		}
 		if !h.paint.left {
@@ -299,6 +299,22 @@ func TestTheTakenOverMessageSaysWhoAndWhen(t *testing.T) {
 	}
 	if !strings.Contains(want, "T") || strings.HasSuffix(want, "Z") {
 		t.Errorf("not RFC 3339 with a numeric zone: %q", want)
+	}
+}
+
+// A new client that claimed a name is shown by it, with the address the
+// server saw beside it, loopback the same as any other (bootstrap.md §9.1).
+func TestTheTakenOverMessageNamesTheNewClientsHostBesideItsAddress(t *testing.T) {
+	at := time.Date(2026, 11, 27, 10, 0, 0, 0, time.FixedZone("", 0))
+	when := at.Local().Format("2006-01-02T15:04:05-07:00")
+	for by, want := range map[string]string{
+		"192.168.1.20:41234": "session taken over from blade (192.168.1.20) at " + when,
+		"127.0.0.1:60001":    "session taken over from blade (127.0.0.1) at " + when,
+	} {
+		e := &TakenOverError{By: netip.MustParseAddrPort(by), Host: "blade", At: at}
+		if e.Error() != want {
+			t.Errorf("%q, want %q", e.Error(), want)
+		}
 	}
 }
 

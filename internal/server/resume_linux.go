@@ -120,7 +120,7 @@ func (s *spawner) serveResume(f *os.File) error {
 	if err != nil {
 		return refuse(err)
 	}
-	r := resumeRequest{public: cl.Public, requester: cl.Holder, hasRequester: cl.HasHolder, reply: make(chan []byte, 1)}
+	r := resumeRequest{public: cl.Public, host: cl.Host, requester: cl.Holder, hasRequester: cl.HasHolder, reply: make(chan []byte, 1)}
 	timeout := time.NewTimer(T3)
 	defer timeout.Stop()
 	select {
@@ -198,7 +198,7 @@ func (s *spawner) greeting() bootstrap.SessionLine {
 	g := bootstrap.SessionLine{
 		AttachProtocol: bootstrap.AttachProtocol,
 		SessionID:      s.sid, Name: s.name,
-		Started: s.started, State: s.state, Since: s.since, Peer: s.peer,
+		Started: s.started, State: s.state, Since: s.since, Peer: s.peer, PeerHost: s.peerHost,
 		Holder: s.holder, HasHolder: s.hasHolder, Command: s.command,
 		Foreground: fg, Cwd: cwd,
 	}
@@ -244,14 +244,16 @@ func (s *spawner) foreground() (fg, cwd string) {
 }
 
 // setAttached records that a client holds the session with credential
-// cred, from peer, for the greeting; any resume's hold is over.
-func (s *spawner) setAttached(cred [8]byte, peer netip.AddrPort) {
+// cred, from peer, claiming the name host, for the greeting; any resume's
+// hold is over. The name changes only with the address, so the greeting
+// never pairs one client's name with another's address.
+func (s *spawner) setAttached(cred [8]byte, peer netip.AddrPort, host string) {
 	s.greetMu.Lock()
 	defer s.greetMu.Unlock()
 	s.state, s.since, s.holder, s.hasHolder = bootstrap.SessionAttached, time.Now(), cred, true
 	s.holdUntil = time.Time{}
 	if peer.IsValid() {
-		s.peer = peer
+		s.peer, s.peerHost = peer, host
 	}
 }
 

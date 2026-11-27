@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/danielbodart/mosey/internal/bootstrap"
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 // Failure is an error the user reads: Msg is what cmd/mosey prints after
@@ -28,9 +29,12 @@ func fail(err error, format string, args ...any) error {
 // the server revoked this one, or R3's reconnect found another credential
 // holding it (bootstrap.md §9.2.2), and it exits rather than take it back,
 // which is what cuts off a stolen client. By is the zero AddrPort when the
-// reconnect told it, which does not say where from; Name is the session's.
+// reconnect told it, which does not say where from; Host is the name the
+// new client claimed for its machine, "" for none (transport.md §8.3);
+// Name is the session's.
 type TakenOverError struct {
 	By   netip.AddrPort
+	Host string
 	At   time.Time
 	Name string
 }
@@ -43,6 +47,12 @@ func (e *TakenOverError) Error() string {
 	at := e.At.Local().Format(takenOverTime)
 	if !e.By.IsValid() {
 		return fmt.Sprintf("session %s taken over by another client at %s", e.Name, at)
+	}
+	if e.Host != "" {
+		// The name is only a claim, so it goes with the address the
+		// server saw, loopback included: that says the new client is on
+		// the session's own host (bootstrap.md §9.1).
+		return fmt.Sprintf("session taken over from %s at %s", hostname.Label(e.Host, e.By.Addr().String()), at)
 	}
 	return fmt.Sprintf("session taken over from %s at %s", e.By, at)
 }

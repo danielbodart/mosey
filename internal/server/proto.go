@@ -88,11 +88,12 @@ type Session struct {
 	Log      *slog.Logger
 	// Attached, if set, is called each time a client confirms a
 	// credential, and again when a client reported silent is heard, with
-	// the id of the credential its connection was made with and its
-	// validated address or the zero AddrPort while it has none: the first
-	// stops the spawner's backstop (bootstrap.md §4.5), and each is what
-	// the attach socket's greeting says.
-	Attached func(peer netip.AddrPort, credential [8]byte)
+	// the id of the credential its connection was made with, its
+	// validated address or the zero AddrPort while it has none, and the
+	// name it claimed for its machine or "": the first stops the
+	// spawner's backstop (bootstrap.md §4.5), and each is what the attach
+	// socket's greeting says.
+	Attached func(peer netip.AddrPort, host string, credential [8]byte)
 	// Detached, if set, is called when the attached client goes and no
 	// other takes its place, or has been silent for SilentAfter: the
 	// session waits for a resume (bootstrap.md §9.2).
@@ -458,7 +459,7 @@ func (s *Session) Run(ctx context.Context) error {
 				s.listen(true)
 				s.Log.Info("the silent client is heard again")
 				if s.Attached != nil {
-					s.Attached(cur.conn.Peer(), cur.conn.CredentialID())
+					s.Attached(cur.conn.Peer(), cur.conn.ClientHost(), cur.conn.CredentialID())
 				}
 			}
 			arm()
@@ -489,7 +490,7 @@ func (s *Session) Run(ctx context.Context) error {
 			silent = false
 			arm()
 			if s.Attached != nil {
-				s.Attached(c.Peer(), c.CredentialID())
+				s.Attached(c.Peer(), c.ClientHost(), c.CredentialID())
 			}
 		case ep := <-s.broken:
 			if cur == nil || cur.ep != ep {

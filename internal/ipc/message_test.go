@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 func key() []byte { return bytes.Repeat([]byte{0xab}, PublicKeySize) }
@@ -22,12 +24,14 @@ func examples() []Message {
 		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "s"},
 		Start{Cols: MaxCols, Rows: MaxRows, Port: 65535, Addr: netip.MustParseAddr("192.0.2.1"), ClientPublic: key(), Name: "s"},
 		Start{Cols: 80, Rows: 24, Port: 60001, Addr: netip.MustParseAddr("2001:db8::1"), ClientPublic: key(), Name: strings.Repeat("n", MaxSessionName)},
+		Start{Cols: 80, Rows: 24, Port: 60001, Addr: netip.MustParseAddr("2001:db8::1"), ClientPublic: key(), Name: strings.Repeat("n", MaxSessionName), ClientHost: strings.Repeat("h", hostname.Max)},
+		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "s", ClientHost: "blade"},
 		EmuLink{Generation: 1, Reason: EmuFirst},
 		EmuLink{Generation: 2, Reason: EmuSignalled, Status: -31},
 		EmuLink{Generation: 0xffffffff, Reason: EmuKilled, Status: 0x7fffffff},
 		ShellExit{Status: 0}, ShellExit{Status: -9}, ShellExit{Status: 255},
 		AgentConn{},
-		Resume{ClientPublic: key()},
+		Resume{ClientPublic: key()}, Resume{ClientPublic: key(), ClientHost: "desktop.lan"},
 		EmuPaused{Seconds: 1}, EmuPaused{Seconds: MaxEmuPause},
 		Root{Root: false}, Root{Root: true},
 		Init{Cols: 1, Rows: 1, ScrollbackCells: 1},
@@ -42,6 +46,8 @@ func examples() []Message {
 		Exit{Code: NoClient, Reason: " "}, Exit{Code: NoClient},
 		KillEmu{Generation: 1, Why: KillDeadline}, KillEmu{Generation: 0xffffffff, Why: KillViolation},
 		Attached{}, Attached{Credential: [8]byte{1, 2}, Peer: netip.MustParseAddrPort("192.0.2.7:1")},
+		Attached{Credential: [8]byte{1, 2}, Peer: netip.MustParseAddrPort("127.0.0.1:41234"), Host: "desktop"},
+		Attached{Host: "blade"},
 		Hangup{},
 		HangupIfIdle{}, HangupIfIdle{Credential: [8]byte{1, 2, 3, 4, 5, 6, 7, 8}},
 		Attached{Peer: netip.MustParseAddrPort("[2001:db8::7]:65535")},
@@ -126,7 +132,7 @@ func fixedOrMax(t byte) int {
 	case typeFailed:
 		return 1 + MaxFailed
 	case typeStart:
-		return 25 + PublicKeySize
+		return 27 + PublicKeySize + MaxSessionName + hostname.Max
 	}
 	return 0
 }
@@ -179,6 +185,10 @@ func TestFieldsOutOfRangeAreRefused(t *testing.T) {
 		Credential{}, Credential{Line: []byte("no newline")},
 		Credential{Line: append(make([]byte, MaxCredentialLine), '\n')},
 		Resume{ClientPublic: key()[1:]}, Resume{ClientPublic: append(key(), 0)},
+		Resume{ClientPublic: key(), ClientHost: "bad_name"},
+		Resume{ClientPublic: key(), ClientHost: strings.Repeat("h", hostname.Max+1)},
+		Start{Cols: 1, Rows: 1, Port: 1, ClientPublic: key(), Name: "s", ClientHost: "-x"},
+		Attached{Peer: netip.MustParseAddrPort("192.0.2.7:1"), Host: "a\x1b"},
 		Attached{Peer: netip.MustParseAddrPort("192.0.2.7:0")},
 		Attached{Peer: netip.MustParseAddrPort("0.0.0.0:1")},
 		Attached{Peer: netip.MustParseAddrPort("[::ffff:192.0.2.1]:1")},

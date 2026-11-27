@@ -69,7 +69,7 @@ func TestAThirdUnusedCredentialEvictsTheOldestAndSaysSo(t *testing.T) {
 	var minted []Credential
 	for range MaxUnused + 1 {
 		k := must(NewOneShotKey())
-		c, err := creds.Mint(sid, k.PublicKey())
+		c, err := creds.Mint(sid, k.PublicKey(), "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,7 +95,7 @@ func TestAThirdUnusedCredentialEvictsTheOldestAndSaysSo(t *testing.T) {
 
 	// The cap is per session: another session's credentials are left alone.
 	other := must(NewOneShotKey())
-	if _, err := creds.Mint(must(NewSessionID()), other.PublicKey()); err != nil {
+	if _, err := creds.Mint(must(NewSessionID()), other.PublicKey(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if creds.Live() != MaxUnused+1 {
@@ -143,7 +143,7 @@ func TestConfirmationErasesTheCredentialsOtherPendings(t *testing.T) {
 func TestMintRefusesAClientKeyThatIsNotOne(t *testing.T) {
 	creds := NewCredentials(nil)
 	for _, k := range [][]byte{nil, make([]byte, PublicKeySize-1), make([]byte, PublicKeySize+1)} {
-		if _, err := creds.Mint([16]byte{}, k); !errors.Is(err, ErrMalformed) {
+		if _, err := creds.Mint([16]byte{}, k, ""); !errors.Is(err, ErrMalformed) {
 			t.Errorf("a %d-byte key: %v", len(k), err)
 		}
 	}
@@ -163,7 +163,7 @@ func TestCheckPublicKeyAgreesWithMint(t *testing.T) {
 	bad := bytes.Repeat([]byte{0xff}, PublicKeySize) // not a reduced ML-KEM key
 	creds := NewCredentials(nil)
 	for _, key := range [][]byte{nil, make([]byte, PublicKeySize-1), bad, k.PublicKey()} {
-		_, merr := creds.Mint([16]byte{1}, key)
+		_, merr := creds.Mint([16]byte{1}, key, "")
 		if cerr := CheckPublicKey(key); (cerr == nil) != (merr == nil) {
 			t.Errorf("a %d-byte key: CheckPublicKey %v, Mint %v", len(key), cerr, merr)
 		}
@@ -177,8 +177,8 @@ func TestEachCredentialHasItsOwnIDPSKAndServerKey(t *testing.T) {
 	creds := NewCredentials(nil)
 	sid := must(NewSessionID())
 	k := must(NewOneShotKey())
-	a, _ := creds.Mint(sid, k.PublicKey())
-	b, _ := creds.Mint(sid, k.PublicKey())
+	a, _ := creds.Mint(sid, k.PublicKey(), "")
+	b, _ := creds.Mint(sid, k.PublicKey(), "")
 	if a.ID == b.ID || a.PSK == b.PSK || bytes.Equal(a.ServerPublic, b.ServerPublic) {
 		t.Error("two credentials share an id, a PSK or a server key")
 	}

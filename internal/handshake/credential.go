@@ -93,6 +93,8 @@ type credential struct {
 	sk      hpke.PrivateKey
 	// clientPublic is s_C, which msg2 encapsulates to.
 	clientPublic []byte
+	// clientHost is Mint's label, handed on in each Pending.
+	clientHost string
 	// initial is the symmetric state after the prologue, both pre-messages
 	// and the PSK: the same for every msg1 under this credential.
 	initial  symmetric
@@ -128,13 +130,16 @@ func CheckPublicKey(b []byte) error {
 }
 
 // Mint makes a credential for the client whose one-shot public key arrived
-// over SSH stdin, bound to session. The caller writes it to SSH stdout and
-// then wipes both the Credential and the buffer it wrote.
-func (c *Credentials) Mint(session [16]byte, clientPublic []byte) (Credential, error) {
+// over SSH stdin, bound to session. clientHost is the name that client
+// claimed for its machine, "" for none: the store only carries it to the
+// Pending a confirmation comes from, and authenticates nothing with it. The
+// caller writes the credential to SSH stdout and then wipes both the
+// Credential and the buffer it wrote.
+func (c *Credentials) Mint(session [16]byte, clientPublic []byte, clientHost string) (Credential, error) {
 	if err := CheckPublicKey(clientPublic); err != nil {
 		return Credential{}, err
 	}
-	cred := &credential{sid: session, sidHex: hex.EncodeToString(session[:]), clientPublic: append([]byte(nil), clientPublic...)}
+	cred := &credential{sid: session, sidHex: hex.EncodeToString(session[:]), clientPublic: append([]byte(nil), clientPublic...), clientHost: clientHost}
 	var out Credential
 	var err error
 	secretDo(func() {

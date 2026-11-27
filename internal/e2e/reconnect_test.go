@@ -141,7 +141,7 @@ func TestASilentClientCountsAsDetachedUntilItIsHeardAgain(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		w := &resumeWorld{t: t}
 		newResumeWorldWith(t, w, func(s *server.Session) {
-			s.Attached = func(_ netip.AddrPort, cred [8]byte) { w.record("attached", cred) }
+			s.Attached = func(_ netip.AddrPort, _ string, cred [8]byte) { w.record("attached", cred) }
 			s.Detached = func() { w.record("detached", [8]byte{}) }
 		})
 		a := w.first()

@@ -487,11 +487,11 @@ func (l *loop[L, R]) run(ctx context.Context) error {
 				if l.dialing.Load() {
 					// Very likely this client's own new transport (D26);
 					// a takeover only if that dial fails.
-					pending = &TakenOverError{By: ev.By, At: ev.At}
+					pending = &TakenOverError{By: ev.By, Host: ev.Host, At: ev.At}
 					l.events = nil // the old link has nothing more to say
 					continue
 				}
-				return &TakenOverError{By: ev.By, At: ev.At}
+				return &TakenOverError{By: ev.By, Host: ev.Host, At: ev.At}
 			case transport.Ended:
 				l.log.Info("the server ended the session", "reason", ev.Reason)
 				return errSessionEnded

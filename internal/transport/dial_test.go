@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/danielbodart/mosey/internal/handshake"
+	"github.com/danielbodart/mosey/internal/hostname"
 )
 
 var attackerAddr = netip.MustParseAddrPort("203.0.113.99:4444")
@@ -262,15 +263,51 @@ func TestARevokedClientIsToldWhoTookOverAndWhen(t *testing.T) {
 	})
 }
 
-// TestARevokedClientsLaterPacketsDrawAtMostThreeCopies: the first REVOKED
-// is lost, so the old client carries on sending; its packets reach the
-// tombstone, which answers with the three copies sealed before the keys
-// were erased, at most one per 250 ms, and then nothing.
-func TestARevokedClientsLaterPacketsDrawAtMostThreeCopies(t *testing.T) {
+// The REVOKED frame names the new client's host when it claimed one, the
+// name its credential was minted with, beside its address (§8.3).
+func TestRevokedNamesTheNewClientsHost(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s := newSetup(t, 20*time.Millisecond)
 		first, _, _ := s.connect(clientAddr.String())
-		const revokedSize = 30 + 15 // an IPv4 REVOKED frame
+		s.host = "blade"
+		elsewhere := netip.MustParseAddrPort("198.51.100.200:50000")
+		_, secondServer, _ := s.connect(elsewhere.String())
+		time.Sleep(time.Second)
+		var revoked []Revoked
+		for _, ev := range events(first) {
+			if r, ok := ev.(Revoked); ok {
+				revoked = append(revoked, r)
+			}
+		}
+		if len(revoked) != 1 || revoked[0].By != elsewhere || revoked[0].Host != "blade" {
+			t.Fatalf("revocations %+v; want one by blade at %v", revoked, elsewhere)
+		}
+		if h := secondServer.ClientHost(); h != "blade" {
+			t.Errorf("the server's connection says its client is %q", h)
+		}
+	})
+}
+
+// TestARevokedClientsLaterPacketsDrawAtMostThreeCopies: the first REVOKED
+// is lost, so the old client carries on sending; its packets reach the
+// tombstone, which answers with the three copies sealed before the keys
+// were erased, at most one per 250 ms, and then nothing. A copy that names
+// the longest host still goes: it is under 3x the packets that draw it.
+func TestARevokedClientsLaterPacketsDrawAtMostThreeCopies(t *testing.T) {
+	for name, host := range map[string]string{"no host": "", "the longest host": strings.Repeat("h", hostname.Max)} {
+		t.Run(name, func(t *testing.T) { revokedCopiesDrawn(t, host) })
+	}
+}
+
+func revokedCopiesDrawn(t *testing.T, host string) {
+	synctest.Test(t, func(t *testing.T) {
+		s := newSetup(t, 20*time.Millisecond)
+		first, _, _ := s.connect(clientAddr.String())
+		revokedSize := 30 + 15 // an IPv4 REVOKED frame
+		if host != "" {
+			revokedSize += 1 + len(host)
+		}
+		s.host = host
 		var copies int
 		s.net.setTap(func(p memPacket) []memPacket {
 			if p.to == clientAddr && len(p.data) == revokedSize {

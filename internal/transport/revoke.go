@@ -16,15 +16,15 @@ type tombstone struct {
 	last    time.Time
 }
 
-// revoke cuts the connection off because by took the session over at at
-// (D26): it seals revokedCopies REVOKED frames, sends the first, erases
-// every key, and leaves a tombstone holding the rest. The caller holds the
-// lock.
-func (c *Conn) revoke(l *Listener, by netip.AddrPort, at time.Time) {
+// revoke cuts the connection off because by, whose client claimed the
+// name host ("" for none), took the session over at at (D26): it seals
+// revokedCopies REVOKED frames, sends the first, erases every key, and
+// leaves a tombstone holding the rest. The caller holds the lock.
+func (c *Conn) revoke(l *Listener, by netip.AddrPort, host string, at time.Time) {
 	if c.closed || c.cur == nil {
 		return
 	}
-	body := revokedBody(at, by)
+	body := revokedBody(at, by, host)
 	ts := &tombstone{until: time.Now().Add(tombstoneLife)}
 	for range revokedCopies {
 		pkt, err := c.cur.seal(KindRevoked, body)
@@ -48,7 +48,7 @@ func (c *Conn) revoke(l *Listener, by netip.AddrPort, at time.Time) {
 	}
 	l.tombs[ts] = struct{}{}
 	l.wakeHousekeeping()
-	l.e.log.Info("revoked a connection: another client took the session over", "by", by)
+	l.e.log.Info("revoked a connection: another client took the session over", "by", by, "host", host)
 }
 
 // answer sends the next sealed copy to the source of a packet that arrived

@@ -196,6 +196,9 @@ type setup struct {
 	l       *Listener
 	ssock   *memSock
 	session [16]byte
+	// host is the name the next credential minted says its client
+	// claimed (§8.3), "" for none.
+	host string
 }
 
 func newSetup(t testing.TB, delay time.Duration) *setup {
@@ -211,7 +214,7 @@ func newSetup(t testing.TB, delay time.Duration) *setup {
 // mint is the bootstrap: a client key, and a credential for it.
 func (s *setup) mint() (handshake.Credential, *handshake.OneShotKey) {
 	key := must(handshake.NewOneShotKey())
-	cred, err := s.creds.Mint(s.session, key.PublicKey())
+	cred, err := s.creds.Mint(s.session, key.PublicKey(), s.host)
 	if err != nil {
 		s.t.Fatal(err)
 	}

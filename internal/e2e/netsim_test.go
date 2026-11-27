@@ -269,7 +269,7 @@ func newSimNetOver(t *testing.T, n *netsim.Network, sh *netsim.Host, cc, sc *net
 		t.Fatal(err)
 	}
 	creds := handshake.NewCredentials(log)
-	cred, err := creds.Mint(sessionID, key.PublicKey())
+	cred, err := creds.Mint(sessionID, key.PublicKey(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func (n *simNet) device(t *testing.T, name string, addr netip.AddrPort) *device 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cred, err := n.creds.Mint(sessionID, key.PublicKey())
+	cred, err := n.creds.Mint(sessionID, key.PublicKey(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

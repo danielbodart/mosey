@@ -40,7 +40,7 @@ func newWorld(t testing.TB) *world {
 func (w *world) newClient(t testing.TB) {
 	t.Helper()
 	w.key = must(NewOneShotKey())
-	cred, err := w.creds.Mint(w.session, w.key.PublicKey())
+	cred, err := w.creds.Mint(w.session, w.key.PublicKey(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

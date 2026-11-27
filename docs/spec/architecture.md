@@ -74,7 +74,7 @@ above it in this list:
 ```
 wire, replay, hostname, netsim(test-only)
 handshake                       (wire)
-transport                       (wire, replay, handshake)
+transport                       (wire, replay, handshake, hostname)
 ssp                             (wire)          -- never transport: it takes a Datagrams
 channel                         (wire)          -- never transport: it takes a Datagrams too
 agent                           (channel, handshake) -- the bind, capture, pin, replay, relay
@@ -86,7 +86,8 @@ emu                             (screen)
 startup                         ()
 bootstrap                       (startup, hostname) -- raw bytes; never handshake
 pty                             (startup)
-sandbox, ipc, nocore            ()
+sandbox, nocore                 ()
+ipc                             (hostname)
 install                         (bootstrap)     -- the size bound and InstallPath only
 terminal                        ()
 server                          (all of the above but client, terminal, render)
